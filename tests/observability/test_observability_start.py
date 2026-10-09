@@ -64,8 +64,6 @@ def _healthy_get(url: str, timeout_s: float) -> tuple[int, str]:
         return 200, json.dumps({"type": "prometheus", "url": "http://127.0.0.1:9090"})
     if url.endswith(observe_readiness.DASHBOARD_PATH):
         return 200, json.dumps(_dashboard())
-    if url.endswith(observe_readiness.FLEET_CONTROL_PATH):
-        return 200, json.dumps({"metadata": {"name": "narwhal-fleet-control"}})
     raise AssertionError(url)
 
 
@@ -426,17 +424,6 @@ class ReadinessTests(unittest.TestCase):
         listeners.assert_not_called()
         writer.assert_not_called()
         stack.up.assert_not_called()
-
-    def test_grafana_readiness_requires_the_fleet_control_dashboard(self) -> None:
-        stack = FakeStack({"prometheus": [self.prometheus], "grafana": [self.grafana]})
-
-        def get(url: str, timeout_s: float) -> tuple[int, str]:
-            if url.endswith(observe_readiness.FLEET_CONTROL_PATH):
-                return 404, "{}"
-            return _healthy_get(url, timeout_s)
-
-        with self.assertRaisesRegex(observe_services.StartupError, "Fleet control dashboard"):
-            observe_readiness.wait_ready(self.services, stack, get=get, timeout_s=0.1)
 
     def test_grafana_datasource_must_follow_the_prometheus_listener(self) -> None:
         stack = FakeStack(

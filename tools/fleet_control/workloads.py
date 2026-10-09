@@ -20,15 +20,15 @@ KINDS: tuple[WorkloadKind, ...] = (
     "timestamped_trace",
     "prefix_trace",
 )
-# AIPerf generates the prompts of these kinds, so only they take prompt-shaping keys.
+# Workload kinds whose prompts AIPerf generates.
 GENERATED_KINDS = frozenset({"synthetic", "mixed", "multi_turn"})
 TRACE_KINDS = frozenset({"timestamped_trace", "prefix_trace"})
 PUBLIC_DATASETS = ("sharegpt",)
-# AIPerf's --cache-bust targets: where a marker unique to each session defeats prefix reuse.
+# AIPerf --cache-bust targets.
 CACHE_BUST_TARGETS = ("system_prefix", "system_suffix", "first_turn_prefix", "first_turn_suffix")
 ENDPOINT_TYPES = ("chat", "completions")
 DEFAULT_ENDPOINT_TYPE = "chat"
-# AIPerf's arrival pattern for each job `arrival`. `bursty` is a gamma process of this smoothness.
+# AIPerf arrival pattern for each job `arrival`.
 ARRIVALS = {"steady": "constant", "random": "poisson", "bursty": "gamma"}
 BURSTY_SMOOTHNESS = 0.5
 PARAMS = (
@@ -53,8 +53,7 @@ class Limit:
     default: float | None = None
 
 
-# The console starts each input at its default, except for a timestamped trace, which replays
-# its recorded timing in full.
+# Range and console default of each numeric job parameter.
 LIMITS = {
     "rate": Limit(0.1, 1000, default=2),
     "concurrency": Limit(1, 4096, integer=True, default=32),
@@ -113,12 +112,7 @@ class MixEntry:
 
 @dataclass(frozen=True)
 class Workload:
-    """One named library entry: generated prompts, a public dataset or a trace file.
-
-    A `timestamped_trace` replays its records at their recorded timestamps. A `prefix_trace`
-    reuses prompt prefixes through the `hash_ids` of its records and is paced by the job's
-    rate and concurrency instead of any recorded timestamps.
-    """
+    """One named library entry: generated prompts, a public dataset or a trace file."""
 
     name: str
     kind: WorkloadKind
@@ -192,10 +186,7 @@ class Workload:
 
 @dataclass(frozen=True)
 class LoadConfig:
-    """The AIPerf executable, the model it requests and the workload library.
-
-    AIPerf sends its requests to the router named by the control configuration's `router.url`.
-    """
+    """The AIPerf executable, the model it requests and the workload library."""
 
     aiperf: str
     model: str
@@ -280,7 +271,7 @@ def read_load(problems: list[str], raw: object) -> LoadConfig | None:
         reason = workload.chat_only()
         if endpoint_type == "completions" and reason:
             problems.append(f"load.workloads.{name}: {reason} needs endpoint_type chat")
-    # AIPerf's handling of a repeated --extra-inputs is unverified, so one source must own it.
+    # One source sets --extra-inputs.
     if "--extra-inputs" in extra and any(w.ignore_eos for w in workloads.values()):
         problems.append("load.extra_args sets --extra-inputs, so no workload may set ignore_eos")
     if len(problems) > count:
@@ -448,16 +439,7 @@ def _read_trace(
 
 
 def validate_params(workloads: Mapping[str, Workload], params: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a job's normalized parameters, or raise ValueError naming every problem.
-
-    `rate` is requests per second and `arrival` its spacing: `steady`, `random` or `bursty`.
-    `concurrency` is the in-flight request limit and `ramp_s` the seconds to reach the rate or
-    concurrency. The job stops after `duration_s` seconds or `requests` requests, whichever
-    comes first. `warmup_requests` run before measurement. A workload other than a timestamped
-    trace needs a rate, a concurrency or both, and a duration, a request count or both. A
-    timestamped trace keeps its recorded arrival times, so it takes no rate, arrival, ramp or
-    warm-up; `concurrency`, `duration_s` and `requests` optionally cap its replay.
-    """
+    """Return a job's normalized parameters, or raise ValueError naming every problem."""
     problems = [f"unknown job parameter {key!r}" for key in sorted(set(params) - set(PARAMS))]
     name = params.get("workload")
     workload = workloads.get(name) if isinstance(name, str) else None

@@ -20,8 +20,7 @@ from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
 
-# The engine state each engine action leaves, and the action that undoes it. `None` marks an
-# action that returns the engine to its baseline state.
+# Engine state each action leaves.
 ENGINE_CHANGES: dict[str, str | None] = {
     "pause": "paused",
     "stop": "stopped",
@@ -31,16 +30,12 @@ ENGINE_CHANGES: dict[str, str | None] = {
     "readmit": None,
 }
 UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
-# A cold restart starts every engine afresh, so it clears the engine changes before it.
+# Actions that clear the engine changes.
 CLEARING_ACTIONS = frozenset({"config.cold_restart"})
 
 
 def session_changes(session: Session) -> dict[str, Any]:
-    """Return what the session changed and has not undone.
-
-    `configuration` is whether the governing fleet configuration differs from the baseline.
-    `engines` maps each engine still paused, stopped or drained by the session to that state.
-    """
+    """Return the configuration and engine changes the session leaves in place."""
     engines: dict[str, str] = {}
     for action in session.actions:
         if action.outcome != "ok":
@@ -88,11 +83,7 @@ def refused(message: str, status: int = 409) -> ActionError:
 
 
 class ControlService:
-    """Run operator actions against the fleet and record each one.
-
-    Every action goes through `act`, which appends it to the action log and, inside a session,
-    to that session's run record. An exclusive action refuses every other action until it ends.
-    """
+    """Run operator actions against the fleet and record each one."""
 
     def __init__(
         self,
@@ -128,10 +119,7 @@ class ControlService:
         needs_session: bool = True,
         exclusive: bool = False,
     ) -> Action:
-        """Run and record one action, raising ActionError with its entry when it does not succeed.
-
-        `operation` receives the active session and returns the action's effect for the record.
-        """
+        """Run and record one action, raising ActionError when it does not succeed."""
         if self._exclusive is not None:
             error = refused(f"{self._exclusive} is in progress")
             error.action = self.store.record(
@@ -201,10 +189,7 @@ class ControlService:
         return {"session": self.session.id, "baseline_digest": canonical_digest(baseline)}
 
     async def end_session(self) -> Action:
-        """Stop any load job and close the session, leaving the fleet as it is.
-
-        The result lists the changes the session leaves in place.
-        """
+        """Stop any load job, close the session and return the changes it leaves."""
         action = await self.act("session.end", {}, self._end, exclusive=True)
         self.session = None
         return action
@@ -225,12 +210,7 @@ class ControlService:
     async def run_hook(
         self, hook: Hook, session: Session, extra_env: Mapping[str, str] | None = None
     ) -> HookResult:
-        """Run a configured hook with the session's identity in its environment.
-
-        The hook never receives the control token. It reads `NARWHAL_CONTROL_SESSION`,
-        `NARWHAL_CONTROL_RUN_DIR` and `NARWHAL_CONTROL_BASELINE`, the session's copy of the
-        baseline fleet configuration.
-        """
+        """Run a configured hook with the session's environment."""
         env = {key: value for key, value in self._env.items() if key != self.config.token_env}
         env.update(
             NARWHAL_CONTROL_SESSION=session.id,

@@ -169,6 +169,7 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 | `console.refresh`          | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                                                               |
 | `console.embed_in_grafana` | `false`          | Whether pages from the `console.grafana_url` origin and the console's own origin may frame the console. See [Framing boundary](03-Grafana-Dashboard.md#framing-boundary)      |
 | `console.auto_connect`     | `false`          | Whether the console page carries the token and connects on load. See [Connecting automatically](02-Open-the-Console.md#connecting-automatically) |
+| `console.trusted_hosts`    | none             | Host names or IPv4 addresses, besides loopback, for which the console page carries the token. Requires `console.auto_connect` |
 
 `console.grafana_url` is Grafana's address as your workstation browser sees it, usually the tunnel's local Grafana port such as `http://127.0.0.1:13000`.
 
@@ -181,5 +182,5 @@ The example configuration embeds the shipped dashboard's **Requests**, **Latency
 | `NARWHAL_CONTROL_CONFIG`      | The service                 | Configuration file when `--config` is not given                                                                              |
 | `NARWHAL_FLEET`               | The service                 | Baseline fleet configuration file when `fleet` is unset                                                                      |
 | `NARWHAL_CONTROL_TOKEN`       | The service, `make observe` | Bearer token. The service reads the variable that `token_env` names; `make observe` always reads `NARWHAL_CONTROL_TOKEN`     |
-| `NARWHAL_CONTROL_CONSOLE_URL` | `make observe`              | Console address as the browser reaches it, when it differs from `http://127.0.0.1:18020/console`                             |
+| `NARWHAL_CONTROL_CONSOLE_URL` | `make observe`              | Console address that the dashboard's **Fleet control** link opens, when it differs from `http://127.0.0.1:18020/console`     |
 | `NARWHAL_CONTROL_METRICS_URL` | `make observe`              | Control service address as Prometheus reaches it. See [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) |

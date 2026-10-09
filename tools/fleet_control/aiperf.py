@@ -39,8 +39,7 @@ RECORDS = "profile_export.jsonl"
 TRACE_FORMAT = "mooncake_trace"
 PERCENTILES = ("avg", "p50", "p90", "p95", "p99")
 COMPLETED = "completed"
-# AIPerf writes the per-request records in batches of this many, which sets how fresh the live
-# results are. An operator's own setting in the service environment wins.
+# AIPerf record export batch size.
 RECORD_BATCH_ENV = "AIPERF_RECORD_EXPORT_BATCH_SIZE"
 RECORD_BATCH = "10"
 
@@ -148,7 +147,7 @@ def _dataset_args(workload: Workload) -> list[str]:
     if workload.kind == "timestamped_trace":
         argv += ["--fixed-schedule", "--fixed-schedule-auto-offset"]
     else:
-        # Pace the trace by the job's rate and concurrency, not by any record timestamps.
+        # Pace the trace by the job's rate and concurrency.
         argv.append("--no-fixed-schedule")
     if workload.block_size is not None:
         argv += ["--isl-block-size", _value(workload.block_size)]
@@ -224,11 +223,7 @@ def _requests(summary: Mapping[str, Any], records: Path) -> dict[str, Any]:
 
 
 def summarize(artifacts: Path, goodput: Mapping[str, float]) -> dict[str, Any]:
-    """Reduce an AIPerf artifact directory to request counts, throughput and latency.
-
-    Raise ValueError when the directory holds no readable summary export. Latency statistics
-    keep the unit AIPerf reports.
-    """
+    """Reduce an AIPerf artifact directory to request counts, throughput and latency."""
     path = artifacts / SUMMARY
     if not path.is_file():
         found = sorted(artifacts.rglob(SUMMARY)) if artifacts.is_dir() else []
@@ -288,12 +283,7 @@ async def _stop(process: asyncio.subprocess.Process) -> None:
 
 
 class AIPerfRunner:
-    """Run each load job as one `aiperf profile` process in its own process group.
-
-    The job directory receives AIPerf's output log and artifact directory. Stopping the job
-    terminates the whole process group. The job's result holds the command and exit status
-    from the moment AIPerf starts, so stopped and failed jobs keep them in the run record.
-    """
+    """Run each load job as one `aiperf profile` process group."""
 
     def __init__(self, load: LoadConfig, url: str, env: Mapping[str, str]) -> None:
         self.load = load
@@ -375,7 +365,7 @@ class AIPerfRunner:
 
 
 def runner_for(config: ControlConfig, env: Mapping[str, str]) -> AIPerfRunner | None:
-    """Return the configured AIPerf runner; AIPerf never receives the control token."""
+    """Return the configured AIPerf runner."""
     if config.load is None:
         return None
     env = {key: value for key, value in env.items() if key != config.token_env}

@@ -1,6 +1,6 @@
 # Observability asset contracts
 
-The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** and **Fleet control** dashboards, and the Grafana Image Renderer.
+The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** dashboard, and the Grafana Image Renderer.
 
 Follow [Setting up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
@@ -62,10 +62,6 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
       <td><code>runs/observability/mounts/grafana-dashboards/narwhal.json</code></td>
     </tr>
     <tr>
-      <td>Derived Fleet control dashboard</td>
-      <td><code>runs/observability/mounts/grafana-dashboards/fleet-control.json</code></td>
-    </tr>
-    <tr>
       <td>Grafana poll interval</td>
       <td>30 seconds</td>
     </tr>
@@ -74,15 +70,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` also builds the **Fleet control** dashboard from the source dashboard, using `fleet_control_dashboard` in `tools/observability/artifacts.py`. It copies or derives its charts from the source, so changes to the source dashboard carry over. The relevant constants are:
-
-- `CONSOLE_VIEWS`: the console views, each shown in a Text panel with `?view=<name>&theme=dark`.
-- `CONSOLE_SANDBOX`: the sandbox for those frames.
-- `REQUEST_STATS`: the Requests table queries shown in the **Requests** panel.
-- `DIAGNOSTIC_ROWS`: the source panels in the collapsed rows.
-- `CONTROL_ANNOTATIONS`: the **Fleet control actions** and **Load jobs** annotations.
-
-**Request outcomes** keeps the source panel's ID, so the source alert annotations also appear on it.
+`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 

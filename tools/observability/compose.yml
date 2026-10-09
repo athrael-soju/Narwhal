@@ -24,8 +24,6 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       # The fleet control console embeds dashboard panels in frames.
       GF_SECURITY_ALLOW_EMBEDDING: "true"
-      # Sanitizing would strip scripts from the console frames in Fleet control Text panels.
-      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
       NARWHAL_PROMETHEUS_URL: "${NARWHAL_PROMETHEUS_URL:-http://127.0.0.1:9090}"
       GF_RENDERING_SERVER_URL: "http://${NARWHAL_RENDERER_ADDRESS:-127.0.0.1:8081}/render"
       GF_RENDERING_CALLBACK_URL: "${NARWHAL_GRAFANA_URL:-http://127.0.0.1:3000}/"

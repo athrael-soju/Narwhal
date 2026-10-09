@@ -1,53 +1,22 @@
 ---
-description: Run the fleet control console inside the Fleet control Grafana dashboard, mark actions and load jobs on its charts, and understand the framing boundary.
+description: Open the fleet control console from the Narwhal Orchestrator dashboard and mark actions and load jobs on its charts.
 ---
 
 # Using the console from Grafana
 
-`make observe` provisions a **Fleet control** dashboard with UID `narwhal-fleet-control`. It shows each console view in its own panel. The charts stay on the **Narwhal Orchestrator** dashboard, which marks each action and load job.
+The **Narwhal Orchestrator** dashboard has a **Fleet control** link in its dashboard links, which opens the console in a new tab. The dashboard also marks each action and load job on its charts.
 
-<div class="narwhal-panel-row" markdown>
-
-![Top of the Fleet control dashboard.](../../assets/fleet-control/dashboard.png)
-
-</div>
-
-## Open the console in Grafana
+## Open the console from Grafana
 
 The service must be set up as in [Setting up the control service](01-Set-Up-the-Service.md).
 
-1. In the router shell, set the `console` section of `config/fleet-control.local.json`:
+1. If the browser reaches the console at an address other than `http://127.0.0.1:18020/console`, set `NARWHAL_CONTROL_CONSOLE_URL` to that address in the router shell. For a console served under Grafana's own address, use its path, such as `/fleet-control/console`.
+2. To mark actions and load jobs on the charts, set up [dashboard annotations](#dashboard-annotations).
+3. Run `make observe` on the router host.
+4. Open the tunnel, as in [Reaching the console through the tunnel](02-Open-the-Console.md#reaching-the-console-through-the-tunnel).
+5. Open `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator` and select **Fleet control**.
 
-    ```json
-    "console": {
-      "grafana_url": "http://127.0.0.1:13000",
-      "embed_in_grafana": true
-    }
-    ```
-
-    To connect when the page loads, also set `"auto_connect": true`. Read [Connecting automatically](02-Open-the-Console.md#connecting-automatically) first.
-
-2. To show firing alerts in the session strip, set `prometheus_url` to `http://127.0.0.1:9090`.
-3. Restart the control service.
-4. If the browser reaches the console at an address other than `http://127.0.0.1:18020/console`, set `NARWHAL_CONTROL_CONSOLE_URL` to that address in the router shell. For a console served under Grafana's own address, use its path, such as `/fleet-control/console`.
-5. To mark actions and load jobs on the charts, set up [dashboard annotations](#dashboard-annotations).
-6. Run `make observe` on the router host.
-7. Open the tunnel, as in [Reaching the console through the tunnel](02-Open-the-Console.md#reaching-the-console-through-the-tunnel).
-8. Open `http://127.0.0.1:13000/d/narwhal-fleet-control/fleet-control`.
-9. Paste the token into any console panel and select **Connect**. The other console panels connect with it.
-
-The session strip shows **Connected**, and the **Engines** panel lists the fleet's engines.
-
-## Dashboard layout
-
-| Row | Panels                    |
-| --- | ------------------------- |
-| 1   | Session strip             |
-| 2   | Engines                   |
-| 3   | Load job, Load metrics    |
-| 4   | Configuration, Activity   |
-
-An action in one panel refreshes the others.
+The console opens in a new tab. After you connect, the session strip shows **Connected**.
 
 ## Dashboard annotations
 
@@ -89,8 +58,3 @@ Prometheus reads these events from the control service's `GET /metrics`. To add 
 With `console.embed_in_grafana` set, the console accepts frames from the `console.grafana_url` origin and from its own origin.
 
 A console served under Grafana's own address, such as `/fleet-control/console`, shares Grafana's origin, so script in Grafana pages can read its token. Serve the console on its own port to keep the token separate from Grafana.
-
-Grafana removes the console frames from Text panels unless HTML sanitizing is off. `make observe` turns it off with `GF_PANELS_DISABLE_SANITIZE_HTML`.
-
-!!! warning
-    With sanitizing off, any user who can edit a dashboard can add script that runs in other users' Grafana pages. Grafana gives anonymous users Viewer access. Grant dashboard edit rights to operators only.

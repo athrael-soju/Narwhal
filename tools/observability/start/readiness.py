@@ -9,7 +9,6 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 
-from tools.observability.artifacts import FLEET_CONTROL_UID
 from tools.observability.make_targets import TargetContract
 
 from .services import Container, Service, StartupError
@@ -17,7 +16,6 @@ from .stack import Stack
 
 DASHBOARDS = "/apis/dashboard.grafana.app/v2beta1/namespaces/default/dashboards"
 DASHBOARD_PATH = f"{DASHBOARDS}/narwhal-router"
-FLEET_CONTROL_PATH = f"{DASHBOARDS}/{FLEET_CONTROL_UID}"
 DEFAULT_READY_TIMEOUT_S = 60.0
 
 HttpGet = Callable[[str, float], tuple[int, str]]
@@ -116,9 +114,6 @@ def _verify_http(service: Service, get: HttpGet, prometheus_url: str) -> None:
         if status != 200:
             raise StartupError(f"Grafana dashboard returned HTTP {status}")
         verify_dashboard_contract(dashboard)
-        status, _ = get(f"{base}{FLEET_CONTROL_PATH}", 2.0)
-        if status != 200:
-            raise StartupError(f"Grafana Fleet control dashboard returned HTTP {status}")
 
 
 def _verify_targets(

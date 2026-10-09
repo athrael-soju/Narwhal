@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import html
 import json
 import os
 import re
@@ -27,28 +26,12 @@ FILES = {
     ),
 }
 NARWHAL_DASHBOARD = "grafana-dashboards/narwhal.json"
-FLEET_CONTROL_DASHBOARD = "grafana-dashboards/fleet-control.json"
-FLEET_CONTROL_UID = "narwhal-fleet-control"
 CONSOLE_URL_ENV = "NARWHAL_CONTROL_CONSOLE_URL"
 DEFAULT_CONSOLE_URL = "http://127.0.0.1:18020/console"
 CONTROL_METRICS_URL_ENV = "NARWHAL_CONTROL_METRICS_URL"
 CONTROL_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 CONTROL_TARGETS = "prometheus/targets/fleet-control.json"
 CONTROL_TOKEN_FILE = "prometheus/fleet-control-token"
-CONSOLE_THEME = "theme=dark"
-# The console is another origin, so `allow-same-origin` grants it no access to Grafana.
-CONSOLE_SANDBOX = (
-    "allow-scripts allow-same-origin allow-forms allow-downloads "
-    "allow-top-navigation-by-user-activation"
-)
-CONSOLE_VIEWS = {
-    "status": "Fleet control session",
-    "engines": "Fleet control engines",
-    "activity": "Fleet control activity",
-    "load": "Fleet control load job",
-    "results": "Fleet control load metrics",
-    "config": "Fleet control configuration",
-}
 CONTROL_ANNOTATIONS = (
     {
         "name": "Fleet control actions",
@@ -80,10 +63,7 @@ def _directory(path: Path, mode: int) -> None:
 
 
 def console_url(env: Mapping[str, str]) -> str:
-    """Return the console URL the Fleet control dashboard frames, from `CONSOLE_URL_ENV`.
-
-    A path, such as `/fleet-control/console`, frames the console from Grafana's own origin.
-    """
+    """Return the console URL for the dashboard's Fleet control link."""
     value = env.get(CONSOLE_URL_ENV, DEFAULT_CONSOLE_URL)
     parts = urlsplit(value)
     path = not parts.scheme and not parts.netloc and value.startswith("/")
@@ -122,73 +102,6 @@ def control_target(env: Mapping[str, str]) -> ControlTarget | None:
     return ControlTarget(authority, token)
 
 
-def _grid_item(name: str, x: int, y: int, width: int, height: int) -> dict[str, Any]:
-    element = {"kind": "ElementReference", "name": name}
-    spec = {"x": x, "y": y, "width": width, "height": height, "element": element}
-    return {"kind": "GridLayoutItem", "spec": spec}
-
-
-def _panel(
-    panel_id: int,
-    title: str,
-    description: str,
-    queries: list[dict[str, Any]],
-    kind: str,
-    options: Mapping[str, Any],
-    defaults: Mapping[str, Any],
-    overrides: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "kind": "Panel",
-        "spec": {
-            "id": panel_id,
-            "title": title,
-            "description": description,
-            "data": {
-                "kind": "QueryGroup",
-                "spec": {"queries": queries, "transformations": [], "queryOptions": {}},
-            },
-            "vizConfig": {
-                "kind": kind,
-                "spec": {
-                    "options": dict(options),
-                    "fieldConfig": {"defaults": dict(defaults), "overrides": overrides or []},
-                },
-            },
-        },
-    }
-
-
-def _console_view(panel_id: int, console: str, view: str, title: str) -> dict[str, Any]:
-    """Return a text panel that frames one console view."""
-    frame = (
-        f'<iframe src="{html.escape(f"{console}?view={view}&{CONSOLE_THEME}")}" '
-        f'title="{html.escape(title)}" sandbox="{CONSOLE_SANDBOX}" referrerpolicy="no-referrer" '
-        'style="display:block;width:100%;height:100%;border:0"></iframe>'
-    )
-    return _panel(
-        panel_id,
-        "",
-        "",
-        [],
-        "text",
-        {"content": frame, "mode": "html"},
-        {},
-    )
-
-
-def _row(title: str, collapse: bool, items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Return a dashboard row; an untitled row has no header and stays expanded."""
-    spec: dict[str, Any] = {
-        "title": title,
-        "collapse": collapse,
-        "layout": {"kind": "GridLayout", "spec": {"items": items}},
-    }
-    if not title:
-        spec["hideHeader"] = True
-    return {"kind": "RowsLayoutRow", "spec": spec}
-
-
 def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
     query = {key: spec[key] for key in ("expr", "step", "titleFormat", "textFormat")}
     query["useValueForTime"] = spec["useValueForTime"]
@@ -206,50 +119,29 @@ def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def narwhal_dashboard(source: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the shipped dashboard with the fleet control action and load-job markers."""
+def _console_link(console: str) -> dict[str, Any]:
+    """Return the dashboard link that opens the fleet control console in a new tab."""
+    return {
+        "title": "Fleet control",
+        "type": "link",
+        "icon": "external link",
+        "tooltip": "Open the fleet control console",
+        "url": console,
+        "tags": [],
+        "asDropdown": False,
+        "targetBlank": True,
+        "includeVars": False,
+        "keepTime": False,
+    }
+
+
+def narwhal_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
+    """Return the shipped dashboard with the fleet control markers and a link to `console`."""
     dashboard = copy.deepcopy(dict(source))
     spec = dashboard["spec"]
     spec["annotations"] = [*spec["annotations"], *map(_annotation, CONTROL_ANNOTATIONS)]
+    spec["links"] = [*spec["links"], _console_link(console)]
     return dashboard
-
-
-def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
-    """Return the Fleet control dashboard: the console views, in the shipped dashboard's style."""
-    spec = source["spec"]
-    elements = {
-        f"console-{view}": _console_view(index + 1, console, view, title)
-        for index, (view, title) in enumerate(CONSOLE_VIEWS.items())
-    }
-    items = [
-        _grid_item("console-status", 0, 0, 24, 2),
-        _grid_item("console-engines", 0, 2, 24, 15),
-        _grid_item("console-load", 0, 17, 12, 11),
-        _grid_item("console-results", 12, 17, 12, 11),
-        _grid_item("console-config", 0, 28, 12, 11),
-        _grid_item("console-activity", 12, 28, 12, 11),
-    ]
-    return {
-        "apiVersion": source["apiVersion"],
-        "kind": source["kind"],
-        "metadata": {"name": FLEET_CONTROL_UID, "namespace": source["metadata"]["namespace"]},
-        "spec": {
-            "annotations": [],
-            "cursorSync": spec["cursorSync"],
-            "description": "Fleet control console views. The Narwhal Orchestrator dashboard "
-            "marks each action and load job on its charts.",
-            "editable": spec["editable"],
-            "elements": elements,
-            "layout": {"kind": "RowsLayout", "spec": {"rows": [_row("", False, items)]}},
-            "links": [],
-            "liveNow": spec["liveNow"],
-            "preload": spec["preload"],
-            "tags": [*spec["tags"], "fleet-control"],
-            "timeSettings": spec["timeSettings"],
-            "title": "Fleet control",
-            "variables": [],
-        },
-    }
 
 
 def _write(target: Path, data: bytes) -> None:
@@ -272,13 +164,7 @@ def stage_artifacts(
     root: Path = MOUNTS,
     source: Path = BASE,
 ) -> None:
-    """Copy the named configs and discovery targets with explicit container permissions.
-
-    The shipped dashboard gains the fleet control markers. The Fleet control dashboard frames
-    `console`.
-    Prometheus scrapes `control` with its token. When `control` is None, the fleet-control target
-    list and token file are empty.
-    """
+    """Copy the configs and discovery targets with container permissions."""
     _directory(root, 0o700)
     for relative in (
         "prometheus",
@@ -292,13 +178,10 @@ def stage_artifacts(
     for origin, destination in FILES.items():
         _write(root / destination, (source / origin).read_bytes())
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
-    _write(
-        root / NARWHAL_DASHBOARD, (json.dumps(narwhal_dashboard(shipped), indent=2) + "\n").encode()
-    )
-    dashboard = fleet_control_dashboard(shipped, console)
-    _write(root / FLEET_CONTROL_DASHBOARD, (json.dumps(dashboard, indent=2) + "\n").encode())
+    dashboard = narwhal_dashboard(shipped, console)
+    _write(root / NARWHAL_DASHBOARD, (json.dumps(dashboard, indent=2) + "\n").encode())
     targets = [] if control is None else [{"targets": [control.authority]}]
     _write(root / CONTROL_TARGETS, (json.dumps(targets, indent=2) + "\n").encode())
-    # The Prometheus container reads the token; the 0700 mount root keeps it from other accounts.
+    # Prometheus reads this token.
     _write(root / CONTROL_TOKEN_FILE, ("" if control is None else control.token).encode())
     write_contract(contract, root / "prometheus" / "targets")

@@ -32,7 +32,7 @@ The session strip runs along the top of the console.
 | **From session start** | Opens the dashboard with its time range starting at the session start                                                         |
 | **Load job**           | The current or last job, its state and its elapsed time                                                                       |
 | **Drain deadline**     | Deadline in seconds for drains started from this tab. Empty uses the router's default                                         |
-| Buttons                | **Start session** or **End session**, and **Forget token**                                                        |
+| Buttons                | **Start session** or **End session**, **Dashboard**, which opens the Grafana dashboard in a new tab, and **Forget token** |
 
 ## Exclusive actions
 

@@ -11,7 +11,7 @@ The fleet control service runs operator test actions against a running Narwhal f
 - cold restarts and baseline restores
 - AIPerf load jobs
 
-The service records each action, with its time and effect, in a private run record. The console runs on its own page or inside the **Fleet control** Grafana dashboard, beside the fleet's charts.
+The service records each action, with its time and effect, in a private run record. The console runs on its own page. The **Narwhal Orchestrator** dashboard links to it and marks each action on its charts.
 
 The service runs on the router host, listens on loopback, and authenticates API requests with a bearer token. Operators reach the console and Grafana from a workstation through the operator tunnel.
 
@@ -39,7 +39,7 @@ Work happens in sessions. Starting a session copies the baseline fleet configura
 
     ---
 
-    Run the console in the **Fleet control** dashboard and mark actions on the Narwhal Orchestrator charts.
+    Open the console from the Narwhal Orchestrator dashboard and mark actions on its charts.
 
 -   [Running a test session](fleet-control/04-Sessions.md)
 

@@ -1,12 +1,4 @@
-"""Configuration overlays, cold fleet restarts and baseline restores, each checked for readiness.
-
-An overlay is a partial fleet document merged onto the session's current fleet configuration
-as a JSON merge patch (RFC 7386): an object merges key by key, `null` removes a key so the
-field returns to its default, and any other value, arrays included, replaces the current one.
-An overlay may change only the router policy sections in `OVERLAY_SECTIONS`, plus `_`
-annotation keys. The merged document must pass the fleet configuration loader that
-`narwhal config validate` runs before any hook touches the fleet.
-"""
+"""Configuration overlays, cold restarts and baseline restores."""
 
 from __future__ import annotations
 
@@ -38,21 +30,20 @@ if TYPE_CHECKING:
 
 ROUTER_RESTART_HOOK = "router_restart"
 COLD_RESTART_HOOK = "cold_restart"
-# The hook environment variable naming the fleet file the restarted processes must load.
+# Hook environment variable holding the fleet file to load.
 FLEET_ENV = "NARWHAL_CONTROL_FLEET"
-# Router policy read at startup. The other sections describe the engines' launch, model and
-# measured profiles, which a router restart cannot change.
+# Fleet sections a router restart can change.
 OVERLAY_SECTIONS = ("slo", "controller", "serving", "recovery")
 OVERLAYS = "overlays"
 READY_PATH = "/ready"
 READY_POLL_S = 1.0
 READY_PROBE_TIMEOUT_S = 5.0
-# Router lifecycle states from which a readmit returns a drained engine to service.
+# Router lifecycle states a readmit applies to.
 READMITTABLE = frozenset({"draining", "drained", "deadline_exceeded", "blocked"})
 
 
 def merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
-    """Return `base` with `overlay` applied as a JSON merge patch, leaving both unchanged."""
+    """Return `base` with `overlay` applied as a JSON merge patch (RFC 7386)."""
     merged = dict(base)
     for key, value in overlay.items():
         if value is None:
@@ -66,7 +57,7 @@ def merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]
 
 
 def overlay_problems(overlay: Mapping[str, Any]) -> list[str]:
-    """Return every reason the overlay's shape is refused before it is merged."""
+    """Return the problems in the overlay's shape."""
     if not overlay:
         return ["the overlay changes no section"]
     allowed = ", ".join(OVERLAY_SECTIONS)
@@ -98,11 +89,7 @@ def reject_constant(name: str) -> NoReturn:
 
 
 class Overlays:
-    """Apply overlays through the router-restart hook, restart the fleet and restore the baseline.
-
-    Each operation is an exclusive action: the service refuses every other action until the
-    hook finishes and the router answers `GET /ready` with 200, or for at most `router.timeout_s`.
-    """
+    """Apply overlays, cold restarts and baseline restores as exclusive actions."""
 
     def __init__(
         self,
@@ -154,13 +141,13 @@ class Overlays:
             "base_digest": current["digest"],
         }
         effect["hook"] = await self._run(hook, session, fleet, effect)
-        # The router restarted with this file, so it governs the fleet even if readiness fails.
+        # The router now runs this file.
         session.apply_configuration(self.service.stamp(), "overlay", merged, fleet=fleet)
         effect["readiness"] = await self._ready(effect)
         return effect
 
     def check(self, overlay: Mapping[str, Any]) -> dict[str, Any]:
-        """Return the overlay's problems and merged document, without applying or recording it."""
+        """Return the overlay's problems and merged document."""
         session = self.service.session
         if session is None:
             raise refused("no session is active; start one with POST /api/session")
@@ -170,7 +157,7 @@ class Overlays:
         if not problems:
             directory = session.directory / OVERLAYS
             directory.mkdir(mode=0o700, exist_ok=True)
-            # Load the candidate beside the applied overlays so relative paths resolve the same.
+            # Resolve relative paths beside the applied overlays.
             descriptor, name = tempfile.mkstemp(dir=directory, prefix=".check-", suffix=".json")
             os.close(descriptor)
             candidate = Path(name)
@@ -201,11 +188,7 @@ class Overlays:
         return await self.service.act("config.cold_restart", {}, restart, exclusive=True)
 
     async def restore(self) -> Action:
-        """Undo what the session changed: the configuration first, then each changed engine.
-
-        A session that changed nothing restores nothing. Each engine step is recorded as its own
-        engine action.
-        """
+        """Undo the session's configuration change, then each engine change."""
 
         async def restore(session: Session | None) -> Mapping[str, Any]:
             assert session is not None

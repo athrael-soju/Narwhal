@@ -32,7 +32,6 @@ class MonitoringArtifactTests(unittest.TestCase):
                 expected = {
                     *artifacts.FILES.values(),
                     artifacts.NARWHAL_DASHBOARD,
-                    artifacts.FLEET_CONTROL_DASHBOARD,
                     artifacts.CONTROL_TARGETS,
                     artifacts.CONTROL_TOKEN_FILE,
                     "prometheus/targets/router.json",
@@ -79,44 +78,13 @@ class MonitoringArtifactTests(unittest.TestCase):
             self.assertEqual(list(external.iterdir()), [])
 
 
-class FleetControlDashboardTests(unittest.TestCase):
+class OrchestratorDashboardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.shipped = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-        self.dashboard = artifacts.fleet_control_dashboard(
-            self.shipped, "http://127.0.0.1:18020/console"
-        )
-
-    def rows(self) -> list[dict]:
-        return [row["spec"] for row in self.dashboard["spec"]["layout"]["spec"]["rows"]]
-
-    def test_the_dashboard_holds_only_the_console_views(self):
-        spec = self.dashboard["spec"]
-        self.assertEqual(self.dashboard["metadata"]["name"], artifacts.FLEET_CONTROL_UID)
-        self.assertEqual(self.dashboard["apiVersion"], self.shipped["apiVersion"])
-        self.assertEqual(spec["timeSettings"], self.shipped["spec"]["timeSettings"])
-        self.assertEqual(
-            sorted(spec["elements"]), sorted(f"console-{view}" for view in artifacts.CONSOLE_VIEWS)
-        )
-        (row,) = self.rows()
-        self.assertTrue(row["hideHeader"])
-        placed = [item["spec"]["element"]["name"] for item in row["layout"]["spec"]["items"]]
-        self.assertEqual(sorted(placed), sorted(spec["elements"]))
-        ids = [element["spec"]["id"] for element in spec["elements"].values()]
-        self.assertEqual(len(ids), len(set(ids)))
-
-    def test_each_grid_row_fits_the_24_columns_without_overlap(self):
-        for row in self.rows():
-            cells = set()
-            for item in row["layout"]["spec"]["items"]:
-                box = item["spec"]
-                self.assertLessEqual(box["x"] + box["width"], 24)
-                for x in range(box["x"], box["x"] + box["width"]):
-                    for y in range(box["y"], box["y"] + box["height"]):
-                        self.assertNotIn((x, y), cells, box["element"]["name"])
-                        cells.add((x, y))
+        self.console = "http://127.0.0.1:18020/console"
 
     def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):
-        marked = artifacts.narwhal_dashboard(self.shipped)
+        marked = artifacts.narwhal_dashboard(self.shipped, self.console)
         shipped = self.shipped["spec"]["annotations"]
         annotations = marked["spec"]["annotations"]
         self.assertEqual(annotations[: len(shipped)], shipped)
@@ -132,28 +100,26 @@ class FleetControlDashboardTests(unittest.TestCase):
             self.assertEqual((names[name]["enable"], names[name]["hide"]), (True, True))
         self.assertEqual(len(self.shipped["spec"]["annotations"]), len(shipped))
 
-    def test_console_views_are_scripted_and_escape_their_url(self):
-        for view in artifacts.CONSOLE_VIEWS:
-            options = self.dashboard["spec"]["elements"][f"console-{view}"]["spec"]["vizConfig"]
-            self.assertEqual(options["kind"], "text")
-            self.assertEqual(options["spec"]["options"]["mode"], "html")
-            content = options["spec"]["options"]["content"]
-            self.assertIn(
-                f'src="http://127.0.0.1:18020/console?view={view}&amp;theme=dark"', content
-            )
-            self.assertIn(f'sandbox="{artifacts.CONSOLE_SANDBOX}"', content)
-            self.assertIn('referrerpolicy="no-referrer"', content)
-            self.assertNotIn("$", content)
-        escaped = artifacts.fleet_control_dashboard(self.shipped, "http://h/a&b")
-        frame = escaped["spec"]["elements"]["console-engines"]["spec"]["vizConfig"]["spec"]
-        self.assertIn(
-            'src="http://h/a&amp;b?view=engines&amp;theme=dark"', frame["options"]["content"]
+    def test_the_orchestrator_dashboard_links_to_the_console_in_a_new_tab(self):
+        marked = artifacts.narwhal_dashboard(self.shipped, self.console)
+        shipped = self.shipped["spec"]["links"]
+        links = marked["spec"]["links"]
+        self.assertEqual(links[: len(shipped)], shipped)
+        (link,) = links[len(shipped) :]
+        self.assertEqual(
+            {key: link[key] for key in ("title", "type", "url", "targetBlank")},
+            {"title": "Fleet control", "type": "link", "url": self.console, "targetBlank": True},
         )
+        self.assertEqual(self.shipped["spec"]["links"], shipped)
 
-    def test_the_console_page_offers_every_framed_view(self):
-        page = (artifacts.BASE.parent / "fleet_control" / "console.html").read_text()
-        for view in artifacts.CONSOLE_VIEWS:
-            self.assertIn(f'id="view-{view}"', page)
+    def test_staging_links_the_dashboard_to_the_configured_console(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "mounts"
+            console = artifacts.console_url({artifacts.CONSOLE_URL_ENV: "/fleet-control/console"})
+            artifacts.stage_artifacts(TargetContract("127.0.0.1:8000", ()), console, root=root)
+            staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
+            urls = [link["url"] for link in staged["spec"]["links"] if link["type"] == "link"]
+            self.assertEqual(urls, ["/fleet-control/console"])
 
     def test_control_target_needs_an_http_origin_and_the_token(self):
         self.assertIsNone(artifacts.control_target({}))

@@ -38,6 +38,16 @@ With `console.auto_connect` set to `true`, the service embeds the token in the c
 !!! warning
     Any process that can reach the service's port can then read the token from the page. That includes every user and process on the router host and every local process on a workstation with the tunnel open. Enable `auto_connect` only on single-user machines.
 
-The service embeds the token only when the browser addresses it as `127.0.0.1`, `localhost` or `::1`. At any other address, the page asks for the token.
+The service embeds the token for `127.0.0.1`, `localhost`, `::1` and the names in `console.trusted_hosts`. At any other address, the page asks for the token.
+
+To connect from other machines, add the host names their browsers use:
+
+```json
+"console": {
+  "grafana_url": "http://localhost:3000",
+  "auto_connect": true,
+  "trusted_hosts": ["ops-host", "ops-host.example.ts.net"]
+}
+```
 
 After the service restarts with a new token, reload the page.

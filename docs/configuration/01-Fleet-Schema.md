@@ -40,7 +40,7 @@ Set these variables in the process environment, or in the workstation `.env` tha
 | `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                                  |
 | `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`                      |
 | `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090`                 |
-| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, used by the **Fleet control** dashboard                             | `http://127.0.0.1:18020/console` |
+| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, opened by the dashboard's **Fleet control** link                     | `http://127.0.0.1:18020/console` |
 | `NARWHAL_CONTROL_METRICS_URL`       | Fleet control service address scraped by Prometheus. Needs `NARWHAL_CONTROL_TOKEN`                 | `http://127.0.0.1:8020`          |
 | `NARWHAL_CONTROL_TOKEN`             | Fleet control bearer token                                                                         |                                  |
 

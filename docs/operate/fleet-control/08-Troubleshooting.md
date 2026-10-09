@@ -1,21 +1,8 @@
 ---
-description: Diagnose fleet control console problems from the first visible symptom, including empty console panels, missing chart markers, and engines stuck after a drain or stop.
+description: Diagnose fleet control console problems from the first visible symptom, including empty chart frames, missing chart markers, and engines stuck after a drain or stop.
 ---
 
 # Troubleshooting the console
-
-## A console panel shows a browser error page
-
-The browser refused to show the console in a Grafana frame. From the router shell, read the console's framing headers:
-
-```bash
-curl -sS -D - -o /dev/null http://127.0.0.1:8020/console | grep -iE 'x-frame-options|content-security-policy'
-```
-
-- `X-Frame-Options: DENY` or `frame-ancestors 'none'`: `console.embed_in_grafana` is off. Set it to `true` and restart the service.
-- `frame-ancestors` with another origin: `console.grafana_url` differs from the Grafana address in the browser. Set it to the origin in the browser's address bar and restart the service.
-
-Reload the dashboard. Each console panel shows **Control token** or connects.
 
 ## Charts in the standalone console are empty frames
 

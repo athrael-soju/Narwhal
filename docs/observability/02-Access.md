@@ -24,7 +24,7 @@ The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestr
 
 Grafana also allows its panels to be framed by other pages. The fleet control console uses this to show dashboard panels beside its controls. [Reaching the console through the tunnel](../operate/fleet-control/02-Open-the-Console.md#reaching-the-console-through-the-tunnel) adds the control service port to this tunnel.
 
-The **Fleet control** dashboard opens at `http://127.0.0.1:13000/d/narwhal-fleet-control/fleet-control` and shows each fleet control console view in its own panel beside dashboard charts. Grafana renders Text panel HTML without sanitizing it, so the panels can hold the frames that load the console. [Using the console from Grafana](../operate/fleet-control/03-Grafana-Dashboard.md) describes the setup and the effect of that setting.
+The dashboard's **Fleet control** link opens the fleet control console in a new tab. [Using the console from Grafana](../operate/fleet-control/03-Grafana-Dashboard.md) describes the setup.
 
 ## Isolating a second monitoring stack
 

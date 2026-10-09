@@ -1,9 +1,4 @@
-"""Live load-job results, read from AIPerf's per-request records while the job runs.
-
-AIPerf appends one JSON line per finished request to `profile_export.jsonl` in batches. The
-service reads the lines appended since its last read, so each poll parses only new requests.
-Warm-up requests are counted apart and leave the results.
-"""
+"""Live load-job results from AIPerf's per-request records."""
 
 from __future__ import annotations
 
@@ -26,13 +21,13 @@ from .service import ControlService
 ARTIFACTS = "aiperf"
 RECORDS = "profile_export.jsonl"
 COMPLETED = "completed"
-# Result name and AIPerf metric tag of each latency the results report, in milliseconds.
+# Result name and AIPerf metric tag of each latency, in milliseconds.
 LATENCIES = {
     "ttft": "time_to_first_token",
     "itl": "inter_token_latency",
     "request": "request_latency",
 }
-# The time series keeps at most this many points, in buckets of at least BUCKET_S seconds.
+# Smallest time-series bucket, in seconds, and the most points kept.
 BUCKET_S = 5
 MAX_POINTS = 120
 
@@ -122,7 +117,7 @@ class LiveRecords:
         with self.path.open("rb") as stream:
             stream.seek(self._offset)
             data = stream.read()
-        # A line without its newline is still being written; the next refresh reads it.
+        # Read up to the last complete line.
         complete = data.rfind(b"\n") + 1
         self._offset += complete
         for line in data[:complete].splitlines():
@@ -139,10 +134,7 @@ class LiveRecords:
                 self.samples.append(found)
 
     def results(self, slo: Mapping[str, float]) -> dict[str, Any]:
-        """Return the counts, rates, latency percentiles and time series of the samples so far.
-
-        `slo` maps AIPerf metric tags to the job's goodput targets in milliseconds.
-        """
+        """Return the counts, rates, latency percentiles and time series so far."""
         samples = self.samples
         completed = [s for s in samples if s.outcome == COMPLETED]
         errors: dict[str, int] = {}
@@ -222,7 +214,7 @@ def live_routes(service: ControlService, slo: Mapping[str, float]) -> APIRouter:
         job = None if service.jobs is None else service.jobs.job
         if job is None:
             return JSONResponse({"detail": "no load job has run"}, status_code=404)
-        # Job IDs restart in each session, so the job directory names the job.
+        # The job directory identifies the job.
         key = str(job.directory)
         records = followed.get(key)
         if records is None:

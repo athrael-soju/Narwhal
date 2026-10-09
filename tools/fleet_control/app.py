@@ -19,11 +19,7 @@ API = "/api"
 
 
 class BearerAuth:
-    """Refuse every HTTP request whose Authorization header lacks the control token.
-
-    A GET request for one of the `public` paths passes without the token. Those paths serve
-    the console page, which holds no fleet data and sends the token with each API request.
-    """
+    """Refuse HTTP requests without the control token, except GETs for `public` paths."""
 
     def __init__(self, app: ASGIApp, token: str, public: Iterable[str] = ()) -> None:
         self.app = app
@@ -126,10 +122,7 @@ def create_app(
     routers: Iterable[APIRouter] = (),
     public: Iterable[str] = (),
 ) -> FastAPI:
-    """Build the control app; `routers` add further routes behind the same token.
-
-    GET requests for the `public` paths pass without the token; only data-free pages belong there.
-    """
+    """Build the control app with `routers` behind the token."""
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

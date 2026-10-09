@@ -1,9 +1,4 @@
-"""Engine actions: hook-driven pause, resume, stop and start, and router drain and readmit.
-
-Each action names one engine from the session's baseline fleet configuration and records
-that engine's router state before and after the action. Start and resume also wait until the
-router returns the engine to service, because a hook can exit 0 before the engine answers.
-"""
+"""Engine pause, resume, stop, start, drain and readmit."""
 
 from __future__ import annotations
 
@@ -25,7 +20,7 @@ from .hooks import HookResult
 from .records import Action, Session
 from .service import ActionError, ControlService, Operation, refused
 
-# The private configuration names the deployment's command for each hook action.
+# Hook for each hook action.
 HOOK_ACTIONS = {
     "pause": "engine_pause",
     "resume": "engine_resume",
@@ -40,10 +35,9 @@ ACTIONS = (*HOOK_ACTIONS, *LIFECYCLE_ACTIONS)
 # Optional request fields each action accepts beyond the engine it names.
 ACTION_PARAMS: dict[str, frozenset[str]] = {"drain": frozenset({"deadline_s"})}
 STATE_PATH = "/narwhal/state"
-# State reads use this shorter limit so a hung router cannot hold an action for router.timeout_s.
+# Timeout for router state reads, in seconds.
 STATE_TIMEOUT_S = 10.0
-# Hook actions after which the engine must be back in service. The router probes an ejected
-# engine every 10 s by default and readmits it once its checks pass.
+# Actions that wait for the engine to return to service.
 RETURNING_ACTIONS = frozenset({"start", "resume"})
 RETURN_POLL_S = 2.0
 
@@ -79,7 +73,7 @@ class EngineActions:
         )
 
     async def within(self, iid: str, action: str) -> Action:
-        """Run and record `action` on engine `iid` inside an exclusive action already running."""
+        """Run and record `action` on engine `iid` within a running exclusive action."""
         name = f"engine.{action}"
         return await self.service._perform(
             name, {"engine": iid}, self._operation(iid, action, {}), True
@@ -147,11 +141,7 @@ class EngineActions:
         before: Mapping[str, Any],
         effect: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Wait up to `router.timeout_s` for the router to return `iid` to service.
-
-        Fail early when the router blocks the engine's readmission or reports that its profiles
-        no longer match the restarted process.
-        """
+        """Wait up to `router.timeout_s` for the router to return `iid` to service."""
         limit = self.service.config.router.timeout_s
         started = time.monotonic()
         seen = before.get("event")
@@ -194,10 +184,7 @@ class EngineActions:
         return effect
 
     async def engine_state(self, client: httpx.AsyncClient, iid: str) -> dict[str, Any]:
-        """Return the router's view of one engine, or the reason it could not be read.
-
-        An unreadable state does not stop the action; the record carries the reason instead.
-        """
+        """Return the router's view of one engine, or the reason it could not be read."""
         try:
             return (await self._slices(client, [iid]))[iid]
         except StateUnavailable as exc:
@@ -244,12 +231,7 @@ def baseline_engine(session: Session, iid: str) -> Mapping[str, Any]:
 
 
 def engine_slice(state: Mapping[str, Any], iid: str) -> dict[str, Any]:
-    """Return one engine's part of a `narwhal.state` document.
-
-    The slice holds the engine's pool, its availability flags, its resident work, its breaker
-    streaks, its lifecycle record and process start, the router's readiness and wave, and the
-    router's latest lifecycle event for the engine, which names why an ejected engine stays out.
-    """
+    """Return one engine's part of a `narwhal.state` document."""
     pools = state["pools"]
     lifecycle = state["lifecycle"]
     events = [e for e in lifecycle.get("events", []) if isinstance(e, dict) and e.get("iid") == iid]

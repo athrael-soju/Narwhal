@@ -6,6 +6,20 @@ description: Pause, resume, stop, start, drain and readmit engines from the flee
 
 The **Engines** view lists each engine in the baseline fleet configuration with its role, router state, resident requests and last action. Its heading shows the prefill-to-decode split of the engines in service, such as `split 2P:6D`.
 
+## Find an engine
+
+The list sorts engines by state, most severe first: ejected and blocked engines, then quarantined, draining, drained and probation engines, then paused and stopped engines, then engines in service. Click a column heading to sort by that column, and click it again to reverse the order.
+
+To narrow the list:
+
+- Click a state above the list, such as **Draining**, to show only engines in that state. **Needs attention** shows every engine that is not in service. Click the state again to show all engines.
+- Type part of an engine ID in **Find engine**.
+- Choose a role in **All roles**.
+
+**Clear filters** removes all three. When the fleet has more than 10 engines, the list splits into pages; choose 10, 20, 50 or 100 engines per page.
+
+Click an engine ID to open its details beside the list: its state, role, resident requests, router lifecycle state and flags, the router's reason when the engine is ejected, and the engine's actions in this session.
+
 <div class="narwhal-panel-row" markdown>
 
 ![Engines view with n7 draining.](../../assets/fleet-control/engines-draining.png)

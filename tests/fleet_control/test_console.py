@@ -8,6 +8,7 @@ import json
 import re
 import tempfile
 import unittest
+from dataclasses import replace
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -206,6 +207,14 @@ class ConsoleConfigTests(unittest.TestCase):
                 {"grafana_url": GRAFANA, "auto_connect": 1},
                 "console.auto_connect must be true or false",
             ),
+            "trusted hosts": (
+                {"grafana_url": GRAFANA, "auto_connect": True, "trusted_hosts": ["ops box"]},
+                "console.trusted_hosts must be a list of host names",
+            ),
+            "trusted hosts without auto connect": (
+                {"grafana_url": GRAFANA, "trusted_hosts": ["ops"]},
+                "console.trusted_hosts requires console.auto_connect",
+            ),
         }
         for label, (console, problem) in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as folder:
@@ -235,8 +244,8 @@ class ConsoleConfigTests(unittest.TestCase):
     def test_grafana_allows_the_console_to_frame_its_panels(self) -> None:
         self.assertIn('GF_SECURITY_ALLOW_EMBEDDING: "true"', COMPOSE.read_text())
 
-    def test_grafana_text_panels_keep_the_console_frame_scripted(self) -> None:
-        self.assertIn('GF_PANELS_DISABLE_SANITIZE_HTML: "true"', COMPOSE.read_text())
+    def test_grafana_keeps_sanitizing_text_panel_html(self) -> None:
+        self.assertNotIn("GF_PANELS_DISABLE_SANITIZE_HTML", COMPOSE.read_text())
 
 
 class ConsoleCase(unittest.IsolatedAsyncioTestCase):
@@ -365,7 +374,7 @@ class ConsoleWithoutGrafanaTests(ConsoleCase):
         self.assertEqual(csp(response)["frame-src"], ["'none'"])
         settings = await self.client.get("/api/console", headers=self.auth)
         self.assertEqual(settings.json(), {"grafana": None, "load": True, "hooks": ["restore"]})
-        self.assertIn("No dashboard panels are configured", HTML)
+        self.assertIn('$("dashboard").hidden = Boolean(VIEW) || !panels.length;', HTML)
 
 
 class EmbeddedConsoleTests(ConsoleCase):
@@ -408,6 +417,25 @@ class AutoConnectTests(ConsoleCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertNotIn(TOKEN, response.text)
                 self.assertIn('id="token-form"', response.text)
+
+    async def test_trusted_host_names_get_the_token_at_any_port(self) -> None:
+        trusted = ConsoleConfig(GRAFANA, (), auto_connect=True, trusted_hosts=("ops", "10.0.0.5"))
+        routes = console_routes(replace(self.config, console=trusted), TOKEN)
+        app = FastAPI()
+        app.include_router(routes)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for host, carries in (
+                ("ops:3000", True),
+                ("OPS", True),
+                ("10.0.0.5:8080", True),
+                ("ops.attacker.example", False),
+                ("10.0.0.6", False),
+            ):
+                with self.subTest(host=host):
+                    response = await client.get("/console", headers={"host": host})
+                    self.assertEqual(TOKEN in response.text, carries)
 
     async def test_the_injected_page_keeps_its_policy_and_the_api_its_guard(self) -> None:
         response = await self.client.get("/console", headers={"host": "127.0.0.1:18020"})

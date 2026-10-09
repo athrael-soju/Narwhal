@@ -1,16 +1,4 @@
-"""The console page: every control beside embedded Grafana dashboard panels.
-
-The page is static HTML with inline CSS and JavaScript. It is served without the bearer token
-and holds no fleet data: the operator pastes the token into the page, which keeps it in the
-tab's sessionStorage and sends it as `Authorization: Bearer` on every API request. The API
-routes keep refusing requests without the token, and no cookie carries it, so another site
-cannot make the browser send an authenticated request.
-
-With `console.auto_connect`, the page carries the token in a meta element and connects on load,
-so any client that reaches the listener can read the token. The route serves that page for a
-loopback Host header and the page without the token for any other, including the Host header of
-a site that rebinds its own domain name to loopback.
-"""
+"""Routes for the console page and its settings."""
 
 from __future__ import annotations
 
@@ -52,12 +40,13 @@ def with_token(html: str, token: str) -> str:
     return html.replace(_TOKEN_ANCHOR, _TOKEN_ANCHOR + element)
 
 
-def loopback_host(host: str) -> bool:
-    """Return whether a Host header names a loopback address."""
+def token_host(host: str, trusted: tuple[str, ...]) -> bool:
+    """Return whether a Host header names a loopback address or one of the `trusted` names."""
     try:
-        return urlsplit(f"//{host}").hostname in LOOPBACK_HOSTS
+        name = urlsplit(f"//{host}").hostname
     except ValueError:
         return False
+    return name in LOOPBACK_HOSTS or name in trusted
 
 
 def inline_hashes(html: str) -> dict[str, list[str]]:
@@ -76,11 +65,7 @@ def origin(url: str) -> str:
 
 
 def content_security_policy(html: str, console: ConsoleConfig | None) -> str:
-    """Admit only the page's own inline code, API requests to this service and Grafana frames.
-
-    Grafana may frame the page only when the configuration opts in with `embed_in_grafana`, from
-    the `grafana_url` origin or from the console's own origin when a proxy serves both.
-    """
+    """Return the page's Content-Security-Policy."""
     hashes = inline_hashes(html)
     grafana = None if console is None else origin(console.grafana_url)
     frames = grafana if console is not None and console.panels else "'none'"
@@ -115,7 +100,7 @@ def panel_url(console: ConsoleConfig, panel: int) -> str:
 
 
 def console_document(config: ControlConfig) -> dict[str, Any]:
-    """Return the console settings the page reads after the operator supplies the token."""
+    """Return the console settings."""
     console = config.console
     grafana = None
     if console is not None:
@@ -128,13 +113,11 @@ def console_document(config: ControlConfig) -> dict[str, Any]:
 
 
 def console_routes(config: ControlConfig, token: str = "") -> APIRouter:
-    """Return the public console page, its redirect and the token-protected console settings.
-
-    With `console.auto_connect`, the page carries `token` for loopback hosts only.
-    """
+    """Return the console page, its redirect and the console settings routes."""
     routes = APIRouter()
     html = plain = page()
     auto_connect = config.console is not None and config.console.auto_connect
+    trusted = config.console.trusted_hosts if config.console is not None else ()
     if auto_connect:
         if not token:
             raise ValueError("console.auto_connect requires the bearer token")
@@ -145,7 +128,7 @@ def console_routes(config: ControlConfig, token: str = "") -> APIRouter:
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
     }
-    # X-Frame-Options cannot name an allowed origin; `frame-ancestors` admits Grafana instead.
+    # `frame-ancestors` names the origins that may frame the page.
     if config.console is None or not config.console.embed_in_grafana:
         headers["X-Frame-Options"] = "DENY"
 
@@ -155,7 +138,7 @@ def console_routes(config: ControlConfig, token: str = "") -> APIRouter:
 
     @routes.get(CONSOLE_PATH, include_in_schema=False)
     async def console_page(request: Request) -> Response:
-        body = html if loopback_host(request.headers.get("host", "")) else plain
+        body = html if token_host(request.headers.get("host", ""), trusted) else plain
         return Response(body, media_type="text/html; charset=utf-8", headers=headers)
 
     @routes.get(f"{API}/console")

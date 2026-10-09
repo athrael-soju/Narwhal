@@ -31,7 +31,7 @@ export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 
 ### Scraping the fleet control service
 
-To mark [fleet control](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations) actions and load jobs on the **Fleet control** dashboard, Prometheus must scrape the fleet control service. Before `make observe`, set its address and token:
+To mark [fleet control](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations) actions and load jobs on the **Narwhal Orchestrator** dashboard, Prometheus must scrape the fleet control service. Before `make observe`, set its address and token:
 
 ```bash
 export NARWHAL_CONTROL_METRICS_URL=http://127.0.0.1:8020
@@ -61,7 +61,6 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | Grafana datasource       | The `Prometheus` datasource points at the Prometheus listener                                                                       |
 | Dashboard                | `narwhal-router` loads from Grafana's `dashboard.grafana.app/v2beta1` API with its `router` selector defaulting to All (regex `.*`) |
 | Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present                                                     |
-| Fleet control dashboard  | `narwhal-fleet-control` loads                                                                                                       |
 | `narwhal-router` job     | Exactly one healthy target at `NARWHAL_ROUTER_URL`                                                                                  |
 | `engines` job            | One healthy target per fleet engine, labelled with its `iid`                                                                        |
 | Router readiness         | `narwhal_router_ready` reports `1`                                                                                                  |
@@ -101,8 +100,7 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | `tools/observability/prometheus-alerts.yml`                                  | `prometheus/prometheus-alerts.yml`                                                |
 | `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL`                                     | `prometheus/targets/router.json`, `prometheus/targets/engines.json`               |
 | `tools/observability/grafana/provisioning/`                                  | `grafana-provisioning/`                                                           |
-| `tools/observability/grafana-narwhal.json`                                   | `grafana-dashboards/narwhal.json`                                                 |
-| `tools/observability/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL` | `grafana-dashboards/fleet-control.json`                                           |
+| `tools/observability/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL` | `grafana-dashboards/narwhal.json`                                                 |
 | `NARWHAL_CONTROL_METRICS_URL`                                                | `prometheus/targets/fleet-control.json`, empty if unset                           |
 | `NARWHAL_CONTROL_TOKEN`                                                      | `prometheus/fleet-control-token`, empty if `NARWHAL_CONTROL_METRICS_URL` is unset |
 

@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Narwhal fleet control</title>
 <style>
-/* Fleet control design tokens. The role colours mark prefill, decode and colocated engines. */
+/* Design tokens. */
 :root {
   color-scheme: light;
   --sans: "IBM Plex Sans", "Helvetica Neue", system-ui, sans-serif;
@@ -297,11 +297,11 @@ body:not(.framed) .strip { position: sticky; top: 0; z-index: 3; }
 .strip > .feedback { padding: 0 24px 10px; }
 .feedback { flex: 1 1 100%; margin: 0; font-size: 12px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .feedback .detail { color: var(--muted); overflow-wrap: anywhere; }
-/* Grafana shows its panel menu over the top right corner of an untitled panel on hover. */
+/* Room for Grafana's panel menu. */
 body.framed .panel-head { padding-right: 36px; }
 body.framed .strip { display: flex; align-items: center; gap: 0; min-height: 100vh; border: 0; padding: 0 36px 0 4px; white-space: nowrap; }
 body.framed .strip-top { display: contents; }
-body.framed .strip-title, body.framed .strip-top .divider, body.framed .strip-top .spacer { display: none; }
+body.framed .strip-title, body.framed .strip-top .divider, body.framed .strip-top .spacer, body.framed #open-dashboard { display: none; }
 body.framed .conn { padding-right: 16px; }
 body.framed .strip-cells { flex: 1 1 auto; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 body.framed .cell { padding: 2px 16px; gap: 4px; }
@@ -331,6 +331,12 @@ body.framed .connect { margin: 0; padding: 4px; border: 0; max-width: none; }
 .board { display: grid; gap: 16px; max-width: 1680px; margin: 0 auto; padding: 20px 24px 48px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .area-engines, .area-dashboard { grid-column: 1 / -1; }
 .area-load, .area-results { align-self: stretch; }
+/* Activity: fixed height, scrolling rows. */
+.area-activity { align-self: stretch; min-height: 400px; }
+@media (max-width: 1200px) { .area-activity { height: 420px; } }
+.activity-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+.activity-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+body.framed .area-activity { height: 100vh; }
 @media (max-width: 1200px) { .board { grid-template-columns: minmax(0, 1fr); } }
 body.framed .board { display: block; padding: 0; max-width: none; }
 .panel {
@@ -366,10 +372,46 @@ body.framed .scroll { margin: 0 -8px; }
 .tbl td.wrap { white-space: normal; min-width: 180px; }
 .tbl .empty { color: var(--muted); }
 .tbl .err { display: block; max-width: 320px; margin-top: 3px; font-size: 11.5px; color: var(--muted); white-space: normal; }
-#engines td { vertical-align: middle; height: 48px; padding-top: 6px; padding-bottom: 6px; }
+#engines td { vertical-align: middle; height: 40px; padding-top: 4px; padding-bottom: 4px; }
+#engines tr.selected td { background: var(--row-hover); }
+#engines tr.selected td:first-child { box-shadow: inset 2px 0 var(--info); }
 #engines tr:hover td { background: var(--row-hover); }
 #engines tr.active td { background: var(--active); }
 .engine-id { font: 600 13px var(--mono); color: var(--strong); }
+.link { padding: 0; border: 0; background: none; cursor: pointer; text-align: left; }
+.link:hover { text-decoration: underline; }
+/* Engine list. */
+.summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--text); font: 500 12px/1 var(--sans); cursor: pointer; }
+.chip:hover { background: var(--btn-hover); }
+.chip[aria-pressed="true"] { background: var(--btn-hover); border-color: var(--btn-line); color: var(--strong); }
+.chip .count { font-family: var(--mono); color: var(--muted); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar input { width: 200px; }
+.toolbar select { width: 140px; }
+.pager select { width: auto; height: 28px; }
+.pager { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.pager .lbl { font-family: var(--mono); margin-right: 4px; }
+.sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.sort:hover { color: var(--strong); }
+th[aria-sort="ascending"] .sort::after { content: "↑"; }
+th[aria-sort="descending"] .sort::after { content: "↓"; }
+.engines-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 1100px) {
+  .engines-body.with-drawer { grid-template-columns: minmax(0, 1fr) 320px; }
+  .engines-body.with-drawer .scroll { margin-right: 0; }
+}
+.drawer { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px 16px; background: var(--raise); border: 1px solid var(--line-soft); border-radius: 4px; }
+.drawer-head { display: flex; align-items: center; gap: 10px; }
+.drawer-head h3 { margin: 0; font: 600 14px var(--mono); color: var(--strong); }
+.drawer-head .btn { margin-left: auto; }
+.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12.5px; align-items: baseline; }
+.facts dt { font: 500 10.5px/1.45 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.drawer .reason { margin: 0; font-size: 12px; color: var(--muted); }
+.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.history li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.history .err { flex-basis: 100%; color: var(--muted); }
 .role { display: inline-flex; align-items: center; gap: 7px; font: 500 12px/1 var(--mono); color: var(--text); }
 .role::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--faint); }
 .role-prefill::before { background: var(--prefill); }
@@ -431,8 +473,7 @@ body.framed .scroll { margin: 0 -8px; }
 .field.half { grid-column: span 2; }
 @media (max-width: 560px) { .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .field.wide, .field.half { grid-column: span 2; } }
 .panel-form .hint { padding: 10px 12px; background: var(--inset); border-radius: 4px; line-height: 1.55; }
-/* The Load job form fills its panel, which matches the Load metrics panel beside it. The fields,
-   the workload hint and the buttons share the extra height. */
+/* The Load job form fills its panel. */
 #view-load .panel-form { flex: 1 1 auto; justify-content: space-between; }
 #view-load .fields { row-gap: 18px; }
 #view-load .field input, #view-load .field select { height: 36px; }
@@ -520,6 +561,7 @@ dialog ul:empty { display: none; }
     <span class="divider" aria-hidden="true"></span>
     <span id="conn" class="conn"><span class="dot" aria-hidden="true"></span><span id="conn-text">Not connected</span></span>
     <span class="spacer"></span>
+    <a id="open-dashboard" class="btn btn-sm" href="#" target="_blank" rel="noopener" hidden>Dashboard ↗</a>
     <button id="forget" class="btn btn-sm" type="button" hidden>Forget token</button>
   </div>
   <div id="strip-cells" class="strip-cells">
@@ -573,11 +615,35 @@ dialog ul:empty { display: none; }
       <div class="legend" aria-label="Role colours"><span class="role role-prefill">prefill</span><span class="role role-decode">decode</span><span class="role role-colocated">colocated</span></div>
     </div>
     <p id="engines-notice" class="notice" hidden></p>
-    <div class="scroll">
-      <table class="tbl">
-        <thead><tr><th scope="col">Engine</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Resident</th><th scope="col">Last action</th><th scope="col" class="end">Actions</th></tr></thead>
-        <tbody id="engines"></tbody>
-      </table>
+    <div id="engine-summary" class="summary" role="group" aria-label="Filter engines by state"></div>
+    <div class="toolbar">
+      <label for="engine-search" class="sr-only">Find engines by ID</label>
+      <input id="engine-search" type="search" placeholder="Find engine" autocomplete="off" spellcheck="false">
+      <label for="engine-role" class="sr-only">Role</label>
+      <select id="engine-role"><option value="">All roles</option><option value="prefill">Prefill</option><option value="decode">Decode</option><option value="colocated">Colocated</option></select>
+      <button id="engine-clear" class="btn btn-sm" type="button" hidden>Clear filters</button>
+      <span class="pager">
+        <span id="engine-range" class="lbl"></span>
+        <label for="engine-per-page" class="sr-only">Engines per page</label>
+        <select id="engine-per-page"><option value="10">10 per page</option><option value="20">20 per page</option><option value="50">50 per page</option><option value="100">100 per page</option></select>
+        <button id="engine-prev" class="btn btn-sm btn-icon" type="button" aria-label="Previous page">‹</button>
+        <button id="engine-next" class="btn btn-sm btn-icon" type="button" aria-label="Next page">›</button>
+      </span>
+    </div>
+    <div id="engines-body" class="engines-body">
+      <div class="scroll">
+        <table class="tbl">
+          <thead><tr>
+            <th scope="col" data-sort="id"><button class="sort" type="button">Engine</button></th>
+            <th scope="col" data-sort="role"><button class="sort" type="button">Role</button></th>
+            <th scope="col" data-sort="state"><button class="sort" type="button">State</button></th>
+            <th scope="col" data-sort="resident"><button class="sort" type="button">Resident</button></th>
+            <th scope="col">Last action</th><th scope="col" class="end">Actions</th>
+          </tr></thead>
+          <tbody id="engines"></tbody>
+        </table>
+      </div>
+      <aside id="engine-drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
     </div>
     <div id="last-action" class="inset last-action" hidden></div>
   </section>
@@ -662,7 +728,7 @@ dialog ul:empty { display: none; }
       <h2 id="activity-title">Activity <span id="activity-state" class="sub"></span></h2>
       <a id="run-record" href="#" class="lbl" hidden>Run record</a>
     </div>
-    <div class="scroll">
+    <div class="scroll activity-scroll" tabindex="0" aria-label="Recorded actions">
       <table class="tbl">
         <thead><tr><th scope="col">#</th><th scope="col">Started (UTC)</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col" class="end">Duration</th><th scope="col">Outcome</th></tr></thead>
         <tbody id="activity"></tbody>
@@ -904,7 +970,6 @@ async function call(name, params, body) {
   }
   let response;
   try {
-    // Relative to the page, so a proxy can serve the console under a path.
     response = await fetch("." + path, init);
   } catch (error) {
     return { status: 0, path, body: { detail: "the control service is unreachable: " + error.message } };
@@ -917,7 +982,7 @@ async function call(name, params, body) {
   return { status: response.status, path, body: data };
 }
 
-// An action reply is the recorded entry; a refused or failed one nests it under `action`.
+// The recorded entry of an action reply.
 function actionEntry(body) {
   if (!body) return null;
   return body.action && typeof body.action === "object" ? body.action : body;
@@ -1099,8 +1164,7 @@ function render() {
 
 // Engine state.
 function processStates() {
-  // Pause, resume, stop and start run as hooks outside the router, so their state comes from
-  // the run record.
+  // Hook actions' engine states, from the run record.
   const states = {};
   for (const action of (state.record ? state.record.actions : [])) {
     if (action.outcome !== "ok") continue;
@@ -1192,7 +1256,6 @@ function activeDrain(iid, slice, recorded) {
 function restartPending(slice) {
   const record = slice && !slice.error ? slice.lifecycle : null;
   if (!record || !record.restart_required || !record.old_process_start) return false;
-  // An unknown process start leaves the decision to the router.
   return slice.process_start === record.old_process_start;
 }
 
@@ -1200,7 +1263,6 @@ function primaryAction(slice, process) {
   if (process) return process.state === "stopped" ? "start" : "resume";
   const lifecycle = lifecycleState(slice);
   if (lifecycle && lifecycle !== "active") return "readmit";
-  // Readmit stays the main action for an ejected engine so its row shows the router's reason.
   if (slice && !slice.error && slice.ejected) return "readmit";
   return "drain";
 }
@@ -1270,6 +1332,9 @@ function renderStatus() {
   conn.title = $("conn-text").textContent;
   const confirming = !$("strip-confirm").hidden;
   $("forget").hidden = !connected || Boolean(PAGE_TOKEN);
+  const dashboard = connected && state.settings.grafana;
+  $("open-dashboard").hidden = !dashboard;
+  if (dashboard) $("open-dashboard").href = dashboard.dashboard_url;
   $("strip-signals").hidden = !connected;
   $("strip-state").hidden = !connected || confirming;
   $("strip-actions").hidden = !connected || confirming;
@@ -1349,7 +1414,7 @@ function renderSignals() {
   $("alerts-names").textContent = alerts.firing.map((alert) => alert.alertname + (alert.labels.iid ? " " + alert.labels.iid : "")).join(" · ");
 }
 
-// The changes the session leaves in the fleet, as the service reports them with the run record.
+// The changes the session leaves in the fleet.
 function changeList() {
   const changes = state.record && state.record.changes;
   if (!changes) return [];
@@ -1382,15 +1447,20 @@ function engineRow(iid) {
   const more = el("button", { type: "button", class: "btn btn-sm btn-icon", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "More actions for " + iid },
     el("span", { class: "dots", "aria-hidden": "true" }, el("span"), el("span"), el("span")));
   more.addEventListener("click", () => (menuFor === iid ? closeMenu(true) : openMenu(iid, more)));
+  const open = el("button", { type: "button", class: "link engine-id", "aria-controls": "engine-drawer", "aria-expanded": "false", title: "Show details for " + iid }, iid);
+  open.addEventListener("click", () => {
+    engineView.open = engineView.open === iid ? null : iid;
+    renderEngines();
+  });
   const cells = {
-    id: el("td", { class: "engine-id" }, iid),
+    id: el("td", {}, open),
     role: el("td", {}),
     state: el("td", {}),
     resident: el("td", {}),
     last: el("td", {}),
     actions: el("td", { class: "end" }, el("span", { class: "cell-actions" }, primary, more)),
   };
-  row = { tr: el("tr", {}, ...Object.values(cells)), cells, primary, more };
+  row = { tr: el("tr", {}, ...Object.values(cells)), cells, primary, more, open };
   rows.set(iid, row);
   return row;
 }
@@ -1422,9 +1492,117 @@ function lastCell(iid, recorded, drain) {
   return [el("span", { class: "lbl" }, "–")];
 }
 
+// Engine list filters, sort and page.
+const PAGE_SIZES = [10, 20, 50, 100];
+const PAGE_KEY = "narwhal-control-engines-per-page";
+const TONE_RANK = { bad: 0, orange: 1, magenta: 2, warn: 3, muted: 4, ok: 5 };
+const engineView = { status: "", query: "", role: "", sort: "state", descending: false, page: 0, perPage: 20, open: null };
+
+function engineEntries(context) {
+  return context.ids.map((iid) => {
+    const slice = context.engines[iid];
+    const process = context.processes[iid];
+    const status = returningStatus(iid) || engineStatus(slice, process);
+    return {
+      iid, slice, process, status,
+      group: status.label.split(" · ")[0],
+      role: slice && !slice.error ? slice.role : null,
+      counts: slice && !slice.error && !process ? slice.resident : null,
+    };
+  });
+}
+
+function rank(entry) {
+  return TONE_RANK[entry.status.tone] ?? TONE_RANK.muted;
+}
+
+function compareEngines(a, b) {
+  const byId = a.iid.localeCompare(b.iid, undefined, { numeric: true });
+  let order = 0;
+  if (engineView.sort === "id") order = byId;
+  else if (engineView.sort === "role") order = String(a.role).localeCompare(String(b.role));
+  else if (engineView.sort === "state") order = rank(a) - rank(b) || a.group.localeCompare(b.group);
+  else if (engineView.sort === "resident") order = (residentTotal(a.counts) ?? -1) - (residentTotal(b.counts) ?? -1);
+  return (engineView.descending ? -order : order) || byId;
+}
+
+function engineMatches(entry) {
+  if (engineView.status === "attention" ? entry.status.tone === "ok" : engineView.status && entry.group !== engineView.status) return false;
+  if (engineView.role && entry.role !== engineView.role) return false;
+  return !engineView.query || entry.iid.toLowerCase().includes(engineView.query.toLowerCase());
+}
+
+function filtersActive() {
+  return Boolean(engineView.status || engineView.query || engineView.role);
+}
+
+function renderEngineSummary(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.group) || { count: 0, entry };
+    group.count += 1;
+    groups.set(entry.group, group);
+  }
+  const attention = entries.filter((entry) => entry.status.tone !== "ok").length;
+  const chips = [["", "All", entries.length, null]];
+  if (attention) chips.push(["attention", "Needs attention", attention, "bad"]);
+  for (const [name, group] of [...groups].sort((x, y) => rank(x[1].entry) - rank(y[1].entry) || x[0].localeCompare(y[0]))) {
+    chips.push([name, capital(name), group.count, group.entry.status.tone]);
+  }
+  if (engineView.status && !chips.some(([value]) => value === engineView.status)) chips.push([engineView.status, capital(engineView.status), 0, "muted"]);
+  update("engine-summary", $("engine-summary"), () => [JSON.stringify([chips, engineView.status]), chips.map(([value, label, count, tone]) => {
+    const chip = el("button", { type: "button", class: "chip", "aria-pressed": String(engineView.status === value) },
+      el("span", { class: tone ? "state tone-" + tone : "" }, label), el("span", { class: "count" }, String(count)));
+    chip.addEventListener("click", () => {
+      engineView.status = engineView.status === value ? "" : value;
+      engineView.page = 0;
+      renderEngines();
+    });
+    return chip;
+  })]);
+}
+
+function renderEngineDrawer(context, entries) {
+  const drawer = $("engine-drawer");
+  const entry = entries.find((item) => item.iid === engineView.open);
+  if (!entry) engineView.open = null;
+  drawer.hidden = !entry;
+  $("engines-body").classList.toggle("with-drawer", Boolean(entry));
+  if (!entry) return;
+  const { iid, slice, status } = entry;
+  const usable = slice && !slice.error;
+  const history = (state.record ? state.record.actions : []).filter((action) => action.params && action.params.engine === iid).reverse();
+  const tags = engineTags(slice, status);
+  const facts = [
+    ["State", el("span", { class: "state tone-" + status.tone }, status.label)],
+    ["Role", entry.role ? el("span", { class: "role role-" + entry.role }, entry.role) : "–"],
+    ["Resident", el("span", { class: "mono" }, residentLabel(entry.counts))],
+    ["Lifecycle", el("span", { class: "mono" }, (lifecycleState(slice) || "–").replace("_", " "))],
+    ["Flags", tags.length ? el("span", { class: "tags" }, ...tags.map((tag) => el("span", { class: "tag" }, tag))) : "none"],
+  ];
+  if (!(usable && slice.ejected)) facts.push(["Router event", usable && slice.event ? el("span", { class: "mono" }, slice.event.action.replace(/_/g, " ")) : "–"]);
+  const parts = [
+    el("div", { class: "drawer-head" }, el("h3", { id: "drawer-title" }, iid),
+      el("button", { type: "button", class: "btn btn-sm btn-icon", "aria-label": "Close details for " + iid, "data-close": "drawer" }, "×")),
+    el("dl", { class: "facts" }, ...facts.flatMap(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
+  ];
+  if (usable && slice.ejected) parts.push(el("p", { class: "reason" }, ejectedReason(iid, slice)));
+  if (slice && slice.error) parts.push(el("p", { class: "reason" }, text(slice.error)));
+  parts.push(el("span", { class: "k" }, "Actions in this session"));
+  parts.push(history.length
+    ? el("ol", { class: "history" }, ...history.map((action) => el("li", {},
+      el("span", { class: "mono lbl" }, clock(action.started_at)),
+      el("span", { class: "mono strong" }, shortName(action.action)),
+      el("span", { class: "state tone-" + (OUTCOME_TONES[action.outcome] || "bad") }, action.outcome),
+      ...(action.error ? [el("span", { class: "err" }, action.error)] : []))))
+    : el("p", { class: "reason" }, state.record ? "No actions on " + iid + " in this session." : "Start a session to record actions."));
+  update("engine-drawer", drawer, () => [JSON.stringify([iid, facts.map(([, value]) => (value instanceof Node ? value.textContent + value.className : value)),
+    history.map((action) => [action.seq, action.outcome, action.error]), Boolean(state.record), usable && slice.ejected]), parts]);
+}
+
 function renderEngines() {
   const context = engineContext();
-  const { engines, ids, processes, last, busy } = context;
+  const { engines, ids, last, busy } = context;
   const notice = $("engines-notice");
   const gate = sessionGate();
   if (state.enginesError) {
@@ -1435,23 +1613,41 @@ function renderEngines() {
     notice.className = "notice";
   }
   notice.hidden = !state.enginesError && !gate;
+  const entries = engineEntries(context);
   const serving = { prefill: 0, decode: 0 };
+  for (const entry of entries) if (entry.role in serving && !entry.process && !entry.slice.ejected) serving[entry.role] += 1;
+  const split = serving.prefill + serving.decode ? " · split " + serving.prefill + "P:" + serving.decode + "D" : "";
+  $("engines-state").textContent = ids.length ? ids.length + split : "";
+  renderEngineSummary(entries);
+  const matching = entries.filter(engineMatches).sort(compareEngines);
+  const perPage = engineView.perPage;
+  const pages = Math.max(1, Math.ceil(matching.length / perPage));
+  engineView.page = Math.min(engineView.page, pages - 1);
+  const first = engineView.page * perPage;
+  const shown = matching.slice(first, first + perPage);
+  $("engine-range").textContent = matching.length ? (first + 1) + "–" + (first + shown.length) + " of " + matching.length : "0 of " + entries.length;
+  $("engine-prev").hidden = $("engine-next").hidden = pages === 1;
+  $("engine-per-page").hidden = entries.length <= PAGE_SIZES[0];
+  $("engine-prev").disabled = engineView.page === 0;
+  $("engine-next").disabled = engineView.page >= pages - 1;
+  $("engine-clear").hidden = !filtersActive();
+  for (const th of document.querySelectorAll("#view-engines th[data-sort]")) {
+    if (th.dataset.sort === engineView.sort) th.setAttribute("aria-sort", engineView.descending ? "descending" : "ascending");
+    else th.removeAttribute("aria-sort");
+  }
   const ordered = [];
-  for (const iid of ids) {
-    const slice = engines[iid];
-    const process = processes[iid];
+  for (const entry of shown) {
+    const { iid, slice, process, status, role, counts } = entry;
     const row = engineRow(iid);
-    const role = slice && !slice.error ? slice.role : null;
-    const status = returningStatus(iid) || engineStatus(slice, process);
-    if (role && !process && !(slice.ejected)) serving[role] += 1;
     const drain = activeDrain(iid, slice, last[iid]);
     row.tr.classList.toggle("active", Boolean(drain));
+    row.tr.classList.toggle("selected", engineView.open === iid);
+    row.open.setAttribute("aria-expanded", String(engineView.open === iid));
     update("role:" + iid, row.cells.role, () => [String(role), [role ? el("span", { class: "role role-" + role }, role) : el("span", { class: "lbl" }, "-")]]);
     const tags = engineTags(slice, status);
     update("state:" + iid, row.cells.state, () => [status.label + status.tone + tags.join(","), [el("span", { class: "state-cell" },
       el("span", { class: "state tone-" + status.tone }, status.label),
       ...(tags.length ? [el("span", { class: "tags" }, ...tags.map((tag) => el("span", { class: "tag" }, tag)))] : []))]]);
-    const counts = slice && !slice.error && !process ? slice.resident : null;
     const startTotal = drain ? residentTotal(drain.start) : null;
     const fraction = startTotal ? Math.max(0, Math.min(1, 1 - residentTotal(counts) / startTotal)) : null;
     update("resident:" + iid, row.cells.resident, () => [residentLabel(counts) + "|" + fraction, [el("div", { class: "resident" },
@@ -1472,14 +1668,15 @@ function renderEngines() {
     ordered.push(row.tr);
   }
   for (const iid of [...rows.keys()]) if (!(iid in engines)) rows.delete(iid);
-  const split = serving.prefill + serving.decode ? " · split " + serving.prefill + "P:" + serving.decode + "D" : "";
-  $("engines-state").textContent = ids.length ? ids.length + split : "";
   const body = $("engines");
   if (!ordered.length) {
-    body.replaceChildren(el("tr", {}, el("td", { colSpan: 6, class: "empty" }, state.enginesError ? "Engine state is unavailable." : "Reading engine state…")));
+    const message = state.enginesError ? "Engine state is unavailable." : !ids.length ? "Reading engine state…" : "No engines match these filters.";
+    update("engines-empty", body, () => [message, [el("tr", {}, el("td", { colSpan: 6, class: "empty" }, message))]]);
   } else if (ordered.length !== body.children.length || ordered.some((tr, index) => body.children[index] !== tr)) {
+    state.keys["engines-empty"] = "";
     body.replaceChildren(...ordered);
   }
+  renderEngineDrawer(context, entries);
   if (menuFor) renderMenu();
   renderLastAction(context);
 }
@@ -1639,8 +1836,7 @@ async function loadWorkloads(enabled) {
   workloadHint();
 }
 
-// A timestamped trace replays its recorded timing in full, so its inputs clear. Other workloads
-// start each empty input at the service's default.
+// Fill each input with its default.
 function jobDefaults() {
   const workload = state.workloads[$("job-workload").value];
   if (!workload) return;
@@ -1739,7 +1935,7 @@ function jobProgress(job) {
   return { fraction: Math.min(1, elapsed / (limit * 1000)), label };
 }
 
-// Live results: the service reads AIPerf's per-request records while the job runs.
+// Live results.
 async function refreshLive() {
   const job = state.health && state.health.job;
   if (!job) {
@@ -1763,7 +1959,7 @@ function milliseconds(value) {
   return value >= 1000 ? amount(value / 1000, 2) + " s" : amount(value, value < 10 ? 1 : 0) + " ms";
 }
 
-// The p95 tone against the target: green below 80%, yellow below 100%, red at or above it.
+// p95 tone against the target.
 function targetTone(value, target) {
   if (!target || value === null || value === undefined) return "";
   return value < 0.8 * target ? "tone-ok" : value < target ? "tone-warn" : "tone-bad";
@@ -1820,8 +2016,7 @@ function renderResults() {
   drawChart("chart-ttft", points.map((point) => [point.t, point.ttft_p95]), live.slo.ttft, milliseconds);
 }
 
-// Draw one series over job time as a line over a filled area, with an optional dashed target line.
-// The chart draws in a 300 by 96 box that the SVG stretches to the panel width.
+// Draw one series and its target line.
 function drawChart(id, points, target, format) {
   const svg = $(id);
   const width = 300;
@@ -2060,9 +2255,8 @@ function renderActivity() {
 // Dashboard panels.
 function renderDashboard(grafana) {
   const panels = grafana ? grafana.panels : [];
-  $("dashboard").hidden = Boolean(VIEW) || (!panels.length && FRAMED);
+  $("dashboard").hidden = Boolean(VIEW) || !panels.length;
   if (!panels.length) {
-    $("dashboard-note").textContent = "No dashboard panels are configured. List Grafana panel IDs in console.panels of the control configuration to embed them here.";
     $("panels").replaceChildren();
     return;
   }
@@ -2157,6 +2351,56 @@ $("confirm-ok").addEventListener("click", () => closeConfirm(true));
 $("confirm-cancel").addEventListener("click", () => closeConfirm(false));
 $("confirm-dialog").addEventListener("cancel", (event) => { event.preventDefault(); closeConfirm(false); });
 
+$("engine-search").addEventListener("input", () => {
+  engineView.query = $("engine-search").value.trim();
+  engineView.page = 0;
+  renderEngines();
+});
+$("engine-role").addEventListener("change", () => {
+  engineView.role = $("engine-role").value;
+  engineView.page = 0;
+  renderEngines();
+});
+$("engine-clear").addEventListener("click", () => {
+  Object.assign(engineView, { status: "", query: "", role: "", page: 0 });
+  $("engine-search").value = "";
+  $("engine-role").value = "";
+  renderEngines();
+});
+{
+  const stored = Number(readStored(PAGE_KEY));
+  engineView.perPage = PAGE_SIZES.includes(stored) ? stored : 20;
+  $("engine-per-page").value = String(engineView.perPage);
+}
+$("engine-per-page").addEventListener("change", () => {
+  engineView.perPage = Number($("engine-per-page").value);
+  engineView.page = 0;
+  try { sessionStorage.setItem(PAGE_KEY, String(engineView.perPage)); } catch (error) { /* Kept in memory only. */ }
+  renderEngines();
+});
+$("engine-prev").addEventListener("click", () => {
+  engineView.page = Math.max(0, engineView.page - 1);
+  renderEngines();
+});
+$("engine-next").addEventListener("click", () => {
+  engineView.page += 1;
+  renderEngines();
+});
+for (const th of document.querySelectorAll("#view-engines th[data-sort]")) {
+  th.querySelector("button").addEventListener("click", () => {
+    engineView.descending = engineView.sort === th.dataset.sort ? !engineView.descending : false;
+    engineView.sort = th.dataset.sort;
+    renderEngines();
+  });
+}
+$("engine-drawer").addEventListener("click", (event) => {
+  if (!event.target.closest("[data-close]")) return;
+  const iid = engineView.open;
+  engineView.open = null;
+  renderEngines();
+  const row = rows.get(iid);
+  if (row) row.open.focus();
+});
 $("engine-menu").addEventListener("keydown", (event) => {
   const moves = { ArrowDown: 1, ArrowUp: -1, Home: "first", End: "last" };
   if (event.key in moves) {
