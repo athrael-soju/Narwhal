@@ -263,28 +263,6 @@
   max-width: none;
 }
 
-.md-typeset .narwhal-figure-row {
-  align-items: center;
-  display: flex;
-  gap: 1.5rem;
-}
-
-.md-typeset .narwhal-figure-row figure {
-  flex: 1 1 0;
-  margin: 0;
-  width: auto;
-}
-
-.md-typeset .narwhal-figure-row figure:first-child {
-  flex-grow: 2;
-}
-
-@media screen and (max-width: 44.9375em) {
-  .md-typeset .narwhal-figure-row {
-    flex-direction: column;
-  }
-}
-
 /* Table width: 0.8rem wrapper overhang minus 0.15rem table padding. */
 .md-typeset .narwhal-panel-row {
   display: flex;
