@@ -81,7 +81,9 @@ With the queue on, a request can wait at three stages:
 | Prefill seat | The part of `serving.queue_timeout_s` the request has left | HTTP 504 `expired` |
 | Decode seat | The producer's [KV handoff bound](#kv-handoff-bound) | A retry when attempts remain, otherwise HTTP 504 `handoff_expired` |
 
-The router answers HTTP 429 with message `router in-flight limit reached` once the requests it counts reach the in-flight limit plus `serving.queue_capacity`. The original request deadline ends any wait with HTTP 504 `request_expired`. A whole-wave hold, degraded engine monitoring or a lost router lease ends waiting requests with HTTP 503 `standby`, as [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes.
+The router answers HTTP 429 with message `router in-flight limit reached` once the requests it counts reach the in-flight limit plus `serving.queue_capacity`. The original request deadline ends any wait with HTTP 504 `request_expired`.
+
+The router sets each wait's timer at its bound, but the timer fires only when the router's event loop runs it. Under event-loop lag, a wait can therefore run past its bound by about the lag, and a seat that frees in that time still serves the request. `narwhal_router_loop_lag_seconds` reports the lag, and the [router saturation](../configuration/02-Serving-and-Role-Control.md#router-saturation) check rejects new requests with HTTP 429 once it reaches a quarter of `slo.ttft_s`. A whole-wave hold, degraded engine monitoring or a lost router lease ends waiting requests with HTTP 503 `standby`, as [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes.
 
 In `predictive` mode, the router prices a first attempt each time its admission-seat or prefill-seat wait starts or wakes, and the price includes the time waited. A priced first attempt therefore leaves its wait with the TTFT check's HTTP 429, cause `queue`, before its wait exceeds the TTFT budget. A `serving.queue_timeout_s` longer than the TTFT budget still bounds the waits the router does not price: a retry's prefill-seat wait, and every wait in `open` mode.
 
@@ -100,9 +102,11 @@ Above capacity, under sustained load, the queue cost most of the goodput:
 | `predictive` | 878 of 7,200 | 5,066 of 7,200 |
 | `open` | 619 of 7,200 | 3,732 of 7,200 |
 
-With the queue on, predictive mode refused 1,756 requests with cause `slot_wait`, and its longest decode-seat wait was 2.5 seconds. Open mode answered 1,327 HTTP 504 `queue_expired` responses and 205 saturation 429s, and its longest decode-seat wait was 5.2 seconds.
+With the queue on, predictive mode refused 1,756 requests with cause `slot_wait`, and its longest decode-seat wait was 2.5 seconds. No admission-seat wait exceeded the 2-second bound. Open mode answered 1,327 HTTP 504 `queue_expired` responses and 205 saturation 429s, and its longest decode-seat wait was 5.2 seconds.
 
-In the burst replay, the queue absorbed the burst. With the queue on, the fleet served 10,016 good requests of the 14,345 offered in the burst, with a TTFT p95 of 1.94 seconds, against about 7,250 with the queue off.
+In the open-mode run, `narwhal_router_loop_lag_seconds` peaked at 0.72 seconds, and 2,585 of the 7,200 requests waited longer than the 2-second bound for an admission seat, up to 2.75 seconds. Of those, 1,176 then expired with HTTP 504 `queue_expired`, and a seat served the other 1,409.
+
+In the burst replay, the queue absorbed the burst. With the queue on and predictive admission, the fleet served 10,016 good requests of the 14,345 offered in the burst, with a TTFT p95 of 1.94 seconds, against about 7,250 with the queue off.
 
 ### Turning the queue on
 
@@ -136,11 +140,24 @@ The router derives each producer's handoff bound from the KV lease in its attest
 handoff bound = kv_lease_duration - kv_lease_duration // 6
 ```
 
-At the launcher's default lease of 30 seconds, the bound is 25 seconds. A producer whose attestation records no lease has no handoff bound, and the original request deadline bounds its handoffs.
+At the launcher's default lease of 30 seconds, the bound is 25 seconds. A producer whose attestation records no lease has no handoff bound, and the original request deadline bounds its handoffs and its requests' decode-seat waits.
 
 When a handoff reaches its bound before decode dispatch, the attempt ends. With attempts remaining, the request retries with a fresh prefill. Without them, the client receives HTTP 504 `handoff_expired`, and the journal records terminal `expired` with reason `handoff`.
 
-Default evidence: [TODO(task9): handoff expiries and each engine's expired-KV count in the queue-on run with every decode seat held, and whether the expired-KV counts match the router's requests that ended between prefill completion and decode dispatch].
+### KV handoff measurements
+
+These runs used engines that attest a 6-second lease, so each producer's handoff bound was 5 seconds. Admission was `open`, with `serving.queue_capacity` at `512` and `serving.queue_timeout_s` at `30`. Requests asked for 1,024 output tokens, so every decode seat stayed held.
+
+| `serving.max_attempts` | Handoff expiries | Client outcomes | Producers' expired-KV count |
+| --- | --- | --- | --- |
+| `1` | 3,404 attempts | 3,404 HTTP 504 `handoff_expired`, 160 served | Rose by 3,404 |
+| `2` | 3,426 attempts | 3,404 HTTP 504 `handoff_expired`, 3 served after a retry that followed a handoff expiry | Rose by 3,426 |
+
+In both runs, the producers' expired-KV count matched the router's handoff expiries attempt for attempt. In the one-attempt run, no request decoded on its own producer, and the expired requests' decode-seat waits lasted 5.00 to 5.13 seconds. In the two-attempt run, each attempt's decode-seat wait ended at the 5-second bound, and a request's waits totalled up to 10.03 seconds across its two attempts.
+
+A run on engines whose attestation records no lease had no handoff bound. Decode-seat waits reached 63.8 seconds, and the producers expired the KV of 1,649 requests while the router recorded no handoff expiry. Deploy engines whose attestation carries the lease, which the [engine launcher](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets, so the router enforces the bound.
+
+### Changing the lease
 
 [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets the lease at engine launch. A longer lease lets a prefilled request wait longer for a decode seat, and a producer holds the KV blocks of an abandoned handoff for longer. A shorter lease frees producer KV blocks sooner, and decode-seat waits end sooner. Relaunch and attest the engines after you change the lease.
 
