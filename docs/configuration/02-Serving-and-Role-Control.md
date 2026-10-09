@@ -12,7 +12,7 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
 | `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
-| `serving.max_connections`    | `512`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
+| `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
 | `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 In `predictive` mode, the router returns HTTP 429 when a request fails the time to first token (TTFT) check or the decode admission check. `open` mode disables predictive refusals.
@@ -284,7 +284,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | `serving.prefill_timeout_s`           | `120.0` | Elapsed-time deadline for the prefill leg.                                                  | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_timeout_s`        | `2.5`   | Deadline to the first decode token.                                                         | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_calibration_path` | `""`    | Path to a completed first-token calibration artifact under `runs/`.                         |                                               |
-| `engine.decode_read_timeout_s`        | `60.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
+| `engine.decode_read_timeout_s`        | `10.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
 | `engine.tokenize`                     | `true`  | Requests exact token counts for text and chat input from the dialect tokenization endpoint. |                                               |
 | `engine.tokenize_timeout_s`           | `2.0`   | Elapsed-time deadline for an exact token count.                                             | Positive                                      |
 | `engine.chars_per_token`              | `3.8`   | Characters per token for the fallback estimate.                                             | Positive                                      |

@@ -17,8 +17,8 @@ This page covers the router settings that decide whether a request is admitted, 
 | `serving.queue_timeout_s` | `0.0` | Unused while `serving.queue_capacity` is `0` |
 | `serving.max_attempts` | `2` | Prefill-engine and decode-engine kills before output under load, with retries off and on |
 | `recovery.failure_quarantine_s` | `0.0` | The same engine kills with retries on and a positive quarantine |
-| `serving.max_connections` | `512` | [TODO(task9): replace `512` here and in the code with the in-flight count at which the open-admission in-flight sweep recorded its first saturation 429] |
-| `engine.decode_read_timeout_s` | `60.0` | [TODO(task9): replace `60.0` here and in the code with a value above the largest inter-chunk gap of served streams in the admission runs] |
+| `serving.max_connections` | `768` | An open-admission in-flight sweep, whose first saturation 429 came at 768 in-flight requests |
+| `engine.decode_read_timeout_s` | `10.0` | The largest inter-chunk gap of served streams: 0.60 s in the admission runs and 0.74 s in the in-flight sweep |
 | KV handoff bound | Derived per producer | The producer's attested KV lease |
 | Engine seats | Derived per engine | The engine's attestation and profile |
 
@@ -181,12 +181,22 @@ The router counts each completion request from its arrival until its response en
 
 The default is the in-flight count at which the router's own [saturation check](../configuration/02-Serving-and-Role-Control.md#router-saturation) first rejected a request in an open-admission sweep. At that limit, the in-flight 429 binds before the router's event loop or request sizing falls behind.
 
-Default evidence: [TODO(task9): the in-flight count at the first saturation 429 (reason `saturated`) in the open-admission sweep of in-flight requests past the limit, with the goodput, router loop lag and first limit to bind at each step. Until this value replaces `512`, the previous paragraph does not hold].
+The sweep ran in `open` mode with the in-flight limit lifted. Closed-loop clients held each in-flight count for 45 seconds, at 256, 384, 512, 640, 768, 1024 and 1280 requests, with synthetic 512-token prompts and 256-token outputs. No step up to 640 in-flight requests produced a saturation 429. The 768 step produced 112, the first in the sweep.
+
+Requests meeting the SLO fell well before the router saturated:
+
+| In-flight requests | Requests meeting the SLO |
+| --- | --- |
+| 256 | 2,700 of 2,700 |
+| 384 | 1,218 of 2,884 |
+| 512 | 389 of 3,590 |
+
+The in-flight limit therefore bounds router saturation, not goodput. At the default limit, an open-admission fleet admits more requests than its engines serve within the SLO, and the excess appears as SLO misses. To give clients a 429 instead of an SLO miss, use [`predictive` admission](#admission-mode), the default.
 
 | Change | Client outcome |
 | --- | --- |
 | Lower the limit | More requests receive the in-flight 429 at a lower load. |
-| Raise the limit | More requests are admitted. Past the measured count, the router can answer HTTP 429 with reason `saturated` instead, or admitted requests can miss their SLO. |
+| Raise the limit | More requests are admitted. Past the measured count, the router can answer HTTP 429 with reason `saturated` instead. In `open` mode, admitted requests can miss their SLO at in-flight counts well below the limit. |
 
 To set the limit for your fleet, run an open-admission sweep that raises the in-flight requests past the limit, and record the in-flight count at which the first `saturated` 429 appears. Set `serving.max_connections` at or below that count. [In-flight limit rejections](../Troubleshoot.md#in-flight-limit-rejections) gives the diagnosis when this 429 rises in production.
 
@@ -201,13 +211,15 @@ When a gap reaches the limit, the decode leg fails with a timeout, reason `engin
 | Streaming | The HTTP 200 stream ends with a terminal error event of type `decode` and code `failed`. | The stream stays open until the original request deadline, `serving.request_timeout_s`, and then ends with a terminal error event with code `expired`. |
 | Non-streaming | The request retries when attempts remain, otherwise it receives HTTP 504 `decode`. | The original request deadline ends the request with HTTP 504 `request_expired`. |
 
-The default sits above the largest inter-chunk gap of streams served while the fleet was healthy, so a healthy stream does not reach it. A stalled stream on a hung decode engine ends after the limit.
+The default sits above the largest inter-chunk gap of streams served while the fleet was healthy, so a healthy stream does not reach it. The largest gap of any served stream was 0.60 seconds across the predictive and open admission runs, and 0.74 seconds across the in-flight sweep. The default of 10 seconds is more than ten times the larger gap.
 
-Default evidence: [TODO(task9): the largest inter-chunk gap of served streams in the admission runs, and the stream stalls recorded with a paused decode engine. Until a value above that gap replaces `60.0`, the previous paragraph does not hold].
+A stream that receives no chunk for the limit fails. After output starts, it ends with the terminal error event and does not retry. A stalled stream on a hung decode engine therefore ends after the limit.
+
+[TODO(task9): the stream stalls recorded with a paused decode engine under load, and how long each stalled stream ran before the gap limit ended it].
 
 Change the limit under these conditions:
 
-- Raise it when served streams on your workload show inter-chunk gaps near the limit, such as from long outputs or larger decode batches.
+- Raise it when served streams on your engines or workload show longer inter-chunk gaps, such as on a decode engine that runs long prefills locally.
 - Lower it to end streams on a hung decode engine sooner, while keeping it above the largest gap measured on healthy streams.
 
 A [configuration overlay](06-Controlling-the-Fleet.md#configuration-overlays-cold-restarts-and-restores) cannot change the `engine` section. Change this field in the fleet file, then restart the router.
