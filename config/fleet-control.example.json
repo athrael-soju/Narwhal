@@ -4,9 +4,29 @@
   "token_env": "NARWHAL_CONTROL_TOKEN",
   "runs_dir": "runs/fleet-control",
   "fleet": "config/fleet.production.json",
+  "router": {
+    "url": "http://127.0.0.1:8000",
+    "timeout_s": 600
+  },
   "hooks": {
     "restore": {
       "argv": ["/path/to/restore-baseline"],
+      "timeout_s": 900
+    },
+    "engine_pause": {
+      "argv": ["/path/to/engine-control", "pause"],
+      "timeout_s": 60
+    },
+    "engine_resume": {
+      "argv": ["/path/to/engine-control", "resume"],
+      "timeout_s": 60
+    },
+    "engine_stop": {
+      "argv": ["/path/to/engine-control", "stop"],
+      "timeout_s": 300
+    },
+    "engine_start": {
+      "argv": ["/path/to/engine-control", "start"],
       "timeout_s": 900
     }
   }
