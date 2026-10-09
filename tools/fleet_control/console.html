@@ -241,7 +241,21 @@ progress.drain::-moz-progress-bar { background: var(--warn); }
   border-bottom: 1px solid var(--line-soft);
 }
 body:not(.framed) .strip { position: sticky; top: 0; z-index: 3; }
-body.framed .strip { border: 0; padding: 4px; min-height: 100vh; align-content: center; }
+body.framed .strip { border: 0; padding: 0 4px; min-height: 100vh; flex-wrap: nowrap; gap: 20px; white-space: nowrap; }
+body.framed .strip-state { flex-wrap: nowrap; min-width: 0; overflow: hidden; gap: 16px; }
+body.framed .strip-state .item, body.framed .strip-actions, body.framed .strip-confirm { flex-wrap: nowrap; }
+body.framed .strip-confirm { min-width: 0; }
+body.framed .strip-confirm span { overflow: hidden; text-overflow: ellipsis; }
+body.framed .strip .feedback { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+body.framed .strip .feedback .detail { overflow: hidden; text-overflow: ellipsis; }
+body.framed .strip-title h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+body.framed #strip-started { display: none; }
+body.framed #strip-busy { order: -1; }
+body.framed .strip-state progress { width: 64px; }
+.strip:is([data-fit="1"], [data-fit="2"], [data-fit="3"], [data-fit="4"]) #strip-job-progress,
+.strip:is([data-fit="2"], [data-fit="3"], [data-fit="4"]) .item > .lbl:first-child,
+.strip:is([data-fit="3"], [data-fit="4"]) #from-session,
+.strip[data-fit="4"] #conn-text { display: none; }
 .strip-title { display: flex; align-items: center; gap: 10px; }
 .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
@@ -260,7 +274,7 @@ body.framed .strip { border: 0; padding: 4px; min-height: 100vh; align-content: 
 .strip-state progress { width: 96px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; padding: 2px 8px; border-radius: 2px; background: var(--warn-tint); color: var(--warn); font-size: 12px; }
 .strip-actions, .strip-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.strip-actions input { width: 84px; }
+.strip-actions input { width: 96px; }
 .strip-confirm { flex: 1 1 100%; justify-content: flex-end; }
 .strip-confirm span { font-size: 12px; }
 .feedback { flex: 1 1 100%; margin: 0; font-size: 12px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
@@ -273,7 +287,7 @@ body.framed .connect { margin: 0; padding: 4px; border: 0; max-width: none; }
 .connect input { flex: 1 1 200px; }
 .message { margin: 8px 0 0; font-size: 12px; }
 
-/* Board: a 24-column grid like Grafana's. */
+/* Board. */
 .board { display: grid; gap: 8px; padding: 8px 16px 24px; grid-template-columns: repeat(24, minmax(0, 1fr)); align-items: start; }
 .area-engines, .area-activity, .area-dashboard { grid-column: span 24; }
 .area-load, .area-config { grid-column: span 12; }
@@ -546,9 +560,7 @@ const ROUTES = {
   restore: ["POST", "/api/config/restore"],
 };
 const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit"];
-// Engine actions that run a deployment hook, by the hook they need.
 const HOOK_ACTIONS = { pause: "engine_pause", resume: "engine_resume", stop: "engine_stop", start: "engine_start" };
-// Engine actions that take an engine out of service ask for confirmation.
 const CONFIRMED_ACTIONS = ["pause", "stop", "drain"];
 const LIFECYCLE_TONES = { draining: "warn", drained: "warn", deadline_exceeded: "orange", validating: "magenta", blocked: "bad" };
 const SHORT_NAMES = {
@@ -565,7 +577,6 @@ const SHORT_NAMES = {
 const OUTCOME_TONES = { ok: "ok", refused: "orange", failed: "bad" };
 const TOKEN_KEY = "narwhal-control-token";
 const DEADLINE_KEY = "narwhal-control-drain-deadline";
-// A service with console.auto_connect places its token in this meta element.
 const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]') || {}).content || "";
 const POLL_MS = 2000;
 const ENGINE_POLL_MS = 3000;
@@ -573,23 +584,19 @@ const FLEET_POLL_MS = 5000;
 // The run record is re-read every this many status polls during a session.
 const RECORD_EVERY = 3;
 
-// The Fleet control dashboard frames the console with ?theme=dark to match Grafana.
 const THEME = new URLSearchParams(window.location.search).get("theme");
 if (THEME === "dark" || THEME === "light") document.documentElement.dataset.theme = THEME;
-// The dashboard frames one view per panel with ?view=; without it the page shows every view.
 const VIEWS = { status: "Session", engines: "Engines", activity: "Activity", load: "Load job", config: "Configuration" };
 const VIEW_PARAM = new URLSearchParams(window.location.search).get("view");
 const VIEW = VIEW_PARAM && Object.hasOwn(VIEWS, VIEW_PARAM) ? VIEW_PARAM : "";
 const FRAMED = window.self !== window.top;
 const shows = (...names) => !VIEW || names.includes(VIEW);
-// What each view reads, so a framed view polls only the routes it renders.
 const NEEDS = {
   record: shows("status", "engines", "activity", "config"),
   engines: shows("status", "engines", "activity"),
   fleet: shows("status"),
   workloads: shows("load"),
 };
-// Views of one dashboard share a channel: an action in one refreshes the others.
 const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("narwhal-fleet-control") : null;
 
 const $ = (id) => document.getElementById(id);
@@ -658,7 +665,6 @@ function duration(ms) {
   return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
 }
 
-// A recorded action's run time: tenths of a second below a minute, then minutes and seconds.
 function brief(ms) {
   if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
   if (ms < 60000) return (ms / 1000).toFixed(1) + " s";
@@ -696,7 +702,6 @@ function announce(message) {
   $("announcer").textContent = message;
 }
 
-// Replace a node's children only when the content it shows changed.
 function update(key, node, build) {
   const [signature, children] = build();
   if (state.keys[key] === signature) return;
@@ -774,7 +779,7 @@ function outcomeOf(reply) {
   return { kind, detail: body.detail || (entry && entry.error) || "" };
 }
 
-// Run one control: mark it pending, call its route, keep its outcome beside it, refresh every view.
+// Run one control.
 async function act(key, label, name, params, body) {
   if (state.pending.has(key)) return null;
   state.pending.set(key, { label, started: Date.now() });
@@ -808,12 +813,11 @@ function renderFeedback(node, key) {
     if (done.detail) parts.push(el("span", { class: "detail" }, done.detail));
     node.replaceChildren(...parts);
   }
-  // A success leaves the page after a while; a refusal or failure stays until the next attempt.
   const stale = done && done.kind === "ok" && elapsedSince(done.at) > 15000;
   node.hidden = (!pending && !done) || (!pending && stale);
 }
 
-// Confirmation: an in-page dialog that names the target and the effect.
+// Confirmation.
 let confirmResolve = null;
 
 function confirmAction(title, effect, details, confirmLabel) {
@@ -836,7 +840,6 @@ function closeConfirm(result) {
   if (resolve) resolve(result);
 }
 
-// Gates the service applies to every action, so the page disables a control instead of sending it.
 function sessionGate() {
   if (!state.health || !state.health.session) return "Start a session first.";
   return busyGate();
@@ -936,7 +939,7 @@ function render() {
   if (shows("config")) renderConfiguration();
 }
 
-// Engine state, from the router's view and the run record.
+// Engine state.
 function processStates() {
   // Pause, resume, stop and start are hooks the router cannot see; the run record keeps them.
   const states = {};
@@ -980,7 +983,6 @@ function engineStatus(slice, process) {
   return { label: "in service", tone: "ok" };
 }
 
-// Router flags the state label does not already name.
 function engineTags(slice, status) {
   if (!slice || slice.error) return [];
   const tags = [];
@@ -999,7 +1001,6 @@ function residentTotal(counts) {
   return counts && typeof counts === "object" ? Number(counts.prefill || 0) + Number(counts.decode || 0) : null;
 }
 
-// The drain an engine is running: the recorded drain action while the router reports it draining.
 function activeDrain(iid, slice, recorded) {
   if (lifecycleState(slice) !== "draining") return null;
   if (!recorded || recorded.action !== "engine.drain" || recorded.outcome !== "ok") return { action: null };
@@ -1007,7 +1008,6 @@ function activeDrain(iid, slice, recorded) {
   return { action: recorded, deadline: recorded.params.deadline_s, start: before && !before.error ? before.resident : null };
 }
 
-// A drain that requires a new engine process, while the router still sees the old one.
 function restartPending(slice) {
   const record = slice && !slice.error ? slice.lifecycle : null;
   if (!record || !record.restart_required || !record.old_process_start) return false;
@@ -1015,7 +1015,6 @@ function restartPending(slice) {
   return slice.process_start === record.old_process_start;
 }
 
-// The action an engine's row offers first, for the state the engine is in.
 function primaryAction(slice, process) {
   if (process) return process.state === "stopped" ? "start" : "resume";
   const lifecycle = lifecycleState(slice);
@@ -1025,7 +1024,6 @@ function primaryAction(slice, process) {
   return "drain";
 }
 
-// Why an engine action is unavailable, or "" when the page offers it.
 function engineGate(iid, action, slice, process, others) {
   const gate = sessionGate();
   if (gate) return gate;
@@ -1066,7 +1064,6 @@ function engineContext() {
   return { engines, ids, processes, last, busy };
 }
 
-// Work in progress: an exclusive action, this page's pending requests and running drains.
 function inProgress() {
   const items = new Set();
   const health = state.health || {};
@@ -1089,17 +1086,18 @@ function renderStatus() {
   conn.classList.toggle("ok", connected && state.reachable);
   conn.classList.toggle("bad", connected && !state.reachable);
   $("conn-text").textContent = !connected ? "Not connected" : state.reachable ? "Connected" : "Service unreachable";
+  conn.title = $("conn-text").textContent;
   const confirming = !$("strip-confirm").hidden;
   $("strip-signals").hidden = !connected;
-  $("strip-state").hidden = !connected;
+  $("strip-state").hidden = !connected || confirming;
   $("strip-actions").hidden = !connected || confirming;
   if (!connected) return;
   renderSignals();
   const health = state.health || {};
   const session = health.session;
   $("strip-session").textContent = shortSession(session);
-  $("strip-session").title = session || "";
   const started = session && state.record && state.record.started_at;
+  $("strip-session").title = session ? "Session " + session + (started ? ", started " + clock(started) + " UTC" : "") : "";
   $("strip-started").textContent = started ? "· started " + clock(started) + " UTC ·" : "";
   const grafana = state.settings.grafana;
   const link = $("from-session");
@@ -1108,6 +1106,7 @@ function renderStatus() {
   const job = health.job;
   const progress = jobProgress(job);
   $("strip-job").textContent = job ? job.id : "none";
+  $("strip-job").title = job ? "Load job " + job.id : "";
   $("strip-job-state").textContent = job ? job.state : "";
   $("strip-job-state").className = job && job.state === "running" ? "tone-ok" : job && job.state === "failed" ? "tone-bad" : "lbl";
   $("strip-job-progress").hidden = !(progress && progress.fraction !== null);
@@ -1123,6 +1122,17 @@ function renderStatus() {
   $("session-start").setAttribute("aria-busy", String(state.pending.has("session")));
   $("forget").hidden = Boolean(PAGE_TOKEN);
   renderFeedback($("fb-session"), "session");
+  fitStrip();
+}
+
+function fitStrip() {
+  const strip = $("view-status");
+  const content = $("strip-state");
+  let level = 0;
+  strip.dataset.fit = "0";
+  while (document.body.classList.contains("framed") && level < 4 && content.scrollWidth > content.clientWidth) {
+    strip.dataset.fit = String(++level);
+  }
 }
 
 function renderSignals() {
@@ -1159,6 +1169,7 @@ function confirmEndSession(open) {
   const session = state.health && state.health.session;
   $("strip-confirm").hidden = !open;
   $("strip-actions").hidden = open;
+  $("strip-state").hidden = open;
   if (open) {
     $("strip-confirm-text").textContent = "End session " + shortSession(session) + "? The service stops any running load job, "
       + "restores the baseline fleet configuration and closes the session.";
@@ -1198,7 +1209,6 @@ function lastCell(iid, recorded, drain) {
     return [el("span", { class: "spin", "aria-hidden": "true" }), " ", el("span", { class: "mono" }, pending.label.split(" ")[0]),
       el("span", { class: "lbl mono" }, " · " + wholeSeconds(elapsedSince(pending.started)) + " s")];
   }
-  // This tab's outcome wins until the run record holds a newer entry.
   if (mine && mine.kind !== "ok" && (!recorded || Date.parse(recorded.finished_at) < Date.parse(mine.at))) {
     return [el("span", { class: "mono" }, mine.label.split(" ")[0]), " ", toned(OUTCOME_TONES[mine.kind], mine.kind)];
   }
@@ -1280,7 +1290,6 @@ function renderEngines() {
   renderLastAction(context);
 }
 
-// The latest engine action of the session: the engine's state and resident work before it and now.
 function renderLastAction(context) {
   const actions = state.record ? state.record.actions : [];
   let action = null;
@@ -1306,7 +1315,6 @@ function renderLastAction(context) {
   update("last-action", node, () => [parts.map((part) => part.textContent).join("|"), parts]);
 }
 
-// The menu of an engine's other actions. Unavailable items stay focusable and give their reason.
 let menuFor = null;
 let menuButton = null;
 
@@ -1494,7 +1502,6 @@ function renderJob() {
   $("job-error").hidden = !(job && job.error);
   $("job-error").textContent = job && job.error ? job.error : "";
   if (running) {
-    // The inputs show what the running job uses.
     if (state.workloads[job.params.workload]) $("job-workload").value = job.params.workload;
     for (const [field, id] of JOB_FIELDS) $(id).value = job.params[field] === undefined ? "" : job.params[field];
     workloadHint();
@@ -1684,7 +1691,7 @@ function renderActivity() {
   });
 }
 
-// Dashboard panels. A console framed by a Grafana dashboard without panels shows its controls only.
+// Dashboard panels.
 function renderDashboard(grafana) {
   const panels = grafana ? grafana.panels : [];
   $("dashboard").hidden = Boolean(VIEW) || (!panels.length && FRAMED);
@@ -1710,7 +1717,6 @@ function startPolling() {
     window.setInterval(() => refresh(false), POLL_MS),
     NEEDS.engines ? window.setInterval(refreshEngines, ENGINE_POLL_MS) : 0,
     NEEDS.fleet ? window.setInterval(refreshFleet, FLEET_POLL_MS) : 0,
-    // Elapsed times and progress advance between polls.
     window.setInterval(render, 1000),
   ].filter(Boolean);
 }
@@ -1738,7 +1744,6 @@ async function connect() {
   if (NEEDS.workloads) await loadWorkloads(reply.body.load);
   await refreshAll(true);
   startPolling();
-  // The other views of the dashboard read the token this view stored.
   if (typed) broadcast({ type: "token" });
 }
 
@@ -1759,7 +1764,7 @@ function disconnect(message) {
   renderStatus();
 }
 
-// Views: a framed view shows one section and takes the panel's background.
+// Views.
 if (VIEW) {
   document.body.classList.add("framed");
   document.title = VIEWS[VIEW] + " · Narwhal fleet control";
@@ -1800,7 +1805,7 @@ $("engine-menu").addEventListener("keydown", (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (menuFor && !$("engine-menu").contains(event.target) && !menuButton.contains(event.target)) closeMenu(false);
 });
-window.addEventListener("resize", () => closeMenu(false));
+window.addEventListener("resize", () => { closeMenu(false); fitStrip(); });
 window.addEventListener("scroll", () => closeMenu(false), true);
 
 $("drain-deadline").addEventListener("input", () => {
@@ -1817,6 +1822,7 @@ $("strip-confirm").addEventListener("keydown", (event) => {
 $("strip-confirm-ok").addEventListener("click", async () => {
   $("strip-confirm").hidden = true;
   $("strip-actions").hidden = false;
+  $("strip-state").hidden = false;
   await act("session", "End session", "sessionEnd");
   $("session-start").focus();
 });

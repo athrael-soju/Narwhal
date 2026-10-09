@@ -90,7 +90,7 @@ class JobSlot:
         return self._task is not None
 
     def clear(self) -> None:
-        """Forget the last finished job, so a new session starts without one."""
+        """Forget the last finished job."""
         if self._task is None:
             self._job = None
 

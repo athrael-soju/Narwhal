@@ -28,24 +28,18 @@ FILES = {
 }
 FLEET_CONTROL_DASHBOARD = "grafana-dashboards/fleet-control.json"
 FLEET_CONTROL_UID = "narwhal-fleet-control"
-# The fleet control console as the operator's browser reaches it through the operator tunnel.
 CONSOLE_URL_ENV = "NARWHAL_CONTROL_CONSOLE_URL"
 DEFAULT_CONSOLE_URL = "http://127.0.0.1:18020/console"
-# The fleet control service as Prometheus reaches it, and the bearer token it requires.
 CONTROL_METRICS_URL_ENV = "NARWHAL_CONTROL_METRICS_URL"
 CONTROL_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 CONTROL_TARGETS = "prometheus/targets/fleet-control.json"
 CONTROL_TOKEN_FILE = "prometheus/fleet-control-token"
-# The console matches Grafana's default dark theme when framed with this query.
 CONSOLE_THEME = "theme=dark"
-# The console runs its own script, submits its forms through script, saves the run record as a
-# download and links the dashboard to the session's start. It is another origin, so
-# `allow-same-origin` keeps it in its own origin and grants no access to Grafana.
+# The console is another origin, so `allow-same-origin` grants it no access to Grafana.
 CONSOLE_SANDBOX = (
     "allow-scripts allow-same-origin allow-forms allow-downloads "
     "allow-top-navigation-by-user-activation"
 )
-# Console views framed by the dashboard: view name, frame title.
 CONSOLE_VIEWS = {
     "status": "Fleet control session",
     "engines": "Fleet control engines",
@@ -53,16 +47,11 @@ CONSOLE_VIEWS = {
     "load": "Fleet control load job",
     "config": "Fleet control configuration",
 }
-# Router metrics a panel reads, filtered to the selected router while it answers scrapes.
 _ROUTER = 'job="narwhal-router",instance=~"$router"'
-# Panels of the shipped dashboard that the collapsed rows copy, by row title. A panel the
-# shipped dashboard does not define is left out.
 DIAGNOSTIC_ROWS = (
     ("Controller", (10, 9)),
-    # Request waiting time and Retries and early exits sit side by side.
     ("Request & Recovery", (52, 12, 57, 58, 54, 55, 56, 59)),
 )
-# The Requests stat shows these columns of the shipped Requests table, by query.
 REQUEST_STATS = (
     ("A", "Within SLO"),
     ("B", "Offered"),
@@ -73,8 +62,6 @@ REQUEST_STATS = (
     ("H", "Failed"),
     ("I", "Expired"),
 )
-# Fleet control's own metrics, scraped from the control service when observability startup
-# names it, mark each attempted action and each running load job on the time-series panels.
 CONTROL_ANNOTATIONS = (
     {
         "name": "Fleet control actions",
@@ -294,8 +281,7 @@ def _latency_bars(source: Mapping[str, Any], panel_id: int) -> dict[str, Any]:
 def _request_outcomes(source: Mapping[str, Any]) -> dict[str, Any]:
     """Return offered, completed and dropped requests per second.
 
-    The panel keeps the ID of the shipped Request outcomes panel, so the shipped alert
-    annotations that name that panel mark this one.
+    The panel keeps the shipped panel ID, which the shipped alert annotations name.
     """
     shipped = source["panel-11"]
     queries = _queries(shipped)
@@ -370,7 +356,7 @@ def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
             "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
             "query": {"kind": "prometheus", "spec": query},
             "enable": True,
-            "hide": False,
+            "hide": True,
             "iconColor": spec["iconColor"],
             "name": spec["name"],
             "legacyOptions": dict(query),
@@ -379,12 +365,7 @@ def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
-    """Return the Fleet control dashboard: console views among panels of `source`.
-
-    The console's session strip, engines, activity, load job and configuration views sit in
-    text panels beside panels derived from the shipped dashboard, so the two dashboards show
-    the same series. Collapsed rows hold the shipped diagnostic panels.
-    """
+    """Return the Fleet control dashboard: console views among panels of `source`."""
     spec = source["spec"]
     shipped = spec["elements"]
     next_id = max(element["spec"]["id"] for element in shipped.values()) + 1
@@ -398,16 +379,16 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
     for name in ("panel-8", "panel-37", "panel-50", "panel-51"):
         elements[name] = shipped[name]
     items = [
-        _grid_item("console-status", 0, 0, 24, 4),
-        _grid_item("panel-requests", 0, 4, 15, 4),
-        _grid_item("panel-latency", 15, 4, 9, 4),
-        _grid_item("console-engines", 0, 8, 12, 13),
-        _grid_item("panel-8", 12, 8, 12, 13),
-        _grid_item("panel-11", 0, 21, 14, 8),
-        _grid_item("panel-37", 14, 21, 10, 8),
-        _grid_item("panel-50", 0, 29, 12, 8),
-        _grid_item("panel-51", 12, 29, 12, 8),
-        _grid_item("console-activity", 0, 37, 24, 8),
+        _grid_item("console-status", 0, 0, 24, 2),
+        _grid_item("panel-requests", 0, 2, 15, 4),
+        _grid_item("panel-latency", 15, 2, 9, 4),
+        _grid_item("console-engines", 0, 6, 12, 13),
+        _grid_item("panel-8", 12, 6, 12, 13),
+        _grid_item("panel-11", 0, 19, 14, 8),
+        _grid_item("panel-37", 14, 19, 10, 8),
+        _grid_item("panel-50", 0, 27, 12, 8),
+        _grid_item("panel-51", 12, 27, 12, 8),
+        _grid_item("console-activity", 0, 35, 24, 8),
     ]
     rows = [
         _row("", False, items),
@@ -415,8 +396,8 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
             "Load and configuration",
             False,
             [
-                _grid_item("console-load", 0, 0, 12, 11),
-                _grid_item("console-config", 12, 0, 12, 11),
+                _grid_item("console-load", 0, 0, 12, 9),
+                _grid_item("console-config", 12, 0, 12, 9),
             ],
         ),
     ]

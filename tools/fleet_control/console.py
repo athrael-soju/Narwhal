@@ -33,7 +33,6 @@ CONSOLE_PATH = "/console"
 # Paths served without the token. `/` redirects to the console page.
 PUBLIC_PATHS = ("/", CONSOLE_PATH)
 _INLINE = re.compile(r"<(script|style)>(.*?)</\1>", re.DOTALL)
-# The page reads its token from this element when the configuration sets `auto_connect`.
 _TOKEN_ANCHOR = '<meta name="referrer" content="no-referrer">\n'
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 

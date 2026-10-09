@@ -244,7 +244,6 @@ def engine_routes(actions: EngineActions) -> APIRouter:
 
     @routes.get("")
     async def engines() -> JSONResponse:
-        # Outside a session, the engines come from the configured baseline fleet file.
         if service.session is not None:
             iids = list(baseline_engines(service.session))
         else:

@@ -33,14 +33,16 @@ The deployment workflow resolves relative fleet and profile paths from the check
 
 Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#loading-the-private-environment) loads.
 
-| Variable                            | Use                                                                                                | Default          |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------- |
-| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"` |                  |
-| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                           |                  |
-| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                  |
-| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`      |
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090` |
-| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address that `make observe` writes into the **Fleet control** dashboard, as the workstation browser reaches it | `http://127.0.0.1:18020/console` |
+| Variable                            | Use                                                                                                | Default                          |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"` |                                  |
+| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                           |                                  |
+| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                                  |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`                      |
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090`                 |
+| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, used by the **Fleet control** dashboard                             | `http://127.0.0.1:18020/console` |
+| `NARWHAL_CONTROL_METRICS_URL`       | Fleet control service address scraped by Prometheus. Needs `NARWHAL_CONTROL_TOKEN`                 | `http://127.0.0.1:8020`          |
+| `NARWHAL_CONTROL_TOKEN`             | Fleet control bearer token                                                                         |                                  |
 
 An engine `url` or `attestation_url` expands from the environment when the entire JSON string is a single `${NAME}` reference:
 
@@ -121,11 +123,11 @@ With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle dr
 
 The optional `hardware` block needs all three fields when present.
 
-| Field                              | Notes                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Field                              | Notes                                                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `hardware.accelerator`             | Nonempty accelerator product name from [engine-host inspection](../deploy/03-Validate-Engines.md#inspecting-every-engine-host). |
-| `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                           |
-| `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                       |
+| `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                              |
+| `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                          |
 
 ### 3.2 Contract fields
 

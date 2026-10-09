@@ -153,7 +153,6 @@ class ControlService:
         self.session = self.store.open_session(self._now(), str(source), baseline)
         self._session_mark = mark(self.config.router.journal)
         self._job_count = 0
-        # The previous session's last job belongs to that session's record, not this one.
         if self.jobs is not None:
             self.jobs.clear()
         return {"session": self.session.id, "baseline_digest": canonical_digest(baseline)}

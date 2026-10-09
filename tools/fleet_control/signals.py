@@ -1,9 +1,4 @@
-"""Fleet signals for the console status strip and the service's Prometheus metrics.
-
-`GET /api/fleet` reports the router's readiness and, when the configuration names Prometheus,
-the alerts firing there. `GET /metrics` exposes the active session's actions and the running
-load job, from which the Fleet control dashboard draws its annotations.
-"""
+"""Fleet signals for the console status strip and the service's Prometheus metrics."""
 
 from __future__ import annotations
 
@@ -19,16 +14,12 @@ from .overlays import READY_PATH, READY_PROBE_TIMEOUT_S, probe
 from .records import Action
 from .service import ControlService
 
-# The shipped dashboard's Router panel counts the same alerts.
 ALERTS_QUERY = 'ALERTS{alertname=~"Narwhal.+",alertstate="firing",severity!="info"}'
 PROMETHEUS_TIMEOUT_S = 5.0
 METRICS_PATH = "/metrics"
-# Prometheus text exposition format 0.0.4.
 METRICS_TYPE = "text/plain; version=0.0.4; charset=utf-8"
-# Labels Prometheus adds to every alert series; the console shows the others.
 _ALERT_LABELS = frozenset({"__name__", "alertname", "alertstate", "job", "instance"})
-# Load-job actions draw the job region instead of action markers.
-_JOB_ACTIONS = frozenset({"job.start", "job.stop", "job.complete"})
+_UNMARKED = frozenset({"job.start", "job.stop", "job.complete", "session.start", "session.end"})
 _SHORT_NAMES = {
     "config.overlay": "overlay",
     "config.cold_restart": "cold restart",
@@ -82,7 +73,7 @@ def metrics(service: ControlService) -> str:
         "# TYPE narwhal_control_action_started_ms gauge",
     ]
     for action in [] if session is None else session.actions:
-        if action.outcome == "refused" or action.name in _JOB_ACTIONS:
+        if action.outcome == "refused" or action.name in _UNMARKED:
             continue
         target = action_target(action)
         labels = {

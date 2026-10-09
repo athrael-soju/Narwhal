@@ -74,7 +74,15 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` builds the **Fleet control** dashboard from the source dashboard. It copies the panels listed in `CONSOLE_PANELS` in `tools/observability/artifacts.py`, with the source variables, annotations and time settings, and frames the console at `NARWHAL_CONTROL_CONSOLE_URL`. A change to a copied panel in the source dashboard reaches both dashboards.
+`make observe` also builds the **Fleet control** dashboard from the source dashboard, using `fleet_control_dashboard` in `tools/observability/artifacts.py`. It copies or derives its charts from the source, so changes to the source dashboard carry over. The relevant constants are:
+
+- `CONSOLE_VIEWS`: the console views, each shown in a Text panel with `?view=<name>&theme=dark`.
+- `CONSOLE_SANDBOX`: the sandbox for those frames.
+- `REQUEST_STATS`: the Requests table queries shown in the **Requests** panel.
+- `DIAGNOSTIC_ROWS`: the source panels in the collapsed rows.
+- `CONTROL_ANNOTATIONS`: the **Fleet control actions** and **Load jobs** annotations.
+
+**Request outcomes** keeps the source panel's ID, so the source alert annotations also appear on it.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 
@@ -86,6 +94,10 @@ curl -fsS http://127.0.0.1:3000/api/health
 Give every series a fixed colour from the [dashboard colour key](../../docs/observability/05-Dashboard.md#colours).
 
 Validate changed queries against traffic, idle engines, failed scrapes, router restart and the **Engine detail** selector before deploying the dashboard. Keep live addresses and captured responses under `runs/`.
+
+## Fleet control scrape job
+
+The `fleet-control` job in `tools/observability/prometheus.yml` scrapes the fleet control service's `/metrics` with the token in `/etc/prometheus/fleet-control-token`. `make observe` writes the target and token from `NARWHAL_CONTROL_METRICS_URL` and `NARWHAL_CONTROL_TOKEN`. Without `NARWHAL_CONTROL_METRICS_URL`, the job has no target. See [Dashboard annotations](../../docs/operate/06-Controlling-the-Fleet.md#dashboard-annotations).
 
 ## Alert rules
 

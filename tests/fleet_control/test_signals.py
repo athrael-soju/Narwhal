@@ -187,8 +187,6 @@ class MetricsTests(SignalCase):
         self.assertEqual(
             actions,
             [
-                f'narwhal_control_action_started_ms{{session="{session.id}",seq="1",'
-                f'action="session.start",target="",outcome="ok",title="session start"}} {STAMP_MS}',
                 f'narwhal_control_action_started_ms{{session="{session.id}",seq="2",'
                 f'action="engine.drain",target="e1",outcome="ok",title="drain e1"}} {STAMP_MS}',
                 f'narwhal_control_action_started_ms{{session="{session.id}",seq="4",'

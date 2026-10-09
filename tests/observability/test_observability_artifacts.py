@@ -125,7 +125,6 @@ class FleetControlDashboardTests(unittest.TestCase):
             [(item["element"]["name"], item["x"], item["y"]) for item in recovery],
             [("panel-52", 0, 0), ("panel-12", 12, 0)],
         )
-        # The outcomes panel keeps the shipped ID that the shipped alert annotations name.
         self.assertEqual(spec["elements"]["panel-11"]["spec"]["id"], 11)
 
     def test_each_grid_row_fits_the_24_columns_without_overlap(self):
@@ -168,6 +167,8 @@ class FleetControlDashboardTests(unittest.TestCase):
         jobs = names["Load jobs"]["query"]["spec"]
         self.assertIn("narwhal_control_load_job_running", jobs["expr"])
         self.assertFalse(jobs["useValueForTime"])
+        for name in ("Fleet control actions", "Load jobs"):
+            self.assertEqual((names[name]["enable"], names[name]["hide"]), (True, True))
 
     def test_console_views_are_scripted_and_escape_their_url(self):
         for view in artifacts.CONSOLE_VIEWS:

@@ -14,9 +14,7 @@ scrape_configs:
   - job_name: engines
     file_sd_configs:
       - files: ["/etc/prometheus/targets/engines.json"]
-  # Fleet control's actions and load jobs, which the Fleet control dashboard draws as
-  # annotations. Startup writes the target and token only when NARWHAL_CONTROL_METRICS_URL
-  # names the control service; otherwise the job has no target.
+  # Empty unless NARWHAL_CONTROL_METRICS_URL is set.
   - job_name: fleet-control
     authorization:
       credentials_file: /etc/prometheus/fleet-control-token
