@@ -63,6 +63,8 @@ The new process resets:
 - latency histograms
 - floor history
 - monitoring-failure counters
+- timed quarantines
+- ejection, hold, probe and readmission counts
 
 After a process restart, `narwhal-serve --resume` reads the state handoff from `recovery.state_path`, written by the running router. A warm standby takeover uses the latest polled, lease-validated state handoff.
 

@@ -49,6 +49,7 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 | --- | --- | --- |
 | Connection error or connect timeout | `connection` | Eject the engine |
 | Transport timeout | `timeout` | Run a health probe |
+| [Dropped connection](../telemetry/04-Failures.md#dropped-connections) after the request was sent | `timeout` | Run a health probe |
 | First-token deadline while the engine emits other output | `overload` | Run a health probe |
 | First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Run an inference probe under a placement hold |
 | HTTP 408 or 429 | `overload` | Run a health probe |
@@ -59,7 +60,7 @@ The role-coverage rule counts an engine as covered when every role it places sta
 
 The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
-The inference probe runs a prefill leg and a decode leg. On an inconclusive leg, engine monitoring keeps the hold and schedules another probe. When a leg fails, Narwhal ejects a covered engine, and an uncovered engine stays in placement. A successful probe clears recorded inference failures and the hold, under the profile-match rule.
+The inference probe runs a prefill leg and a decode leg. A probe of a decode engine takes its prefill leg on the producer of the failed KV transfer while that producer is live, and otherwise on [another live producer or the held engine itself](../telemetry/04-Failures.md#inference-probe-producers). When the producer's leg fails, the next producer runs the probe. On an inconclusive leg, engine monitoring keeps the hold and schedules another probe. When a leg on the held engine fails, Narwhal ejects a covered engine, and an uncovered engine stays in placement. A successful probe clears recorded inference failures and the hold, under the profile-match rule.
 
 ### Liveness
 

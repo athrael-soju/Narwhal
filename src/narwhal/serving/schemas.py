@@ -461,14 +461,86 @@ class VerifyingOut(BaseModel):
     kind: str
 
 
+class EjectionCountOut(BaseModel):
+    """Ejections of one engine for one cause since process start."""
+
+    iid: str
+    cause: str
+    count: int
+
+
+class HoldStartCountOut(BaseModel):
+    """Holds of one kind started on one engine since process start."""
+
+    iid: str
+    kind: Literal["timed", "inference"]
+    count: int
+
+
+class HoldEndCountOut(BaseModel):
+    """Holds of one kind on one engine that ended for one cause since process start."""
+
+    iid: str
+    kind: Literal["timed", "inference"]
+    cause: str
+    count: int
+
+
+class ProbeCountOut(BaseModel):
+    """Verification probe outcomes for one engine and probe kind since process start."""
+
+    iid: str
+    kind: str
+    outcome: str
+    count: int
+
+
+class ReadmissionCountOut(BaseModel):
+    """Returns of one ejected engine to placement by one recovery path since process start."""
+
+    iid: str
+    evidence: str
+    count: int
+
+
 class BreakerOut(BaseModel):
-    """Breaker failure accounting: per-class streaks and pending probes.
+    """Breaker failure accounting: per-class streaks, pending probes and transition counts.
 
     `liveness` streaks count health-sweep misses.
     """
 
     failures: dict[str, EngineStreaksOut] = Field(default_factory=dict)
     verifying: list[VerifyingOut] = Field(default_factory=list)
+    ejections: list[EjectionCountOut] = Field(default_factory=list)
+    hold_starts: list[HoldStartCountOut] = Field(default_factory=list)
+    hold_ends: list[HoldEndCountOut] = Field(default_factory=list)
+    probes: list[ProbeCountOut] = Field(default_factory=list)
+    readmissions: list[ReadmissionCountOut] = Field(default_factory=list)
+
+
+class TimedHoldOut(BaseModel):
+    """One engine under a timed failure quarantine."""
+
+    iid: str
+    # Seconds since the hold started; null for a hold restored without its start time.
+    held_s: float | None = None
+    remaining_s: float
+
+
+class InferenceHoldOut(BaseModel):
+    """One engine held until an inference probe passes."""
+
+    iid: str
+    held_s: float | None = None
+    # Producers whose transfers to this engine failed; empty for a standalone probe.
+    recorded_producers: list[str] = Field(default_factory=list)
+
+
+class HoldsOut(BaseModel):
+    """Current placement holds, split by kind."""
+
+    timed: list[TimedHoldOut] = Field(default_factory=list)
+    inference: list[InferenceHoldOut] = Field(default_factory=list)
 
 
 class ResidencyOut(BaseModel):
@@ -558,6 +630,8 @@ class StateOut(BaseModel):
     flips: list[FlipOut]
     # Engines temporarily held out of placement after failure.
     quarantined: list[str] = []
+    # The same engines split into timed quarantines and inference holds.
+    holds: HoldsOut = Field(default_factory=HoldsOut)
     breaker: BreakerOut = Field(default_factory=BreakerOut)
     residency: dict[str, ResidencyOut] = Field(default_factory=dict)
     decode_floor: DecodeFloorOut

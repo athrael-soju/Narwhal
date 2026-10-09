@@ -241,14 +241,32 @@ Each router event row carries an `at` timestamp, in Unix wall-clock seconds for 
 | `below_floor_recovered` | The live prefill pool returns to `min_prefill`. | `duration_s`, `live_prefill`, `min_prefill` |
 | `controller_decision` | The role controller records an `applied`, `blocked`, `held`, or `advisory` decision. | `prefill`, `decode`, `by`, `reason`, `result`, `applied`, [decision details](../http-api/05-Live-State.md#controller-decisions) |
 | `decode_floor_restored` | A role change restores `min_decode`. | `iid`, `live_decode`, `min_decode` |
+| `engine_ejected` | The breaker or a recovery check ejects an engine. | `iid`, [`cause`](04-Failures.md#ejections-holds-and-readmissions) |
+| `engine_hold_ended` | A timed quarantine or inference hold ends. | `iid`, `kind`, [`cause`](04-Failures.md#ejections-holds-and-readmissions), `held_s` |
+| `engine_hold_started` | A timed quarantine or inference hold starts. | `iid`, [`kind`](04-Failures.md#hold-kinds), `duration_s` (`null` for an inference hold) |
 | `engine_lifecycle` | An engine lifecycle operation runs. | `action` and its operation fields |
+| `engine_probe` | A health or inference verification probe returns. | `iid`, `kind`, [`outcome`](04-Failures.md#verification-probe-outcomes); [inference probe fields](#inference-probe-events) |
+| `engine_readmitted` | An ejected engine returns to placement. | `iid`, [`evidence`](04-Failures.md#ejections-holds-and-readmissions) |
 | `monitoring_stage_failure` | A monitoring stage fails. | `stage`, `class`, stage-local `consecutive` count |
 | `monitoring_degraded` | Consecutive failed monitoring passes reach `controller.monitor_failure_limit`. | `stage`, `class`, `core_consecutive` |
 | `monitoring_recovered` | A fully successful monitoring pass clears degraded state. | |
 
+### Inference probe events
+
+An `engine_probe` event with `kind: verify_inference` adds these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `producer` | Engine that ran the probe's prefill leg, `null` for a standalone probe. |
+| `recorded_producer` | Producer recorded by the failed transfer this probe verifies, `null` when none was recorded. |
+| `producer_class` | Failure class of the producer leg, on a `producer_failed` outcome. |
+| `prefill_class`, `decode_class` | Failure class of each failed leg, on a `failed` outcome. |
+
+### Profile recovery events
+
 A failed profile-generation check during a health or inference recovery probe:
 
-- ejects the engine
+- ejects the engine and writes an `engine_ejected` event with `cause: profile_generation`
 - writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
 
 That event carries these fields:

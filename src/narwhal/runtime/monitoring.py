@@ -317,7 +317,7 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
                 router.cfg.liveness_misses,
             )
             continue
-        if router.scheduler.eject(iid):
+        if router.scheduler.eject(iid, "liveness"):
             misses.pop(iid, None)
             gone.append(iid)
             log.warning(

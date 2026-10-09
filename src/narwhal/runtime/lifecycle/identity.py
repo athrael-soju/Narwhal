@@ -83,7 +83,7 @@ async def check_process_identities(
             previous = manager.process_starts.get(spec.iid)
             changed = start is not None and previous is not None and start != previous
             if error or changed:
-                router.scheduler.eject(spec.iid)
+                router.scheduler.eject(spec.iid, "process_identity")
                 excluded.append(spec.iid)
                 manager._emit(
                     "process_excluded",
@@ -163,7 +163,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             return False
         if not problems:
             return True
-        router.scheduler.eject(iid)
+        router.scheduler.eject(iid, "profile_generation")
         manager._emit("profile_recovery_blocked", iid=iid, error="; ".join(problems))
         if router.cfg.engine_restart_policy == "whole_wave":
             manager.require_restart_wave("profile generation could not be verified")
