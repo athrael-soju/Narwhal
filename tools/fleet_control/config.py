@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .workloads import LoadConfig, read_load
+
 DEFAULT_CONFIG = Path("config/fleet-control.local.json")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8020
@@ -24,7 +26,7 @@ DEFAULT_ROUTER_TIMEOUT_S = 600.0
 MIN_TOKEN_LENGTH = 32
 RESTORE_HOOK = "restore"
 REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
-_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router"}
+_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load"}
 _HOOK_KEYS = {"argv", "timeout_s"}
 _ROUTER_KEYS = {"url", "timeout_s"}
 
@@ -52,7 +54,7 @@ class RouterEndpoint:
 
 @dataclass(frozen=True)
 class ControlConfig:
-    """Listener, credential, record location, baseline fleet, router and hook commands."""
+    """Listener, credential, record location, baseline fleet, router, hooks and load jobs."""
 
     fleet: Path
     hooks: Mapping[str, Hook]
@@ -61,6 +63,7 @@ class ControlConfig:
     token_env: str = DEFAULT_TOKEN_ENV
     runs_dir: Path = DEFAULT_RUNS_DIR
     router: RouterEndpoint = RouterEndpoint()
+    load: LoadConfig | None = None
 
     def hook(self, name: str) -> Hook:
         """Return the configured hook, or raise when the deployment did not name one."""
@@ -106,6 +109,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         problems.append("fleet must name the baseline fleet configuration (or set NARWHAL_FLEET)")
     hooks = _read_hooks(problems, raw.get("hooks"))
     router = _read_router(problems, raw.get("router", {}))
+    load = read_load(problems, raw["load"]) if "load" in raw else None
     if problems:
         raise ConfigError(f"{path}: " + "; ".join(problems))
     return ControlConfig(
@@ -116,6 +120,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         token_env=str(token_env),
         runs_dir=Path(str(runs_dir)),
         router=router,
+        load=load,
     )
 
 

@@ -37,5 +37,32 @@
       "argv": ["/path/to/restart-fleet"],
       "timeout_s": 1800
     }
+  },
+  "load": {
+    "aiperf": "/path/to/aiperf-venv/bin/aiperf",
+    "model": "<served-model>",
+    "tokenizer": "/path/to/tokenizer",
+    "endpoint_type": "chat",
+    "streaming": true,
+    "goodput": {
+      "time_to_first_token": 10000,
+      "inter_token_latency": 125
+    },
+    "workloads": {
+      "synthetic-512-256": {
+        "kind": "synthetic",
+        "isl": 512,
+        "osl": 256
+      },
+      "timestamped-trace": {
+        "kind": "timestamped_trace",
+        "file": "/path/to/timestamped-trace.jsonl"
+      },
+      "reused-prefix-trace": {
+        "kind": "prefix_trace",
+        "file": "/path/to/reused-prefix-trace.jsonl",
+        "block_size": 512
+      }
+    }
   }
 }
