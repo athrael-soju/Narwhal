@@ -8,6 +8,7 @@ import json
 import re
 import tempfile
 import unittest
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -46,6 +47,38 @@ LOAD = LoadConfig(
     workloads={"short": Workload("short", "synthetic", isl=8, osl=4)},
 )
 HTML = PAGE.read_text(encoding="utf-8")
+
+
+class Elements(HTMLParser):
+    """Collect inline script and style text, and every external resource reference."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.text: dict[str, list[str]] = {"script": [], "style": []}
+        self.external: list[tuple[str, str]] = []
+        self._open: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self.text:
+            self._open = tag
+            self.text[tag].append("")
+        if tag in ("script", "link", "img"):
+            self.external += [(tag, name) for name, _ in attrs if name in ("src", "href")]
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self._open:
+            self._open = None
+
+    def handle_data(self, data: str) -> None:
+        if self._open is not None:
+            self.text[self._open][-1] += data
+
+
+def elements(html: str) -> Elements:
+    parser = Elements()
+    parser.feed(html)
+    parser.close()
+    return parser
 
 
 def page_routes() -> dict[str, tuple[str, str]]:
@@ -245,8 +278,8 @@ class ConsolePageTests(ConsoleCase):
 
     async def test_the_policy_admits_only_the_inline_code_and_grafana_frames(self) -> None:
         policy = csp(await self.client.get("/console"))
-        scripts = re.findall(r"<script>(.*?)</script>", HTML, re.DOTALL)
-        styles = re.findall(r"<style>(.*?)</style>", HTML, re.DOTALL)
+        page = elements(HTML)
+        scripts, styles = page.text["script"], page.text["style"]
         self.assertEqual(len(scripts), 1)
         self.assertEqual(len(styles), 1)
         self.assertEqual(policy["default-src"], ["'none'"])
@@ -259,7 +292,7 @@ class ConsolePageTests(ConsoleCase):
         # The policy refuses inline handlers, style attributes and external resources.
         self.assertIsNone(re.search(r"\son[a-z]+=", HTML))
         self.assertIsNone(re.search(r"\sstyle=", HTML))
-        self.assertIsNone(re.search(r"<(script|link|img)[^>]*\s(src|href)=", HTML))
+        self.assertEqual(page.external, [])
         self.assertNotIn("innerHTML", HTML)
 
     async def test_every_api_route_refuses_requests_without_a_valid_token(self) -> None:
