@@ -76,7 +76,7 @@ class ConfigCliTests(unittest.TestCase):
         self.path = self.root / "config/fleet.json"
         self.raw = {
             "schema": "narwhal.fleet",
-            "schema_version": 3,
+            "schema_version": 2,
             "model": "offline-model",
             "engines": [{"iid": "engine", "url": "http://127.0.0.1:1/"}],
             "slo": {"ttft_s": 1, "tpot_s": 0.05},
@@ -105,7 +105,7 @@ class ConfigCliTests(unittest.TestCase):
                 self.assertEqual(result["operation"], f"config {action}")
                 self.assertEqual(result["exit_code"], 0)
                 data = result["data"]
-                self.assertEqual(validate_document(data, EFFECTIVE_CONFIG), 3)
+                self.assertEqual(validate_document(data, EFFECTIVE_CONFIG), 2)
                 self.assertEqual(data["scope"], "fleet_file")
                 self.assertEqual(
                     data["settings"]["engine"]["engine_api_key_env"], "CONFIG_TEST_KEY"
@@ -230,7 +230,7 @@ class ConfigCliTests(unittest.TestCase):
     def test_default_inspection_prints_the_versioned_document(self):
         status, stdout, stderr = self.run_command("inspect")
         self.assertEqual(status, 0, stderr)
-        self.assertEqual(validate_document(json.loads(stdout), EFFECTIVE_CONFIG), 3)
+        self.assertEqual(validate_document(json.loads(stdout), EFFECTIVE_CONFIG), 2)
 
     def test_text_failures_identify_the_fleet_and_loader_error(self):
         self.path.write_text('{"schema": "narwhal.fleet", "schema_version": 99}')

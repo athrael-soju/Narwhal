@@ -6,12 +6,11 @@ from ...contracts import METRICS, current
 from .exposition import metric_lines, slo_label
 
 
-def _by_reason(state: dict, terminal: str, label: str, total: int) -> list:
-    """Return one sample per reason, or the unlabelled total when reasons are absent."""
-    reasons = (state.get("outcome_reasons") or {}).get(terminal)
-    if reasons is None:
-        return [({}, total)]
-    return [({label: reason}, count) for reason, count in reasons.items()]
+def _by_reason(state: dict, terminal: str, label: str) -> list:
+    """Return one sample per reason of a terminal outcome."""
+    return [
+        ({label: reason}, count) for reason, count in state["outcome_reasons"][terminal].items()
+    ]
 
 
 def render_admission(state: dict) -> list[str]:
@@ -46,7 +45,7 @@ def render_admission(state: dict) -> list[str]:
         "narwhal_expired_total",
         "Original requests terminated by their admission or total deadline, by reason",
         "counter",
-        _by_reason(state, "expired", "reason", state.get("expired", 0)),
+        _by_reason(state, "expired", "reason"),
     )
     serving = state.get("serving") or {}
     for field_name, help_text in (
@@ -99,23 +98,19 @@ def render_admission(state: dict) -> list[str]:
             "Loop lag or sizing delay at which ingress answers a saturation 429",
         ),
     ):
-        if field_name in admission:
-            out += metric_lines(
-                f"narwhal_{name}", help_text, "gauge", [({}, admission[field_name])]
-            )
-    if "mode" in admission:
-        out += metric_lines(
-            "narwhal_admission_info",
-            "Admission mode set by serving.admission",
-            "gauge",
-            [({"mode": admission["mode"]}, 1)],
-        )
-        out += metric_lines(
-            "narwhal_admission_margin",
-            "Fraction serving.admission_margin adds to the TTFT budget",
-            "gauge",
-            [({}, admission.get("margin", 0.0))],
-        )
+        out += metric_lines(f"narwhal_{name}", help_text, "gauge", [({}, admission[field_name])])
+    out += metric_lines(
+        "narwhal_admission_info",
+        "Admission mode set by serving.admission",
+        "gauge",
+        [({"mode": admission["mode"]}, 1)],
+    )
+    out += metric_lines(
+        "narwhal_admission_margin",
+        "Fraction serving.admission_margin adds to the TTFT budget",
+        "gauge",
+        [({}, admission["margin"])],
+    )
     for field_name in (
         "queued",
         "queue_capacity",
@@ -174,18 +169,17 @@ def render_admission(state: dict) -> list[str]:
 def render_refusals(state: dict) -> list[str]:
     """Render admission refusal, rejection and invalid-request counters."""
     out: list[str] = []
-    admission = state.get("admission") or {}
     out += metric_lines(
         "narwhal_refused_total",
         "Requests predictive admission refused for a projected TTFT or decode SLO miss, by cause",
         "counter",
-        _by_reason(state, "refused", "cause", admission.get("refused", 0)),
+        _by_reason(state, "refused", "cause"),
     )
     out += metric_lines(
         "narwhal_rejected_total",
         "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness, by reason",
         "counter",
-        _by_reason(state, "rejected", "reason", admission.get("rejected", 0)),
+        _by_reason(state, "rejected", "reason"),
     )
     out += metric_lines(
         "narwhal_invalid_requests_total",
@@ -203,7 +197,7 @@ def render_outcomes(state: dict) -> list[str]:
         "narwhal_failed_total",
         "Requests that ended in an error, by reason",
         "counter",
-        _by_reason(state, "failed", "reason", state.get("failed", 0)),
+        _by_reason(state, "failed", "reason"),
     )
     out += metric_lines(
         "narwhal_cancelled_total",

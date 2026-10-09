@@ -19,13 +19,13 @@ Every fleet file declares this header:
 ```json
 {
   "schema": "narwhal.fleet",
-  "schema_version": 3
+  "schema_version": 2
 }
 ```
 
 The declared schema and version must match a [supported interface version](telemetry/05-Compatibility.md#checking-interface-compatibility-before-deployment).
 
-Under fleet schema version 3, ingress handles client identity and content capture. The Narwhal router holds one global admission budget, and request records hold timings, identifiers, placements and outcomes.
+Under fleet schema version 2, ingress handles client identity and content capture. The Narwhal router holds one global admission budget, and request records hold timings, identifiers, placements and outcomes.
 
 ## Fleet and deployment contracts
 

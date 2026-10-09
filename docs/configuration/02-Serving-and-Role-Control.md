@@ -19,7 +19,7 @@ In `predictive` mode, the router returns HTTP 429 when a request fails the time 
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
-Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit) gives the measurement behind the default and the client outcomes of each mode and limit.
+Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit) gives the client outcomes of each mode and limit.
 
 #### In-flight limit
 
@@ -103,7 +103,7 @@ The check admits the request when all three of these pass:
 
 In `predictive` mode, only an original request's first attempt is priced against the TTFT check. An attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
 
-### 4.2 Waiting, phase concurrency, and retries
+### 4.2 Waiting, engine seats, and retries
 
 | Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -134,6 +134,8 @@ A request with no queue budget left still takes a free prefill seat, but it does
 Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat. An arriving request therefore meets a full queue only while requests hold every seat.
 
 In `predictive` mode, the router prices an original request's first attempt when it starts an admission-seat or prefill-seat wait. It prices the request again each time the wait wakes. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. The price grows with the time waited, so the router also prices the request when that growth alone would exceed the TTFT budget. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+
+The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#51-prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
 
 A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
 
@@ -197,7 +199,7 @@ The original request deadline covers tokenization, queue wait, retry backoff, en
 
 Tune queueing and retries:
 
-1. Read [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) for the measurement behind each default and the client outcomes of each value.
+1. Read [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value and when to change it.
 2. Set queue capacity and deadlines from the workload's measured latency and capacity.
 3. Verify that the backend releases abandoned KV handoffs when the lease expires.
 4. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.

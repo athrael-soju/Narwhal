@@ -301,7 +301,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             self.router.cfg.profiles_path.parent
         ).engine_contract
         for iid in ("e0", "e3"):
-            self.router.scheduler.eject(iid)
+            self.router.scheduler.eject(iid, "liveness")
         with (
             patch.object(self.router.engines, "healthy", new=AsyncMock(side_effect=[True, False])),
             patch.object(monitoring, "attested", new=answering),
@@ -341,7 +341,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         """An engine whose sidecar is unreachable stays ejected and validates once it responds."""
         status = {"e0": None, "e3": 200}
         self._sidecars(status)
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         with (
             patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
             patch.object(
@@ -362,7 +362,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
     async def test_contract_recovery_validates_a_sidecar_that_responds_with_an_error(self):
         """A sidecar status error reaches validation, which blocks with the named failure."""
         self._sidecars({"e0": 503, "e3": 200})
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         failed = ValidationOutcome(failures={"e0": ["attestation unreadable: HTTPStatusError"]})
         with (
             patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
@@ -382,7 +382,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         status = {"e0": 200, "e3": None}
         self._sidecars(status)
         for iid in ("e0", "e3"):
-            self.router.scheduler.eject(iid)
+            self.router.scheduler.eject(iid, "liveness")
         with (
             patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
             patch.object(
@@ -401,7 +401,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
     async def test_whole_wave_policy_converts_automatic_recovery_to_operator_hold(self):
         """Whole-wave policy holds every engine before any automatic health readmission."""
         self.router.cfg.engine_restart_policy = "whole_wave"
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         with patch.object(self.router.engines, "healthy", new=AsyncMock()) as healthy:
             self.assertEqual(await readmit(self.router, 0), [])
         healthy.assert_not_awaited()

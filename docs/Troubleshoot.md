@@ -212,7 +212,7 @@ Action: reduce the offered rate, or add capacity. In `open` mode, compare a run 
 3. Compare completed throughput and the share of requests meeting the service-level objective, from `narwhal_served_total` and `narwhal_slo_met_total`.
 4. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
 
-Before you change an admission, queue, retry or in-flight setting, read [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md) for the measurement behind its default and the client outcomes of each value.
+Before you change an admission, queue, retry or in-flight setting, read [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value.
 
 The class is resolved when the counter series that identified it stops increasing at the offered rate, and the journal shows no new terminal rows with that reason.
 

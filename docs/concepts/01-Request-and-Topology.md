@@ -35,7 +35,7 @@ A completion request passes through these stages:
 
 When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) gives each wait's bound and response.
 
-A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
+A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-engine-seats-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 

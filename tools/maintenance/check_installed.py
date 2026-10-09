@@ -59,7 +59,7 @@ def check_offline_config():
             json.dumps(
                 {
                     "schema": "narwhal.fleet",
-                    "schema_version": 3,
+                    "schema_version": 2,
                     "model": "installed-offline",
                     "engines": [{"iid": "e", "url": "${NARWHAL_INSTALLED_ENGINE_URL}"}],
                     "slo": {"ttft_s": 1, "tpot_s": 1},
@@ -94,7 +94,7 @@ def check_offline_config():
             assert result["operation"] == f"config {action}"
             data = result["data"]
             assert data["schema"] == "narwhal.effective-config"
-            assert data["schema_version"] == 3
+            assert data["schema_version"] == 2
             assert data["settings"]["engines"][0]["url"] == "http://127.0.0.1:1"
             assert data["settings"]["engine"]["control_connections"] == 4
             assert data["artifact_paths"]["profiles"] == str(root / "runs/profiles.json")

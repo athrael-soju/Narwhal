@@ -149,7 +149,7 @@ class HttpAccountingTests(HttpHarness):
                     else ServingPolicy()
                 )
                 client = self.client()
-                self.router.scheduler.eject("e3")
+                self.router.scheduler.eject("e3", "liveness")
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(self.calls, [])

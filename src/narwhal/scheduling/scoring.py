@@ -100,28 +100,8 @@ class SplitSnapshot:
     profile_options: tuple[tuple[int, tuple[Profile, ...]], ...] = ()
     demand_options: tuple[tuple[int, Demand], ...] = ()
     offered_outputs: tuple[int, ...] = ()
-    decode_concurrency: int = 0
-    waiting_decode_requests: int = 0
-    # Decode residents on engines that currently hold the decode role.
-    decode_role_requests: int = 0
     # Decode-slot wait over the remaining TTFT budget, by decode engine count.
     decode_wait_ratios: tuple[tuple[int, float], ...] = ()
-
-    @property
-    def decode_recovery_ratio(self) -> float:
-        """Return the larger of decode pressure and capped decode-slot occupancy."""
-        return max(self.decode_pressure, self._decode_slots(self.current_decode))
-
-    def _decode_slots(self, decode: int) -> float:
-        """Return the share of capped decode slots that decode-role and waiting requests fill.
-
-        A smaller decode pool keeps each departing engine's residents on that engine.
-        """
-        cap = self.decode_concurrency
-        engines = max(decode, self.current_decode)
-        if cap <= 0 or decode <= 0:
-            return 0.0
-        return (self.decode_role_requests + self.waiting_decode_requests) / (engines * cap)
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -190,7 +170,6 @@ class SplitSnapshot:
                         context,
                         output_len,
                         correction=correction,
-                        request_cap=self.decode_concurrency,
                     )
                     and p.covers_decode(1, context)
                     for p in profiles
@@ -209,9 +188,7 @@ class SplitSnapshot:
             else None
         )
         request_limit = (
-            min(
-                p.decode_request_limit(tokens / requests, self.decode_concurrency) for p in profiles
-            )
+            min(p.decode_request_limit(tokens / requests) for p in profiles)
             if requests > 0 and profiles
             else None
         )
@@ -238,7 +215,6 @@ class SplitSnapshot:
             tpot_ratio = max(
                 tpot_ratio,
                 self.decode_pressure * self.current_decode / decode,
-                self._decode_slots(decode),
             )
             if profiles:
                 interval = (
@@ -301,7 +277,6 @@ class SplitScorer:
         occupancy = decode_occupancy(
             self.scheduler,
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
-            concurrency=self.scheduler.decode_concurrency,
             expected_output=self.demand.output_estimator(),
         )
         if occupancy is None:
@@ -513,9 +488,6 @@ class SplitScorer:
             resident_prefill_s=resident_prefill,
             resident_decode_tokens=sum(i.decode_tokens() for i in instances),
             resident_decode_requests=sum(len(i.decode) for i in instances),
-            decode_concurrency=self.scheduler.decode_concurrency,
-            waiting_decode_requests=sum(r.phase is Phase.DECODE for r in waiting),
-            decode_role_requests=sum(len(i.decode) for i in instances if i.role is Role.DECODE),
             decode_wait_ratios=self.decode_wait_ratios(
                 len(instances) - prefill for prefill, _ in profile_options
             ),

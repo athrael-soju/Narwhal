@@ -221,6 +221,48 @@ class SeatHandoffTests(QueueWaitHarness):
         self.assertEqual(seen, [(1, 0)])
         self.assert_released()
 
+    async def test_a_waiter_cancelled_after_its_grant_releases_the_seat(self):
+        client = self.client()
+        serving = []
+        serve = self.router.serve
+
+        async def tracked(*args, **kwargs):
+            serving.append(asyncio.current_task())
+            return await serve(*args, **kwargs)
+
+        self.router.serve = tracked
+        holder = await self.hold_prefill(client)
+        waiting = self.submit(client)
+        await self.until(lambda: self.queued(Phase.PREFILL) == 1)
+        producer = self.router.monitor.instances["e0"]
+        first_token = self.router.monitor.first_token
+        granted = []
+
+        def observe(iid, rid):
+            first_token(iid, rid)
+            if not granted:
+                granted.extend(producer.prefill)
+                # The waiter's request is cancelled before its granted wait resumes.
+                serving[1].cancel()
+
+        self.router.monitor.first_token = observe
+        self.blocked.set()
+        self.assertEqual((await holder).status_code, 200)
+        with self.assertRaises(asyncio.CancelledError):
+            await waiting
+        self.assertEqual(len(granted), 1)
+        # The waiter never reached its prefill leg, and its reservation left the producer.
+        prefills = [
+            body
+            for _, body in self.calls
+            if (body.get("kv_transfer_params") or {}).get("do_remote_decode")
+        ]
+        self.assertEqual(len(prefills), 1)
+        self.assertEqual(producer.prefill, {})
+        self.assertEqual((self.router.served, self.router.cancelled), (1, 1))
+        self.assertEqual(self.row(granted[0])["terminal"], "cancelled")
+        self.assert_released()
+
 
 class HoldTests(QueueWaitHarness):
     async def start_waiters(self):
@@ -336,7 +378,7 @@ class ProducerDecodeTests(QueueWaitHarness):
             if request.phase is Phase.DECODE:
                 producer.role = Role.DECODE
                 if eject:
-                    scheduler.eject("e3")
+                    scheduler.eject("e3", "liveness")
             return schedule(request, **kwargs)
 
         scheduler.schedule = change_before_decode

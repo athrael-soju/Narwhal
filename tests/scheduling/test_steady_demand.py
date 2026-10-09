@@ -6,6 +6,7 @@ import heapq
 import itertools
 import tempfile
 import unittest
+from dataclasses import replace
 
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.reactive import Departure
@@ -236,7 +237,8 @@ class DecodeWaitTests(unittest.TestCase):
         self.addCleanup(self.fleet.telemetry.stop)
         self.fleet.pressure = {Role.PREFILL: 0.9, Role.DECODE: 3.0}
         # One slot per decode engine; four of the five hold a resident.
-        self.fleet.scheduler.decode_concurrency = 1
+        for row in self.fleet.profiles.all_profiles():
+            self.fleet.profiles.put(replace(row, decode_max_requests=1))
         self.pending = Request("pending", 100, wanted_len=10, arrived_at=self.fleet.now)
 
     def hold(self, wanted_len: int) -> None:
@@ -264,13 +266,12 @@ class DecodeWaitTests(unittest.TestCase):
 
                 # Admission on four decode engines projects the same wait for the request.
                 fleet.monitor.finished("e0", self.pending.rid)
-                self.assertTrue(fleet.scheduler.eject("e1"))
+                self.assertTrue(fleet.scheduler.eject("e1", "liveness"))
                 ready = fleet.scheduler.prefill_ready_s(self.pending, fleet.monitor.instances["e0"])
                 admitted = decode_admits(
                     fleet.scheduler,
                     self.pending,
                     ready_s=ready,
-                    concurrency=1,
                     expected_output=fleet.controller.demand.output_estimator(),
                 )
                 self.assertEqual(admitted, ratio <= 1.0)

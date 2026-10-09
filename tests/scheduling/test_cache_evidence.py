@@ -158,7 +158,7 @@ class CacheEvidenceTests(unittest.TestCase):
         self.assertEqual(sequenced.cache_placement["evidence_sequence"], 7)
         self.assertLess(record["predicted_prefill_s"], record["cold_prefill_s"])
         # Cache evidence cannot place a request on an ejected or excluded engine.
-        scheduler.eject(other)
+        scheduler.eject(other, "liveness")
         held = Request("held", 40, cached_tokens={other: 32})
         self.assertEqual(scheduler.schedule(held).iid, placed.iid)
         with self.assertRaisesRegex(RuntimeError, "no schedulable instances"):

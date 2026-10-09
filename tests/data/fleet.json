@@ -1,6 +1,6 @@
 {
   "schema": "narwhal.fleet",
-  "schema_version": 3,
+  "schema_version": 2,
   "model": "test-model",
   "hardware": {
     "accelerator": "test-accelerator",

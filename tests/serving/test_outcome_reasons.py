@@ -44,12 +44,14 @@ class OutcomeReasonTests(HttpHarness):
             for reason in reasons:
                 with self.subTest(terminal=terminal, reason=reason):
                     self.assertIn(f'narwhal_{terminal}_total{{{label}="{reason}"}} 0', text)
+        self.assertNotIn('"unclassified"', text)
         self.assertIn('narwhal_admission_info{mode="open"} 1', text)
         self.assertIn("narwhal_admission_margin 0.25", text)
         self.assertIn("narwhal_served_after_retry_total 0", text)
         state = (await client.get("/narwhal/state")).json()
         self.assertEqual((state["admission"]["mode"], state["admission"]["margin"]), ("open", 0.25))
         self.assertEqual(state["outcome_reasons"]["failed"]["engine_error"], 0)
+        self.assertNotIn("unclassified", state["outcome_reasons"]["rejected"])
         self.assertEqual(self.journal_meta()["admission"], {"mode": "open", "margin": 0.25})
 
     async def test_rejections_record_reason_status_and_error_type(self):

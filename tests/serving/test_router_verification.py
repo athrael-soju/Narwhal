@@ -105,7 +105,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.router.sizer.estimate_length({"messages": [{"content": "hello"}]}), 1
         )
         for iid in ("e0", "e3"):
-            self.router.scheduler.eject(iid)
+            self.router.scheduler.eject(iid, "liveness")
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
             self.assertEqual((await self.router.sizer.size({"prompt": ""}))[0], 1)
             count.assert_not_awaited()
@@ -159,7 +159,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.router._clock = lambda: now[0]
         bad = self.router.scheduler.live_instances()[0]
         for other in self.router.scheduler.live_instances()[1:]:
-            self.router.scheduler.eject(other.iid)
+            self.router.scheduler.eject(other.iid, "liveness")
         healed = False
 
         async def tokenize(url, *args, **kwargs):

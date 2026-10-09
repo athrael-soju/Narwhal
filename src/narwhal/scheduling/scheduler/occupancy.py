@@ -129,13 +129,12 @@ def decode_occupancy(
     scheduler: GlobalScheduler,
     input_len: int,
     *,
-    concurrency: int = 0,
     seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> DecodeOccupancy | None:
     """Project decode holds from now for a joining request of `input_len` prompt tokens.
 
-    A positive `concurrency`, or an engine's positive `seats` entry, caps its slots.
+    An engine's positive `seats` entry caps its slots.
     Returns None without live decode engines or with an engine lacking `decode_max_requests`.
     """
     engines = tuple(scheduler.live_instances(Role.DECODE))
@@ -148,7 +147,6 @@ def decode_occupancy(
         if profile is None or profile.decode_max_requests is None:
             return None
         limit = profile.decode_max_requests
-        limit = min(limit, concurrency) if concurrency > 0 else limit
         seat = (seats or {}).get(inst.iid, 0)
         limit = min(limit, seat) if seat > 0 else limit
         token_limit = profile.decode_token_limit
@@ -202,7 +200,6 @@ def decode_admits(
     ready_s: float = 0.0,
     ttft_s: float | None = None,
     ttft_margin: float = 0.0,
-    concurrency: int = 0,
     seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> bool:
@@ -214,7 +211,6 @@ def decode_admits(
             ready_s=ready_s,
             ttft_s=ttft_s,
             ttft_margin=ttft_margin,
-            concurrency=concurrency,
             seats=seats,
             expected_output=expected_output,
         )
@@ -229,7 +225,6 @@ def decode_refusal(
     ready_s: float = 0.0,
     ttft_s: float | None = None,
     ttft_margin: float = 0.0,
-    concurrency: int = 0,
     seats: Mapping[str, int] | None = None,
     expected_output: Callable[[Request], int] | None = None,
 ) -> str | None:
@@ -244,7 +239,6 @@ def decode_refusal(
     occupancy = decode_occupancy(
         scheduler,
         request.input_len,
-        concurrency=concurrency,
         seats=seats,
         expected_output=estimate,
     )

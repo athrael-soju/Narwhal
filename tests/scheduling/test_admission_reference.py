@@ -145,7 +145,6 @@ def reference_decode_occupancy(
     scheduler: GlobalScheduler,
     input_len: int,
     *,
-    concurrency: int = 0,
     expected_output: Callable[[Request], int] | None = None,
 ) -> ReferenceOccupancy | None:
     engines = tuple(scheduler.live_instances(Role.DECODE))
@@ -158,7 +157,6 @@ def reference_decode_occupancy(
         if profile is None or profile.decode_max_requests is None:
             return None
         limit = profile.decode_max_requests
-        limit = min(limit, concurrency) if concurrency > 0 else limit
         token_limit = profile.decode_token_limit
         slots += limit
         tokens += float("inf") if token_limit is None else token_limit
@@ -208,16 +206,13 @@ def reference_decode_admits(
     ready_s: float = 0.0,
     ttft_s: float | None = None,
     ttft_margin: float = 0.0,
-    concurrency: int = 0,
     expected_output: Callable[[Request], int] | None = None,
     trace: list[str] | None = None,
 ) -> bool:
     """Return the cb41445 verdict, appending the deciding check to `trace`."""
     trace = [] if trace is None else trace
     estimate = expected_output or (lambda r: r.wanted_len)
-    occupancy = reference_decode_occupancy(
-        scheduler, request.input_len, concurrency=concurrency, expected_output=estimate
-    )
+    occupancy = reference_decode_occupancy(scheduler, request.input_len, expected_output=estimate)
     if occupancy is None:
         trace.append("unmeasured")
         return True
@@ -476,7 +471,6 @@ def build_fleet(rng: random.Random, directory: Path) -> Fleet:
         SLO(rng.uniform(0.2, 3.0), rng.uniform(0.005, 0.1)),
         clock=clock,
         health=health,
-        decode_concurrency=rng.choice((0, 1, 2, 3)),
     )
     demand = DemandModel(monitor, scheduler, clock, window_s=60.0, bucket_s=1.0)
     for _ in range(rng.randint(0, 30)):
@@ -567,12 +561,9 @@ class AdmissionReferenceTests(unittest.TestCase):
         for fleet in self.fleets(250, seed=1):
             for current, reference in estimators(fleet):
                 input_len = rng.randint(1, 4000)
-                concurrency = rng.choice((0, 1, 2, 3, 8))
-                new = decode_occupancy(
-                    fleet.scheduler, input_len, concurrency=concurrency, expected_output=current
-                )
+                new = decode_occupancy(fleet.scheduler, input_len, expected_output=current)
                 old = reference_decode_occupancy(
-                    fleet.scheduler, input_len, concurrency=concurrency, expected_output=reference
+                    fleet.scheduler, input_len, expected_output=reference
                 )
                 if old is None:
                     self.assertIsNone(new)
@@ -629,7 +620,6 @@ class AdmissionReferenceTests(unittest.TestCase):
                         "ready_s": rng.choice((0.0, rng.uniform(0.0, 3.0))),
                         "ttft_s": rng.choice((None, rng.uniform(0.0, 3.0))),
                         "ttft_margin": rng.choice((0.0, 0.2)),
-                        "concurrency": rng.choice((0, 1, 2, 3)),
                     }
                     trace: list[str] = []
                     expected = reference_decode_admits(

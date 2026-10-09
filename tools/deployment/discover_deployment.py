@@ -411,7 +411,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
         raise ValueError("Set NARWHAL_ENGINE_MODEL_NAME in .env")
     fleet = {
         "schema": "narwhal.fleet",
-        "schema_version": 3,
+        "schema_version": 2,
         "model": model,
         "hardware": {
             "accelerator": product,

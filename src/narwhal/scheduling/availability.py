@@ -216,7 +216,7 @@ class EngineAvailability:
             and inst.iid not in self.quarantined
         ]
 
-    def eject(self, iid: str, cause: str = "unspecified") -> bool:
+    def eject(self, iid: str, cause: str) -> bool:
         """Eject an engine, recording the evidence `cause` that excluded it."""
         if iid in self.ejected:
             return False

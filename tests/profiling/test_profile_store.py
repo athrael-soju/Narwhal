@@ -81,12 +81,12 @@ class ProfileStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "zero tpot_slope requires measured decode bounds"):
             profile(tpot_slope=0, decode_max_requests=None)
 
-    def test_a_capped_batch_below_the_measured_domain_prices_at_its_smallest_batch(self):
-        """A decode cap under the smallest measured batch keeps a conservative capacity."""
+    def test_a_batch_below_the_measured_domain_prices_at_its_smallest_batch(self):
+        """A TPOT budget under the smallest measured batch keeps a conservative capacity."""
         row = replace(profile(), decode_min_kv_tokens=600)
-        capped = row.decode_rps(1.0, 80, 64, request_cap=4)
-        self.assertAlmostEqual(capped, 4 / (64 * row.token_interval(600, 4)))
-        self.assertLess(capped, 4 / (64 * row.token_interval(320, 4)))
+        bounded = row.decode_rps(0.006, 80, 64)
+        self.assertAlmostEqual(bounded, 4 / (64 * row.token_interval(600, 4)))
+        self.assertLess(bounded, 4 / (64 * row.token_interval(320, 4)))
         uncapped = row.decode_rps(1.0, 80, 64)
         self.assertAlmostEqual(uncapped, 16 / (64 * row.token_interval(16 * 80, 16)))
 
@@ -140,8 +140,6 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertGreater(row.decode_rps(1, 256, 32), 0)
         self.assertAlmostEqual(row.decode_rps(1, 256, 32), row.decode_rps(1, 256, 16) / 2)
         self.assertEqual(replace(row, decode_min_output_tokens=16).decode_rps(1, 256, 8), 0)
-        self.assertEqual(row.decode_request_limit(256, request_cap=1), 1)
-        self.assertLess(row.decode_rps(1, 256, 32, request_cap=1), row.decode_rps(1, 256, 32))
         with self.assertRaisesRegex(ValueError, "colocated role mix"):
             replace(row, colocated_decode_rps=None)
 

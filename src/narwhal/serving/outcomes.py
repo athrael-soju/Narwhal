@@ -32,6 +32,7 @@ class ResponseLimitExceeded(ValueError):
 
 
 # Every value appears on `/metrics` from process start, so each counter's series stay fixed.
+# An `unclassified` series of any counter appears once the router counts one.
 FAILED_REASONS = (
     "no_engine",
     "engine_unreachable",
@@ -45,7 +46,7 @@ FAILED_REASONS = (
     "response_limit",
     "internal",
 )
-REJECTED_REASONS = ("inflight_limit", "saturated", "not_ready", "unclassified")
+REJECTED_REASONS = ("inflight_limit", "saturated", "not_ready")
 # The one message of every 429 at the router in-flight limit.
 INFLIGHT_LIMIT_MESSAGE = "router in-flight limit reached"
 # The one message of every expiry at the original request deadline.

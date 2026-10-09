@@ -258,7 +258,7 @@ These panels show how long requests wait and how the router retries failed attem
 | completed after retry | Requests completed by an attempt after the first                                               |
 | ended before sizing   | Requests that ended before [input sizing](../http-api/03-Backend-and-Failures.md#input-sizing) |
 
-**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The pool starts at `serving.retry_budget`, each retry spends one credit when it dispatches, and each successful original request adds `serving.retry_replenish` up to the starting size. While less than one credit remains, the router denies each retry, and the request ends with its attempt's failure. The [retry settings](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) define both fields.
+**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The pool starts at `serving.retry_budget`, each retry spends one credit when it dispatches, and each successful original request adds `serving.retry_replenish` up to the starting size. While less than one credit remains, the router denies each retry, and the request ends with its attempt's failure. The [retry settings](../configuration/02-Serving-and-Role-Control.md#42-waiting-engine-seats-and-retries) define both fields.
 
 ## Router event loop
 
