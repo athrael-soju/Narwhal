@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from narwhal.contracts import canonical_digest
+
 RUN_SCHEMA = "narwhal.fleet-control-run"
 RUN_SCHEMA_VERSION = 1
 ACTION_LOG = "actions.jsonl"
@@ -88,9 +90,27 @@ class Session:
         """Return the session's copy of the baseline fleet configuration."""
         return self.directory / BASELINE
 
-    def apply_configuration(self, at: str, source: str, document: Mapping[str, Any]) -> None:
-        """Record a fleet configuration that now governs the deployment."""
-        self.configurations.append({"applied_at": at, "source": source, "document": document})
+    @property
+    def fleet_path(self) -> Path:
+        """Return the session's file holding the fleet configuration that governs the fleet."""
+        return self.directory / self.configurations[-1]["fleet"]
+
+    def apply_configuration(
+        self, at: str, source: str, document: Mapping[str, Any], *, fleet: str = BASELINE
+    ) -> None:
+        """Record a fleet configuration that now governs the deployment.
+
+        `fleet` names the session file that holds `document`, relative to the session directory.
+        """
+        self.configurations.append(
+            {
+                "applied_at": at,
+                "source": source,
+                "fleet": fleet,
+                "digest": canonical_digest(document),
+                "document": document,
+            }
+        )
 
     def document(self) -> dict[str, Any]:
         """Return the run record."""
