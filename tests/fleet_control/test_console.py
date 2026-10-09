@@ -35,6 +35,7 @@ from tools.fleet_control.console import (
     with_token,
 )
 from tools.fleet_control.engines import ACTIONS, EngineActions, engine_routes
+from tools.fleet_control.live import live_routes
 from tools.fleet_control.overlays import Overlays, overlay_routes
 from tools.fleet_control.service import ControlService
 from tools.fleet_control.signals import FleetSignals, signal_routes
@@ -259,6 +260,7 @@ class ConsoleCase(unittest.IsolatedAsyncioTestCase):
                 overlay_routes(Overlays(service)),
                 signal_routes(FleetSignals(service)),
                 workload_routes(LOAD),
+                live_routes(service, {}),
             ],
             public=PUBLIC_PATHS,
         )

@@ -55,6 +55,6 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 ## Paused and stopped engines
 
-The console tracks paused and stopped engines within the session. A baseline restore or a cold restart clears those states.
+The console tracks paused and stopped engines within the session. **Restore baseline** returns them to service, and a cold restart clears those states.
 
 The **Last action** line under the table shows the latest engine action and the change in the engine's state and resident requests. The run record holds the engine's full router state before and after each action.

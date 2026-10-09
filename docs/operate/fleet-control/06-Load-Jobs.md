@@ -24,15 +24,15 @@ In the **Load job** view, select a workload and set its inputs:
 | ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
 | Rate (req/s)     | `rate`            | Requests per second                                                                                      | 0.1 to 1000  | 2        |
 | Arrival          | `arrival`         | Spacing of requests at the rate: `random` (Poisson), `steady` (even) or `bursty` (gamma, smoothness 0.5) |              | `random` |
-| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               | 1 to 4096    |          |
-| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    |          |
+| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               | 1 to 4096    | 32       |
+| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    | 10       |
 | Duration (s)     | `duration_s`      | Seconds of load                                                                                          | 1 to 86400   | 300      |
-| Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 |          |
-| Warm-up requests | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   |          |
+| Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 | 1000     |
+| Warm-up requests | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   | 10       |
 
 Concurrency, Requests and Warm-up requests take whole numbers. The console and the service refuse values outside the range.
 
-Selecting a workload fills in the defaults. Rate starts at 2 when Rate and Concurrency are both empty, and Duration at 300 when Duration and Requests are both empty. A `timestamped_trace` workload clears Rate, Arrival, Ramp-up and Warm-up, because the trace sets its own arrival times.
+Selecting a workload fills each empty input with its default. A `timestamped_trace` workload clears every input, so the trace replays in full at its recorded times.
 
 Each workload kind accepts these inputs:
 
@@ -54,12 +54,15 @@ The view locks its inputs, and the session strip shows the job's progress. **Sto
 
 ## Results
 
-When the job finishes, the view shows:
+**Load results** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
 
-- completed requests, total requests and errors
-- request and output-token throughput, and goodput when `load.goodput` is configured
-- TTFT, inter-token latency and request latency at p50, p95 and p99
-- AIPerf's exit code and the number of journal lines copied
+- the job's progress against its duration
+- completed requests, errors, requests per second and output tokens per second
+- the share of requests within the SLO, when `load.goodput` is configured
+- time to first token, inter-token latency and request latency at p50, p95 and p99, with the `load.goodput` target beside each
+- charts of completed requests per second and time to first token p95 over the job
+
+A p95 value turns yellow at 80% of its target and red at 100%.
 
 **Job document** downloads the full job document as `<job>.json`. [Load jobs](10-API-Reference.md#load-jobs) in the API reference lists its fields.
 

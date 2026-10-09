@@ -24,7 +24,6 @@ _SHORT_NAMES = {
     "config.overlay": "overlay",
     "config.cold_restart": "cold restart",
     "config.restore": "restore",
-    "baseline.restore": "restore",
     "session.start": "session start",
     "session.end": "session end",
 }

@@ -34,6 +34,7 @@ from tools.fleet_control.engines import (
     engine_routes,
     engine_slice,
 )
+from tools.fleet_control.overlays import Overlays, overlay_routes
 from tools.fleet_control.service import ActionError, ControlService
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -179,14 +180,18 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         self.router = FakeRouter(stopped)
         config = ControlConfig(
             FLEET,
-            {"restore": hook("restore", "print('restored')"), **self.hooks},
+            dict(self.hooks),
             runs_dir=self.runs,
             router=RouterEndpoint(ROUTER, self.router_timeout_s),
         )
         env = {"PATH": "/usr/bin:/bin", "NARWHAL_CONTROL_TOKEN": TOKEN, "STOPPED": str(stopped)}
         self.service = ControlService(config, env=env, now=lambda: NOW)
-        actions = EngineActions(self.service, httpx.MockTransport(self.router.handle), 0.02)
-        app = create_app(self.service, TOKEN, routers=[engine_routes(actions)])
+        transport = httpx.MockTransport(self.router.handle)
+        actions = EngineActions(self.service, transport, 0.02)
+        overlays = Overlays(self.service, engines=actions, transport=transport)
+        app = create_app(
+            self.service, TOKEN, routers=[engine_routes(actions), overlay_routes(overlays)]
+        )
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://control",
@@ -262,6 +267,34 @@ class HookActionTests(EngineCase):
             [path for method, path, _ in self.router.requests],
             ["/narwhal/state"] * 5,
         )
+
+
+class RestoreEngineTests(EngineCase):
+    async def test_restore_undoes_each_engine_change_and_nothing_else(self) -> None:
+        await self.start_session()
+        for path in ("/api/engines/e1/stop", "/api/engines/e2/pause", "/api/engines/e3/drain"):
+            response = await self.client.post(path)
+            self.assertEqual(response.status_code, 200, response.text)
+        changes = (await self.client.get("/api/session")).json()["changes"]
+        self.assertEqual(
+            changes,
+            {"configuration": False, "engines": {"e1": "stopped", "e2": "paused", "e3": "drained"}},
+        )
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        steps = response.json()["result"]["steps"]
+        self.assertEqual(
+            [(step["engine"], step["action"]) for step in steps],
+            [("e1", "start"), ("e2", "resume"), ("e3", "readmit")],
+        )
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"], {"configuration": False, "engines": {}})
+        self.assertEqual(
+            [entry["action"] for entry in record["actions"][-4:]],
+            ["engine.start", "engine.resume", "engine.readmit", "config.restore"],
+        )
+        self.assertFalse(self.router.out("e1") or self.router.out("e2") or self.router.out("e3"))
+        self.assertNotIn("/ready", [path for _, path, _ in self.router.requests])
 
 
 # This start hook exits 0 and leaves the engine stopped, as when the process fails to come up.

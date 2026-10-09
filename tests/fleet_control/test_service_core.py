@@ -1,4 +1,4 @@
-"""Control service authentication, run records, the load-job lock and baseline restore."""
+"""Control service authentication, run records, the load-job lock and ending a session."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def python_hook(script: str, *, timeout_s: float = 30.0) -> Hook:
-    return Hook("restore", (sys.executable, "-c", script), timeout_s)
+    return Hook("check", (sys.executable, "-c", script), timeout_s)
 
 
 class FakeRunner:
@@ -86,7 +86,7 @@ class ConfigTests(unittest.TestCase):
     def test_example_config_loads(self) -> None:
         config = load_config(ROOT / "config/fleet-control.example.json", {})
         self.assertEqual(config.host, "127.0.0.1")
-        self.assertIn("restore", config.hooks)
+        self.assertIn("router_restart", config.hooks)
 
     def test_non_loopback_listener_is_refused(self) -> None:
         for host in ("0.0.0.0", "::", "example.invalid"):
@@ -108,7 +108,6 @@ class ConfigTests(unittest.TestCase):
             "port must be an integer",
             "fleet must name the baseline",
             "hooks.router_restart.argv must be a non-empty list",
-            "hooks.restore is required",
         ):
             self.assertIn(problem, message)
 
@@ -158,9 +157,8 @@ class ConfigTests(unittest.TestCase):
 
 
 class ServiceCase(unittest.IsolatedAsyncioTestCase):
-    """Serve the control app in-process with a fake runner and a scripted restore hook."""
+    """Serve the control app in-process with a fake runner."""
 
-    restore = python_hook("print('restored')")
     with_runner = True
 
     async def asyncSetUp(self) -> None:
@@ -168,8 +166,8 @@ class ServiceCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.runs = Path(folder.name) / "runs"
         self.marker = Path(folder.name) / "marker"
-        config = ControlConfig(FLEET, {"restore": self.restore}, runs_dir=self.runs)
-        self.runner = FakeRunner()
+        config = ControlConfig(FLEET, {}, runs_dir=self.runs)
+        self.runner = self.make_runner()
         env = {"PATH": "/usr/bin:/bin", "NARWHAL_CONTROL_TOKEN": TOKEN, "MARKER": str(self.marker)}
         self.service = ControlService(
             config, runner=self.runner if self.with_runner else None, env=env, now=lambda: NOW
@@ -181,6 +179,9 @@ class ServiceCase(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self.client.aclose)
         self.addAsyncCleanup(self.service.close)
+
+    def make_runner(self) -> FakeRunner:
+        return FakeRunner()
 
     async def start_session(self) -> str:
         response = await self.client.post("/api/session")
@@ -296,7 +297,8 @@ class RunRecordTests(ServiceCase):
         await self.start_session()
         response = await self.client.get("/api/session")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), self.record())
+        changes = {"configuration": False, "engines": {}}
+        self.assertEqual(response.json(), {**self.record(), "changes": changes})
 
     async def test_an_invalid_baseline_refuses_the_session(self) -> None:
         broken = self.runs.parent / "broken.json"
@@ -384,19 +386,31 @@ class NoRunnerTests(ServiceCase):
         self.assertEqual(self.actions()[-1], ("job.start", "refused"))
 
 
-RESTORE_SCRIPT = """
+HOOK_SCRIPT = """
 import json, os, pathlib
 baseline = json.loads(pathlib.Path(os.environ["NARWHAL_CONTROL_BASELINE"]).read_text())
-print("restoring", baseline["model"], os.environ["NARWHAL_CONTROL_SESSION"])
+print("checking", baseline["model"], os.environ["NARWHAL_CONTROL_SESSION"])
 print("token visible:", "NARWHAL_CONTROL_TOKEN" in os.environ)
 """
 
 
-class RestoreTests(ServiceCase):
-    restore = python_hook(RESTORE_SCRIPT)
-
-    async def test_ending_a_session_restores_the_baseline(self) -> None:
+class HookEnvironmentTests(ServiceCase):
+    async def test_a_hook_sees_the_session_and_never_the_token(self) -> None:
         session = await self.start_session()
+        assert self.service.session is not None
+        result = await self.service.run_hook(python_hook(HOOK_SCRIPT), self.service.session)
+        document = result.document(self.service.session.directory)
+        self.assertEqual(document["exit_code"], 0)
+        self.assertEqual(document["log"], "hooks/001-check.log")
+        self.assertIn(f"checking test-model {session}", document["tail"])
+        self.assertIn("token visible: False", document["tail"])
+        log = self.runs / "sessions" / session / document["log"]
+        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
+
+class EndSessionTests(ServiceCase):
+    async def test_ending_a_session_stops_the_job_and_leaves_the_fleet(self) -> None:
+        await self.start_session()
         await self.client.post("/api/jobs", json={})
         await asyncio.sleep(0)
         response = await self.client.post("/api/session/end")
@@ -412,116 +426,46 @@ class RestoreTests(ServiceCase):
                 ("job.start", "ok"),
                 ("job.complete", "ok"),
                 ("job.stop", "ok"),
-                ("baseline.restore", "ok"),
                 ("session.end", "ok"),
             ],
         )
-        restore = record["actions"][4]["result"]
-        self.assertEqual(restore["exit_code"], 0)
-        self.assertFalse(restore["timed_out"])
-        self.assertEqual(restore["log"], "hooks/001-restore.log")
-        self.assertIn(f"restoring test-model {session}", restore["tail"])
-        self.assertIn("token visible: False", restore["tail"])
         self.assertEqual(
-            record["actions"][5]["result"],
+            record["actions"][4]["result"],
             {
-                "restore_seq": 5,
+                "changes": {"configuration": False, "engines": {}},
                 "journal": {"extract": None, "notes": ["router.journal is not configured"]},
             },
         )
-        self.assertEqual([entry["source"] for entry in record["configurations"]], ["baseline"] * 2)
-        log = self.runs / "sessions" / session / restore["log"]
-        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
-        self.assertEqual(len(self.log()), 6)
+        self.assertEqual([entry["source"] for entry in record["configurations"]], ["baseline"])
         response = await self.client.post("/api/session/end")
         self.assertEqual(response.status_code, 409)
 
 
-FAIL_ONCE_SCRIPT = """
-import os, pathlib, sys
-marker = pathlib.Path(os.environ["MARKER"])
-if not marker.exists():
-    marker.write_text("failed once")
-    print("baseline unreachable")
-    sys.exit(3)
-print("restored")
-"""
+class SlowStopRunner(FakeRunner):
+    """Hold a cancelled job open until the test releases the stop."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.stop_gate = asyncio.Event()
 
-class FailedRestoreTests(ServiceCase):
-    restore = python_hook(FAIL_ONCE_SCRIPT)
-
-    async def test_a_failed_restore_keeps_the_session_open_for_a_retry(self) -> None:
-        await self.start_session()
-        response = await self.client.post("/api/session/end")
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "restore hook exited 3")
-        self.assertEqual(response.json()["action"]["action"], "session.end")
-        self.assertIsNotNone(self.service.session)
-        record = self.record()
-        self.assertIsNone(record["ended_at"])
-        failed = record["actions"][1]
-        self.assertEqual((failed["action"], failed["outcome"]), ("baseline.restore", "failed"))
-        self.assertEqual(failed["result"]["exit_code"], 3)
-        self.assertIn("baseline unreachable", failed["result"]["tail"])
-        self.assertEqual(len(record["configurations"]), 1)
-        response = await self.client.post("/api/session/end")
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(
-            self.actions(),
-            [
-                ("session.start", "ok"),
-                ("baseline.restore", "failed"),
-                ("session.end", "failed"),
-                ("baseline.restore", "ok"),
-                ("session.end", "ok"),
-            ],
-        )
-        self.assertEqual(self.record()["actions"][3]["result"]["log"], "hooks/002-restore.log")
-
-
-class MissingRestoreCommandTests(ServiceCase):
-    restore = Hook("restore", ("/nonexistent/restore-baseline",), 5.0)
-
-    async def test_a_missing_restore_command_is_a_failed_restore(self) -> None:
-        await self.start_session()
-        response = await self.client.post("/api/session/end")
-        self.assertEqual(response.status_code, 502)
-        self.assertIn("restore hook could not start", response.json()["detail"])
-        self.assertEqual(self.actions()[1], ("baseline.restore", "failed"))
-
-
-class TimedOutRestoreTests(ServiceCase):
-    restore = python_hook(
-        "import time; print('waiting', flush=True); time.sleep(60)", timeout_s=0.5
-    )
-
-    async def test_a_restore_past_its_timeout_is_killed_and_recorded(self) -> None:
-        await self.start_session()
-        response = await self.client.post("/api/session/end")
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "restore hook timed out after 0.5s")
-        result = self.record()["actions"][1]["result"]
-        self.assertTrue(result["timed_out"])
-        self.assertIsNone(result["exit_code"])
-        self.assertIn("waiting", result["tail"])
-        self.assertLess(result["duration_s"], 10)
-
-
-WAIT_SCRIPT = """
-import os, pathlib, time
-marker = pathlib.Path(os.environ["MARKER"])
-deadline = time.monotonic() + 20
-while not marker.exists() and time.monotonic() < deadline:
-    time.sleep(0.02)
-"""
+    async def run(self, job: Job) -> Mapping[str, Any]:
+        self.started.append(job)
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            await self.stop_gate.wait()
+            raise
+        return {"requests": 10}
 
 
 class ExclusiveActionTests(ServiceCase):
-    restore = python_hook(WAIT_SCRIPT)
+    def make_runner(self) -> FakeRunner:
+        return SlowStopRunner()
 
     async def test_actions_are_refused_while_the_session_ends(self) -> None:
         await self.start_session()
+        await self.client.post("/api/jobs", json={})
+        await asyncio.sleep(0)
         ending = asyncio.create_task(self.client.post("/api/session/end"))
         for _ in range(200):
             if self.service.status()["in_progress"] == "session.end":
@@ -530,15 +474,17 @@ class ExclusiveActionTests(ServiceCase):
         response = await self.client.post("/api/jobs", json={})
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"], "session.end is in progress")
-        self.marker.write_text("done")
+        assert isinstance(self.runner, SlowStopRunner)
+        self.runner.stop_gate.set()
         self.assertEqual((await ending).status_code, 200)
-        self.assertEqual(self.runner.started, [])
         self.assertEqual(
             self.actions(),
             [
                 ("session.start", "ok"),
+                ("job.start", "ok"),
                 ("job.start", "refused"),
-                ("baseline.restore", "ok"),
+                ("job.complete", "ok"),
+                ("job.stop", "ok"),
                 ("session.end", "ok"),
             ],
         )

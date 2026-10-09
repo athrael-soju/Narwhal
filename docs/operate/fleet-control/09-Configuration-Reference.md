@@ -38,15 +38,12 @@ The service runs these hooks:
 
 | Hook             | Runs for                                 | Must                                                                                        |
 | ---------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `restore`        | Ending a session, restoring the baseline | Return the deployment to the baseline fleet configuration at `NARWHAL_CONTROL_BASELINE`     |
 | `engine_pause`   | Engine pause                             | Pause the engine named by `NARWHAL_CONTROL_ENGINE`                                          |
-| `engine_resume`  | Engine resume                            | Resume that engine                                                                          |
+| `engine_resume`  | Engine resume, restoring the baseline    | Resume that engine                                                                          |
 | `engine_stop`    | Engine stop                              | Stop that engine                                                                            |
-| `engine_start`   | Engine start                             | Start that engine                                                                           |
-| `router_restart` | Configuration overlay                    | Restart the router with the fleet configuration at `NARWHAL_CONTROL_FLEET`                  |
+| `engine_start`   | Engine start, restoring the baseline     | Start that engine                                                                           |
+| `router_restart` | Overlay, restoring the baseline          | Restart the router with the fleet configuration at `NARWHAL_CONTROL_FLEET`                  |
 | `cold_restart`   | Cold restart                             | Restart every engine and the router with the fleet configuration at `NARWHAL_CONTROL_FLEET` |
-
-Only `restore` is required. An action whose hook is missing returns HTTP 501, and the console disables it.
 
 ### How hooks run
 
@@ -166,7 +163,7 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 | Key                        | Default          | Meaning                                                                                                                                          |
 | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `console.grafana_url`      | none; required   | Grafana base URL as the operator's browser reaches it, without credentials, query or fragment                                                    |
-| `console.dashboard_uid`    | `narwhal-router` | Dashboard UID for embedded panels and dashboard links. Set `narwhal-fleet-control` when the console runs in the **Fleet control** dashboard      |
+| `console.dashboard_uid`    | `narwhal-router` | Dashboard UID for embedded panels and dashboard links                                                                                         |
 | `console.panels`           | none             | Non-empty list of distinct panel IDs that the standalone console embeds, in display order                                                        |
 | `console.from`             | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`                                                   |
 | `console.refresh`          | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                                                               |

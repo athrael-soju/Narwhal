@@ -23,7 +23,7 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment. The `restore` hook is required. Each other hook, and the `load` and `console` sections, enables one feature. [Configuration reference](09-Configuration-Reference.md) lists every key.
+Edit the copy for your deployment. Each hook, and the `load` and `console` sections, enables one feature. [Configuration reference](09-Configuration-Reference.md) lists every key.
 
 The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 

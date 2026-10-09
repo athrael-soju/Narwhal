@@ -19,10 +19,9 @@ A malformed request body returns HTTP 422 with a `detail` alone, and the service
 | `POST /api/session`     | 201    | The session started. The result holds the session ID and the baseline digest                                  |
 |                         | 409    | A session is already active, or an exclusive action is in progress                                            |
 |                         | 500    | The baseline fleet configuration cannot be read or fails the fleet configuration loader                       |
-| `POST /api/session/end` | 200    | The restore hook succeeded and the session closed                                                             |
+| `POST /api/session/end` | 200    | The session closed. The result lists the changes the fleet keeps                                              |
 |                         | 409    | No session is active, or an exclusive action is in progress                                                   |
-|                         | 502    | The restore hook failed to start, exited non-zero or timed out; the session stays open                        |
-| `GET /api/session`      | 200    | The active session's run record                                                                               |
+| `GET /api/session`      | 200    | The active session's run record, with `changes`                                                               |
 |                         | 404    | No session is active                                                                                          |
 | `GET /api/health`       | 200    | `status`, the active `session`, the current or last load `job`, `in_progress` and `in_progress_since`         |
 | `GET /api/console`      | 200    | `grafana` with the dashboard UID, dashboard URL and panel URLs, or `null`; `load`; and the configured `hooks` |
@@ -90,6 +89,8 @@ When the state read fails, the record holds the reason in `error` and the action
 |                               | 409    | No job is running, no session is active, or an exclusive action is in progress                                                                                                                                                                                                                    |
 | `GET /api/jobs/current`       | 200    | The running job, or the last one to finish                                                                                                                                                                                                                                                        |
 |                               | 404    | No job has run                                                                                                                                                                                                                                                                                    |
+| `GET /api/jobs/current/live`  | 200    | The current job's results so far, read from AIPerf's per-request records: `requests`, `elapsed_s`, `throughput`, `latency` percentiles, `slo` targets, `goodput` and a `series` over the job                                                                                                      |
+|                               | 404    | No job has run                                                                                                                                                                                                                                                                                    |
 | `GET /api/workloads`          | 200    | The workload library. `workloads` lists each entry with `name`, `kind`, `label`, `description`, `ignore_eos` and the workload's other keys, except `file`. `limits` maps each numeric job field to its `min`, `max`, `integer` and console `default`. The route exists only with a `load` section |
 
 When a job finishes or stops, the service copies the job's [journal extract](11-Run-Record.md#journal-extracts) and records a `job.complete` action with the job document. The job document holds:
@@ -106,7 +107,7 @@ When a job finishes or stops, the service copies the job's [journal extract](11-
 | `POST /api/config/overlay`       | Applies an overlay                                 |
 | `POST /api/config/overlay/check` | Checks an overlay without applying or recording it |
 | `POST /api/config/cold-restart`  | Runs the `cold_restart` hook                       |
-| `POST /api/config/restore`       | Runs the `restore` hook                            |
+| `POST /api/config/restore`       | Undoes the session's changes                       |
 
 | Status | Meaning                                                                                                    |
 | ------ | ---------------------------------------------------------------------------------------------------------- |

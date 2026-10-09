@@ -4,7 +4,7 @@ description: Run the fleet control console inside the Fleet control Grafana dash
 
 # Using the console from Grafana
 
-`make observe` provisions a **Fleet control** dashboard with UID `narwhal-fleet-control`. The dashboard shows each console view in its own panel, beside charts from the **Narwhal Orchestrator** dashboard.
+`make observe` provisions a **Fleet control** dashboard with UID `narwhal-fleet-control`. It shows each console view in its own panel. The charts stay on the **Narwhal Orchestrator** dashboard, which marks each action and load job.
 
 <div class="narwhal-panel-row" markdown>
 
@@ -21,7 +21,6 @@ The service must be set up as in [Setting up the control service](01-Set-Up-the-
     ```json
     "console": {
       "grafana_url": "http://127.0.0.1:13000",
-      "dashboard_uid": "narwhal-fleet-control",
       "embed_in_grafana": true
     }
     ```
@@ -41,24 +40,18 @@ The session strip shows **Connected**, and the **Engines** panel lists the fleet
 
 ## Dashboard layout
 
-| Row                               | Panels                                                                                                                                                                        |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Top, without a header             | Session strip; Requests; Latency against SLO; Engines; Engine role history; Request outcomes; Fleet events; Time to first token; Time per output token; Activity              |
-| **Load and configuration**        | Load job; Configuration                                                                                                                                                       |
-| **Controller**, collapsed         | Pool assignments; Pool pressure                                                                                                                                               |
-| **Request & Recovery**, collapsed | Request waiting time; Retries and early exits; Admission in-flight; Queue depth; Dropped requests by reason; Failed attempts by reason; Expired KV by producer; Retry credits |
+| Row | Panels                    |
+| --- | ------------------------- |
+| 1   | Session strip             |
+| 2   | Engines                   |
+| 3   | Load job, Load results    |
+| 4   | Configuration, Activity   |
 
-Session strip, Engines, Activity, Load job and Configuration are console panels. An action in one console panel refreshes the others.
-
-The remaining panels are charts. [Reading the dashboard](../../observability/05-Dashboard.md) describes those copied from the Narwhal Orchestrator dashboard. Three charts are specific to this dashboard:
-
-- **Requests** shows each column of the Narwhal Orchestrator **Requests** table as a separate stat.
-- **Latency against SLO** shows TTFT p95 and TPOT p95 as a percentage of their SLO targets. A bar turns yellow at 80% and red at 100%.
-- **Request outcomes** shows requests offered, completed and dropped per second. Dropped requests are those refused, rejected, failed or expired.
+An action in one panel refreshes the others.
 
 ## Dashboard annotations
 
-The dashboard marks fleet control activity on its charts with two annotation layers:
+The **Narwhal Orchestrator** dashboard marks fleet control activity on its charts with two annotation layers:
 
 - **Fleet control actions** draws a dashed purple line at the start of each engine action, overlay, cold restart and restore, labelled with the action and target, such as `drain n7`.
 - **Load jobs** shades each load job's interval and labels it with the job ID.

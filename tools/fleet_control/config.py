@@ -32,8 +32,6 @@ DEFAULT_DASHBOARD_UID = "narwhal-router"
 # The shipped dashboard's own time range and refresh interval.
 DEFAULT_PANEL_FROM = "now-15m"
 DEFAULT_PANEL_REFRESH = "5s"
-RESTORE_HOOK = "restore"
-REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
 _KEYS = {
     "host",
     "port",
@@ -194,7 +192,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
 
 def _read_hooks(problems: list[str], raw: object) -> dict[str, Hook]:
     if not isinstance(raw, dict):
-        problems.append("hooks must be an object naming at least the restore command")
+        problems.append("hooks must be an object")
         return {}
     hooks = {}
     for name, spec in raw.items():
@@ -221,7 +219,6 @@ def _read_hooks(problems: list[str], raw: object) -> dict[str, Hook]:
             problems.append(f"{label}.timeout_s must be a positive number of seconds")
             continue
         hooks[name] = Hook(name, tuple(argv), float(timeout))
-    problems.extend(f"hooks.{name} is required" for name in sorted(REQUIRED_HOOKS - set(raw)))
     return hooks
 
 

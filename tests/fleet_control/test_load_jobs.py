@@ -668,7 +668,7 @@ class CompletedJobTests(RunnerCase):
         )
         self.assertEqual(
             response.json()["limits"]["concurrency"],
-            {"min": 1, "max": 4096, "integer": True, "default": None},
+            {"min": 1, "max": 4096, "integer": True, "default": 32},
         )
         self.assertEqual(
             response.json()["workloads"],

@@ -39,6 +39,10 @@ RECORDS = "profile_export.jsonl"
 TRACE_FORMAT = "mooncake_trace"
 PERCENTILES = ("avg", "p50", "p90", "p95", "p99")
 COMPLETED = "completed"
+# AIPerf writes the per-request records in batches of this many, which sets how fresh the live
+# results are. An operator's own setting in the service environment wins.
+RECORD_BATCH_ENV = "AIPERF_RECORD_EXPORT_BATCH_SIZE"
+RECORD_BATCH = "10"
 
 
 class AIPerfFailed(RuntimeError):
@@ -375,6 +379,7 @@ def runner_for(config: ControlConfig, env: Mapping[str, str]) -> AIPerfRunner | 
     if config.load is None:
         return None
     env = {key: value for key, value in env.items() if key != config.token_env}
+    env.setdefault(RECORD_BATCH_ENV, RECORD_BATCH)
     return AIPerfRunner(config.load, config.router.url, env)
 
 

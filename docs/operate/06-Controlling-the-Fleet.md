@@ -17,7 +17,7 @@ The service runs on the router host, listens on loopback, and authenticates API 
 
 Hooks are the commands, defined in the private configuration, that perform each change, such as stopping an engine or restarting the router. Drains and readmits use the router's lifecycle API instead.
 
-Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it runs the `restore` hook, which returns the deployment to that baseline.
+Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it closes the session's record and leaves the fleet as it is. **Restore baseline** undoes the session's changes.
 
 ## Pages
 
@@ -39,7 +39,7 @@ Work happens in sessions. Starting a session copies the baseline fleet configura
 
     ---
 
-    Run the console in the **Fleet control** dashboard and mark actions on its charts.
+    Run the console in the **Fleet control** dashboard and mark actions on the Narwhal Orchestrator charts.
 
 -   [Running a test session](fleet-control/04-Sessions.md)
 

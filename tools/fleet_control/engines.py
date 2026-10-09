@@ -23,7 +23,7 @@ from .app import API, action_reply
 from .config import Hook
 from .hooks import HookResult
 from .records import Action, Session
-from .service import ActionError, ControlService, refused
+from .service import ActionError, ControlService, Operation, refused
 
 # The private configuration names the deployment's command for each hook action.
 HOOK_ACTIONS = {
@@ -73,7 +73,19 @@ class EngineActions:
 
     async def act(self, iid: str, action: str, params: Mapping[str, Any]) -> Action:
         """Run `action` on engine `iid` and record it with the engine's state around it."""
+        name = f"engine.{action}"
+        return await self.service.act(
+            name, {"engine": iid, **params}, self._operation(iid, action, params)
+        )
 
+    async def within(self, iid: str, action: str) -> Action:
+        """Run and record `action` on engine `iid` inside an exclusive action already running."""
+        name = f"engine.{action}"
+        return await self.service._perform(
+            name, {"engine": iid}, self._operation(iid, action, {}), True
+        )
+
+    def _operation(self, iid: str, action: str, params: Mapping[str, Any]) -> Operation:
         async def operate(session: Session | None) -> Mapping[str, Any]:
             assert session is not None
             engine = baseline_engine(session, iid)
@@ -102,7 +114,7 @@ class EngineActions:
                 after = await self.engine_state(client, iid)
             return {"engine": iid, "before": before, **effect, "after": after}
 
-        return await self.service.act(f"engine.{action}", {"engine": iid, **params}, operate)
+        return operate
 
     def _hook(self, action: str) -> Hook:
         name = HOOK_ACTIONS[action]

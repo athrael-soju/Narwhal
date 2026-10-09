@@ -11,10 +11,6 @@
     "journal_max_bytes": 268435456
   },
   "hooks": {
-    "restore": {
-      "argv": ["/path/to/restore-baseline"],
-      "timeout_s": 900
-    },
     "engine_pause": {
       "argv": ["/path/to/engine-control", "pause"],
       "timeout_s": 60

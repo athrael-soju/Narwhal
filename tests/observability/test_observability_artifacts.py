@@ -21,7 +21,7 @@ class MonitoringArtifactTests(unittest.TestCase):
             contract = TargetContract("127.0.0.1:8000", (("e1", "192.0.2.1:8002"),))
             previous_umask = os.umask(0o077)
             try:
-                for relative in artifacts.FILES:
+                for relative in (*artifacts.FILES, "grafana-narwhal.json"):
                     path = source / relative
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes((artifacts.BASE / relative).read_bytes())
@@ -31,6 +31,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                 artifacts.stage_artifacts(contract, root=root, source=source)
                 expected = {
                     *artifacts.FILES.values(),
+                    artifacts.NARWHAL_DASHBOARD,
                     artifacts.FLEET_CONTROL_DASHBOARD,
                     artifacts.CONTROL_TARGETS,
                     artifacts.CONTROL_TOKEN_FILE,
@@ -88,44 +89,20 @@ class FleetControlDashboardTests(unittest.TestCase):
     def rows(self) -> list[dict]:
         return [row["spec"] for row in self.dashboard["spec"]["layout"]["spec"]["rows"]]
 
-    def test_console_views_sit_among_panels_of_the_shipped_dashboard(self):
+    def test_the_dashboard_holds_only_the_console_views(self):
         spec = self.dashboard["spec"]
         self.assertEqual(self.dashboard["metadata"]["name"], artifacts.FLEET_CONTROL_UID)
         self.assertEqual(self.dashboard["apiVersion"], self.shipped["apiVersion"])
-        shipped = self.shipped["spec"]
-        for name in ("panel-8", "panel-37", "panel-50", "panel-51"):
-            self.assertEqual(spec["elements"][name], shipped["elements"][name])
-        self.assertEqual(spec["variables"], shipped["variables"])
-        self.assertEqual(spec["annotations"][: len(shipped["annotations"])], shipped["annotations"])
-        self.assertEqual(spec["timeSettings"], shipped["timeSettings"])
-        rows = self.rows()
+        self.assertEqual(spec["timeSettings"], self.shipped["spec"]["timeSettings"])
         self.assertEqual(
-            [(row["title"], row["collapse"]) for row in rows],
-            [
-                ("", False),
-                ("Load and configuration", False),
-                ("Controller", True),
-                ("Request & Recovery", True),
-            ],
+            sorted(spec["elements"]), sorted(f"console-{view}" for view in artifacts.CONSOLE_VIEWS)
         )
-        self.assertTrue(rows[0]["hideHeader"])
-        placed = [
-            item["spec"]["element"]["name"]
-            for row in rows
-            for item in row["layout"]["spec"]["items"]
-        ]
+        (row,) = self.rows()
+        self.assertTrue(row["hideHeader"])
+        placed = [item["spec"]["element"]["name"] for item in row["layout"]["spec"]["items"]]
         self.assertEqual(sorted(placed), sorted(spec["elements"]))
-        self.assertEqual(len(placed), len(set(placed)))
-        for view in artifacts.CONSOLE_VIEWS:
-            self.assertIn(f"console-{view}", placed)
         ids = [element["spec"]["id"] for element in spec["elements"].values()]
         self.assertEqual(len(ids), len(set(ids)))
-        recovery = [item["spec"] for item in rows[-1]["layout"]["spec"]["items"]][:2]
-        self.assertEqual(
-            [(item["element"]["name"], item["x"], item["y"]) for item in recovery],
-            [("panel-52", 0, 0), ("panel-12", 12, 0)],
-        )
-        self.assertEqual(spec["elements"]["panel-11"]["spec"]["id"], 11)
 
     def test_each_grid_row_fits_the_24_columns_without_overlap(self):
         for row in self.rows():
@@ -138,29 +115,13 @@ class FleetControlDashboardTests(unittest.TestCase):
                         self.assertNotIn((x, y), cells, box["element"]["name"])
                         cells.add((x, y))
 
-    def test_derived_panels_reuse_the_shipped_queries(self):
-        elements = self.dashboard["spec"]["elements"]
-        shipped = self.shipped["spec"]["elements"]
-
-        def exprs(panel):
-            return [
-                q["spec"]["query"]["spec"]["expr"] for q in panel["spec"]["data"]["spec"]["queries"]
-            ]
-
-        requests = exprs(shipped["panel-105"])
-        refs = "ABCDEFGHI"
-        self.assertEqual(
-            exprs(elements["panel-requests"]),
-            [requests[refs.index(ref)] for ref, _ in artifacts.REQUEST_STATS],
-        )
-        self.assertEqual(exprs(elements["panel-latency"]), exprs(shipped["panel-106"])[:2])
-        outcomes = exprs(elements["panel-11"])
-        self.assertEqual(outcomes[:2], exprs(shipped["panel-11"])[:2])
-        for name in ("refused", "rejected", "failed", "expired"):
-            self.assertIn(f"narwhal_{name}_total", outcomes[2])
-
-    def test_fleet_control_annotations_read_the_control_metrics(self):
-        names = {a["spec"]["name"]: a["spec"] for a in self.dashboard["spec"]["annotations"]}
+    def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):
+        marked = artifacts.narwhal_dashboard(self.shipped)
+        shipped = self.shipped["spec"]["annotations"]
+        annotations = marked["spec"]["annotations"]
+        self.assertEqual(annotations[: len(shipped)], shipped)
+        self.assertEqual(marked["spec"]["elements"], self.shipped["spec"]["elements"])
+        names = {a["spec"]["name"]: a["spec"] for a in annotations}
         actions = names["Fleet control actions"]["query"]["spec"]
         self.assertEqual(actions["expr"], "narwhal_control_action_started_ms")
         self.assertTrue(actions["useValueForTime"])
@@ -169,6 +130,7 @@ class FleetControlDashboardTests(unittest.TestCase):
         self.assertFalse(jobs["useValueForTime"])
         for name in ("Fleet control actions", "Load jobs"):
             self.assertEqual((names[name]["enable"], names[name]["hide"]), (True, True))
+        self.assertEqual(len(self.shipped["spec"]["annotations"]), len(shipped))
 
     def test_console_views_are_scripted_and_escape_their_url(self):
         for view in artifacts.CONSOLE_VIEWS:

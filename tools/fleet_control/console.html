@@ -289,9 +289,9 @@ body.framed .connect { margin: 0; padding: 4px; border: 0; max-width: none; }
 
 /* Board. */
 .board { display: grid; gap: 8px; padding: 8px 16px 24px; grid-template-columns: repeat(24, minmax(0, 1fr)); align-items: start; }
-.area-engines, .area-activity, .area-dashboard { grid-column: span 24; }
-.area-load, .area-config { grid-column: span 12; }
-@media (max-width: 900px) { .area-load, .area-config { grid-column: span 24; } }
+.area-engines, .area-dashboard { grid-column: span 24; }
+.area-load, .area-results, .area-config, .area-activity { grid-column: span 12; }
+@media (max-width: 900px) { .area-load, .area-results, .area-config, .area-activity { grid-column: span 24; } }
 body.framed .board { display: block; padding: 0; }
 .panel {
   background: var(--panel);
@@ -362,10 +362,25 @@ tr.active { background: var(--row-active); }
 .fields { display: flex; flex-wrap: wrap; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 96px; }
 .field.wide { flex: 2 1 200px; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px; margin: 0; }
-.tiles > div { background: var(--inset); border-radius: 2px; padding: 6px 10px; }
-.tiles dt { color: var(--muted); font-size: 12px; }
-.tiles dd { margin: 2px 0 0; font-size: 16px; font-weight: 500; color: var(--strong); font-variant-numeric: tabular-nums; }
+.results-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.results-head progress { flex: 1; height: 4px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; margin: 0 0 14px; }
+.kpis > div { border-left: 2px solid var(--line); padding-left: 10px; }
+.kpis dt { color: var(--muted); font-size: 12px; }
+.kpis dd { margin: 2px 0 0; font-size: 20px; font-weight: 500; color: var(--strong); font-variant-numeric: tabular-nums; }
+.kpis dd small { font-size: 12px; font-weight: 400; color: var(--muted); }
+table.latency { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-variant-numeric: tabular-nums; }
+table.latency th { color: var(--muted); font-size: 12px; font-weight: 400; }
+table.latency th, table.latency td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line-soft); }
+table.latency th:first-child, table.latency td:first-child { text-align: left; padding-left: 0; }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.charts figure { margin: 0; }
+.charts figcaption { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+svg.chart { display: block; width: 100%; height: 90px; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .series { fill: none; stroke: var(--info); stroke-width: 1.5; }
+.chart .target { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart text { fill: var(--muted); font-size: 10px; }
 .changes { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px 12px; font-size: 12px; align-items: center; margin-top: 4px; }
 .changes .key { overflow-wrap: anywhere; }
 .changes .old { color: var(--faint); text-decoration: line-through; }
@@ -422,13 +437,13 @@ dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
     <label for="drain-deadline" class="lbl">Drain deadline (s)</label>
     <input id="drain-deadline" type="number" min="0" step="any" placeholder="default">
     <button id="session-start" class="btn btn-primary" type="button">Start session</button>
-    <button id="session-end" class="btn btn-danger" type="button" hidden>End session and restore</button>
+    <button id="session-end" class="btn btn-danger" type="button" hidden>End session</button>
     <button id="forget" class="btn" type="button" hidden>Forget token</button>
   </div>
   <div id="strip-confirm" class="strip-confirm" role="group" aria-labelledby="strip-confirm-text" hidden>
     <span id="strip-confirm-text"></span>
     <button id="strip-confirm-cancel" class="btn" type="button">Cancel</button>
-    <button id="strip-confirm-ok" class="btn btn-danger-solid" type="button">End session and restore</button>
+    <button id="strip-confirm-ok" class="btn btn-danger-solid" type="button">End session</button>
   </div>
   <p id="fb-session" class="feedback" hidden></p>
 </header>
@@ -458,19 +473,6 @@ dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
     <div id="last-action" class="inset last-action" hidden></div>
   </section>
 
-  <section id="view-activity" class="view panel area-activity" aria-labelledby="activity-title">
-    <div class="panel-head">
-      <h2 id="activity-title">Activity <span id="activity-state" class="sub"></span></h2>
-      <a id="run-record" href="#" class="lbl" hidden>Run record</a>
-    </div>
-    <div class="scroll">
-      <table class="tbl">
-        <thead><tr><th scope="col">#</th><th scope="col">Started (UTC)</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Duration</th><th scope="col">Outcome</th></tr></thead>
-        <tbody id="activity"></tbody>
-      </table>
-    </div>
-  </section>
-
   <section id="view-load" class="view panel area-load" aria-labelledby="load-title">
     <div class="panel-head">
       <h2 id="load-title">Load job <span id="job-title" class="sub mono"></span></h2>
@@ -494,13 +496,30 @@ dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
       <div class="row">
         <button id="job-start" class="btn btn-primary" type="submit">Start job</button>
         <button id="job-stop" class="btn btn-danger" type="button">Stop job</button>
-        <span class="lbl">Inputs lock while a job runs. Client results appear when it finishes.</span>
       </div>
     </form>
     <p id="fb-job" class="feedback" hidden></p>
-    <dl id="job-results" class="tiles"></dl>
+  </section>
+
+  <section id="view-results" class="view panel area-results" aria-labelledby="results-title">
+    <div class="panel-head">
+      <h2 id="results-title">Load results <span id="results-job" class="sub mono"></span></h2>
+      <a id="job-document" href="#" class="lbl" hidden>Job document</a>
+    </div>
+    <p id="results-empty" class="lbl">Start a load job to see its results here as they arrive.</p>
     <p id="job-error" class="notice bad" hidden></p>
-    <a id="job-document" href="#" class="lbl" hidden>Job document</a>
+    <div id="results-body" hidden>
+      <div class="results-head"><progress id="results-progress" max="1" value="0"></progress><span id="results-clock" class="lbl mono"></span></div>
+      <dl id="results-kpis" class="kpis"></dl>
+      <table class="latency">
+        <thead><tr><th scope="col">Latency</th><th scope="col">p50</th><th scope="col">p95</th><th scope="col">p99</th><th scope="col">Target</th></tr></thead>
+        <tbody id="results-latency"></tbody>
+      </table>
+      <div class="charts">
+        <figure><figcaption>Completed requests per second</figcaption><svg id="chart-rate" class="chart" role="img" aria-label="Completed requests per second over the job"></svg></figure>
+        <figure><figcaption>Time to first token, p95</figcaption><svg id="chart-ttft" class="chart" role="img" aria-label="Time to first token p95 over the job"></svg></figure>
+      </div>
+    </div>
   </section>
 
   <section id="view-config" class="view panel area-config" aria-labelledby="config-title">
@@ -523,6 +542,19 @@ dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
       <button id="restore" class="btn btn-danger" type="button">Restore baseline</button>
     </div>
     <p id="fb-config" class="feedback" hidden></p>
+  </section>
+
+  <section id="view-activity" class="view panel area-activity" aria-labelledby="activity-title">
+    <div class="panel-head">
+      <h2 id="activity-title">Activity <span id="activity-state" class="sub"></span></h2>
+      <a id="run-record" href="#" class="lbl" hidden>Run record</a>
+    </div>
+    <div class="scroll">
+      <table class="tbl">
+        <thead><tr><th scope="col">#</th><th scope="col">Started (UTC)</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Duration</th><th scope="col">Outcome</th></tr></thead>
+        <tbody id="activity"></tbody>
+      </table>
+    </div>
   </section>
 
   <aside id="dashboard" class="panel area-dashboard" aria-labelledby="dashboard-title">
@@ -559,6 +591,7 @@ const ROUTES = {
   workloads: ["GET", "/api/workloads"],
   jobStart: ["POST", "/api/jobs"],
   jobCurrent: ["GET", "/api/jobs/current"],
+  jobLive: ["GET", "/api/jobs/current/live"],
   jobStop: ["POST", "/api/jobs/current/stop"],
   overlayCheck: ["POST", "/api/config/overlay/check"],
   overlay: ["POST", "/api/config/overlay"],
@@ -573,7 +606,6 @@ const SHORT_NAMES = {
   "config.overlay": "overlay",
   "config.cold_restart": "cold restart",
   "config.restore": "restore",
-  "baseline.restore": "restore",
   "session.start": "session start",
   "session.end": "session end",
   "job.start": "job start",
@@ -587,12 +619,13 @@ const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]')
 const POLL_MS = 2000;
 const ENGINE_POLL_MS = 3000;
 const FLEET_POLL_MS = 5000;
+const LIVE_POLL_MS = 3000;
 // Status polls between run record reads during a session.
 const RECORD_EVERY = 3;
 
 const THEME = new URLSearchParams(window.location.search).get("theme");
 if (THEME === "dark" || THEME === "light") document.documentElement.dataset.theme = THEME;
-const VIEWS = { status: "Session", engines: "Engines", activity: "Activity", load: "Load job", config: "Configuration" };
+const VIEWS = { status: "Session", engines: "Engines", activity: "Activity", load: "Load job", results: "Load results", config: "Configuration" };
 const VIEW_PARAM = new URLSearchParams(window.location.search).get("view");
 const VIEW = VIEW_PARAM && Object.hasOwn(VIEWS, VIEW_PARAM) ? VIEW_PARAM : "";
 const FRAMED = window.self !== window.top;
@@ -602,6 +635,7 @@ const NEEDS = {
   engines: shows("status", "engines", "activity"),
   fleet: shows("status"),
   workloads: shows("load"),
+  live: shows("results"),
 };
 const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("narwhal-fleet-control") : null;
 
@@ -618,6 +652,7 @@ const state = {
   enginesError: "",
   fleet: null,
   workloads: {},
+  live: null,
   limits: {},
   pending: new Map(),
   feedback: new Map(),
@@ -936,6 +971,7 @@ async function refreshAll(force) {
   await refresh(force);
   if (NEEDS.engines) await refreshEngines();
   if (NEEDS.fleet) await refreshFleet();
+  if (NEEDS.live) await refreshLive();
 }
 
 function render() {
@@ -944,6 +980,7 @@ function render() {
   if (shows("engines")) renderEngines();
   if (shows("activity")) renderActivity();
   if (shows("load")) renderJob();
+  if (shows("results")) renderResults();
   if (shows("config")) renderConfiguration();
 }
 
@@ -954,7 +991,7 @@ function processStates() {
   const states = {};
   for (const action of (state.record ? state.record.actions : [])) {
     if (action.outcome !== "ok") continue;
-    if (action.action === "baseline.restore" || action.action === "config.cold_restart") {
+    if (action.action === "config.cold_restart") {
       for (const iid of Object.keys(states)) delete states[iid];
       continue;
     }
@@ -1196,14 +1233,24 @@ function renderSignals() {
   node.title = alerts.firing.map((alert) => alert.alertname + (alert.labels.iid ? " " + alert.labels.iid : "")).join(", ");
 }
 
+// The changes the session leaves in the fleet, as the service reports them with the run record.
+function changeList() {
+  const changes = state.record && state.record.changes;
+  if (!changes) return [];
+  const list = changes.configuration ? ["configuration differs from the baseline"] : [];
+  for (const [iid, change] of Object.entries(changes.engines || {})) list.push(iid + " " + change);
+  return list;
+}
+
 function confirmEndSession(open) {
   const session = state.health && state.health.session;
   $("strip-confirm").hidden = !open;
   $("strip-actions").hidden = open;
   $("strip-state").hidden = open;
   if (open) {
-    $("strip-confirm-text").textContent = "End session " + shortSession(session) + "? The service stops any running load job, "
-      + "restores the baseline fleet configuration and closes the session.";
+    const changes = changeList();
+    $("strip-confirm-text").textContent = "End session " + shortSession(session) + "? The service stops any running load job and closes the session. "
+      + (changes.length ? "The fleet keeps the session's changes: " + changes.join(", ") + ". Restore baseline undoes them." : "The session changed nothing in the fleet.");
     $("strip-confirm-cancel").focus();
   } else {
     $("session-end").focus();
@@ -1476,18 +1523,17 @@ async function loadWorkloads(enabled) {
   workloadHint();
 }
 
-// A timestamped trace keeps its recorded timing, so its timing inputs clear. Other workloads start
-// an empty Rate and Concurrency pair, or Duration and Requests pair, at the service's default.
+// A timestamped trace replays its recorded timing in full, so its inputs clear. Other workloads
+// start each empty input at the service's default.
 function jobDefaults() {
   const workload = state.workloads[$("job-workload").value];
   if (!workload) return;
-  if (workload.kind === "timestamped_trace") {
-    for (const id of ["job-rate", "job-arrival", "job-ramp", "job-warmup"]) $(id).value = "";
-    return;
-  }
-  for (const [key, id, other] of [["rate", "job-rate", "job-concurrency"], ["duration_s", "job-duration", "job-requests"]]) {
+  const trace = workload.kind === "timestamped_trace";
+  if (trace) $("job-arrival").value = "";
+  for (const [key, id] of JOB_FIELDS) {
     const limit = state.limits[key];
-    if (limit && limit.default !== null && $(id).value === "" && $(other).value === "") $(id).value = limit.default;
+    if (trace) $(id).value = "";
+    else if (limit && limit.default !== null && $(id).value === "") $(id).value = limit.default;
   }
 }
 
@@ -1577,14 +1623,121 @@ function jobProgress(job) {
   return { fraction: Math.min(1, elapsed / (limit * 1000)), label };
 }
 
-function tile(label, value) {
-  return el("div", {}, el("dt", {}, label), el("dd", {}, value));
+// Live results: the service reads AIPerf's per-request records while the job runs.
+async function refreshLive() {
+  const job = state.health && state.health.job;
+  if (!job) {
+    state.live = null;
+    return;
+  }
+  const live = state.live;
+  const current = live && live.started_at === job.started_at;
+  if (current && live.state === job.state && job.state !== "running") return;
+  const reply = await call("jobLive", {});
+  if (reply.status === 200 && reply.body) {
+    state.live = { ...reply.body, started_at: job.started_at };
+    renderResults();
+  }
 }
 
-function latencyTile(label, stats) {
-  if (!stats) return null;
-  const values = [stats.p50, stats.p95, stats.p99].map((value) => amount(value, 1)).join(" / ");
-  return tile(label + " p50/p95/p99 (" + stats.unit + ")", values);
+const LATENCY_ROWS = [["ttft", "Time to first token"], ["itl", "Inter-token latency"], ["request", "Request latency"]];
+
+function milliseconds(value) {
+  if (value === null || value === undefined) return "-";
+  return value >= 1000 ? amount(value / 1000, 2) + " s" : amount(value, value < 10 ? 1 : 0) + " ms";
+}
+
+// The p95 tone against the target: green below 80%, yellow below 100%, red at or above it.
+function targetTone(value, target) {
+  if (!target || value === null || value === undefined) return "";
+  return value < 0.8 * target ? "tone-ok" : value < target ? "tone-warn" : "tone-bad";
+}
+
+function kpi(label, value, extra, tone) {
+  const dd = el("dd", { class: tone || "" }, value);
+  if (extra) dd.append(" ", el("small", {}, extra));
+  return el("div", {}, el("dt", {}, label), dd);
+}
+
+function renderResults() {
+  const job = state.health && state.health.job;
+  const live = job && state.live && state.live.started_at === job.started_at ? state.live : null;
+  $("results-job").textContent = job ? "· " + job.id : "";
+  $("results-empty").hidden = Boolean(job);
+  $("results-body").hidden = !job;
+  $("job-document").hidden = !job || job.state === "running";
+  $("job-error").hidden = !(job && job.error);
+  $("job-error").textContent = job && job.error ? job.error : "";
+  if (!job) return;
+  const progress = jobProgress(job);
+  $("results-progress").hidden = !progress || progress.fraction === null;
+  if (progress && progress.fraction !== null) $("results-progress").value = progress.fraction;
+  $("results-clock").textContent = job.state + (progress && progress.label ? " · " + progress.label : "");
+  if (!live) return;
+  const requests = live.requests;
+  const throughput = live.throughput;
+  const kpis = [
+    kpi("Completed", amount(requests.completed, 0), job.params.requests ? "of " + amount(job.params.requests, 0) : ""),
+    kpi("Errors", amount(requests.errors, 0), "", requests.errors ? "tone-bad" : ""),
+    kpi("Requests/s", amount(throughput.requests_per_s)),
+    kpi("Output tokens/s", amount(throughput.output_tokens_per_s, 0)),
+  ];
+  if (live.goodput && requests.completed) {
+    const share = 100 * live.goodput.good_requests / requests.completed;
+    kpis.push(kpi("Within SLO", amount(share, 1) + "%", "", share >= 95 ? "tone-ok" : share >= 90 ? "tone-warn" : "tone-bad"));
+  }
+  $("results-kpis").replaceChildren(...kpis);
+  const rows = LATENCY_ROWS.map(([name, label]) => {
+    const stats = live.latency[name] || {};
+    const target = live.slo[name];
+    return el("tr", {},
+      el("td", {}, label),
+      el("td", {}, milliseconds(stats.p50)),
+      el("td", { class: targetTone(stats.p95, target) }, milliseconds(stats.p95)),
+      el("td", {}, milliseconds(stats.p99)),
+      el("td", {}, target ? milliseconds(target) : "-"));
+  });
+  $("results-latency").replaceChildren(...rows);
+  const points = live.series.points;
+  drawChart($("chart-rate"), points.map((point) => [point.t, point.requests_per_s]), null, (value) => amount(value, 1) + "/s");
+  drawChart($("chart-ttft"), points.map((point) => [point.t, point.ttft_p95]), live.slo.ttft, milliseconds);
+}
+
+// Draw one series as a line over job time, with an optional dashed target line.
+function drawChart(svg, points, target, format) {
+  const width = Math.max(svg.clientWidth, 120);
+  const height = 90;
+  const pad = { left: 2, right: 2, top: 14, bottom: 14 };
+  const values = points.map(([, value]) => value).filter((value) => value !== null && value !== undefined);
+  const end = points.length ? points[points.length - 1][0] : 0;
+  const top = Math.max(0, target || 0, ...values) * 1.15 || 1;
+  const x = (t) => pad.left + (width - pad.left - pad.right) * (end ? t / end : 0);
+  const y = (value) => pad.top + (height - pad.top - pad.bottom) * (1 - value / top);
+  const make = (tag, attributes, text) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const nodes = [make("line", { class: "axis", x1: pad.left, x2: width - pad.right, y1: height - pad.bottom, y2: height - pad.bottom })];
+  let path = "";
+  let drawing = false;
+  for (const [t, value] of points) {
+    if (value === null || value === undefined) {
+      drawing = false;
+      continue;
+    }
+    path += (drawing ? "L" : "M") + x(t).toFixed(1) + " " + y(value).toFixed(1);
+    drawing = true;
+  }
+  if (path) nodes.push(make("path", { class: "series", d: path }));
+  if (target) nodes.push(make("line", { class: "target", x1: pad.left, x2: width - pad.right, y1: y(target), y2: y(target) }));
+  nodes.push(make("text", { x: pad.left, y: 10 }, values.length ? "peak " + format(Math.max(...values)) : "waiting for requests"));
+  if (target) nodes.push(make("text", { x: width - pad.right, y: 10, "text-anchor": "end" }, "target " + format(target)));
+  nodes.push(make("text", { x: pad.left, y: height - 2 }, "0:00"));
+  if (end) nodes.push(make("text", { x: width - pad.right, y: height - 2, "text-anchor": "end" }, duration(end * 1000)));
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.replaceChildren(...nodes);
 }
 
 function renderJob() {
@@ -1603,34 +1756,12 @@ function renderJob() {
   const key = job ? JSON.stringify([job.id, job.state, job.finished_at, job.error]) : "";
   if (state.keys.job === key) return;
   state.keys.job = key;
-  $("job-document").hidden = !job || running;
-  $("job-error").hidden = !(job && job.error);
-  $("job-error").textContent = job && job.error ? job.error : "";
   if (running) {
     if (state.workloads[job.params.workload]) $("job-workload").value = job.params.workload;
     for (const [field, id] of JOB_FIELDS) $(id).value = job.params[field] === undefined ? "" : job.params[field];
     $("job-arrival").value = job.params.arrival || "";
     workloadHint();
   }
-  const result = (job && !running && job.result) || {};
-  const tiles = [];
-  if (result.requests) {
-    tiles.push(tile("Completed", amount(result.requests.completed, 0) + " / " + amount(result.requests.total, 0)));
-    tiles.push(tile("Errors", amount(result.requests.errors, 0)));
-  }
-  if (result.throughput) {
-    tiles.push(tile("Requests/s", amount(result.throughput.requests_per_s)));
-    tiles.push(tile("Output tokens/s", amount(result.throughput.output_tokens_per_s, 0)));
-  }
-  if (result.goodput) tiles.push(tile("Goodput requests/s", amount(result.goodput.requests_per_s)));
-  const latency = result.latency || {};
-  for (const [metric, label] of [["ttft", "TTFT"], ["itl", "ITL"], ["request", "Request latency"]]) {
-    const node = latencyTile(label, latency[metric]);
-    if (node) tiles.push(node);
-  }
-  if (result.exit_code !== undefined && result.exit_code !== null) tiles.push(tile("AIPerf exit code", String(result.exit_code)));
-  if (job && job.journal) tiles.push(tile("Journal extract", job.journal.extract ? amount(job.journal.lines, 0) + " lines" : "none"));
-  $("job-results").replaceChildren(...tiles);
 }
 
 // Configuration and overlays.
@@ -1823,6 +1954,7 @@ function startPolling() {
     window.setInterval(() => refresh(false), POLL_MS),
     NEEDS.engines ? window.setInterval(refreshEngines, ENGINE_POLL_MS) : 0,
     NEEDS.fleet ? window.setInterval(refreshFleet, FLEET_POLL_MS) : 0,
+    NEEDS.live ? window.setInterval(refreshLive, LIVE_POLL_MS) : 0,
     window.setInterval(render, 1000),
   ].filter(Boolean);
 }
@@ -1978,8 +2110,8 @@ $("cold-restart").addEventListener("click", async () => {
 });
 $("restore").addEventListener("click", async () => {
   const confirmed = await confirmAction("Restore the baseline?",
-    "The restore hook returns the deployment to the baseline fleet configuration recorded when the session started, then the service waits for the router to report ready.",
-    [], "Restore baseline");
+    "The service undoes the session's changes. A changed configuration restarts the router with the baseline; each changed engine is resumed, started or readmitted.",
+    changeList().length ? changeList() : ["The session changed nothing."], "Restore baseline");
   if (!confirmed) return;
   await act("config", "Restore baseline", "restore");
 });

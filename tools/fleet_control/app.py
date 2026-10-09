@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .records import Action
-from .service import ActionError, ControlService
+from .service import ActionError, ControlService, session_changes
 
 API = "/api"
 
@@ -87,7 +87,9 @@ def core_routes(service: ControlService) -> APIRouter:
     async def session() -> JSONResponse:
         if service.session is None:
             return JSONResponse({"detail": "no session is active"}, status_code=404)
-        return JSONResponse(service.session.document())
+        return JSONResponse(
+            {**service.session.document(), "changes": session_changes(service.session)}
+        )
 
     @routes.post("/session/end")
     async def end_session() -> JSONResponse:

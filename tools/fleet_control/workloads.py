@@ -53,14 +53,15 @@ class Limit:
     default: float | None = None
 
 
-# The defaults apply to workloads other than timestamped traces, which keep their recorded timing.
+# The console starts each input at its default, except for a timestamped trace, which replays
+# its recorded timing in full.
 LIMITS = {
     "rate": Limit(0.1, 1000, default=2),
-    "concurrency": Limit(1, 4096, integer=True),
-    "ramp_s": Limit(1, 3600),
+    "concurrency": Limit(1, 4096, integer=True, default=32),
+    "ramp_s": Limit(1, 3600, default=10),
     "duration_s": Limit(1, 86400, default=300),
-    "requests": Limit(1, 1_000_000, integer=True),
-    "warmup_requests": Limit(1, 10_000, integer=True),
+    "requests": Limit(1, 1_000_000, integer=True, default=1000),
+    "warmup_requests": Limit(1, 10_000, integer=True, default=10),
 }
 LIMIT_UNITS = {
     "rate": " requests per second",

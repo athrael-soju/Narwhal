@@ -70,8 +70,7 @@ The `result` depends on the action:
 | Action                                                         | `result`                                                                                   |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `session.start`                                                | `session`, `baseline_digest`                                                               |
-| `session.end`                                                  | `restore_seq`, the `seq` of the session's `baseline.restore`, and `journal`                |
-| `baseline.restore`                                             | The hook run                                                                               |
+| `session.end`                                                  | `changes` and `journal`                                                                    |
 | `engine.pause`, `engine.stop`                                  | `engine`, `before`, `hook`, `after`                                                        |
 | `engine.resume`, `engine.start`                                | `engine`, `before`, `hook`, `service` with `in_service` and `waited_s`, `after`            |
 | `engine.drain`, `engine.readmit`                               | `engine`, `before`, `router` with the call's `path`, `body`, `status` and `error`, `after` |
@@ -79,7 +78,9 @@ The `result` depends on the action:
 | `job.complete`                                                 | The job document                                                                           |
 | `config.overlay`                                               | `fleet`, `digest`, `base_digest`, `hook`, `readiness`                                      |
 | `config.cold_restart`                                          | `fleet`, `digest`, `hook`, `readiness`                                                     |
-| `config.restore`                                               | `restore_seq`, `fleet`, `digest`, `readiness`                                              |
+| `config.restore`                                               | `changes`, `steps`, and `hook` and `readiness` when the configuration changed              |
+
+`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, each engine the session left `paused`, `stopped` or `drained`. Each `steps` entry names the `engine`, the `action` that undid its change and that action's `seq`, or `null` when the engine was already in service.
 
 A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, and `tail`, the last 4096 bytes of output.
 

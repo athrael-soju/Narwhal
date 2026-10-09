@@ -440,33 +440,35 @@ class OverlayTests(OverlayCase):
             ],
         )
 
-    async def test_restore_returns_to_the_baseline_and_waits_for_the_router(self) -> None:
+    async def test_restore_returns_the_router_to_the_baseline(self) -> None:
         directory = await self.start_session()
         await self.client.post("/api/config/overlay", json={"serving": {"max_connections": 64}})
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()["result"]
-        self.assertEqual(result["restore_seq"], 3)
-        self.assertEqual(result["fleet"], "baseline.json")
-        self.assertEqual(result["digest"], canonical_digest(BASELINE))
+        self.assertEqual(result["changes"], {"configuration": True, "engines": {}})
+        self.assertEqual(result["steps"], [])
+        self.assertEqual(result["hook"]["hook"], ROUTER_RESTART_HOOK)
         self.assertTrue(result["readiness"]["ready"])
+        self.assertEqual(self.captured()[-1]["fleet"], str((directory / "baseline.json").resolve()))
         self.assertEqual(
             self.actions(),
-            [
-                ("session.start", "ok"),
-                ("config.overlay", "ok"),
-                ("baseline.restore", "ok"),
-                ("config.restore", "ok"),
-            ],
+            [("session.start", "ok"), ("config.overlay", "ok"), ("config.restore", "ok")],
         )
         record = self.record()
         self.assertEqual(self.sources(), ["baseline", "overlay", "baseline"])
         self.assertEqual(record["configuration"]["document"], BASELINE)
         self.assertEqual(record["configuration"]["fleet"], "baseline.json")
-        self.assertEqual(record["actions"][2]["result"]["hook"], "restore")
-        await self.client.post("/api/config/cold-restart")
-        self.assertEqual(self.captured()[-1]["fleet"], str((directory / "baseline.json").resolve()))
-        self.assertEqual(self.router.probes, 3)
+        self.assertEqual(self.router.probes, 2)
+
+    async def test_restore_after_no_change_touches_nothing(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()["result"]
+        self.assertEqual(result, {"changes": {"configuration": False, "engines": {}}, "steps": []})
+        self.assertEqual(self.captured(), [])
+        self.assertEqual(self.router.probes, 0)
 
 
 class SlowRouterTests(OverlayCase):
@@ -509,16 +511,17 @@ class UnreadyRouterTests(OverlayCase):
 
     async def test_an_unreachable_router_fails_the_restore(self) -> None:
         await self.start_session()
+        assert self.service.session is not None
+        self.service.session.apply_configuration(NOW.isoformat(), "overlay", {**BASELINE, "_x": 1})
         self.router.unreachable = True
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 504, response.text)
         readiness = response.json()["action"]["result"]["readiness"]
         self.assertIsNone(readiness["status_code"])
         self.assertIn("ConnectError", readiness["reason"])
-        self.assertEqual(
-            self.actions(),
-            [("session.start", "ok"), ("baseline.restore", "ok"), ("config.restore", "failed")],
-        )
+        self.assertEqual(self.actions(), [("session.start", "ok"), ("config.restore", "failed")])
+        # The router restarted with the baseline, so it governs the fleet despite the timeout.
+        self.assertEqual(self.sources(), ["baseline", "overlay", "baseline"])
 
 
 class FailedRouterRestartTests(OverlayCase):

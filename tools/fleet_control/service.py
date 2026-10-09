@@ -1,4 +1,4 @@
-"""Operator sessions, recorded actions, baseline restore and the load-job slot."""
+"""Operator sessions, recorded actions, the session's outstanding changes and the load-job slot."""
 
 from __future__ import annotations
 
@@ -12,13 +12,56 @@ from typing import Any
 from narwhal.config.loading import load as load_fleet
 from narwhal.contracts import canonical_digest
 
-from .config import RESTORE_HOOK, ControlConfig, Hook
+from .config import ControlConfig, Hook
 from .hooks import HookResult, run_hook
 from .jobs import Job, JobRunner, JobSlot
 from .journal import SESSION_EXTRACT, Mark, extract, mark
 from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
+
+# The engine state each engine action leaves, and the action that undoes it. `None` marks an
+# action that returns the engine to its baseline state.
+ENGINE_CHANGES: dict[str, str | None] = {
+    "pause": "paused",
+    "stop": "stopped",
+    "drain": "drained",
+    "resume": None,
+    "start": None,
+    "readmit": None,
+}
+UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
+# A cold restart starts every engine afresh, so it clears the engine changes before it.
+CLEARING_ACTIONS = frozenset({"config.cold_restart"})
+
+
+def session_changes(session: Session) -> dict[str, Any]:
+    """Return what the session changed and has not undone.
+
+    `configuration` is whether the governing fleet configuration differs from the baseline.
+    `engines` maps each engine still paused, stopped or drained by the session to that state.
+    """
+    engines: dict[str, str] = {}
+    for action in session.actions:
+        if action.outcome != "ok":
+            continue
+        if action.name in CLEARING_ACTIONS:
+            engines.clear()
+            continue
+        verb = action.name.removeprefix("engine.")
+        if verb == action.name or verb not in ENGINE_CHANGES:
+            continue
+        iid = str(action.params.get("engine"))
+        change = ENGINE_CHANGES[verb]
+        if change is None:
+            engines.pop(iid, None)
+        else:
+            engines[iid] = change
+    baseline = session.configurations[0]["digest"]
+    return {
+        "configuration": session.configurations[-1]["digest"] != baseline,
+        "engines": engines,
+    }
 
 
 class ActionError(Exception):
@@ -158,9 +201,9 @@ class ControlService:
         return {"session": self.session.id, "baseline_digest": canonical_digest(baseline)}
 
     async def end_session(self) -> Action:
-        """Stop any load job, restore the baseline deployment and close the session.
+        """Stop any load job and close the session, leaving the fleet as it is.
 
-        When the restore fails, the session stays open so the operator can retry.
+        The result lists the changes the session leaves in place.
         """
         action = await self.act("session.end", {}, self._end, exclusive=True)
         self.session = None
@@ -170,37 +213,14 @@ class ControlService:
         assert session is not None
         if self.jobs is not None and self.jobs.busy:
             await self._perform("job.stop", {}, self._stop_job, True)
-        restore = await self._perform("baseline.restore", {}, self._restore, True)
         journal = self.journal_extract(session.directory, SESSION_EXTRACT, self._session_mark)
         session.ended_at = self.stamp()
-        return {"restore_seq": restore.seq, "journal": journal}
+        return {"changes": session_changes(session), "journal": journal}
 
     def journal_extract(self, directory: Path, name: str, start: Mark | None) -> dict[str, Any]:
         """Copy the router journal rows appended since `start` into the session directory."""
         router = self.config.router
         return extract(router.journal, start, directory, name, router.journal_max_bytes)
-
-    async def restore_baseline(self) -> Action:
-        """Run the restore hook against the session's recorded baseline."""
-        return await self.act("baseline.restore", {}, self._restore, exclusive=True)
-
-    async def _restore(self, session: Session | None) -> Mapping[str, Any]:
-        assert session is not None
-        hook = self.config.hook(RESTORE_HOOK)
-        try:
-            result = await self.run_hook(hook, session)
-        except OSError as exc:
-            raise ActionError(f"restore hook could not start: {exc}") from exc
-        effect = result.document(session.directory)
-        if not result.ok:
-            reason = (
-                f"timed out after {hook.timeout_s:g}s"
-                if result.timed_out
-                else f"exited {result.exit_code}"
-            )
-            raise ActionError(f"restore hook {reason}", result=effect)
-        session.apply_configuration(self.stamp(), "baseline", session.baseline)
-        return effect
 
     async def run_hook(
         self, hook: Hook, session: Session, extra_env: Mapping[str, str] | None = None

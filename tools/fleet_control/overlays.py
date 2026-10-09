@@ -18,7 +18,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 from fastapi import APIRouter, Request
@@ -31,7 +31,10 @@ from .app import API, action_reply
 from .config import ConfigError, Hook
 from .hooks import HookResult
 from .records import Action, Session, write_private
-from .service import ActionError, ControlService, refused
+from .service import UNDO, ActionError, ControlService, refused, session_changes
+
+if TYPE_CHECKING:
+    from .engines import EngineActions
 
 ROUTER_RESTART_HOOK = "router_restart"
 COLD_RESTART_HOOK = "cold_restart"
@@ -44,6 +47,8 @@ OVERLAYS = "overlays"
 READY_PATH = "/ready"
 READY_POLL_S = 1.0
 READY_PROBE_TIMEOUT_S = 5.0
+# Router lifecycle states from which a readmit returns a drained engine to service.
+READMITTABLE = frozenset({"draining", "drained", "deadline_exceeded", "blocked"})
 
 
 def merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
@@ -103,10 +108,12 @@ class Overlays:
         self,
         service: ControlService,
         *,
+        engines: EngineActions | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         poll_s: float = READY_POLL_S,
     ) -> None:
         self.service = service
+        self.engines = engines
         self._transport = transport
         self._poll_s = poll_s
 
@@ -194,24 +201,45 @@ class Overlays:
         return await self.service.act("config.cold_restart", {}, restart, exclusive=True)
 
     async def restore(self) -> Action:
-        """Run the restore hook against the recorded baseline, then wait for the router."""
+        """Undo what the session changed: the configuration first, then each changed engine.
+
+        A session that changed nothing restores nothing. Each engine step is recorded as its own
+        engine action.
+        """
 
         async def restore(session: Session | None) -> Mapping[str, Any]:
             assert session is not None
-            # The nested restore is recorded as its own action, as when a session ends.
-            action = await self.service._perform(
-                "baseline.restore", {}, self.service._restore, True
-            )
-            current = session.configurations[-1]
-            effect: dict[str, Any] = {
-                "restore_seq": action.seq,
-                "fleet": current["fleet"],
-                "digest": current["digest"],
-            }
-            effect["readiness"] = await self._ready(effect)
+            changes = session_changes(session)
+            steps: list[dict[str, Any]] = []
+            effect: dict[str, Any] = {"changes": changes, "steps": steps}
+            if changes["configuration"]:
+                baseline = session.configurations[0]
+                hook = self._hook(ROUTER_RESTART_HOOK)
+                effect["hook"] = await self._run(hook, session, baseline["fleet"], effect)
+                session.apply_configuration(self.service.stamp(), "baseline", baseline["document"])
+                effect["readiness"] = await self._ready(effect)
+            for iid, change in changes["engines"].items():
+                steps.append(await self._undo(iid, UNDO[change], effect))
             return effect
 
         return await self.service.act("config.restore", {}, restore, exclusive=True)
+
+    async def _undo(self, iid: str, action: str, effect: Mapping[str, Any]) -> dict[str, Any]:
+        if self.engines is None:
+            raise ActionError(f"engine actions are unavailable to {action} {iid}", result=effect)
+        if action == "readmit":
+            async with self.engines._client() as client:
+                state = await self.engines.engine_state(client, iid)
+            lifecycle = state.get("lifecycle") or {}
+            if not state.get("draining") and lifecycle.get("state") not in READMITTABLE:
+                return {"engine": iid, "action": action, "seq": None}
+        try:
+            done = await self.engines.within(iid, action)
+        except ActionError as exc:
+            raise ActionError(
+                f"{action} {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        return {"engine": iid, "action": action, "seq": done.seq}
 
     def _hook(self, name: str) -> Hook:
         try:

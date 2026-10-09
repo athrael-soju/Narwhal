@@ -10,14 +10,7 @@ A session is one operator test run. Start a session before any other action.
 
 **Start session** validates the baseline fleet configuration and copies it into a new session directory.
 
-**End session and restore** asks for confirmation, then:
-
-1. stops a running load job
-2. runs the `restore` hook
-3. copies the session's [journal extract](11-Run-Record.md#journal-extracts)
-4. closes the session
-
-It returns once the restore hook finishes, before the router reports ready. If the restore hook fails, the session stays open, and you can end it again.
+**End session** stops a running load job, copies the session's [journal extract](11-Run-Record.md#journal-extracts) and closes the session. The fleet keeps the session's changes, which the confirmation lists. To undo them, select [Restore baseline](07-Configuration-Changes.md#restore-the-baseline) before you end the session.
 
 ## Session strip
 
@@ -39,7 +32,7 @@ The session strip runs along the top of the console.
 | **From session start** | Opens the dashboard with its time range starting at the session start                                                         |
 | **Load job**           | The current or last job, its state and its elapsed time                                                                       |
 | **Drain deadline (s)** | Deadline for drains started from this tab. Empty uses the router's default                                                    |
-| Buttons                | **Start session** or **End session and restore**, and **Forget token**                                                        |
+| Buttons                | **Start session** or **End session**, and **Forget token**                                                        |
 
 ## Exclusive actions
 

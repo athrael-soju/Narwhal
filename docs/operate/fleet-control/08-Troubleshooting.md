@@ -36,7 +36,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
 - Empty result: `NARWHAL_CONTROL_METRICS_URL` was unset when `make observe` last ran. Set it and `NARWHAL_CONTROL_TOKEN`, as in [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations), and run `make observe` again.
 - Value `0`: open Prometheus `/targets` and read the `fleet-control` scrape error. For HTTP 401, Prometheus holds an old token. Export the current token and run `make observe` again. For a refused connection, `NARWHAL_CONTROL_METRICS_URL` names the wrong address.
 
-Run an engine action to confirm the fix. Its marker appears on **Request outcomes** after the action finishes.
+Run an engine action to confirm the fix. Its marker appears on the Narwhal Orchestrator **Request outcomes** chart after the action finishes.
 
 ## Readmit stays disabled after a drain
 

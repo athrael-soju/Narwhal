@@ -6,7 +6,7 @@ description: Apply a configuration overlay to a running fleet, cold-restart it, 
 
 The **Configuration** view shows the session's baseline file and, under **Changed from baseline**, each setting in the current configuration that differs from the baseline.
 
-Overlays, cold restarts and restores are [exclusive actions](04-Sessions.md#exclusive-actions). After each one, the service waits for the router to report ready.
+Overlays, cold restarts and restores are [exclusive actions](04-Sessions.md#exclusive-actions).
 
 ## Configuration overlays
 
@@ -40,10 +40,15 @@ The service validates the merged configuration as `narwhal config validate` does
 
 ## Restore the baseline
 
-**Restore baseline** runs the `restore` hook and records the baseline as the current configuration. The session stays open.
+**Restore baseline** undoes the session's changes and leaves everything else running:
+
+- If the configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook.
+- It resumes each paused engine, starts each stopped engine and readmits each drained engine.
+
+A session that changed nothing restores nothing. The session stays open.
 
 ## Router readiness
 
-After an overlay, cold restart or restore, the service polls the router's `GET /ready` every second until it returns HTTP 200. When `router.timeout_s` passes first, the action fails with HTTP 504.
+After an overlay, a cold restart or a configuration restore, the service polls the router's `GET /ready` every second until it returns HTTP 200. When `router.timeout_s` passes first, the action fails with HTTP 504.
 
 If the `router_restart` hook succeeds but the router misses that deadline, the overlay still applies to the session.
