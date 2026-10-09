@@ -34,8 +34,6 @@ The role controller scores the current split of engines between prefill and deco
 
 [Read the full evaluation: Evaluating Narwhal](https://athrael.net/posts/evaluating-narwhal/)
 
-[![Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM.](assets/infographic.png)](https://athrael.net/posts/evaluating-narwhal/)
-
 ## Getting the commands
 
 Install on Linux with Python 3.11 or newer:

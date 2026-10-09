@@ -61,13 +61,13 @@ The **Requests** and **Latency** tables summarise the displayed interval. **Rout
 
 <div class="narwhal-panel-row stats" markdown>
 
-![Requests table with 99.8% within SLO, 18.1K offered, 18.1K completed, 0 cancelled, 0.2% dropped and 29 failed.](../assets/observability/headline-requests.png)
+![Requests table with within-SLO share, offered, completed, cancelled, dropped and failed counts.](../assets/observability/headline-requests.png)
 
 </div>
 
 <div class="narwhal-panel-row stats" markdown>
 
-![Latency table with TTFT p95 at 10% and TPOT p95 at 34% of the SLO, 0.2 s and 15 ms.](../assets/observability/headline-latency.png)
+![Latency table with TTFT p95 and TPOT p95 as a share of the SLO.](../assets/observability/headline-latency.png)
 
 ![Router block with admission Ready and 0 firing alerts.](../assets/observability/headline-router.png)
 
@@ -103,9 +103,9 @@ The engine table shows each engine's current role, state and load. **Engine role
 
 <div class="narwhal-panel-row" markdown>
 
-![Engines table with eight Serving engines in ID order, three on prefill and five on decode, with resident and running bars on the decode engines and KV cache use below 7%.](../assets/observability/engines.png)
+![Engines table in ID order with role, resident and running bars, and KV cache use.](../assets/observability/engines.png)
 
-![Engine role history with steady prefill and decode roles, and two unreachable periods on n8.](../assets/observability/engine-role-history.png)
+![Engine role history with each engine's role and unreachable periods.](../assets/observability/engine-role-history.png)
 
 </div>
 
@@ -130,13 +130,13 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 <div class="narwhal-panel-row" markdown>
 
-![Request outcomes near 30 requests per second, with completed following offered and page markers where n8 dropped out.](../assets/observability/request-outcomes.png)
+![Request outcomes with completed following offered, and page markers where an engine drops out.](../assets/observability/request-outcomes.png)
 
 </div>
 
 <div class="narwhal-panel-row" markdown>
 
-![Fleet events timeline with NarwhalEngineDown pages for n8 and a NarwhalEngineEjected page.](../assets/observability/fleet-events.png)
+![Fleet events timeline with NarwhalEngineDown and NarwhalEngineEjected pages.](../assets/observability/fleet-events.png)
 
 </div>
 
@@ -173,7 +173,7 @@ The row under **Request outcomes** breaks its drop series down by request outcom
 
 <div class="narwhal-panel-row" markdown>
 
-![Pool assignments during a role-control run: the prefill pool goes from three engines to seven, down to one and back to seven, and decode mirrors it.](../assets/observability/pool-assignments.png)
+![Pool assignments as the role controller moves engines between pools.](../assets/observability/pool-assignments.png)
 
 </div>
 
@@ -197,7 +197,7 @@ These panels show how long requests take and how much work the engines complete.
 
 <div class="narwhal-panel-row" markdown>
 
-![Token throughput with prefilled prompt tokens near 17K per second and output tokens near 8K per second.](../assets/observability/token-throughput.png)
+![Token throughput for prefilled prompt tokens and output tokens.](../assets/observability/token-throughput.png)
 
 </div>
 

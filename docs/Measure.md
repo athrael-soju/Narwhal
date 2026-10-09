@@ -31,18 +31,6 @@ A fleet measurement reports the highest tested offered rate that meets the fleet
 
 </div>
 
-## Qualification results
-
-<div class="grid cards" markdown>
-
--   [GPU benchmark qualification](measure/07-GPU-Qualification.md)
-
-    ---
-
-    Pinned inputs, procedure, and measured points from a recorded Kimi-K3 run on eight-GPU engines.
-
-</div>
-
 ## Placement trials
 
 <div class="grid cards" markdown>

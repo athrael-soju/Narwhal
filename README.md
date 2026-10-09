@@ -97,24 +97,6 @@ New requests follow the revised split, and resident requests finish on their ass
 
 <h3 align="center"><a href="https://athrael.net/posts/evaluating-narwhal/">Read the full evaluation: Evaluating Narwhal</a></h3>
 
-<p align="center">
-  <a href="https://github.com/ai-dynamo/aiperf/releases/tag/v0.12.0"><img src="https://img.shields.io/badge/client-AIPerf%20v0.12.0-0f766e" alt="AIPerf v0.12.0"></a>
-  <a href="https://huggingface.co/moonshotai/Kimi-K3"><img src="https://img.shields.io/badge/model-Kimi--K3-0f766e" alt="Kimi-K3 model"></a>
-  <a href="https://athrael.net/narwhal-evaluation-2026-09/chat-document-results/"><img src="https://img.shields.io/badge/workload-chat%2Fdocument-0f766e" alt="Chat/document workload results"></a>
-  <a href="https://athrael.net/narwhal-evaluation-2026-09/mixed-workload-results/"><img src="https://img.shields.io/badge/workload-mixed%20payload-0f766e" alt="Mixed-payload workload results"></a>
-  <a href="https://athrael.net/posts/evaluating-narwhal#prefix-caching"><img src="https://img.shields.io/badge/prefix%20caching-enabled-0f766e" alt="Prefix caching enabled"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/athrael-soju/Narwhal"><img src="https://img.shields.io/badge/framework-Narwhal%20v0.1.0-0f766e" alt="Narwhal v0.1.0"></a>
-  <a href="https://github.com/ai-dynamo/dynamo"><img src="https://img.shields.io/badge/framework-Dynamo%20Planner-0f766e" alt="Dynamo Planner"></a>
-  <a href="https://github.com/ray-project/ray"><img src="https://img.shields.io/badge/framework-Ray%20Serve%20LLM-0f766e" alt="Ray Serve LLM"></a>
-</p>
-
-<p align="center">
-  <a href="https://athrael.net/posts/evaluating-narwhal/"><img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/infographic.png" alt="Evaluation results for Narwhal, Dynamo Planner, and Ray Serve LLM."></a>
-</p>
-
 ## Getting the commands
 
 Install on Linux with Python 3.11 or newer:

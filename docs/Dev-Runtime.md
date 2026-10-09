@@ -12,7 +12,7 @@ Model files come from the Hugging Face cache or from paths given to `narwhal dev
 
 For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefill and one decode engine running the Qwen3.5-0.8B GGUF model.
 
-The [four-engine reference template](dev/RTX-5090-Reference.md) is measured on and pinned to the RTX 5090.
+The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
