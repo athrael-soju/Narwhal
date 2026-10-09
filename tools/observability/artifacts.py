@@ -46,7 +46,7 @@ CONSOLE_VIEWS = {
     "engines": "Fleet control engines",
     "activity": "Fleet control activity",
     "load": "Fleet control load job",
-    "results": "Fleet control load results",
+    "results": "Fleet control load metrics",
     "config": "Fleet control configuration",
 }
 CONTROL_ANNOTATIONS = (
@@ -169,8 +169,7 @@ def _console_view(panel_id: int, console: str, view: str, title: str) -> dict[st
     return _panel(
         panel_id,
         "",
-        f"{title}. The fleet control console refuses this frame unless console.embed_in_grafana "
-        "is true in the control configuration.",
+        "",
         [],
         "text",
         {"content": frame, "mode": "html"},
@@ -224,11 +223,11 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
     }
     items = [
         _grid_item("console-status", 0, 0, 24, 2),
-        _grid_item("console-engines", 0, 2, 24, 11),
-        _grid_item("console-load", 0, 13, 12, 10),
-        _grid_item("console-results", 12, 13, 12, 10),
-        _grid_item("console-config", 0, 23, 12, 10),
-        _grid_item("console-activity", 12, 23, 12, 10),
+        _grid_item("console-engines", 0, 2, 24, 15),
+        _grid_item("console-load", 0, 17, 12, 11),
+        _grid_item("console-results", 12, 17, 12, 11),
+        _grid_item("console-config", 0, 28, 12, 11),
+        _grid_item("console-activity", 12, 28, 12, 11),
     ]
     return {
         "apiVersion": source["apiVersion"],

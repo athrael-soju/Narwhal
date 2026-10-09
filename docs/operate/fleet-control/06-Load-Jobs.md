@@ -28,9 +28,9 @@ In the **Load job** view, select a workload and set its inputs:
 | Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    | 10       |
 | Duration (s)     | `duration_s`      | Seconds of load                                                                                          | 1 to 86400   | 300      |
 | Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 | 1000     |
-| Warm-up requests | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   | 10       |
+| Warm-up          | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   | 10       |
 
-Concurrency, Requests and Warm-up requests take whole numbers. The console and the service refuse values outside the range.
+Concurrency, Requests and Warm-up take whole numbers. The console and the service refuse values outside the range.
 
 Selecting a workload fills each empty input with its default. A `timestamped_trace` workload clears every input, so the trace replays in full at its recorded times.
 
@@ -52,9 +52,9 @@ A `timestamped_trace` workload sends each request at its recorded time. With bot
 
 The view locks its inputs, and the session strip shows the job's progress. **Stop job** stops AIPerf.
 
-## Results
+## Load metrics
 
-**Load results** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
+**Load metrics** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
 
 - the job's progress against its duration
 - completed requests, errors, requests per second and output tokens per second

@@ -44,7 +44,7 @@ The session strip shows **Connected**, and the **Engines** panel lists the fleet
 | --- | ------------------------- |
 | 1   | Session strip             |
 | 2   | Engines                   |
-| 3   | Load job, Load results    |
+| 3   | Load job, Load metrics    |
 | 4   | Configuration, Activity   |
 
 An action in one panel refreshes the others.

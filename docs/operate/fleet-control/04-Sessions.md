@@ -26,12 +26,12 @@ The session strip runs along the top of the console.
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Connection             | **Connected**, **Service unreachable** or **Not connected**                                                                   |
 | **Admission**          | **Ready** when the router admits requests, otherwise **Not ready** or **Unreachable**. The tooltip holds the router's reason  |
-| **Alerts**             | Number of firing Narwhal alerts, red when any has page severity. Requires `prometheus_url`. The tooltip lists the alert names |
+| **Alerts**             | Number of firing Narwhal alerts, red when any has page severity. Requires `prometheus_url`. The names of the firing alerts follow the count |
 | **In progress**        | Actions still running, such as `drain n7`                                                                                     |
-| **Session**            | Short session ID. The tooltip holds the start time                                                                            |
+| **Session**            | Short session ID and start time                                                                                               |
 | **From session start** | Opens the dashboard with its time range starting at the session start                                                         |
 | **Load job**           | The current or last job, its state and its elapsed time                                                                       |
-| **Drain deadline (s)** | Deadline for drains started from this tab. Empty uses the router's default                                                    |
+| **Drain deadline**     | Deadline in seconds for drains started from this tab. Empty uses the router's default                                         |
 | Buttons                | **Start session** or **End session**, and **Forget token**                                                        |
 
 ## Exclusive actions
