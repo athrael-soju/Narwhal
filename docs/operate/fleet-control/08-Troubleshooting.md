@@ -48,8 +48,20 @@ The router readmits this engine only after its process restarts.
 2. Wait until **Readmit** is enabled.
 3. Select **Readmit**. The engine returns to `in service`.
 
+## Start fails and the engine stays ejected
+
+**Start** or **Resume** fails with one of these errors. The engine's row shows the router's latest lifecycle event in the **Readmit** tooltip.
+
+| Error                                                        | Cause                                                                                   | Fix                                                                                                                                |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `<engine> did not return to service within <n>s`             | The engine process failed to come up, or it answers health checks too slowly            | Read the start hook's output in `hooks/<nnn>-engine_start.log` in the session directory, then the engine's startup log. See [An engine fails to start after a stop](#an-engine-fails-to-start-after-a-stop) |
+| `<engine> needs fresh profiles before the router readmits it` | The restarted process no longer matches the engine's profiles                           | Profile the engine and restart the router with the new profiles, as in [Activating replacement profiles](../03-Restart-Engines.md#activating-replacement-profiles) |
+| `the router blocked readmission of <engine>`                  | The router's readmission validation failed. The error ends with the router's reason     | Fix the reason, then select **Readmit**                                                                                            |
+
 ## An engine fails to start after a stop
 
 **Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release).
 
 Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave). The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
+
+With `UCX_CUDA_IPC_CACHE` set to `n` in `runtime.environment` and UCX 1.22 or later in the engine image, peers release a stopped engine's GPU memory, and **Start** succeeds without a wave restart. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.

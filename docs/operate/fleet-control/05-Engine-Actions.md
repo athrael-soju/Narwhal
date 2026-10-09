@@ -17,9 +17,9 @@ The **Engines** view lists each engine in the baseline fleet configuration with 
 | Action      | Effect                                                                                                                                                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Pause**   | Runs the `engine_pause` hook                                                                                                                                                                                                   |
-| **Resume**  | Runs the `engine_resume` hook                                                                                                                                                                                                  |
+| **Resume**  | Runs the `engine_resume` hook, then waits until the router returns the engine to service                                                                                                                                       |
 | **Stop**    | Runs the `engine_stop` hook                                                                                                                                                                                                    |
-| **Start**   | Runs the `engine_start` hook                                                                                                                                                                                                   |
+| **Start**   | Runs the `engine_start` hook, then waits until the router returns the engine to service                                                                                                                                        |
 | **Drain**   | Calls the router's [`POST /narwhal/lifecycle/drain`](../../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain). The router stops placing new requests on the engine and waits for its resident requests to finish |
 | **Readmit** | Calls the router's [`POST /narwhal/lifecycle/readmit`](../../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) for a drained engine                                                                           |
 
@@ -30,8 +30,10 @@ Each row has a main button for the engine's current state and a **…** menu wit
 | Paused in this session       | **Resume**                                                          |
 | Stopped in this session      | **Start**                                                           |
 | Draining, drained or blocked | **Readmit**                                                         |
-| Ejected by the router        | **Readmit**, disabled because the router readmits it after recovery |
+| Ejected by the router        | **Readmit**, disabled. The tooltip gives the router's reason        |
 | In service                   | **Drain**                                                           |
+
+**Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. Meanwhile the engine's state reads `starting` or `resuming` with the seconds waited. The action fails when the engine stays ejected for that long, when the router blocks its readmission, or when the router reports that the engine needs fresh profiles. The error names the reason, and [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected) lists the fixes.
 
 The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline (s)** from the session strip when it is set, and the router's default of 300 seconds otherwise. During a drain, a bar under the engine's resident requests shows the drained fraction.
 
@@ -47,6 +49,7 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 - **Pause**, **Resume**, **Stop** and **Start** require their hooks. **Resume** requires a paused engine, and **Start** a stopped or ejected engine.
 - **Drain** requires an engine in service. The router runs one drain or readmit at a time.
+- **Readmit** for an ejected engine stays disabled, because the router readmits an ejected engine after its own checks pass. The tooltip shows the router's latest lifecycle event for the engine. When that event is `profile_recovery_blocked`, the engine's state reads `needs profiles`.
 - **Readmit** requires a drained or blocked engine. When the router requires a restart after the drain, **Readmit** stays disabled until the engine restarts. See [Readmit stays disabled after a drain](08-Troubleshooting.md#readmit-stays-disabled-after-a-drain).
 - All engine actions require an active session and are disabled during an [exclusive action](04-Sessions.md#exclusive-actions).
 
