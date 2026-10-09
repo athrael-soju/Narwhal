@@ -28,6 +28,14 @@
     "engine_start": {
       "argv": ["/path/to/engine-control", "start"],
       "timeout_s": 900
+    },
+    "router_restart": {
+      "argv": ["/path/to/restart-router"],
+      "timeout_s": 300
+    },
+    "cold_restart": {
+      "argv": ["/path/to/restart-fleet"],
+      "timeout_s": 1800
     }
   }
 }
