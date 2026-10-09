@@ -84,6 +84,18 @@ class SeatsOut(BaseModel):
     engines: dict[str, EngineSeatsOut] = Field(default_factory=dict)
 
 
+class EngineHandoffOut(BaseModel):
+    """One producer's attested KV lease and the handoff bound derived from it.
+
+    `null` values mean the engine's attestation records no lease, and the request
+    deadline bounds its handoffs.
+    """
+
+    kv_lease_s: int | None = None
+    renewal_s: int | None = None
+    bound_s: float | None = None
+
+
 class ServingOut(BaseModel):
     """Accounting for HTTP retention and physical attempts across original requests."""
 
@@ -516,6 +528,7 @@ class StateOut(BaseModel):
     # Failed, refused, rejected and expired counts by reason.
     outcome_reasons: dict[str, dict[str, int]] = Field(default_factory=dict)
     seats: SeatsOut = Field(default_factory=SeatsOut)
+    handoff: dict[str, EngineHandoffOut] = Field(default_factory=dict)
     serving: ServingOut = Field(default_factory=ServingOut)
     http_pools: HttpPoolsOut
     pools: PoolsOut

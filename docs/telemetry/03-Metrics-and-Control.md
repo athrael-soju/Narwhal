@@ -31,7 +31,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_attempt_failures_total`, `narwhal_served_after_retry_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total` |
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | In-flight limit and saturation | `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, `narwhal_saturation_threshold_seconds` |
-| Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`, `narwhal_engine_seats` |
+| Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`, `narwhal_engine_seats`, `narwhal_kv_lease_seconds`, `narwhal_handoff_bound_seconds` |
 | Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_engine_quarantined`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
 | Floors | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total` |
 | Role controller | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
@@ -50,7 +50,7 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
 | `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
-| `narwhal_expired_total` | counter | `reason` | Deadline expiries: `deadline` or `queue_timeout`. |
+| `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 | `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
 | `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |

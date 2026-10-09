@@ -31,7 +31,6 @@ FAILED_REASONS = (
     "engine_rejected",
     "engine_error",
     "local_pool",
-    "handoff_expired",
     "invalid_response",
     "response_limit",
     "internal",
@@ -39,7 +38,7 @@ FAILED_REASONS = (
 REJECTED_REASONS = ("inflight_limit", "saturated", "not_ready", "unclassified")
 # The one message of every 429 at the router in-flight limit.
 INFLIGHT_LIMIT_MESSAGE = "router in-flight limit reached"
-EXPIRED_REASONS = ("deadline", "queue_timeout")
+EXPIRED_REASONS = ("deadline", "queue_timeout", "handoff")
 REFUSED_CAUSES = ("queue", "prompt", "aggregate_unpriced", "slot_wait", "kv_capacity", "tpot")
 OUTCOME_REASONS = {
     "failed": FAILED_REASONS,
@@ -54,13 +53,13 @@ def failure_reason(exc: BaseException, *, deadline_passed: bool) -> str:
     if isinstance(exc, RequestExpired):
         return "deadline"
     if isinstance(exc, QueueExpired):
-        return "deadline" if deadline_passed else "queue_timeout"
+        return "deadline" if deadline_passed or exc.at_deadline else "queue_timeout"
     if isinstance(exc, PlacementRefused):
         return exc.cause
     if isinstance(exc, NoEngine):
         return "no_engine"
     if isinstance(exc, HandoffExpired):
-        return "handoff_expired"
+        return "handoff"
     if isinstance(exc, ResponseLimitExceeded):
         return "response_limit"
     if isinstance(exc, EngineError):

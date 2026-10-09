@@ -99,7 +99,6 @@ class Fleet:
                 serving=ServingPolicy(
                     queue_capacity=8,
                     queue_timeout_s=10.0,
-                    handoff_timeout_s=60.0,
                 ),
             )
             self.journal = RunJournal(Path(directory) / "journal.jsonl")

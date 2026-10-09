@@ -30,7 +30,16 @@ class PlacementRefused(Exception):
 
 
 class QueueExpired(Exception):
-    """A request exhausted its admission wait or original deadline."""
+    """A request exhausted its admission wait or the deadline its caller set.
+
+    `at_deadline` records whether the caller's deadline, not the queue's wait limit,
+    ended the wait. An event-loop timer can fire shortly before that deadline on the
+    router clock, so callers classify the expiry from this flag.
+    """
+
+    def __init__(self, *, at_deadline: bool = False) -> None:
+        super().__init__()
+        self.at_deadline = at_deadline
 
 
 @dataclass(eq=False)
@@ -69,7 +78,7 @@ class AdmissionQueue(Generic[T]):
         """Reserve immediately or wait within both the queue and request clocks."""
         now = self._clock()
         if now >= deadline:
-            raise QueueExpired
+            raise QueueExpired(at_deadline=True)
         if not self._pending:
             result = reserve()
             if result is not None:
@@ -79,12 +88,13 @@ class AdmissionQueue(Generic[T]):
         waiter = _Waiter()
         self._pending[waiter] = None
         self.high_water = max(self.high_water, len(self._pending))
+        at_deadline = deadline <= now + self.wait_s
         expires = min(deadline, now + self.wait_s)
         try:
             while True:
                 remaining = expires - self._clock()
                 if remaining <= 0:
-                    raise QueueExpired
+                    raise QueueExpired(at_deadline=at_deadline)
                 # A notification during the capacity check stays set for the next wait.
                 waiter.wake.clear()
                 if next(iter(self._pending)) is waiter:
@@ -95,7 +105,7 @@ class AdmissionQueue(Generic[T]):
                     async with asyncio.timeout(remaining):
                         await waiter.wake.wait()
                 except TimeoutError as exc:
-                    raise QueueExpired from exc
+                    raise QueueExpired(at_deadline=at_deadline) from exc
         finally:
             # Removal also covers cancellation after the head was notified.
             del self._pending[waiter]

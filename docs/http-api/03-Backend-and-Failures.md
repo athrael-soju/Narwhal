@@ -44,7 +44,18 @@ Scoped to the original client request:
 - retries
 - cleanup
 
-`serving.handoff_timeout_s` counts handoff age from the start of the producer HTTP leg.
+Handoff age counts from prefill completion, when the producer's lease starts.
+
+### KV handoff expiry
+
+The [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) limits the time from prefill completion to decode dispatch. A handoff that reaches the bound ends its attempt:
+
+| Point of expiry | Journal `error` contains |
+| --- | --- |
+| Before decode dispatch | `KV handoff expired before decode dispatch` |
+| While waiting for a decode seat, with `serving.queue_capacity` above 0 | `KV handoff bound reached while waiting for a decode seat` |
+
+The expiry is transient, so a request with attempts remaining retries with a fresh prefill. When the request has no attempts left, the router returns HTTP `504` with error type and code `handoff_expired` and the message `KV handoff expired before decode dispatch`. The journal records terminal `expired` with reason `handoff`.
 
 Durations in the [measurement contract](../measure/01-Profile.md):
 

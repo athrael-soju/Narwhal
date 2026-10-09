@@ -144,7 +144,6 @@ class HttpAccountingTests(HttpHarness):
                     ServingPolicy(
                         queue_capacity=queue,
                         queue_timeout_s=5.0,
-                        handoff_timeout_s=5.0,
                     )
                     if queue
                     else ServingPolicy()
@@ -221,7 +220,7 @@ class HttpAccountingTests(HttpHarness):
 
     async def test_a_refusal_on_a_retry_returns_the_refusal(self):
         """Streamed and non-streamed retries that admission refuses return 429 with Retry-After."""
-        self.cfg.serving = replace(self.cfg.serving, max_attempts=2, handoff_timeout_s=5.0)
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=2)
         client = self.client()
         real = execution.prepare_attempt
         attempts = []
@@ -304,9 +303,7 @@ class HttpAccountingTests(HttpHarness):
 
     async def test_retry_repeats_prefill_and_settles_one_original(self):
         """A transient producer failure consumes one retry and records one served request."""
-        self.cfg.serving = ServingPolicy(
-            max_attempts=2, handoff_timeout_s=5, retry_base_s=0.001, retry_cap_s=0.001
-        )
+        self.cfg.serving = ServingPolicy(max_attempts=2, retry_base_s=0.001, retry_cap_s=0.001)
         self.cfg.failure_quarantine_s = 0
         self.prefill_statuses = [503, 200]
         client = self.client()
@@ -474,7 +471,7 @@ class HttpAccountingTests(HttpHarness):
 
     async def test_exhausted_retry_budget_settles_the_first_attempt(self):
         """With a zero retry budget, the router records the producer failure after one attempt."""
-        self.cfg.serving = ServingPolicy(max_attempts=2, handoff_timeout_s=5, retry_budget=0)
+        self.cfg.serving = ServingPolicy(max_attempts=2, retry_budget=0)
         self.prefill_statuses = [503]
         client = self.client()
         response = await self.post(client)
@@ -497,7 +494,7 @@ class HttpAccountingTests(HttpHarness):
 
     async def test_output_started_prevents_retry_after_decode_failure(self):
         """A decode error after the first token ends the stream and records one failed request."""
-        self.cfg.serving = ServingPolicy(max_attempts=3, handoff_timeout_s=5)
+        self.cfg.serving = ServingPolicy(max_attempts=3)
         self.decode_frames.append({"error": {"message": "decode failed"}})
         client = self.client()
         response = await client.post(

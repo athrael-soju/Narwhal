@@ -8,16 +8,16 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.client import EngineError
+from narwhal.serving.admission import QueueExpired
 from narwhal.serving.outcomes import OUTCOME_REASONS, failure_reason
 from narwhal.serving.policy import ServingPolicy
 from tests.fixtures import fleet
 from tests.serving.test_http_accounting import HttpHarness
 
-FAST_RETRY = {"handoff_timeout_s": 5, "retry_base_s": 0.001, "retry_cap_s": 0.001}
+FAST_RETRY = {"retry_base_s": 0.001, "retry_cap_s": 0.001}
 QUEUED = {
     "queue_capacity": 2,
     "queue_timeout_s": 5.0,
-    "handoff_timeout_s": 5.0,
 }
 
 
@@ -298,3 +298,13 @@ class FailureReasonTests(unittest.TestCase):
                     raise EngineError("tokenize", "http://engine", 502, str(cause)) from cause
                 except EngineError as exc:
                     self.assertEqual(failure_reason(exc, deadline_passed=False), reason)
+
+    def test_a_queue_expiry_at_the_callers_deadline_is_a_deadline_expiry(self):
+        """The wait timer can fire before the deadline on the router clock."""
+        for exc, deadline_passed, reason in (
+            (QueueExpired(at_deadline=True), False, "deadline"),
+            (QueueExpired(at_deadline=False), True, "deadline"),
+            (QueueExpired(at_deadline=False), False, "queue_timeout"),
+        ):
+            with self.subTest(at_deadline=exc.at_deadline, deadline_passed=deadline_passed):
+                self.assertEqual(failure_reason(exc, deadline_passed=deadline_passed), reason)

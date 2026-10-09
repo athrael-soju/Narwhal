@@ -33,6 +33,7 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
+from narwhal.engines.attestation import attested_kv_lease
 from tests.deployment.fixtures import (
     cache_settings_line,
     cuda_engine,
@@ -204,6 +205,26 @@ class EngineLauncherTests(unittest.TestCase):
                     plan["args"][plan["args"].index("--kv-transfer-config") + 1]
                 )
                 self.assertEqual(transfer_config, plan["connector"])
+
+    def test_the_connector_sets_the_producer_kv_lease(self):
+        for lease in (None, 6, 45):
+            with self.subTest(lease=lease), tempfile.TemporaryDirectory() as folder:
+                record, env = launcher_inputs(Path(folder))
+                if lease is not None:
+                    record["runtime"]["kv_lease_s"] = lease
+                plan, _ = build(record, env, Path(folder) / "launch")
+                transfer_config = json.loads(
+                    plan["args"][plan["args"].index("--kv-transfer-config") + 1]
+                )
+                extra = transfer_config["kv_connector_extra_config"]
+                self.assertEqual(extra["kv_lease_duration"], lease or 30)
+                # The attested launch arguments record the lease the router reads.
+                self.assertEqual(attested_kv_lease({"launch": {"args": plan["args"]}}), lease or 30)
+        for lease in (5, 0, 30.0, "30", True):
+            spec = runtime()
+            spec["kv_lease_s"] = lease
+            with self.subTest(lease=lease), self.assertRaisesRegex(ValueError, "kv_lease_s"):
+                validate_runtime(spec)
 
     def test_extra_options_cannot_override_ports_credentials_or_connector(self):
         for options in (["--port", "99"], ["--api-key", "secret"], ["--kv-transfer-config", "{}"]):
