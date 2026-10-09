@@ -46,7 +46,7 @@ Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
 `/ready` reports the reason for each `503` refusal.
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#41-global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) compares the client outcomes of each mode, queue setting and retry limit.
 
 ### Admission counters
 

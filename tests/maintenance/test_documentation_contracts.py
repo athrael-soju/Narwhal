@@ -50,14 +50,21 @@ def error_table_rows(text):
 
 class DocumentationContractTests(unittest.TestCase):
     def test_configuration_literal_defaults(self):
-        """Backticked JSON defaults agree with their owning configuration fields."""
+        """Backticked JSON defaults agree with their owning configuration fields.
+
+        The settings guide states the same defaults, so it is checked with the reference.
+        """
         engine = asdict(EngineSpec("e0", "http://stub"))
         contract = EngineContract().fields()
         cfg = FleetConfig(model="stub", engines=[EngineSpec("e0", "http://stub")], slo=SLO(1, 1))
         fleet = document(cfg)
         section = ""
         checked = 0
-        for page in sorted((ROOT / "docs/configuration").glob("*.md")):
+        pages = [
+            *sorted((ROOT / "docs/configuration").glob("*.md")),
+            ROOT / "docs/operate/07-Admission-Queue-and-Retry-Settings.md",
+        ]
+        for page in pages:
             for line in page.read_text().splitlines():
                 if line.startswith("## "):
                     section = line

@@ -111,6 +111,7 @@ class OutcomeReasonTests(HttpHarness):
         self.assertTrue(all(row["queue_waits"]["admission"] is None for row in rows))
 
     async def test_an_engine_failure_records_its_reason_and_one_attempt(self):
+        self.cfg.serving = ServingPolicy(max_attempts=1)
         self.prefill_statuses = [500]
         client = self.client()
         response = await self.post(client)
@@ -139,6 +140,8 @@ class OutcomeReasonTests(HttpHarness):
         async def slow_count(*args, **kwargs):
             raise EngineError("tokenize", "http://engine", 504, "exact count exceeded 1s")
 
+        # One attempt makes each injected fault the request's outcome.
+        self.cfg.serving = ServingPolicy(max_attempts=1)
         for phase, status, upstream in (
             ("admission", 504, None),
             ("prefill", 502, "prefill"),

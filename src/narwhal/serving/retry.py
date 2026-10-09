@@ -29,7 +29,7 @@ def transient(exc: BaseException) -> bool:
 class RetryPolicy:
     """Bound complete prefill/decode attempts for each original request."""
 
-    max_attempts: int = 1
+    max_attempts: int = 2
     base_delay_s: float = 0.1
     max_delay_s: float = 1.0
 

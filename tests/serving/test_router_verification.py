@@ -80,6 +80,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sizing_skips_a_failed_tokenizer_until_a_count_succeeds(self):
         """Failed exact counting fails this request; the next counts avoid that engine."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
         with patch.object(
             self.router.engines,
             "tokenize",
@@ -111,6 +113,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
         """A failed engine's backoff doubles per failure and survives other engines' success."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
         # Failed counts feed the breaker; these engines stay live to show the backoff alone.
         self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
@@ -183,6 +187,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sustained_tokenizer_failures_keep_the_engine_error_and_the_capped_backoff(self):
         """Every consecutive failed count raises the engine error and holds the capped backoff."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
         # Failed counts feed the breaker; these engines stay live to show the backoff alone.
         self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]

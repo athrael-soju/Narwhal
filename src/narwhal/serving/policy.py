@@ -10,11 +10,11 @@ from .retry import RetryPolicy
 
 @dataclass(frozen=True)
 class ServingPolicy:
-    """Keep the queue-free, single-attempt baseline until limits are configured."""
+    """Serve without a queue and retry a failed attempt once until limits are configured."""
 
     queue_capacity: int = 0
     queue_timeout_s: float = 0.0
-    max_attempts: int = 1
+    max_attempts: int = 2
     retry_base_s: float = 0.1
     retry_cap_s: float = 1.0
     retry_budget: int = 10
