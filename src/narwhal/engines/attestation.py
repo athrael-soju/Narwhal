@@ -218,6 +218,53 @@ def make_attestation(
     return payload
 
 
+def _launch_arg(payload: Any, name: str) -> str | None:
+    """Return the value of the first `name` argument in an attestation's launch arguments."""
+    launch = payload.get("launch") if isinstance(payload, dict) else None
+    args = launch.get("args") if isinstance(launch, dict) else None
+    if not isinstance(args, list):
+        return None
+    for index, arg in enumerate(args):
+        if not isinstance(arg, str):
+            continue
+        flag, equals, value = arg.partition("=")
+        if flag != name:
+            continue
+        if not equals:
+            value = args[index + 1] if index + 1 < len(args) else ""
+        return value if isinstance(value, str) else None
+    return None
+
+
+def attested_sequence_limit(payload: Any) -> int | None:
+    """Return the `--max-num-seqs` value in an attestation's launch arguments, if set."""
+    value = _launch_arg(payload, "--max-num-seqs")
+    if value is not None and value.isdigit() and int(value) > 0:
+        return int(value)
+    return None
+
+
+def attested_kv_lease(payload: Any) -> int | None:
+    """Return `kv_lease_duration` from the NIXL connector configuration an attestation records.
+
+    The value is the seconds a producer holds a finished prefill's KV blocks for its consumer.
+    """
+    value = _launch_arg(payload, "--kv-transfer-config")
+    if value is None:
+        return None
+    try:
+        config = json.loads(value)
+    except ValueError:
+        return None
+    if not isinstance(config, dict):
+        return None
+    extra = config.get("kv_connector_extra_config")
+    lease = extra.get("kv_lease_duration") if isinstance(extra, dict) else None
+    if config.get("kv_connector") != "NixlConnector" or type(lease) is not int or lease < 1:
+        return None
+    return lease
+
+
 def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
     """Digest the contract and launch evidence that fix an engine's timing."""
     return canonical_digest({"contract": contract, "launch": launch})

@@ -31,10 +31,12 @@ class ModelsOut(BaseModel):
 
 
 class AdmissionOut(BaseModel):
-    """Admission occupancy and refusal counts.
+    """Admission occupancy, saturation signals and refusal counts.
 
-    `rejected` counts pool-exhaustion rejections. `refused` counts requests that the
-    cost model prices over the TTFT budget on every landing, before dispatch.
+    `inflight` counts requests holding one of the `limit` admission seats. `rejected`
+    counts requests rejected at the in-flight limit, by router saturation, or while the
+    router is not ready. `refused` counts requests that predictive admission refused for a
+    projected TTFT or decode SLO miss before dispatch.
     """
 
     inflight: int
@@ -44,10 +46,54 @@ class AdmissionOut(BaseModel):
     waiting_prefill: int = 0
     waiting_decode: int = 0
     limit: int
+    # Router event-loop lag and the median request sizing delay, each against the
+    # threshold at which ingress answers a saturation 429.
+    loop_lag_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    sizing_delay_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    saturation_threshold_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     rejected: int
     refused: int
     # Engine-authentication mode: boundary or engine-credential.
     engine_auth: str = "boundary"
+    # `serving.admission` and `serving.admission_margin`.
+    mode: str = "predictive"
+    margin: float = 0.0
+
+
+class AttemptFailuresOut(BaseModel):
+    """Failed attempts in one request phase for one failure reason."""
+
+    phase: str
+    reason: str
+    count: int
+
+
+class EngineSeatsOut(BaseModel):
+    """One engine's seats; `0` means the engine has no seat limit for that phase."""
+
+    prefill: int = 0
+    decode: int = 0
+    # `--max-num-seqs` from the engine's verified attestation.
+    sequence_limit: int | None = None
+
+
+class SeatsOut(BaseModel):
+    """Per-engine seats and the mean sized input length that sets prefill seats."""
+
+    mean_input_len: float | None = None
+    engines: dict[str, EngineSeatsOut] = Field(default_factory=dict)
+
+
+class EngineHandoffOut(BaseModel):
+    """One producer's attested KV lease and the handoff bound derived from it.
+
+    `null` values mean the engine's attestation records no lease, and the request
+    deadline bounds its handoffs.
+    """
+
+    kv_lease_s: int | None = None
+    renewal_s: int | None = None
+    bound_s: float | None = None
 
 
 class ServingOut(BaseModel):
@@ -62,6 +108,8 @@ class ServingOut(BaseModel):
     retry_credits: float = 0.0
     retry_credits_spent: int = 0
     retry_denied: int = 0
+    served_after_retry: int = 0
+    attempt_failures: list[AttemptFailuresOut] = Field(default_factory=list)
     decode_tokens_observed: int = 0
     upstream_seconds: dict[str, float] = Field(default_factory=dict)
 
@@ -413,14 +461,86 @@ class VerifyingOut(BaseModel):
     kind: str
 
 
+class EjectionCountOut(BaseModel):
+    """Ejections of one engine for one cause since process start."""
+
+    iid: str
+    cause: str
+    count: int
+
+
+class HoldStartCountOut(BaseModel):
+    """Holds of one kind started on one engine since process start."""
+
+    iid: str
+    kind: Literal["timed", "inference"]
+    count: int
+
+
+class HoldEndCountOut(BaseModel):
+    """Holds of one kind on one engine that ended for one cause since process start."""
+
+    iid: str
+    kind: Literal["timed", "inference"]
+    cause: str
+    count: int
+
+
+class ProbeCountOut(BaseModel):
+    """Verification probe outcomes for one engine and probe kind since process start."""
+
+    iid: str
+    kind: str
+    outcome: str
+    count: int
+
+
+class ReadmissionCountOut(BaseModel):
+    """Returns of one ejected engine to placement by one recovery path since process start."""
+
+    iid: str
+    evidence: str
+    count: int
+
+
 class BreakerOut(BaseModel):
-    """Breaker failure accounting: per-class streaks and pending probes.
+    """Breaker failure accounting: per-class streaks, pending probes and transition counts.
 
     `liveness` streaks count health-sweep misses.
     """
 
     failures: dict[str, EngineStreaksOut] = Field(default_factory=dict)
     verifying: list[VerifyingOut] = Field(default_factory=list)
+    ejections: list[EjectionCountOut] = Field(default_factory=list)
+    hold_starts: list[HoldStartCountOut] = Field(default_factory=list)
+    hold_ends: list[HoldEndCountOut] = Field(default_factory=list)
+    probes: list[ProbeCountOut] = Field(default_factory=list)
+    readmissions: list[ReadmissionCountOut] = Field(default_factory=list)
+
+
+class TimedHoldOut(BaseModel):
+    """One engine under a timed failure quarantine."""
+
+    iid: str
+    # Seconds since the hold started; null for a hold restored without its start time.
+    held_s: float | None = None
+    remaining_s: float
+
+
+class InferenceHoldOut(BaseModel):
+    """One engine held until an inference probe passes."""
+
+    iid: str
+    held_s: float | None = None
+    # Producers whose transfers to this engine failed; empty for a standalone probe.
+    recorded_producers: list[str] = Field(default_factory=list)
+
+
+class HoldsOut(BaseModel):
+    """Current placement holds, split by kind."""
+
+    timed: list[TimedHoldOut] = Field(default_factory=list)
+    inference: list[InferenceHoldOut] = Field(default_factory=list)
 
 
 class ResidencyOut(BaseModel):
@@ -477,6 +597,10 @@ class StateOut(BaseModel):
     ha: HAOut
     lifecycle: LifecycleViewOut
     admission: AdmissionOut
+    # Failed, refused, rejected and expired counts by reason.
+    outcome_reasons: dict[str, dict[str, int]] = Field(default_factory=dict)
+    seats: SeatsOut = Field(default_factory=SeatsOut)
+    handoff: dict[str, EngineHandoffOut] = Field(default_factory=dict)
     serving: ServingOut = Field(default_factory=ServingOut)
     http_pools: HttpPoolsOut
     pools: PoolsOut
@@ -506,6 +630,8 @@ class StateOut(BaseModel):
     flips: list[FlipOut]
     # Engines temporarily held out of placement after failure.
     quarantined: list[str] = []
+    # The same engines split into timed quarantines and inference holds.
+    holds: HoldsOut = Field(default_factory=HoldsOut)
     breaker: BreakerOut = Field(default_factory=BreakerOut)
     residency: dict[str, ResidencyOut] = Field(default_factory=dict)
     decode_floor: DecodeFloorOut

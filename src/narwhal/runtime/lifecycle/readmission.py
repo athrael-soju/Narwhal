@@ -105,7 +105,7 @@ async def validate_readmission(
                 and previous is not None
                 and (identity.process_start_time_seconds != previous)
             ):
-                router.scheduler.eject(spec.iid)
+                router.scheduler.eject(spec.iid, "process_identity")
                 outcome.fail(spec.iid, "peer process changed before readmission")
             if not spec.attestation_url:
                 outcome.fail(spec.iid, "attestation_url is not configured")
@@ -122,6 +122,7 @@ async def validate_readmission(
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
+                router.attested(spec.iid, payload)
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
                 )
@@ -207,14 +208,14 @@ async def validate_readmission(
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
                 if problems:
-                    router.scheduler.eject(spec.iid)
+                    router.scheduler.eject(spec.iid, "profile_generation")
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 identity_failed = True
                 outcome.fail(
                     spec.iid,
                     f"identity changed or unavailable during validation: {type(exc).__name__}",
                 )
-                router.scheduler.eject(spec.iid)
+                router.scheduler.eject(spec.iid, "process_identity")
         if identity_failed and cfg.engine_restart_policy == "whole_wave":
             router.lifecycle.require_restart_wave(
                 "process identity changed during validation", reset=True

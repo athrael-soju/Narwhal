@@ -88,7 +88,6 @@ nav:
           - Reconciling and accepting: measure/04-Reconcile-and-Accept.md
           - Ordered benchmark points: measure/05-Benchmark-Runner.md
           - Benchmark evidence bundle: measure/06-Benchmark-Evidence.md
-          - GPU benchmark qualification: measure/07-GPU-Qualification.md
           - Cache-aware placement trial: measure/08-Cache-Aware-Trial.md
           - Benchmarking the router: measure/09-Router-Benchmark.md
       - Setting up observability:
@@ -106,6 +105,7 @@ nav:
           - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
           - Release drills: operate/05-Release-Drills.md
           - Controlling the fleet: operate/06-Controlling-the-Fleet.md
+          - Choosing admission, queue and retry settings: operate/07-Admission-Queue-and-Retry-Settings.md
       - Troubleshooting a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md

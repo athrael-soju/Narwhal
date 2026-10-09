@@ -12,7 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.prefix import CacheNamespace
-from narwhal.scheduling.scheduler.occupancy import decode_admits
+from narwhal.scheduling.scheduler.occupancy import decode_refusal
 from narwhal.serving import execution
 from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
@@ -25,7 +25,7 @@ from tests.fixtures import fleet, hold_prefix, invalid_token_choices, put_warm
 from tests.wire import engine_transports
 
 
-class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
+class HttpHarness(unittest.IsolatedAsyncioTestCase):
     """Requests traverse ingress and the real router against a local HTTP transport."""
 
     def setUp(self):
@@ -62,11 +62,15 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         wire = "".join("data: " + json.dumps(frame) + "\n\n" for frame in self.decode_frames)
         return httpx.Response(200, text=wire + "data: [DONE]\n\n")
 
+    def transports(self):
+        """Return the control-pool transport and data-leg dial for the engine handler."""
+        return engine_transports(self.engine)
+
     def client(self):
         """Create the app and register cleanup for its journal, engine client and HTTP client."""
 
         def router(*args, **kwargs):
-            return NarwhalRouter(*args, **engine_transports(self.engine), **kwargs)
+            return NarwhalRouter(*args, **self.transports(), **kwargs)
 
         with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
             app = create_app(self.cfg, journal_path=self.root / "journal.jsonl")
@@ -102,6 +106,10 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.ingress_inflight, 0)
         self.assertFalse(self.router.monitor.waiting)
 
+
+class HttpAccountingTests(HttpHarness):
+    """Admission, retries, body limits and original-request accounting."""
+
     async def test_token_id_prompt_carries_cache_evidence_to_demand_and_journal(self):
         client = self.client()
         scheduler = self.router.scheduler
@@ -136,15 +144,12 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
                     ServingPolicy(
                         queue_capacity=queue,
                         queue_timeout_s=5.0,
-                        prefill_concurrency=4,
-                        decode_concurrency=4,
-                        handoff_timeout_s=5.0,
                     )
                     if queue
                     else ServingPolicy()
                 )
                 client = self.client()
-                self.router.scheduler.eject("e3")
+                self.router.scheduler.eject("e3", "liveness")
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(self.calls, [])
@@ -215,7 +220,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_refusal_on_a_retry_returns_the_refusal(self):
         """Streamed and non-streamed retries that admission refuses return 429 with Retry-After."""
-        self.cfg.serving = replace(self.cfg.serving, max_attempts=2, handoff_timeout_s=5.0)
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=2)
         client = self.client()
         real = execution.prepare_attempt
         attempts = []
@@ -223,7 +228,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         async def prepare(*args, **kwargs):
             attempts.append(1)
             if len(attempts) % 2 == 0:
-                raise PlacementRefused(2.0, decode=True)
+                raise PlacementRefused(2.0, cause="slot_wait")
             return await real(*args, **kwargs)
 
         with patch.object(execution, "prepare_attempt", side_effect=prepare):
@@ -298,9 +303,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retry_repeats_prefill_and_settles_one_original(self):
         """A transient producer failure consumes one retry and records one served request."""
-        self.cfg.serving = ServingPolicy(
-            max_attempts=2, handoff_timeout_s=5, retry_base_s=0.001, retry_cap_s=0.001
-        )
+        self.cfg.serving = ServingPolicy(max_attempts=2, retry_base_s=0.001, retry_cap_s=0.001)
         self.cfg.failure_quarantine_s = 0
         self.prefill_statuses = [503, 200]
         client = self.client()
@@ -418,7 +421,9 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post(client)
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["retry-after"], "1")
-        self.assertEqual(self.terminal_rows()[-1]["refused_cause"], "decode")
+        row = self.terminal_rows()[-1]
+        self.assertEqual((row["refused_cause"], row["reason"]), ("decode", "slot_wait"))
+        self.assertEqual(self.router.outcome_reasons["refused"], {"slot_wait": 1})
         self.assertEqual(self.calls, [])
         for index in range(limit):
             self.router.monitor.finished(decode.iid, f"d{index}")
@@ -431,7 +436,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
         prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
         self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
         with (
-            patch.object(execution, "decode_admits", wraps=decode_admits) as gate,
+            patch.object(execution, "decode_refusal", wraps=decode_refusal) as gate,
             patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
         ):
             self.assertEqual((await self.post(client)).status_code, 200)
@@ -466,7 +471,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exhausted_retry_budget_settles_the_first_attempt(self):
         """With a zero retry budget, the router records the producer failure after one attempt."""
-        self.cfg.serving = ServingPolicy(max_attempts=2, handoff_timeout_s=5, retry_budget=0)
+        self.cfg.serving = ServingPolicy(max_attempts=2, retry_budget=0)
         self.prefill_statuses = [503]
         client = self.client()
         response = await self.post(client)
@@ -489,7 +494,7 @@ class HttpAccountingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_output_started_prevents_retry_after_decode_failure(self):
         """A decode error after the first token ends the stream and records one failed request."""
-        self.cfg.serving = ServingPolicy(max_attempts=3, handoff_timeout_s=5)
+        self.cfg.serving = ServingPolicy(max_attempts=3)
         self.decode_frames.append({"error": {"message": "decode failed"}})
         client = self.client()
         response = await client.post(

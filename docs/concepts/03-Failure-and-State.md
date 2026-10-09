@@ -30,14 +30,16 @@ A successful pass clears the streak and reopens admission. A router restart rese
 
 ### Connection pools
 
-Each engine has two connection pools:
+The router reaches engines through two kinds of connection pool:
 
-| Pool | Carries | Bound | Client |
-| --- | --- | --- | --- |
-| Data | Token counting, prefill and decode | `serving.max_connections` connections, half kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
-| Control | Health probes and inference probes | `engine.control_connections` | HTTPX |
+| Pool | Scope | Carries | Bound | Client |
+| --- | --- | --- | --- | --- |
+| Data | One pool per engine | Token counting, prefill and decode | `serving.max_connections` open connections to each engine, and up to half that number kept alive | HTTP/1.1 on event-loop transports with the `httptools` parser |
+| Control | One pool shared by all engines | Health probes and inference probes | `engine.control_connections` open connections across all engines, and up to half that number kept alive | HTTPX |
 
-Both pools reuse a kept-alive connection for 5 s after its last response. A connection the engine has closed leaves the pool before reuse.
+A data leg waits for a connection to its own engine only, so a busy engine does not hold connections that another engine's legs need. Health and inference probes for every engine share the control pool.
+
+Both pools reuse a kept-alive connection for up to 4 s after its last response. vLLM closes an idle connection after 5 s, so the router stops reusing a connection before the engine closes it. A connection the engine has already closed leaves the pool before reuse.
 
 ### Failure evidence
 
@@ -47,6 +49,7 @@ When an engine's failure streak for one class reaches `recovery.eject_after`, th
 | --- | --- | --- |
 | Connection error or connect timeout | `connection` | Eject the engine |
 | Transport timeout | `timeout` | Run a health probe |
+| [Dropped connection](../telemetry/04-Failures.md#dropped-connections) after the request was sent | `timeout` | Run a health probe |
 | First-token deadline while the engine emits other output | `overload` | Run a health probe |
 | First-token deadline from a silent engine, mid-stream silence, or invalid stream termination | `stream` | Run an inference probe under a placement hold |
 | HTTP 408 or 429 | `overload` | Run a health probe |
@@ -57,7 +60,7 @@ The role-coverage rule counts an engine as covered when every role it places sta
 
 The profile-match rule requires loaded profiles that match the live process generation before a recovery probe clears evidence and holds.
 
-The inference probe runs a prefill leg and a decode leg. On an inconclusive leg, engine monitoring keeps the hold and schedules another probe. When a leg fails, Narwhal ejects a covered engine, and an uncovered engine stays in placement. A successful probe clears recorded inference failures and the hold, under the profile-match rule.
+The inference probe runs a prefill leg and a decode leg. A probe of a decode engine takes its prefill leg on the producer of the failed KV transfer while that producer is live, and otherwise on [another live producer or the held engine itself](../telemetry/04-Failures.md#inference-probe-producers). When the producer's leg fails, the next producer runs the probe. On an inconclusive leg, engine monitoring keeps the hold and schedules another probe. When a leg on the held engine fails, Narwhal ejects a covered engine, and an uncovered engine stays in placement. A successful probe clears recorded inference failures and the hold, under the profile-match rule.
 
 ### Liveness
 
@@ -150,7 +153,7 @@ An operator drain survives healthy responses, resume, and takeover until readmis
 
 ## Serving saturation and retries
 
-With the default `serving.max_attempts` of `1`, each admitted request gets one prefill and one decode attempt. With the default `serving.queue_capacity` of `0`, the router refuses new requests immediately when every admission seat is occupied.
+With the default `serving.max_attempts` of `2`, an admitted request that fails transiently before visible output can retry once on other engines, within its original deadline and the shared retry credits. With the default `serving.queue_capacity` of `0`, the router refuses new requests immediately when every admission seat is occupied.
 
 [Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue a request or [retry](01-Request-and-Topology.md#how-a-request-executes) it within its original deadline.
 

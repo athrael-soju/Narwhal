@@ -32,6 +32,8 @@ Compare the penalty with the time to first token (TTFT) target and the measured 
 
 At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class.
 
+[Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#failure-quarantine) compares placement and client outcomes with `recovery.failure_quarantine_s` at `0` and above it.
+
 An inconclusive inference probe:
 
 - keeps the breaker's placement hold on a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence)

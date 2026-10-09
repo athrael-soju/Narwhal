@@ -33,15 +33,15 @@ class Contract:
 
 
 CONTRACTS: dict[str, Contract] = {
-    FLEET: Contract("narwhal.fleet"),
-    EFFECTIVE_CONFIG: Contract("narwhal.effective-config"),
+    FLEET: Contract("narwhal.fleet", 2),
+    EFFECTIVE_CONFIG: Contract("narwhal.effective-config", 2),
     PROFILES: Contract("narwhal.profiles"),
     HANDOFF: Contract("narwhal.handoff"),
     LEASE: Contract("narwhal.router-lease"),
     LIFECYCLE: Contract("narwhal.lifecycle"),
     JOURNAL: Contract("narwhal.journal"),
     STATE: Contract("narwhal.state"),
-    METRICS: Contract("narwhal.metrics"),
+    METRICS: Contract("narwhal.metrics", 2),
     ATTESTATION: Contract("narwhal.attestation"),
     CLI: Contract("narwhal.contract-manifest"),
     COMMAND_RESULT: Contract("narwhal.command-result"),

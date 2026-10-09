@@ -6,13 +6,14 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
-from .records import overloaded_response
+from .outcomes import INFLIGHT_LIMIT_MESSAGE
+from .records import deadline_response, overloaded_response
 from .response import RequestStreamResponse
 from .saturation import saturated
 
@@ -28,10 +29,15 @@ class BodyTooLarge(Exception):
 
 
 async def _overloaded(
-    state: RequestLifecycle, message: str, scope: Scope, receive: Receive, send: Send
+    state: RequestLifecycle,
+    message: str,
+    reason: str,
+    scope: Scope,
+    receive: Receive,
+    send: Send,
 ) -> None:
     """Reject one request before its body is read."""
-    response = overloaded_response(state, message)
+    response = overloaded_response(state, message, reason=reason)
     response.headers["x-request-id"] = state.rid
     # No admission seat is available to retain a blocked error writer.
     async with asyncio.timeout(0):
@@ -58,14 +64,14 @@ class ServingIngress:
         scope[LIFECYCLE] = state
         limit = router.max_concurrent + router.cfg.serving.queue_capacity
         if router.ingress_inflight >= limit:
-            await _overloaded(state, "HTTP retention limit reached", scope, receive, send)
+            await _overloaded(state, INFLIGHT_LIMIT_MESSAGE, "inflight_limit", scope, receive, send)
             return
         if saturated(router):
             message = (
                 f"router saturated: loop lag {router.loop_lag_s:.2f}s, "
                 f"request sizing {router.sizing_delays.median():.2f}s"
             )
-            await _overloaded(state, message, scope, receive, send)
+            await _overloaded(state, message, "saturated", scope, receive, send)
             return
         router.ingress_inflight += 1
         router.ingress_high_water = max(router.ingress_high_water, router.ingress_inflight)
@@ -78,6 +84,7 @@ class ServingIngress:
                 MutableHeaders(scope=message)["x-request-id"] = state.rid
                 status = message["status"]
                 if status >= 400 and state.terminal is None:
+                    # Routes settle their own refusals; this records any other early status.
                     terminal = "invalid" if status in (400, 404, 413, 422) else "rejected"
                     state.finish(terminal, error=f"HTTP {status} before dispatch", status=status)
             await send(message)
@@ -87,28 +94,21 @@ class ServingIngress:
             async with state.ingress_timer:
                 await self.app(scope, receive, record_start)
         except TimeoutError:
-            state.finish("expired", error="original request deadline expired", status=504)
+            response = deadline_response(state, headers={"x-request-id": state.rid})
             if started:
                 raise
             # A zero timeout cancels the write as soon as it blocks.
             async with asyncio.timeout(0):
-                await JSONResponse(
-                    {
-                        "error": {
-                            "type": "request_expired",
-                            "message": "original request deadline expired",
-                        }
-                    },
-                    status_code=504,
-                    headers={"x-request-id": state.rid},
-                )(scope, receive, send)
+                await response(scope, receive, send)
         except ClientDisconnect:
             state.finish("cancelled")
         except asyncio.CancelledError:
             state.finish("cancelled")
             raise
         except BaseException:
-            state.finish("failed", error="HTTP request execution failed", status=500)
+            state.finish(
+                "failed", error="HTTP request execution failed", status=500, reason="internal"
+            )
             raise
         finally:
             state.finish("cancelled")

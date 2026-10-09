@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator
+import math
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -14,26 +15,35 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult
 from ..engines.stream import SseEvent, rewrite_sse, sse_token_bearing, sse_token_ids
-from ..runtime.standby import control_ready
-from ..scheduling.scheduler.occupancy import decode_admits
+from ..scheduling.prefill import prefill_seconds
+from ..scheduling.scheduler.occupancy import decode_refusal
 from ..types import Instance, Phase, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
-from .lifecycle import RequestExpired, RequestLifecycle
-from .records import forward_headers, refuse_request
+from .dispatch import placement_hold
+from .handoff import handoff_bound
+from .lifecycle import RequestLifecycle
+from .outcomes import (
+    NoEngine,
+    RequestExpired,
+    ResponseLimitExceeded,
+    RouterHeld,
+    error_response,
+    failure_reason,
+)
+from .records import (
+    deadline_response,
+    forward_headers,
+    not_ready_response,
+    refuse_request,
+    ttft_refusal_cause,
+)
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
+from .seats import decode_seat_map
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
-
-
-class NoEngine(Exception):
-    """No eligible engine can receive this phase in queue-free serving."""
-
-
-class ResponseLimitExceeded(ValueError):
-    """A response exceeds local retention policy, without backend failure evidence."""
 
 
 @dataclass
@@ -50,28 +60,19 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
     """Reject unsupported models and sampling widths before recording demand."""
     asked = body.get("model")
     if asked and asked != router.cfg.model:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": {
-                    "message": f"model {asked!r} is not served here; "
-                    f"this router serves {router.cfg.model!r}",
-                    "type": "invalid_request_error",
-                    "code": "model_not_found",
-                }
-            },
+        return error_response(
+            404,
+            "invalid_request_error",
+            f"model {asked!r} is not served here; this router serves {router.cfg.model!r}",
+            code="model_not_found",
         )
     for field in ("n", "best_of"):
         if int(body.get(field) or 1) > 1:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": f"{field} > 1 cannot be served across a split: the prefill leg "
-                        "runs with max_tokens=1 and the two legs would disagree on sampling width",
-                        "type": "invalid_request_error",
-                    }
-                },
+            return error_response(
+                400,
+                "invalid_request_error",
+                f"{field} > 1 cannot be served across a split: the prefill leg "
+                "runs with max_tokens=1 and the two legs would disagree on sampling width",
             )
     return None
 
@@ -94,6 +95,14 @@ def _failed_leg(
     if isinstance(exc, RequestExpired | ResponseLimitExceeded):
         return
     router = state.router
+    # A retry avoids every engine whose leg failed for this request.
+    if decode:
+        state.failed_engines["decode"].add(inst.iid)
+        # Without output, the producer's KV handoff may be the fault.
+        if not state.output_started and state.prefill_iid is not None:
+            state.failed_engines["prefill"].add(state.prefill_iid)
+    else:
+        state.failed_engines["prefill"].add(inst.iid)
     router.verifier.leg_failed(
         inst.iid,
         exc,
@@ -109,42 +118,118 @@ def _failed_leg(
 
 
 async def _place(
-    state: RequestLifecycle, *, prefill: bool, handoff_deadline: float | None = None
+    state: RequestLifecycle,
+    *,
+    prefill: bool,
+    claim: Callable[[Instance], None],
+    handoff_deadline: float | None = None,
 ) -> Instance:
+    """Place one leg and claim its engine before returning it.
+
+    A prefill-seat wait ends at the remaining `serving.queue_timeout_s`, and a decode-seat
+    wait at the KV handoff bound. Both end at the original request deadline.
+    """
     router, req = state.router, state.request
-    if prefill and not control_ready(router):
-        raise NoEngine("router control is fenced")
-    req.phase = Phase.PREFILL if prefill else Phase.DECODE
+    phase = Phase.PREFILL if prefill else Phase.DECODE
+    hold = placement_hold(router, phase)
+    if hold:
+        raise RouterHeld(hold)
+    req.phase = phase
+    failed = state.failed_engines["prefill" if prefill else "decode"]
     if router.cfg.serving.queue_capacity:
         state.phase = "queue"
         began = router._clock()
+        deadline, wait_s = state.deadline, None
+        if prefill:
+            wait_s = state.queue_budget_s
+        elif handoff_deadline is not None:
+            deadline = min(deadline, handoff_deadline)
         try:
-            deadline = (
-                min(state.deadline, handoff_deadline)
-                if handoff_deadline is not None
-                else state.deadline
+            return await state.wait(
+                lambda: router.dispatcher.place(
+                    req,
+                    deadline=deadline,
+                    claim=claim,
+                    exclude=failed,
+                    wait_s=wait_s,
+                    check=(lambda: price_waiting(state)) if prefill else None,
+                )
             )
-            inst = await state.wait(lambda: router.dispatcher.place(req, deadline=deadline))
-            return inst
         except QueueExpired as exc:
+            # The wait timer can fire just before the bound on the router clock.
             if (
-                handoff_deadline is not None
-                and router._clock() >= handoff_deadline < state.deadline
+                exc.at_deadline
+                and handoff_deadline is not None
+                and handoff_deadline < state.deadline
             ):
                 raise HandoffExpired(
-                    "KV handoff expired while waiting for decode capacity"
+                    "KV handoff bound reached while waiting for a decode seat"
                 ) from exc
             raise
         finally:
-            state.queue_wait_s += router._clock() - began
-    if router.lifecycle_blocked:
-        raise NoEngine(router.lifecycle_blocked)
+            state.waited("prefill" if prefill else "decode", router._clock() - began)
     try:
-        return router.scheduler.schedule(req)
+        inst = router.scheduler.schedule(req, exclude=set(failed))
     except RuntimeError as exc:
         raise NoEngine(
             "no schedulable engines" + (" after prefill" if not prefill else "")
         ) from exc
+    claim(inst)
+    return inst
+
+
+def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:
+    """Return the projected TTFT on `prefill` and record its parts on the request."""
+    router, req = state.router, state.request
+    placement = router.scheduler.prefill_admission_price(req, prefill)
+    elapsed = max(0.0, router._clock() - state.arrived)
+    profile = router.profiles.get(prefill.iid)
+    own = prefill_seconds(profile, req) if profile is not None else None
+    finite = math.isfinite(placement)
+    state.admission_price = {
+        "attempt": state.attempts + 1,
+        # Resident prefill work and any probation penalty on the priced engine.
+        "backlog_s": placement - own if finite and own is not None else None,
+        "own_prefill_s": own,
+        "elapsed_s": elapsed,
+        "price_s": placement + elapsed if finite else None,
+    }
+    return placement + elapsed
+
+
+def _check_ttft(state: RequestLifecycle, priced: float) -> None:
+    """Refuse a projected TTFT above the predictive budget."""
+    router, req = state.router, state.request
+    if not router.scheduler.meets_slo(req, (0.0, priced), ttft_margin=router.cfg.admission_margin):
+        raise PlacementRefused(priced, cause=ttft_refusal_cause(router, req, priced))
+
+
+def price_waiting(state: RequestLifecycle) -> float | None:
+    """Price a waiting first attempt on its cheapest prefill candidate.
+
+    In predictive mode, raise `PlacementRefused` once the projected TTFT exceeds the budget.
+    Otherwise return the router-clock time at which the time already waited alone pushes
+    the price past the budget, so the wait prices the request again then.
+    """
+    router, req = state.router, state.request
+    if router.cfg.admission != "predictive" or state.attempts:
+        return None
+    scheduler = router.scheduler
+    candidates = scheduler.role_pool(
+        Role.PREFILL, scheduler.live_instances(exclude=state.failed_engines["prefill"])
+    )
+    if not candidates:
+        return None
+    phase, req.phase = req.phase, Phase.PREFILL
+    try:
+        placements = {inst.iid: scheduler.prefill_admission_price(req, inst) for inst in candidates}
+        cheapest = min(candidates, key=lambda inst: (placements[inst.iid], inst.iid))
+        priced = _price_admission(state, cheapest)
+        _check_ttft(state, priced)
+    finally:
+        req.phase = phase
+    budget = router.cfg.slo.ttft_s * (1.0 + router.cfg.admission_margin)
+    return state.arrived + budget - placements[cheapest.iid]
 
 
 async def _prepare_once(
@@ -155,31 +240,45 @@ async def _prepare_once(
 ) -> PreparedAttempt:
     router, req = state.router, state.request
     req.prefill_instance = None
+    # A hold that drains engines answers before their absence does.
+    hold = placement_hold(router, Phase.PREFILL)
+    if hold:
+        raise RouterHeld(hold)
     for role in (Role.PREFILL, Role.DECODE):
         if not router.scheduler.role_placeable(role):
             raise NoEngine(f"no schedulable engines for the {role.value} role")
-    prefill = await _place(state, prefill=True)
-    if router.cfg.admission == "predictive":
-        priced = router.scheduler.prefill_admission_price(req, prefill)
-        priced += max(0.0, router._clock() - state.arrived)
-        if not router.scheduler.meets_slo(
-            req, (0.0, priced), ttft_margin=router.cfg.admission_margin
+        failed = state.failed_engines[role.value]
+        if failed and not router.scheduler.role_pool(
+            role, router.scheduler.live_instances(exclude=failed)
         ):
-            raise PlacementRefused(priced)
-        if not decode_admits(
-            router.scheduler,
-            req,
-            ready_s=router.scheduler.prefill_ready_s(req, prefill),
-            ttft_s=priced,
-            ttft_margin=router.cfg.admission_margin,
-            concurrency=router.cfg.serving.decode_concurrency,
-            expected_output=router.controller.demand.output_estimator(),
-        ):
-            raise PlacementRefused(priced, decode=True)
+            raise NoEngine(f"no {role.value} engine remains after failed attempts")
+    retry = state.attempts > 0
+
+    def admit_prefill(prefill: Instance) -> None:
+        # Price before the claim, so the engine's resident queue excludes this request.
+        # Open admission records the same price without enforcing it.
+        priced = _price_admission(state, prefill)
+        if router.cfg.admission == "predictive":
+            # A retry already passed the TTFT price; it rechecks decode as a fresh handoff.
+            if not retry:
+                _check_ttft(state, priced)
+            check = decode_refusal(
+                router.scheduler,
+                req,
+                ready_s=router.scheduler.prefill_ready_s(req, prefill),
+                ttft_s=None if retry else priced,
+                ttft_margin=router.cfg.admission_margin,
+                seats=decode_seat_map(router),
+                expected_output=router.controller.demand.output_estimator(),
+            )
+            if check is not None:
+                raise PlacementRefused(priced, cause=check)
+        state.reserve(prefill)
+
+    prefill = await _place(state, prefill=True, claim=admit_prefill)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
-    state.reserve(prefill)
     began = router._clock()
     try:
         kv = await state.wait(
@@ -195,13 +294,10 @@ async def _prepare_once(
     state.prefilled_at = router._clock()
     router.scheduler.record_answer(prefill.iid, "prefill")
     router.monitor.first_token(prefill.iid, req.rid)
-    handoff_s = router.cfg.serving.handoff_timeout_s
-    # The handoff age counts from local prefill dispatch, before the remote lease starts.
-    expires_at = began + handoff_s if handoff_s else None
-    if expires_at is not None and router._clock() >= expires_at:
-        raise HandoffExpired("prefill consumed the configured KV handoff age allowance")
-    decode = await _place(state, prefill=False, handoff_deadline=expires_at)
-    state.reserve(decode)
+    # The producer's lease starts when prefill completes.
+    bound = handoff_bound(router, prefill.iid)
+    expires_at = None if bound is None else state.prefilled_at + bound
+    decode = await _place(state, prefill=False, claim=state.reserve, handoff_deadline=expires_at)
     state.decode_iid = decode.iid
     state.phase = "decode"
     return PreparedAttempt(prefill, decode, kv, expires_at)
@@ -225,25 +321,34 @@ async def prepare_attempt(
 
 def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
     """Settle the request and keep its error response for streamed and buffered replies."""
-    response = (
-        refuse_request(state, exc.predicted_s, decode=exc.decode)
-        if isinstance(exc, PlacementRefused)
-        else _failure(state, exc)
-    )
+    if isinstance(exc, PlacementRefused):
+        response = refuse_request(state, exc)
+    elif isinstance(exc, RouterHeld):
+        response = not_ready_response(state.router, state, reason=str(exc))
+    else:
+        response = _failure(state, exc)
     state.outcome["response"] = response
     return response
 
 
 def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
+    reason = failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline)
+    if reason == "deadline" and not state.output_started:
+        # Ingress answers the same deadline; both give the client one body.
+        return deadline_response(state)
     status = _status_of(exc)
-    expired = isinstance(exc, RequestExpired | QueueExpired)
+    expired = isinstance(exc, RequestExpired | QueueExpired | HandoffExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
     kind = "expired" if expired else state.phase
+    if isinstance(exc, HandoffExpired):
+        kind = "handoff_expired"
     if isinstance(exc, NoEngine):
         kind = "backend_unavailable" if state.attempts else "no_schedulable_engines"
     if isinstance(exc, NoEngine):
         public_detail = "Engine capacity is unavailable"
-    elif isinstance(exc, RequestExpired | QueueExpired | HandoffExpired):
+    elif isinstance(exc, HandoffExpired):
+        public_detail = "KV handoff expired before decode dispatch"
+    elif isinstance(exc, RequestExpired | QueueExpired):
         public_detail = "Request deadline expired"
     elif isinstance(exc, ResponseLimitExceeded):
         public_detail = "Response exceeds the configured limit"
@@ -251,13 +356,27 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         public_detail = "Invalid non-streaming upstream response"
     else:
         public_detail = "Upstream request failed"
-    state.finish("expired" if expired else "failed", error=detail, status=status)
-    state.outcome["public_error"] = public_detail
-    return JSONResponse(
-        status_code=status,
+    # An unregistered status and type raises here, before the outcome settles.
+    response = error_response(
+        status,
+        kind,
+        public_detail,
         headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
-        content={"error": {"message": public_detail, "type": kind, "code": kind}},
+        code=kind,
     )
+    terminal = "expired" if expired else "failed"
+    # After output starts, the stream's terminal event carries the phase and terminal state.
+    error_type, error_code = (state.phase, terminal) if state.output_started else (kind, kind)
+    state.finish(
+        terminal,
+        error=detail,
+        status=status,
+        reason=reason,
+        error_type=error_type,
+        error_code=error_code,
+    )
+    state.outcome["public_error"] = public_detail
+    return response
 
 
 def _failure_response(state: RequestLifecycle) -> JSONResponse:
@@ -287,6 +406,8 @@ async def serve_request(
             req.cache_checked_at = router._clock()
         finally:
             router.sizing_delays.add(router._clock() - sizing)
+        # Prefill seats follow the mean sized input length.
+        router.input_lengths.add(req.input_len)
         if state.demand_observation is not None:
             req.demand_arrival = router.controller.demand.resize_arrival(
                 state.demand_observation,
@@ -344,8 +465,9 @@ async def _decode_attempt(
 ) -> AsyncGenerator[RelayBatch, None]:
     router = state.router
     # A lost router lease fences new prefills; a dispatched original may still decode.
-    if router.cfg.engine_restart_policy == "whole_wave" and router.lifecycle_blocked:
-        raise NoEngine("whole-wave restart hold")
+    hold = placement_hold(router, Phase.DECODE)
+    if hold:
+        raise RouterHeld(hold)
     if prepared.expires_at is not None and router._clock() >= prepared.expires_at:
         raise HandoffExpired("KV handoff expired before decode dispatch")
     state.phase = "decode"

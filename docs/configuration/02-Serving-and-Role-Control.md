@@ -12,14 +12,31 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
 | `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
-| `serving.max_connections`    | `512`          | Global admitted-request limit and data connection pool size.           | At least 1                                             |
-| `engine.control_connections` | `0`            | Control connection pool size, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
+| `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
+| `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 In `predictive` mode, the router returns HTTP 429 when a request fails the time to first token (TTFT) check or the decode admission check. `open` mode disables predictive refusals.
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
-Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy.
+Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit) gives the client outcomes of each mode and limit.
+
+#### In-flight limit
+
+The in-flight limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`. At most that many requests hold an admission seat at once. With `serving.queue_capacity` above 0, up to that many more requests wait for a seat.
+
+The router counts a completion request against the limit from its arrival, before it reads the body, until its response ends. When the requests it counts reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429, error type `server_overloaded_error` and message `router in-flight limit reached`. It sends the 429 before parsing the body and counts the request as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers) with rejection reason `inflight_limit`.
+
+`/metrics` reports the admission seats in use as `narwhal_admission_inflight`, the limit as `narwhal_admission_inflight_limit`, and the counted requests as `narwhal_http_retained` against `narwhal_http_retained_limit`.
+
+#### Router saturation
+
+The router also answers HTTP 429 with rejection reason `saturated` when either signal reaches a quarter of `slo.ttft_s`:
+
+- event-loop lag, the lateness of a 50 ms wake-up probe
+- the median time to count tokens and hash prefixes for at least 8 requests sized in the last 2 seconds
+
+`/metrics` reports the signals as `narwhal_router_loop_lag_seconds` and `narwhal_request_sizing_delay_seconds`, and their threshold as `narwhal_saturation_threshold_seconds`.
 
 #### Decode admission check
 
@@ -27,7 +44,7 @@ The decode admission check projects when each request holds a slot in the decode
 
 The check admits the request outright when the fleet has zero live decode engines, or when any live decode engine's profile or profiled `decode_max_requests` is unset.
 
-Each request holds one slot. The pool's slot count is the sum of each live decode engine's `decode_max_requests`, capped per engine by `serving.decode_concurrency` when that setting is positive.
+Each request holds one slot. The pool's slot count is the sum of each live decode engine's [decode seats](#engine-seats).
 
 | Request                                    | Reaches decode                      | Holds a slot                                                                       |
 | ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- |
@@ -82,33 +99,86 @@ The check admits the request when all three of these pass:
 | KV tokens | Peak request KV during the checked request's hold fits the sum of the live decode engines' [decode KV token bounds](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request is alone in decode during its hold |
 | TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents still generating on that engine, or the request misses `slo.tpot_s` on every idle decode engine                               |
 
-### 4.2 Waiting, phase concurrency, and retries
+#### Retry pricing
+
+In `predictive` mode, only an original request's first attempt is priced against the TTFT check. An attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
+
+### 4.2 Waiting, engine seats, and retries
 
 | Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
-| `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline.                                                      | Positive when `serving.queue_capacity` is positive                         |
-| `serving.prefill_concurrency` | `0`        | Maximum resident prefill requests per engine.                                                                         | Positive when `serving.queue_capacity` is positive                         |
-| `serving.decode_concurrency`  | `0`        | Maximum resident decode requests per engine.                                                                          | Positive when `serving.queue_capacity` is positive                         |
-| `serving.handoff_timeout_s`   | `0.0`      | Maximum KV handoff age from the start of the prefill HTTP request, with `0` meaning the request deadline.             | Positive and below the verified backend KV lease when queueing or retrying |
-| `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
+| `serving.queue_timeout_s`     | `0.0`      | Most time one request waits for an admission seat and prefill seats combined, capped by the original request deadline. | Positive when `serving.queue_capacity` is positive                         |
+| `serving.max_attempts`        | `2`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                                              | At least `serving.retry_base_s`                                            |
-| `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit.                              | Zero or greater                                                            |
+| `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit when it dispatches.          | Zero or greater                                                            |
 | `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request.                                                                 | 0 to 1                                                                     |
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                                       | At least 1                                                                 |
 | `serving.max_response_bytes`  | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output. | At least 1                                                                 |
 
-When `serving.decode_concurrency` is positive, role control prices each engine's decode capacity at that limit. Each candidate split's decode load is at least:
+#### Queue waits
+
+With `serving.queue_capacity` above `0`, a request can wait at three stages. Each wait has its own bound:
+
+| Wait           | The request waits while                                                                         | The wait ends at                                                                                                         | Response when the bound ends the wait     |
+| -------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| Admission seat | Requests hold every seat under the [in-flight limit](#in-flight-limit)                          | `serving.queue_timeout_s`                                                                                                | HTTP `504`, error type `queue_expired`    |
+| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full          | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left    | HTTP `504`, error type `expired`          |
+| Decode seat    | Every engine that can take the decode leg has its decode seats full                             | The producer's [KV handoff bound](#kv-handoff-bound)                                                                     | HTTP `504`, error type `handoff_expired`  |
+
+The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. The router sets each wait's timer at its bound, and the timer fires when the router's event loop runs it. Under event-loop lag, reported as `narwhal_router_loop_lag_seconds`, a wait can run past its bound by about the lag, and a seat that frees in that time still serves the request. The [router saturation](#router-saturation) check rejects new requests once the lag reaches a quarter of `slo.ttft_s`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
+
+A request with no queue budget left still takes a free prefill seat, but it does not wait for one.
+
+Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat. An arriving request therefore meets a full queue only while requests hold every seat.
+
+In `predictive` mode, the router prices an original request's first attempt when it starts an admission-seat or prefill-seat wait. It prices the request again each time the wait wakes. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. The price grows with the time waited, so the router also prices the request when that growth alone would exceed the TTFT budget. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+
+The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#51-prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
+
+A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
+
+| Hold begins                                                                     | Requests that end with the 503                                                                     | Requests that continue                                        |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [Whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
+| Degraded engine monitoring                                                      | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
+| Lost or failed router lease                                                     | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
+
+A request in its prefill leg when a whole-wave hold begins receives the 503 when its prefill completes. The router also returns the 503 to a request that reaches prefill placement during a whole-wave hold. The same applies while the router is standby, fenced or in degraded engine monitoring.
+
+#### Engine seats
+
+The router derives each engine's prefill and decode seats from engine evidence:
+
+| Seats   | Value |
+| ------- | ----- |
+| Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
+| Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
+
+The attested sequence limit is the `--max-num-seqs` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. An engine launched without `--max-num-seqs` takes its decode seats from the profile alone.
+
+The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
+
+The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
+
+`/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
+
+#### KV handoff bound
+
+After prefill, the producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
+
+The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#33-attestation). It derives the producer's handoff bound:
 
 ```text
-(decode residents on decode-role engines + requests waiting for a decode slot)
-  / (serving.decode_concurrency * max(current decode engines, candidate decode engines))
+handoff bound = kv_lease_duration - kv_lease_duration // 6
 ```
 
-The admission limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`.
+At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtime.kv_lease_s`](05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets the lease.
 
-The router retains at most the admission limit plus `serving.queue_capacity` completion requests. At that ceiling, the router answers a new request with HTTP 429 before parsing its body and counts it as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers).
+The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
+
+When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 
@@ -123,13 +193,16 @@ Any of these ends the request:
 - cancellation
 - any failure after visible output
 
+A retry avoids each engine whose leg failed earlier in the same request. When no engine remains for a role, the request ends with HTTP 503. [Retries](../http-api/03-Backend-and-Failures.md#retries) gives the placement rules, the retry credit and the exact-count failures that move between engines.
+
 The original request deadline covers tokenization, queue wait, retry backoff, engine work, and client writes.
 
 Tune queueing and retries:
 
-1. Set queue capacity, phase concurrency, and deadlines from the workload's measured latency and capacity.
-2. Verify that the backend releases abandoned KV handoffs when the lease expires.
-3. After any change to queueing, concurrency limits, KV handoff expiry, retries, or byte limits, measure again.
+1. Read [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value and when to change it.
+2. Set queue capacity and deadlines from the workload's measured latency and capacity.
+3. Verify that the backend releases abandoned KV handoffs when the lease expires.
+4. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
 
 ### 4.3 Streaming failure semantics
 
@@ -156,6 +229,8 @@ Fit client-side retries inside the caller's remaining deadline.
 Placement selects the lowest-cost engine that passes the role, availability, exclusion, and projected service-level objective (SLO) filters. Ties go to the lowest instance ID.
 
 When every candidate violates its projected SLO, placement selects the lowest-cost candidate as an unserved placement.
+
+A decode leg avoids its producer, the engine that ran its prefill. On its producer, the decode leg reuses that engine's local prefix cache and never pulls the KV handoff. The producer then holds the handoff's KV blocks until its lease expires. Placement puts the decode leg on the producer only when no other engine in the decode pool can take it. The rule applies when a role change moves a producer into the decode pool, including while its requests wait for a decode seat.
 
 A live role change:
 
@@ -211,7 +286,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | `serving.prefill_timeout_s`           | `120.0` | Elapsed-time deadline for the prefill leg.                                                  | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_timeout_s`        | `2.5`   | Deadline to the first decode token.                                                         | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_calibration_path` | `""`    | Path to a completed first-token calibration artifact under `runs/`.                         |                                               |
-| `engine.decode_read_timeout_s`        | `60.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
+| `engine.decode_read_timeout_s`        | `10.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
 | `engine.tokenize`                     | `true`  | Requests exact token counts for text and chat input from the dialect tokenization endpoint. |                                               |
 | `engine.tokenize_timeout_s`           | `2.0`   | Elapsed-time deadline for an exact token count.                                             | Positive                                      |
 | `engine.chars_per_token`              | `3.8`   | Characters per token for the fallback estimate.                                             | Positive                                      |
@@ -257,7 +332,7 @@ Preflight and router startup respond to these conditions:
 
 ### 6.3 Decode stream gaps
 
-Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget.
+Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget. [Decode stream gaps](../operate/07-Admission-Queue-and-Retry-Settings.md#decode-stream-gaps) gives the client outcome of a positive limit and of `0`.
 
 Disable the gap limit:
 

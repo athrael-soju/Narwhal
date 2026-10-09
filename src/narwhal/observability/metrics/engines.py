@@ -90,7 +90,53 @@ def render_availability(state: dict) -> list[str]:
         "gauge",
         [({"iid": iid}, 1) for iid in state.get("quarantined", [])],
     )
+    holds = state.get("holds") or {}
+    out += metric_lines(
+        "narwhal_engine_held",
+        "1 while a hold of this kind, timed quarantine or inference, excludes the engine",
+        "gauge",
+        [
+            ({"iid": row.get("iid", ""), "kind": kind}, 1)
+            for kind in ("timed", "inference")
+            for row in holds.get(kind, [])
+        ],
+    )
     breaker = state.get("breaker") or {}
+    out += _count_lines(
+        breaker,
+        "ejections",
+        "narwhal_engine_ejections_total",
+        "Engine ejections since router start, by cause",
+        ("iid", "cause"),
+    )
+    out += _count_lines(
+        breaker,
+        "hold_starts",
+        "narwhal_engine_hold_starts_total",
+        "Placement holds started since router start, by hold kind",
+        ("iid", "kind"),
+    )
+    out += _count_lines(
+        breaker,
+        "hold_ends",
+        "narwhal_engine_hold_ends_total",
+        "Placement holds ended since router start, by hold kind and cause",
+        ("iid", "kind", "cause"),
+    )
+    out += _count_lines(
+        breaker,
+        "probes",
+        "narwhal_engine_probes_total",
+        "Engine verification probe outcomes since router start, by probe kind",
+        ("iid", "kind", "outcome"),
+    )
+    out += _count_lines(
+        breaker,
+        "readmissions",
+        "narwhal_engine_readmissions_total",
+        "Ejected engines returned to placement since router start, by recovery evidence",
+        ("iid", "evidence"),
+    )
     streak_samples: list[tuple[Mapping[str, str], float | int]] = [
         ({"iid": iid, "class": klass}, count)
         for iid, row in sorted((breaker.get("failures") or {}).items())
@@ -131,6 +177,21 @@ def render_availability(state: dict) -> list[str]:
         [({}, floor.get("cumulative_s", 0.0))],
     )
     return out
+
+
+def _count_lines(
+    breaker: Mapping, key: str, name: str, help_text: str, labels: tuple[str, ...]
+) -> list[str]:
+    """Render one counter family from the breaker's count rows."""
+    return metric_lines(
+        name,
+        help_text,
+        "counter",
+        [
+            ({label: str(row.get(label, "")) for label in labels}, row.get("count", 0))
+            for row in breaker.get(key, [])
+        ],
+    )
 
 
 def render_work(state: dict) -> list[str]:

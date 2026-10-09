@@ -6,10 +6,13 @@ import asyncio
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from ...engines.client import EngineError
 from ...engines.prefix import CacheNamespace, non_negative_ints, prefix_identities
 from ...types import Instance, Request
 from ..completion import cacheable_render
+from ..retry import transient
 
 if TYPE_CHECKING:
     from ...config.model import EngineContract
@@ -54,7 +57,8 @@ class RequestSizer:
     ) -> tuple[int, dict[str, int], dict[str, int], dict[int, list[bytes]]]:
         """Return the input token count and the prefix-cache evidence for the prompt.
 
-        A failed exact count raises EngineError and backs off that engine.
+        A transient exact-count failure backs off its engine and moves the count to another
+        live engine; the last or a non-transient failure raises EngineError.
         """
         prompt = body.get("prompt")
         if (
@@ -66,30 +70,47 @@ class RequestSizer:
             return len(prompt), *(await self._cache_evidence(body, prompt))
         if self.router.cfg.tokenize:
             live = self.router.scheduler.live_instances()
-            if live:
-                engine = self._tokenize_engine(live)
+            attempts = min(len(live), self.router.cfg.serving.max_attempts)
+            tried: set[str] = set()
+            # Each failed count moves to another live engine, up to `serving.max_attempts`.
+            for attempt in range(1, attempts + 1):
+                engine = self._tokenize_engine(live, tried)
+                tried.add(engine.iid)
                 try:
                     got = await self.router.engines.tokenize(
                         engine.url, body, self.router.cfg.tokenize_timeout_s, strict=True
                     )
-                except EngineError:
-                    failures = self.backoff.get(engine.iid, (0, 0.0))[0] + 1
-                    delay = min(
-                        TOKENIZE_BACKOFF_S * 2 ** min(failures - 1, 16), TOKENIZE_BACKOFF_MAX_S
-                    )
-                    self.backoff[engine.iid] = (failures, self.router._clock() + delay)
-                    raise
-                if got is not None:
-                    self.backoff.pop(engine.iid, None)
-                    ids = got.token_ids
-                    if ids is None:
-                        return got.count, {}, {}, {}
-                    return got.count, *(await self._cache_evidence(body, ids))
+                except EngineError as exc:
+                    self._count_failed(engine, exc)
+                    # An engine rejecting the prompt itself fails the count everywhere.
+                    if attempt == attempts or not transient(exc):
+                        raise
+                    continue
+                if got is None:
+                    break
+                self.backoff.pop(engine.iid, None)
+                if got.token_ids is None:
+                    return got.count, {}, {}, {}
+                return got.count, *(await self._cache_evidence(body, got.token_ids))
         return self.estimate_length(body), {}, {}, {}
 
-    def _tokenize_engine(self, live: list[Instance]) -> Instance:
-        """Pick the least-occupied live engine outside its count backoff, rotating among ties."""
+    def _count_failed(self, engine: Instance, exc: EngineError) -> None:
+        """Back off `engine` and record breaker evidence for its failed count."""
+        failures = self.backoff.get(engine.iid, (0, 0.0))[0] + 1
+        delay = min(TOKENIZE_BACKOFF_S * 2 ** min(failures - 1, 16), TOKENIZE_BACKOFF_MAX_S)
+        self.backoff[engine.iid] = (failures, self.router._clock() + delay)
+        # A wrapped transport failure is the evidence; an engine status stands for itself.
+        cause = exc.__cause__
+        evidence = cause if isinstance(cause, httpx.HTTPError | TimeoutError) else exc
+        self.router.verifier.leg_failed(engine.iid, evidence)
+
+    def _tokenize_engine(self, live: list[Instance], tried: set[str]) -> Instance:
+        """Pick the least-occupied untried live engine outside its count backoff.
+
+        Ties rotate between requests.
+        """
         now = self.router._clock()
+        live = [i for i in live if i.iid not in tried]
         candidates = [i for i in live if self.backoff.get(i.iid, (0, 0.0))[1] <= now] or live
         self._turn += 1
         start = self._turn % len(candidates)

@@ -1,6 +1,7 @@
 """Compare reference tables with the configuration, parsers and schema registry."""
 
 import argparse
+import ast
 import importlib
 import json
 import re
@@ -13,6 +14,7 @@ from narwhal.config import SLO, EngineContract, EngineSpec, FleetConfig
 from narwhal.config.serialization import document
 from narwhal.contracts import CONTRACTS
 from narwhal.dev.template import default_template, reference
+from narwhal.serving.outcomes import ERROR_RESPONSES
 from tests.fixtures import ROOT
 
 
@@ -29,16 +31,40 @@ def parser_actions(parser):
                 yield from parser_actions(child)
 
 
+def error_table_rows(text):
+    """Yield the HTTP and error `type` cells of each row in tables that carry both columns."""
+    columns = None
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            columns = None
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if columns is None:
+            if "HTTP" in cells and "Error `type`" in cells:
+                columns = cells.index("HTTP"), cells.index("Error `type`")
+            continue
+        if set(line) <= set("|-: "):
+            continue
+        yield cells[columns[0]], cells[columns[1]]
+
+
 class DocumentationContractTests(unittest.TestCase):
     def test_configuration_literal_defaults(self):
-        """Backticked JSON defaults agree with their owning configuration fields."""
+        """Backticked JSON defaults agree with their owning configuration fields.
+
+        The settings guide states the same defaults, so it is checked with the reference.
+        """
         engine = asdict(EngineSpec("e0", "http://stub"))
         contract = EngineContract().fields()
         cfg = FleetConfig(model="stub", engines=[EngineSpec("e0", "http://stub")], slo=SLO(1, 1))
         fleet = document(cfg)
         section = ""
         checked = 0
-        for page in sorted((ROOT / "docs/configuration").glob("*.md")):
+        pages = [
+            *sorted((ROOT / "docs/configuration").glob("*.md")),
+            ROOT / "docs/operate/07-Admission-Queue-and-Retry-Settings.md",
+        ]
+        for page in pages:
             for line in page.read_text().splitlines():
                 if line.startswith("## "):
                     section = line
@@ -145,3 +171,40 @@ class DocumentationContractTests(unittest.TestCase):
             {schema: int(version) for schema, version in rows},
             {contract.schema: contract.current for contract in CONTRACTS.values()},
         )
+
+    def test_http_error_tables_list_every_status_and_error_type(self):
+        """The HTTP API error tables list exactly the registered status and error type pairs."""
+        listed = set()
+        for page in sorted((ROOT / "docs/http-api").glob("*.md")):
+            for status, error_type in error_table_rows(page.read_text()):
+                with self.subTest(page=page.name, status=status, error_type=error_type):
+                    # One row names one status and one error type.
+                    status_match = re.fullmatch(r"`(\d{3})`", status)
+                    type_match = re.fullmatch(r"`([a-z_]+)`", error_type)
+                    self.assertIsNotNone(status_match)
+                    self.assertIsNotNone(type_match)
+                    listed.add((int(status_match[1]), type_match[1]))
+        self.assertEqual(listed, ERROR_RESPONSES)
+
+    def test_serving_error_bodies_use_the_registered_builder(self):
+        """Serving code builds every JSON error body through `error_response`."""
+        literal = []
+        for path in sorted((ROOT / "src/narwhal/serving").rglob("*.py")):
+            if path.name == "outcomes.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+                if name == "JSONResponse":
+                    literal += [
+                        f"{path.name}:{node.lineno}"
+                        for inner in ast.walk(node)
+                        if isinstance(inner, ast.Dict)
+                        and any(
+                            isinstance(key, ast.Constant) and key.value == "error"
+                            for key in inner.keys
+                        )
+                    ]
+        self.assertEqual(literal, [])

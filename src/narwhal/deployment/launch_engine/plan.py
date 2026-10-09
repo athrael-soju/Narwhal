@@ -46,6 +46,10 @@ MAX_SOCKET_PATH_BYTES = 107
 # vLLM's NIXL engine_ttl for CUDA IPC peers with the UCX IPC cache off; the router's first
 # peer release round follows it.
 ENGINE_TTL_S = 60
+# vLLM's default NIXL producer lease; the launcher always sets the lease explicitly so the
+# attested launch arguments record it. A consumer renews it every lease // 6 seconds.
+KV_LEASE_S = 30
+MIN_KV_LEASE_S = 6
 # First UCX release that unmaps CUDA IPC rkeys when NIXL removes a remote agent.
 UCX_PEER_RELEASE = (1, 22)
 MANAGED_ENV = {
@@ -85,6 +89,9 @@ def validate_runtime(runtime: dict) -> None:
         raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
     if type(runtime.get("block_size")) is not int or runtime["block_size"] < 1:
         raise ValueError("runtime.block_size must be positive")
+    lease = runtime.get("kv_lease_s", KV_LEASE_S)
+    if type(lease) is not int or lease < MIN_KV_LEASE_S:
+        raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
     args = runtime.get("extra_args", [])
     if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
         raise ValueError("runtime.extra_args must be an argument list")
@@ -379,6 +386,7 @@ def build(
         "kv_connector_extra_config": {
             "backends": ["UCX"],
             "enforce_handshake_compat": True,
+            "kv_lease_duration": runtime.get("kv_lease_s", KV_LEASE_S),
             **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
         },
     }

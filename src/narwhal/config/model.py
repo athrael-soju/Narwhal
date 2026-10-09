@@ -197,7 +197,7 @@ class FleetConfig:
     engine_restart_policy: str = "individual"
     tokenize_timeout_s: float = 2.0
     # Data-pool capacity also bounds admitted originals; phase waits hold no connection.
-    max_connections: int = 512
+    max_connections: int = 768
     serving: ServingPolicy = field(default_factory=ServingPolicy)
     # Reserved connections for health and recovery probes. Validation resolves
     # zero to max(4, 2 per engine) and stores the result here.
@@ -221,7 +221,7 @@ class FleetConfig:
     engine_api_key_env: str = ""
     # Maximum gap between decode chunks; size it from the TPOT failure budget.
     # 0 disables the bound.
-    decode_read_timeout_s: float = 60.0
+    decode_read_timeout_s: float = 10.0
     # Set above the measured crossed-handoff p99 for the served context range.
     first_token_timeout_s: float = 2.5
     # Ignored run output containing process-bound crossed-handoff measurements.

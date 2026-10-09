@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -12,12 +14,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
+from ...engines.attestation import attested_kv_lease, attested_sequence_limit
 from ...engines.client import EngineClient
 from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
-from ...observability.metrics.exposition import slo_histogram
+from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
 from ...profiling.calibration import CalibrationCheck
 from ...profiling.store import ProfileStore
 from ...runtime.lifecycle.manager import LifecycleManager
@@ -30,14 +33,30 @@ from ...scheduling.health import DriftTracker
 from ...scheduling.monitor import InstanceMonitor
 from ...scheduling.scheduler.placement import GlobalScheduler
 from ...types import Instance, Phase, Role
-from ..admission import AdmissionQueue, QueueExpired, QueueFull
+from ..admission import AdmissionQueue, PlacementRefused, QueueExpired, QueueFull
 from ..completion import output_cap
-from ..dispatch import Dispatcher
-from ..execution import request_error, serve_request
-from ..lifecycle import RequestExpired, RequestLifecycle
-from ..records import overloaded_response
+from ..dispatch import Dispatcher, placement_hold
+from ..execution import price_waiting, request_error, serve_request
+from ..handoff import snapshot as handoff_snapshot
+from ..lifecycle import QUEUE_STAGES, RequestLifecycle
+from ..outcomes import (
+    INFLIGHT_LIMIT_MESSAGE,
+    OUTCOME_REASONS,
+    RequestExpired,
+    RouterHeld,
+    error_response,
+    failure_reason,
+)
+from ..records import deadline_response, not_ready_response, overloaded_response, refuse_request
 from ..retry import RetryBudget
-from ..saturation import SIZING_MIN_SAMPLES, SIZING_WINDOW_S, RecentDelays
+from ..saturation import (
+    SIZING_MIN_SAMPLES,
+    SIZING_WINDOW_S,
+    RecentDelays,
+    saturation_threshold,
+)
+from ..seats import InputLengths
+from ..seats import snapshot as seats_snapshot
 from .sizing import RequestSizer
 from .verification import SuspectVerifier
 
@@ -72,8 +91,8 @@ class NarwhalRouter:
         self.lease: FileLease | None = None
         self.lease_epoch = 0
         self.lease_holder = ""
-        self.failover_blocked = ""
-        self.lifecycle_blocked = ""
+        self._failover_blocked = ""
+        self._lifecycle_blocked = ""
         self.first_token_calibration = CalibrationCheck("uncalibrated")
         # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
@@ -126,10 +145,10 @@ class NarwhalRouter:
             advisory=cfg.advisory,
             on_floor_event=self.journal.write,
             on_control_event=self.journal.write,
+            on_availability_event=self.journal.write,
             # Four controller windows cover the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
-            decode_concurrency=cfg.serving.decode_concurrency,
             health=DriftTracker(
                 clock=clock,
                 window_s=cfg.health_window_s,
@@ -170,7 +189,10 @@ class NarwhalRouter:
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock)
         # The journal writes this into its run metadata when it opens.
-        journal.extra = {"token_accounting": self._token_accounting()}
+        journal.extra = {
+            "token_accounting": self._token_accounting(),
+            "admission": self._admission_mode(),
+        }
         self.served = 0
         self.slo_met = 0
         self.failed = 0
@@ -186,8 +208,20 @@ class NarwhalRouter:
         self.ingress_high_water = 0
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
+        self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
+        # Engine ID to the `--max-num-seqs` its verified attestation reports.
+        self.sequence_limits: dict[str, int] = {}
+        # Engine ID to the NIXL producer lease in seconds from its verified attestation.
+        self.kv_leases: dict[str, int] = {}
         self.unsized_offered = 0
         self.expired = 0
+        # Outcome counts by reason for each counted terminal state.
+        self.outcome_reasons: dict[str, Counter[str]] = {
+            terminal: Counter() for terminal in OUTCOME_REASONS
+        }
+        # Attempt failures by request phase and failure reason.
+        self.attempt_failures: Counter[tuple[str, str]] = Counter()
+        self.served_after_retry = 0
         self.prefill_attempts = 0
         self.decode_attempts = 0
         self.retry_attempts = 0
@@ -220,11 +254,55 @@ class NarwhalRouter:
         self.dispatcher = Dispatcher(self)
         self.monitor.on_capacity_change = self.dispatcher.notify
         self.retry_budget = RetryBudget(cfg.serving.retry_budget, cfg.serving.retry_replenish)
-        self.queue_wait = slo_histogram(cfg.serving.queue_timeout_s or cfg.slo.ttft_s)
+        wait_scale = cfg.serving.queue_timeout_s or cfg.slo.ttft_s
+        self.queue_wait = {
+            stage: Histogram(
+                buckets_for(wait_scale), labels={"stage": stage, "slo": slo_label(wait_scale)}
+            )
+            for stage in QUEUE_STAGES
+        }
         # Request ID to the time it took an admission seat.
         self._seat_since: dict[str, float] = {}
         self.seat = slo_histogram(cfg.slo.ttft_s)
-        self.monitoring = MonitoringLedger(clock, on_event=self.journal.write)
+        self.monitoring = MonitoringLedger(
+            clock, on_event=self.journal.write, on_degraded=self.wake_waiters
+        )
+
+    @property
+    def failover_blocked(self) -> str:
+        """Why a lost or unclaimed lease fences prefill placement, empty while serving."""
+        return self._failover_blocked
+
+    @failover_blocked.setter
+    def failover_blocked(self, reason: str) -> None:
+        self._failover_blocked = reason
+        if reason:
+            self.wake_waiters()
+
+    @property
+    def lifecycle_blocked(self) -> str:
+        """The whole-wave hold reason while a lifecycle hold withdraws readiness."""
+        return self._lifecycle_blocked
+
+    @lifecycle_blocked.setter
+    def lifecycle_blocked(self, reason: str) -> None:
+        self._lifecycle_blocked = reason
+        if reason:
+            self.wake_waiters()
+
+    def wake_waiters(self) -> None:
+        """Wake every queued request to recheck its hold, as when a hold begins."""
+        self.admission_queue.wake_all()
+        self.dispatcher.wake_all()
+
+    def _holds(self) -> dict[str, list[dict[str, Any]]]:
+        """Return current holds by kind, with each inference hold's recorded producers."""
+        holds = self.scheduler.holds_snapshot()
+        for row in holds["inference"]:
+            row["recorded_producers"] = sorted(
+                peer for peer in self.verifier.sources.get(row["iid"], {""}) if peer
+            )
+        return holds
 
     @property
     def monitoring_degraded(self) -> str:
@@ -234,6 +312,21 @@ class NarwhalRouter:
     def profile_set_diff(self) -> tuple[list[str], list[str]]:
         """Return (missing, extra) engine IDs between the fleet and profile store."""
         return self.profiles.engine_set_diff(self.monitor.instances)
+
+    def _admission_mode(self) -> dict[str, Any]:
+        """Return the admission mode and the TTFT budget margin it applies."""
+        return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
+
+    def attested(self, iid: str, payload: Any) -> None:
+        """Record the sequence limit and KV lease from an engine's verified attestation."""
+        for values, value in (
+            (self.sequence_limits, attested_sequence_limit(payload)),
+            (self.kv_leases, attested_kv_lease(payload)),
+        ):
+            if value is None:
+                values.pop(iid, None)
+            else:
+                values[iid] = value
 
     def _token_accounting(self) -> str:
         """Return the decode token-accounting mode the fleet's dialect guarantees."""
@@ -258,7 +351,14 @@ class NarwhalRouter:
         state.resolve_demand()
         invalid = request_error(self, body)
         if invalid is not None:
-            state.finish("invalid", error="unsupported request", status=invalid.status_code)
+            error = json.loads(bytes(invalid.body))["error"]
+            state.finish(
+                "invalid",
+                error="unsupported request",
+                status=invalid.status_code,
+                error_type=error["type"],
+                error_code=error.get("code"),
+            )
             invalid.headers["x-request-id"] = rid
             return invalid
         # Local sizing keeps rejected traffic visible without issuing probes.
@@ -272,6 +372,13 @@ class NarwhalRouter:
             state.admit()
             return True
 
+        def check() -> float | None:
+            # A waiting request leaves on a prefill hold and is priced while it waits.
+            hold = placement_hold(self, Phase.PREFILL)
+            if hold:
+                raise RouterHeld(hold)
+            return price_waiting(state)
+
         state.phase = "queue"
         try:
             self.monitor.waiting[rid] = req
@@ -280,26 +387,43 @@ class NarwhalRouter:
             began = self._clock()
             try:
                 await state.wait(
-                    lambda: self.admission_queue.acquire(reserve, deadline=state.deadline)
+                    lambda: self.admission_queue.acquire(
+                        reserve,
+                        deadline=state.deadline,
+                        wait_s=state.queue_budget_s,
+                        check=check,
+                    )
                 )
             finally:
                 self.monitor.waiting.pop(rid, None)
-                state.queue_wait_s += self._clock() - began
+                state.waited("admission", self._clock() - began)
             state.phase = "admission"
             response = await serve_request(state, endpoint, body, headers)
         except QueueFull:
-            response = overloaded_response(state, "server_overloaded_error")
-        except (QueueExpired, RequestExpired):
-            state.finish("expired", error="queue deadline expired", status=504)
-            response = JSONResponse(
-                status_code=504,
-                content={"error": {"message": "queue deadline expired", "type": "queue_expired"}},
-            )
+            # A full queue is the same in-flight limit that ingress checks on arrival.
+            response = overloaded_response(state, INFLIGHT_LIMIT_MESSAGE, reason="inflight_limit")
+        except PlacementRefused as exc:
+            response = refuse_request(state, exc)
+        except RouterHeld as exc:
+            response = not_ready_response(self, state, reason=str(exc))
+        except (QueueExpired, RequestExpired) as exc:
+            if failure_reason(exc, deadline_passed=self._clock() >= state.deadline) == "deadline":
+                # Ingress answers the same deadline; both give the client one body.
+                response = deadline_response(state)
+            else:
+                state.finish(
+                    "expired",
+                    error="queue deadline expired",
+                    status=504,
+                    reason="queue_timeout",
+                    error_type="queue_expired",
+                )
+                response = error_response(504, "queue_expired", "queue deadline expired")
         except asyncio.CancelledError:
             state.finish("cancelled")
             raise
         except BaseException:
-            state.finish("failed", error="request execution failed", status=500)
+            state.finish("failed", error="request execution failed", status=500, reason="internal")
             raise
         response.headers["x-request-id"] = rid
         return response
@@ -345,10 +469,27 @@ class NarwhalRouter:
                 "waiting_prefill": len(self.dispatcher.queues[Phase.PREFILL]),
                 "waiting_decode": len(self.dispatcher.queues[Phase.DECODE]),
                 "limit": self.max_concurrent,
+                # The two signals behind the saturation 429 and the value each must stay below.
+                "loop_lag_s": self.loop_lag_s,
+                "sizing_delay_s": self.sizing_delays.median(),
+                "saturation_threshold_s": saturation_threshold(self),
                 "rejected": self.rejected,
                 "refused": self.refused,
                 "engine_auth": self.cfg.engine_auth_mode(),
+                **self._admission_mode(),
             },
+            # Every known reason, zero until it occurs.
+            "outcome_reasons": {
+                terminal: {
+                    reason: counts[reason]
+                    for reason in (*OUTCOME_REASONS[terminal], *sorted(counts))
+                }
+                for terminal, counts in self.outcome_reasons.items()
+            },
+            # Per-engine prefill and decode seats and their inputs.
+            "seats": seats_snapshot(self),
+            # Per-engine attested KV lease and the handoff bound derived from it.
+            "handoff": handoff_snapshot(self),
             "serving": {
                 "http_retained": self.ingress_inflight,
                 "http_retained_limit": self.max_concurrent + self.cfg.serving.queue_capacity,
@@ -359,6 +500,11 @@ class NarwhalRouter:
                 "retry_credits": self.retry_budget.available,
                 "retry_credits_spent": self.retry_budget.spent,
                 "retry_denied": self.retry_budget.denied,
+                "served_after_retry": self.served_after_retry,
+                "attempt_failures": [
+                    {"phase": phase, "reason": reason, "count": count}
+                    for (phase, reason), count in sorted(self.attempt_failures.items())
+                ],
                 "decode_tokens_observed": self.decode_tokens_observed,
                 "upstream_seconds": self.upstream_seconds.copy(),
             },
@@ -401,8 +547,13 @@ class NarwhalRouter:
             "peer_release": self.peer_release.snapshot(),
             "draining": sorted(self.scheduler.draining),
             "quarantined": self.scheduler.quarantine_list(),
-            # Engine failure streaks and active verification probes.
-            "breaker": self.scheduler.breaker_snapshot(),
+            # The same holds split into timed quarantines and inference holds.
+            "holds": self._holds(),
+            # Engine failure streaks, active verification probes and transition counts.
+            "breaker": {
+                **self.scheduler.breaker_snapshot(),
+                "probes": self.verifier.probe_counts(),
+            },
             # Prefix residency each sidecar reports; unknown engines are priced cold.
             "residency": self.residency.snapshot(),
             "probation": sorted(

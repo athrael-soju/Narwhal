@@ -25,7 +25,7 @@ A vLLM engine with the effective `kv_both` role transfers KV across the configur
 
 A completion request passes through these stages:
 
-1. The request takes a seat under the [global admitted-request limit](../configuration/02-Serving-and-Role-Control.md#41-global-admission).
+1. The request takes a seat under the [router in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit).
 2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing) for cached prefixes.
 3. With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check).
 4. The chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff.
@@ -33,9 +33,9 @@ A completion request passes through these stages:
 6. Tokens stream to the client.
 7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.
 
-When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue under its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal.
+When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) gives each wait's bound and response.
 
-A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
+A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-engine-seats-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 

@@ -80,6 +80,8 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sizing_skips_a_failed_tokenizer_until_a_count_succeeds(self):
         """Failed exact counting fails this request; the next counts avoid that engine."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
         with patch.object(
             self.router.engines,
             "tokenize",
@@ -103,7 +105,7 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
             self.router.sizer.estimate_length({"messages": [{"content": "hello"}]}), 1
         )
         for iid in ("e0", "e3"):
-            self.router.scheduler.eject(iid)
+            self.router.scheduler.eject(iid, "liveness")
         with patch.object(self.router.engines, "tokenize", new=AsyncMock()) as count:
             self.assertEqual((await self.router.sizer.size({"prompt": ""}))[0], 1)
             count.assert_not_awaited()
@@ -111,6 +113,10 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failing_tokenizer_waits_out_a_backoff_that_its_own_success_clears(self):
         """A failed engine's backoff doubles per failure and survives other engines' success."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         bad = self.cfg.engines[0].url
@@ -147,11 +153,13 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_backoff_doubles_caps_and_clears_on_own_success(self):
         """A failed engine's backoff doubles to its cap; its next successful count clears it."""
         self.cfg.tokenize = True
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         bad = self.router.scheduler.live_instances()[0]
         for other in self.router.scheduler.live_instances()[1:]:
-            self.router.scheduler.eject(other.iid)
+            self.router.scheduler.eject(other.iid, "liveness")
         healed = False
 
         async def tokenize(url, *args, **kwargs):
@@ -179,6 +187,10 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sustained_tokenizer_failures_keep_the_engine_error_and_the_capped_backoff(self):
         """Every consecutive failed count raises the engine error and holds the capped backoff."""
         self.cfg.tokenize = True
+        # One exact-count attempt per request isolates the backoff from moved counts.
+        self.cfg.serving = replace(self.cfg.serving, max_attempts=1)
+        # Failed counts feed the breaker; these engines stay live to show the backoff alone.
+        self.router.scheduler.availability.eject_after = 10**6
         now = [100.0]
         self.router._clock = lambda: now[0]
         live = self.router.scheduler.live_instances()
@@ -255,9 +267,15 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_or_missing_transfer_paths_keep_verification_pending(self):
         """Recovery waits for checks of newly added producers."""
         self.router.verifier.sources["e3"] = {"unknown"}
-        with patch.object(self.router.engines, "probe_inference", new=AsyncMock()) as probe:
+        with patch.object(
+            self.router.engines,
+            "probe_inference",
+            new=AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg())),
+        ) as probe:
             await self.router.verifier.verify_inference("e3", self.cfg.engines[1].url)
-            probe.assert_not_awaited()
+        # An unconfigured producer gives way to a live one.
+        self.assertEqual(probe.call_args.kwargs["prefill_url"], self.cfg.engines[0].url)
+        self.assertNotIn("e3", self.router.verifier.sources)
         self.router.verifier.sources["e3"] = {""}
 
         async def changed(*args, **kwargs):
@@ -406,7 +424,13 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         inst = router.monitor.instances["e3"]
         request = Request("r", 10, phase=Phase.DECODE)
         other = Request("o", 10, phase=Phase.DECODE)
-        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        state = SimpleNamespace(
+            router=router,
+            prefill_iid="e0",
+            request=request,
+            output_started=False,
+            failed_engines={"prefill": set(), "decode": set()},
+        )
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", other)
         started = router._clock()
@@ -421,7 +445,13 @@ class OverloadVerificationTests(unittest.IsolatedAsyncioTestCase):
         router = self.router()
         inst = router.monitor.instances["e3"]
         request = Request("r", 10, phase=Phase.DECODE)
-        state = SimpleNamespace(router=router, prefill_iid="e0", request=request)
+        state = SimpleNamespace(
+            router=router,
+            prefill_iid="e0",
+            request=request,
+            output_started=False,
+            failed_engines={"prefill": set(), "decode": set()},
+        )
         router.monitor.dispatched("e3", request)
         router.monitor.dispatched("e3", Request("stuck", 10, phase=Phase.DECODE))
         with patch.object(router.verifier, "start") as start:

@@ -140,6 +140,7 @@ Operator input for each `runtime` field:
 | `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                             |
 | `kv_cache_dtype`    | `auto`.                                                                                                                                                              |
 | `block_size`        | Positive runtime block size.                                                                                                                                         |
+| `kv_lease_s`        | Optional NIXL producer lease in whole seconds, at least 6, default `30`. The launcher passes it as `kv_lease_duration`, and the router derives the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it. |
 | `environment`       | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_`, or `SAFETENSORS_` prefix. |
 | `extra_args`        | vLLM options from the `extra_args` allowlist.                                                                                                                        |
 
@@ -155,7 +156,7 @@ The launcher sets these values itself:
 | ------------------------------------------------------------------------------------------ | ---------------- |
 | Model mount, served model name, bind family, HTTP port                                     | Role environment |
 | TP size                                                                                    | Launch record    |
-| `NixlConnector` with `kv_both`, UCX, and failure propagation                               | Launcher         |
+| `NixlConnector` with `kv_both`, UCX, failure propagation, and `kv_lease_duration`          | Launcher         |
 | GPU visibility, advertised addresses and ports, transport selection, engine authentication | Launcher         |
 
 `runtime.environment` rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`. It also rejects names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.

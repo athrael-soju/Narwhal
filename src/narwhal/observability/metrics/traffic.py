@@ -6,6 +6,13 @@ from ...contracts import METRICS, current
 from .exposition import metric_lines, slo_label
 
 
+def _by_reason(state: dict, terminal: str, label: str) -> list:
+    """Return one sample per reason of a terminal outcome."""
+    return [
+        ({label: reason}, count) for reason, count in state["outcome_reasons"][terminal].items()
+    ]
+
+
 def render_admission(state: dict) -> list[str]:
     """Render request totals, queue occupancy and retry budgets."""
     out: list[str] = []
@@ -30,23 +37,38 @@ def render_admission(state: dict) -> list[str]:
     for field_name, help_text in (
         ("offered", "Original completion requests received, including early refusals"),
         ("unsized_offered", "Original requests terminated before input sizing"),
-        ("expired", "Original requests terminated by their admission or total deadline"),
     ):
         out += metric_lines(
             f"narwhal_{field_name}_total", help_text, "counter", [({}, state.get(field_name, 0))]
         )
+    out += metric_lines(
+        "narwhal_expired_total",
+        "Original requests terminated by their admission or total deadline, by reason",
+        "counter",
+        _by_reason(state, "expired", "reason"),
+    )
     serving = state.get("serving") or {}
     for field_name, help_text in (
         ("prefill_attempts", "Prefill HTTP attempts including retries"),
         ("decode_attempts", "Decode HTTP attempts including retries"),
         ("retry_attempts", "Additional prefill attempts after an original attempt failed"),
-        ("retry_credits_spent", "Retry credits consumed, including cancelled backoffs"),
+        ("retry_credits_spent", "Retry credits spent by retries that dispatched"),
         ("retry_denied", "Retries denied by the shared retry quota"),
+        ("served_after_retry", "Requests completed by an attempt after the first"),
         ("decode_tokens_observed", "Exact decode tokens read across all attempts when supported"),
     ):
         out += metric_lines(
             f"narwhal_{field_name}_total", help_text, "counter", [({}, serving.get(field_name, 0))]
         )
+    out += metric_lines(
+        "narwhal_attempt_failures_total",
+        "Failed attempts by request phase and failure reason",
+        "counter",
+        [
+            ({"phase": row["phase"], "reason": row["reason"]}, row["count"])
+            for row in serving.get("attempt_failures", [])
+        ],
+    )
     for field_name, help_text in (
         ("http_retained", "Completion requests holding body, queue or response capacity"),
         ("http_retained_limit", "Maximum retained completion HTTP requests"),
@@ -57,6 +79,38 @@ def render_admission(state: dict) -> list[str]:
             f"narwhal_{field_name}", help_text, "gauge", [({}, serving.get(field_name, 0))]
         )
     admission = state.get("admission") or {}
+    for name, field_name, help_text in (
+        ("admission_inflight", "inflight", "Requests holding an admission seat"),
+        (
+            "admission_inflight_limit",
+            "limit",
+            "Router in-flight limit: --max-concurrent, else serving.max_connections",
+        ),
+        ("router_loop_lag_seconds", "loop_lag_s", "Latest router event-loop wake-up lateness"),
+        (
+            "request_sizing_delay_seconds",
+            "sizing_delay_s",
+            "Median request sizing delay over the trailing window",
+        ),
+        (
+            "saturation_threshold_seconds",
+            "saturation_threshold_s",
+            "Loop lag or sizing delay at which ingress answers a saturation 429",
+        ),
+    ):
+        out += metric_lines(f"narwhal_{name}", help_text, "gauge", [({}, admission[field_name])])
+    out += metric_lines(
+        "narwhal_admission_info",
+        "Admission mode set by serving.admission",
+        "gauge",
+        [({"mode": admission["mode"]}, 1)],
+    )
+    out += metric_lines(
+        "narwhal_admission_margin",
+        "Fraction serving.admission_margin adds to the TTFT budget",
+        "gauge",
+        [({}, admission["margin"])],
+    )
     for field_name in (
         "queued",
         "queue_capacity",
@@ -69,6 +123,36 @@ def render_admission(state: dict) -> list[str]:
             "Bounded request queue occupancy or capacity",
             "gauge",
             [({}, admission.get(field_name, 0))],
+        )
+    seats = (state.get("seats") or {}).get("engines") or {}
+    out += metric_lines(
+        "narwhal_engine_seats",
+        "Engine seats by phase; 0 means no seat limit",
+        "gauge",
+        [
+            ({"iid": iid, "phase": phase}, entry.get(phase, 0))
+            for iid, entry in sorted(seats.items())
+            for phase in ("prefill", "decode")
+        ],
+    )
+    handoff = state.get("handoff") or {}
+    for name, field_name, help_text in (
+        ("kv_lease_seconds", "kv_lease_s", "Producer KV lease from the engine's attestation"),
+        (
+            "handoff_bound_seconds",
+            "bound_s",
+            "Time after prefill completion by which decode must reach its engine",
+        ),
+    ):
+        out += metric_lines(
+            f"narwhal_{name}",
+            help_text,
+            "gauge",
+            [
+                ({"iid": iid}, entry[field_name])
+                for iid, entry in sorted(handoff.items())
+                if entry.get(field_name) is not None
+            ],
         )
     out += metric_lines(
         "narwhal_upstream_seconds_total",
@@ -87,15 +171,15 @@ def render_refusals(state: dict) -> list[str]:
     out: list[str] = []
     out += metric_lines(
         "narwhal_refused_total",
-        "Requests predictive admission refused for a projected TTFT or decode SLO miss",
+        "Requests predictive admission refused for a projected TTFT or decode SLO miss, by cause",
         "counter",
-        [({}, state.get("admission", {}).get("refused", 0))],
+        _by_reason(state, "refused", "cause"),
     )
     out += metric_lines(
         "narwhal_rejected_total",
-        "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness",
+        "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness, by reason",
         "counter",
-        [({}, state.get("admission", {}).get("rejected", 0))],
+        _by_reason(state, "rejected", "reason"),
     )
     out += metric_lines(
         "narwhal_invalid_requests_total",
@@ -111,9 +195,9 @@ def render_outcomes(state: dict) -> list[str]:
     out: list[str] = []
     out += metric_lines(
         "narwhal_failed_total",
-        "Requests that ended in an error",
+        "Requests that ended in an error, by reason",
         "counter",
-        [({}, state.get("failed", 0))],
+        _by_reason(state, "failed", "reason"),
     )
     out += metric_lines(
         "narwhal_cancelled_total",

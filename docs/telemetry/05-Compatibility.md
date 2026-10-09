@@ -26,8 +26,8 @@ Interface versions in this release:
 
 | Interface | Schema | Version | Manifest key |
 | --- | --- | :--: | --- |
-| Narwhal fleet configuration | `narwhal.fleet` | 1 | `fleet` |
-| Effective fleet configuration | `narwhal.effective-config` | 1 | `effective_config` |
+| Narwhal fleet configuration | `narwhal.fleet` | 2 | `fleet` |
+| Effective fleet configuration | `narwhal.effective-config` | 2 | `effective_config` |
 | Engine profile store | `narwhal.profiles` | 1 | `profiles` |
 | Engine attestation | `narwhal.attestation` | 1 | `attestation` |
 | Router state handoff | `narwhal.handoff` | 1 | `handoff` |
@@ -35,7 +35,7 @@ Interface versions in this release:
 | Engine lifecycle | `narwhal.lifecycle` | 1 | `lifecycle` |
 | Request journal | `narwhal.journal` | 1 | `journal` |
 | Live state | `narwhal.state` | 1 | `state` |
-| Prometheus metrics | `narwhal.metrics` | 1 | `metrics` |
+| Prometheus metrics | `narwhal.metrics` | 2 | `metrics` |
 | Command result | `narwhal.command-result` | 1 | `command_result` |
 | Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
@@ -64,4 +64,8 @@ When the manifests are identical, installed-release documents pass validation on
 
 ## Schema version changes
 
-Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped.
+Each interface, including the [command result](../Command-Results.md) envelope, needs a new schema version when a field is renamed, removed, or retyped. For Prometheus metrics, a new label on an existing series also needs a new version.
+
+Metrics version `2` adds the `reason` label to `narwhal_failed_total`, `narwhal_rejected_total`, and `narwhal_expired_total`, the `cause` label to `narwhal_refused_total`, and the `stage` label to `narwhal_queue_wait_seconds`. It also adds the `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, and `narwhal_saturation_threshold_seconds` gauges.
+
+Fleet configuration version `2` and effective fleet configuration version `2` remove `serving.prefill_concurrency`, `serving.decode_concurrency` and `serving.handoff_timeout_s`. The router derives [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) and each producer's [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) from engine attestation in their place. Delete the three keys and set `schema_version` to `2` to upgrade a version `1` fleet file.

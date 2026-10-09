@@ -55,6 +55,12 @@ TLS, authentication, WAF, model routing
 
     Run engine actions, configuration overlays, and load jobs from the control service and its console, and read each session's run record.
 
+-   [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md)
+
+    ---
+
+    Choose the admission mode, queue, retries, failure quarantine, in-flight limit and decode-gap limit from the client outcomes of each value.
+
 -   [Troubleshooting a fleet](Troubleshoot.md)
 
     ---

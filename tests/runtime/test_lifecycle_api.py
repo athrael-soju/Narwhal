@@ -89,7 +89,7 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_wave_drain_keeps_a_stopped_members_last_verified_identity(self):
         """An ejected member whose process already stopped drains with its last verified start."""
         self.router.lifecycle.process_starts["e3"] = 90
-        self.router.scheduler.eject("e3")
+        self.router.scheduler.eject("e3", "liveness")
         with patch.object(
             serving_app,
             "capture_process_identities",
@@ -112,7 +112,7 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unverified_stopped_member_still_blocks_the_drain(self):
         """Without a verified identity, an ejected member's capture failure still holds it."""
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         with patch.object(
             serving_app,
             "capture_process_identities",

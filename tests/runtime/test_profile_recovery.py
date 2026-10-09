@@ -45,7 +45,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_automatic_health_recovery_requires_current_measured_identity(self):
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         self.starts["e0"] += 1
         self.assertEqual(await readmit(self.router, 0), [])
         self.assertIn("e0", self.router.scheduler.ejected)
@@ -67,14 +67,14 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     del self.router.profiles._by_id["e0"]
                 else:
                     self.router.profiles.put(candidate)
-                self.router.scheduler.eject("e0")
+                self.router.scheduler.eject("e0", "liveness")
                 self.assertEqual(await readmit(self.router, 0), [])
                 self.assertIn(message, self.router.lifecycle.events[-1]["error"])
         self.router.profiles.put(original)
         self.assertEqual(await readmit(self.router, 0), ["e0"])
 
     async def test_successful_inference_probe_does_not_bypass_binding(self):
-        self.router.scheduler.eject("e3")
+        self.router.scheduler.eject("e3", "liveness")
         self.router.scheduler.inference_suspects.add("e3")
         self.router.verifier.sources["e3"] = {"e0"}
         self.starts["e3"] += 1
@@ -105,7 +105,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_recovery_preserves_operator_holds_and_control_fencing(self):
         for hold in ("draining", "wave", "standby"):
             with self.subTest(hold=hold):
-                self.router.scheduler.eject("e0")
+                self.router.scheduler.eject("e0", "liveness")
                 self.router.scheduler.draining.clear()
                 if hold == "draining":
                     self.router.scheduler.draining.add("e0")
@@ -119,7 +119,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("e0", self.router.scheduler.ejected)
 
     async def test_fencing_during_identity_fetch_prevents_recovery(self):
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
 
         async def fenced(*args, **kwargs):
             self.router.standby = True
@@ -142,7 +142,7 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def excluded(*args, **kwargs):
-            self.router.scheduler.eject("e0")
+            self.router.scheduler.eject("e0", "liveness")
             return identity_generation(EngineIdentity("fixture", self.starts["e0"]))
 
         with patch("narwhal.runtime.lifecycle.identity.read_generation", side_effect=excluded):

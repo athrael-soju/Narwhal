@@ -184,7 +184,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         for engines, wave in (([], False), (["e0", "e3"], False), (["e0"], True)):
             with self.subTest(engines=engines), self.assertRaises(LifecycleError):
                 self.manager.start_recovery_validation(engines, wave=wave)
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         self.assertTrue(self.manager.start_recovery_validation(["e0"]))
         self.assertFalse(self.manager.records["e0"].restart_required)
         self.assertEqual(self.manager.records["e0"].state, "validating")
@@ -194,19 +194,19 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         """A blocked recovery leaves other engines recoverable; drains and waves still hold."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         self.assertTrue(self.manager.start_recovery_validation(["e0"]))
         self.manager.validation_failed(ValidationOutcome(failures={"e0": ["sidecar down"]}))
         self.assertEqual(self.manager.records["e0"].state, "blocked")
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
-        self.router.scheduler.eject("e3")
+        self.router.scheduler.eject("e3", "liveness")
         self.assertTrue(self.manager.start_recovery_validation(["e3"]))
         self.assertEqual(self.manager.records["e3"].state, "validating")
         for held in ("draining", "wave"):
             with self.subTest(held=held):
                 self.manager.records["e3"].state = "active"
                 self.router.scheduler.finish_drain("e3")
-                self.router.scheduler.eject("e3")
+                self.router.scheduler.eject("e3", "liveness")
                 record = self.manager.records["e0"]
                 record.restart_required = held == "draining"
                 record.wave_id = "wave-held" if held == "wave" else ""
@@ -216,7 +216,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         """One engine's validation failure keeps the entire restart wave blocked."""
         self.manager.records.clear()
         for iid in ("e0", "e3"):
-            self.router.scheduler.eject(iid)
+            self.router.scheduler.eject(iid, "liveness")
         self.assertTrue(self.manager.start_recovery_validation(["e0", "e3"], wave=True))
         self.assertTrue(self.router.lifecycle_blocked)
         outcome = ValidationOutcome(checks={"e0": ["health"]}, failures={"e0": ["bad identity"]})
@@ -382,7 +382,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         """The monitoring entry point retains a held record when profile binding fails."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         self.router.profiles.put(
             replace(self.router.profiles.get("e0"), generation_digest="sha256:" + "0" * 64)
         )
@@ -398,7 +398,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.bind_profiles()
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
-        self.router.scheduler.eject("e0")
+        self.router.scheduler.eject("e0", "liveness")
         with patch.object(readmission, "fetch_engine_identity", self.identities):
             self.assertEqual(await readmit(self.router, 0), ["e0"])
         self.assertEqual(self.manager.records["e0"].state, "active")
@@ -501,7 +501,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         outcome = await self.validate()
         self.assertIn("complete engine_contract", " ".join(outcome.failures["e0"]))
         self.cfg.engine_contract = contract
-        self.router.scheduler.eject("e3")
+        self.router.scheduler.eject("e3", "liveness")
         outcome = await self.validate()
         self.assertIn("eligible fabric", " ".join(outcome.failures["e0"]))
         self.cfg.engine_restart_policy = "whole_wave"

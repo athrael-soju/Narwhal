@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy
+from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy, decode_refusal
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -23,7 +23,7 @@ class PinnedPlacementTests(unittest.TestCase):
 
     def test_pinned_prefill_engines_take_no_decode_legs(self):
         router = self.router(pinned=True)
-        router.scheduler.eject("e3")
+        router.scheduler.eject("e3", "liveness")
         with self.assertRaises(RuntimeError):
             router.scheduler.schedule(Request("r", 10, phase=Phase.DECODE))
 
@@ -37,7 +37,7 @@ class PinnedPlacementTests(unittest.TestCase):
 
     def test_unpinned_fleets_fall_back_to_the_other_role(self):
         router = self.router(pinned=False)
-        router.scheduler.eject("e3")
+        router.scheduler.eject("e3", "liveness")
         self.assertEqual(router.scheduler.schedule(Request("r", 10, phase=Phase.DECODE)).iid, "e0")
 
     def test_holds_keep_every_role_placeable_through_fallback_engines(self):
@@ -64,9 +64,10 @@ class PinnedPlacementTests(unittest.TestCase):
                 cfg = fleet(root, engines=engines, pinned=engines)
                 scheduler = create_app(cfg).state.router.scheduler
                 self.assertTrue(scheduler.quarantine("e3", 30.0))
-                getattr(scheduler, remove)("e4")
+                cause = ("liveness",) if remove == "eject" else ()
+                getattr(scheduler, remove)("e4", *cause)
                 self.assertIn("e3", scheduler.quarantined)
-                getattr(scheduler, remove)("e5")
+                getattr(scheduler, remove)("e5", *cause)
                 self.assertNotIn("e3", scheduler.quarantined)
                 self.assertTrue(scheduler.role_placeable(Role.DECODE))
 
@@ -74,7 +75,7 @@ class PinnedPlacementTests(unittest.TestCase):
         for pinned, placeable in ((True, False), (False, True)):
             with self.subTest(pinned=pinned):
                 router = self.router(pinned=pinned)
-                router.scheduler.eject("e3")
+                router.scheduler.eject("e3", "liveness")
                 self.assertIs(router.scheduler.role_placeable(Role.DECODE), placeable)
                 self.assertTrue(router.scheduler.role_placeable(Role.PREFILL))
 
@@ -97,16 +98,15 @@ class DispatcherFallbackTests(unittest.IsolatedAsyncioTestCase):
                 cfg.serving = ServingPolicy(
                     queue_capacity=4,
                     queue_timeout_s=5.0,
-                    prefill_concurrency=4,
-                    decode_concurrency=4,
-                    handoff_timeout_s=5.0,
                 )
                 cfg.engines = [replace(spec, pin=pinned) for spec in cfg.engines]
                 router = create_app(cfg).state.router
                 self.addAsyncCleanup(router.engines.aclose)
-                router.scheduler.eject("e3")
+                router.scheduler.eject("e3", "liveness")
                 request = Request("r", 10, phase=Phase.DECODE)
-                place = router.dispatcher.place(request, deadline=router._clock() + 0.05)
+                place = router.dispatcher.place(
+                    request, deadline=router._clock() + 0.05, claim=lambda inst: None
+                )
                 if pinned:
                     with self.assertRaises(QueueExpired):
                         await place
@@ -144,11 +144,6 @@ class DecodeAdmissionTests(unittest.TestCase):
     def ready(self, request):
         prefill = self.scheduler.monitor.instances["e0"]
         return self.scheduler.prefill_admission_price(request, prefill)
-
-    def test_a_serving_concurrency_limit_caps_the_measured_limit(self):
-        self.fill(2)
-        self.assertFalse(decode_admits(self.scheduler, self.request, concurrency=2))
-        self.assertTrue(decode_admits(self.scheduler, self.request, concurrency=3))
 
     def test_requests_in_prefill_count_when_they_start_decode_inside_the_window(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
@@ -189,6 +184,9 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertGreater(wait, 0.0)
         self.assertTrue(decode_admits(self.scheduler, self.request, ttft_s=budget - 2 * wait))
         self.assertFalse(decode_admits(self.scheduler, self.request, ttft_s=budget - wait / 2))
+        self.assertEqual(
+            decode_refusal(self.scheduler, self.request, ttft_s=budget - wait / 2), "slot_wait"
+        )
 
     def test_the_admission_margin_widens_the_budget_for_a_decode_wait(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
@@ -207,7 +205,7 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"r{index}", 500, phase=Phase.DECODE, wanted_len=20_000)
             )
         request = Request("new", 500, wanted_len=20_000)
-        self.assertFalse(decode_admits(self.scheduler, request, ttft_s=0.0))
+        self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "kv_capacity")
         occupancy = decode_occupancy(self.scheduler, request.input_len)
         self.assertLess(len(occupancy.residents), occupancy.slots)
 
@@ -217,7 +215,7 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"r{index}", 45_000, phase=Phase.DECODE, wanted_len=1)
             )
         request = Request("new", 45_000, wanted_len=1)
-        self.assertTrue(decode_admits(self.scheduler, request, concurrency=2))
+        self.assertTrue(decode_admits(self.scheduler, request, seats={"e3": 2}))
 
     def test_a_burst_admits_up_to_projected_decode_capacity(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests - 1, wanted_len=2_000)
@@ -327,8 +325,8 @@ class DecodeAdmissionTests(unittest.TestCase):
                 "e3", Request(f"b{index}", 200_000, phase=Phase.DECODE, wanted_len=2_000)
             )
         request = Request("new", 200_000, wanted_len=1)
-        self.assertFalse(decode_admits(self.scheduler, request))
-        self.assertTrue(decode_admits(self.scheduler, request, ready_s=2.0))
+        self.assertEqual(decode_refusal(self.scheduler, request), "tpot")
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=2.0))
 
     def test_admission_reuses_the_controller_estimate_snapshot(self):
         demand = self.router.controller.demand
@@ -436,5 +434,5 @@ class DecodeAdmissionTests(unittest.TestCase):
 
     def test_a_fleet_without_live_decode_engines_admits(self):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
-        self.scheduler.eject("e3")
+        self.scheduler.eject("e3", "liveness")
         self.assertTrue(decode_admits(self.scheduler, self.request))

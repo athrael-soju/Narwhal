@@ -25,9 +25,9 @@ Each invocation prints this output:
 | Invocation | Output |
 | --- | --- |
 | `validate` in text mode | `Validated <source>: <N> engines` |
-| `validate --format json` | A `narwhal.effective-config` version 1 document in the `data` field of the [command result](Command-Results.md) |
-| `inspect` in text mode | A `narwhal.effective-config` version 1 document |
-| `inspect --format json` | A `narwhal.effective-config` version 1 document in the `data` field of the command result |
+| `validate --format json` | A `narwhal.effective-config` version 2 document in the `data` field of the [command result](Command-Results.md) |
+| `inspect` in text mode | A `narwhal.effective-config` version 2 document |
+| `inspect --format json` | A `narwhal.effective-config` version 2 document in the `data` field of the command result |
 
 ## Fleet-file values and serving defaults
 
@@ -49,7 +49,7 @@ The `derived` fields hold values Narwhal computes from the settings:
 | `control_connections` | `engine.control_connections` when positive, or `max(4, 2 * engine_count)` when it is `0` |
 | `data_keepalive_connections` | `max(1, serving.max_connections // 2)` |
 | `control_keepalive_connections` | `max(1, control_connections // 2)` |
-| `max_concurrent` | Default admission concurrency, `serving.max_connections` |
+| `max_concurrent` | Default in-flight limit, `serving.max_connections` |
 | `http_retained_limit` | `serving.max_connections + serving.queue_capacity` |
 | `uvicorn_graceful_timeout_s` | `serving.graceful_timeout_s` as an integer |
 

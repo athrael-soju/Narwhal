@@ -60,7 +60,6 @@ def reference_price_profiles(
                 input_tokens + output_tokens / 2.0,
                 output_tokens,
                 correction=correction,
-                request_cap=model.scheduler.decode_concurrency,
             )
             for p in profiles
         ]

@@ -264,7 +264,7 @@ class Sim:
                     tpot_intercept=0.008,
                     tpot_request_slope=0.0003,
                     kv_capacity_tokens=10_000_000,
-                    decode_max_requests=256,
+                    decode_max_requests=16,
                     decode_max_kv_tokens=10_000_000,
                     decode_fit_mape=0.0,
                     decode_cv_mape=0.0,
@@ -281,7 +281,6 @@ class Sim:
             SLO(2.1, 0.045),
             Thresholds(),
             clock=clock,
-            decode_concurrency=16,
             on_control_event=self.events.append,
         )
         self.controller = ReactiveController(
@@ -689,7 +688,6 @@ class PhaseTraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sim = Sim(directory, prefill=1)
             bound_prefill(sim)
-            sim.scheduler.decode_concurrency = 48
             for iid in list(sim.monitor.instances):
                 row = sim.scheduler.profiles.get(iid)
                 sim.scheduler.profiles.put(

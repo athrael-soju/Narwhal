@@ -73,6 +73,10 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
             **{name: getattr(router, name) for name in HANDOFF_COUNTERS},
             "unserved": router.scheduler.unserved,
         },
+        # Reason counts behind the failed, refused, rejected and expired counters.
+        "outcome_reasons": {
+            terminal: dict(counts) for terminal, counts in router.outcome_reasons.items()
+        },
         "lifecycle": router.lifecycle.handoff(),
         # The newest risk event's age and counts, without arrival evidence.
         "demand_risk": (controller.safety.risk_handoff() if controller is not None else None),
@@ -176,6 +180,24 @@ def load(path: Path) -> dict[str, Any] | None:
     return validate(doc)
 
 
+def _restore_reasons(router: NarwhalRouter, saved: Any) -> None:
+    """Restore reason counts; counts a handoff leaves unexplained stay `unclassified`."""
+    for terminal, counts in router.outcome_reasons.items():
+        counts.clear()
+        entries = saved.get(terminal) if isinstance(saved, dict) else None
+        if isinstance(entries, dict):
+            counts.update(
+                {
+                    str(reason): count
+                    for reason, count in entries.items()
+                    if isinstance(count, int) and not isinstance(count, bool) and count > 0
+                }
+            )
+        missing = getattr(router, terminal) - sum(counts.values())
+        if missing > 0:
+            counts["unclassified"] += missing
+
+
 def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     """Restore saved router state and hold failed engines for recovery probes."""
     now_wall = time.time()
@@ -230,6 +252,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     for name in HANDOFF_COUNTERS:
         setattr(router, name, int(counters.get(name, 0)))
     router.scheduler.unserved = int(counters.get("unserved", 0))
+    _restore_reasons(router, doc.get("outcome_reasons"))
     router.lifecycle.restore(doc.get("lifecycle"))
     controller = router.controller
     risk = doc.get("demand_risk")

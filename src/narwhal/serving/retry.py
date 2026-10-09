@@ -29,7 +29,7 @@ def transient(exc: BaseException) -> bool:
 class RetryPolicy:
     """Bound complete prefill/decode attempts for each original request."""
 
-    max_attempts: int = 1
+    max_attempts: int = 2
     base_delay_s: float = 0.1
     max_delay_s: float = 1.0
 
@@ -39,28 +39,41 @@ class RetryPolicy:
 
 
 class RetryBudget:
-    """Bound retry work to initial credits plus credits earned by completions."""
+    """Bound retry work to initial credits plus credits earned by completions.
+
+    A scheduled retry reserves one credit and spends it when the retry dispatches.
+    """
 
     def __init__(self, capacity: int, replenish: float) -> None:
         self.capacity = capacity
         self.replenish = Fraction(str(replenish))
         self._available = Fraction(capacity)
+        self.reserved = 0
         self.spent = 0
         self.denied = 0
 
     @property
     def available(self) -> float:
-        """Expose credit without rounding the accounting that gates retries."""
-        return float(self._available)
+        """Expose unreserved credit without rounding the accounting that gates retries."""
+        return float(self._available - self.reserved)
 
-    def acquire(self) -> bool:
-        """Consume one retry credit without waiting or borrowing."""
-        if self._available < 1:
+    def reserve(self) -> bool:
+        """Hold one unreserved credit for a scheduled retry, without waiting or borrowing."""
+        if self._available - self.reserved < 1:
             self.denied += 1
             return False
+        self.reserved += 1
+        return True
+
+    def spend(self) -> None:
+        """Spend a reserved credit as its retry dispatches."""
+        self.reserved -= 1
         self._available -= 1
         self.spent += 1
-        return True
+
+    def release(self) -> None:
+        """Return a reserved credit whose retry ended before dispatch."""
+        self.reserved -= 1
 
     def succeeded(self) -> None:
         """Credit one successful original request, capped at bucket capacity."""

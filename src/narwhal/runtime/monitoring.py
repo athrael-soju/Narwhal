@@ -62,9 +62,12 @@ class MonitoringLedger:
         self,
         clock: Callable[[], float] = time.monotonic,
         on_event: Callable[[dict], None] | None = None,
+        on_degraded: Callable[[], None] | None = None,
     ) -> None:
         self._clock = clock
         self._on_event = on_event
+        # Runs when degraded monitoring begins, so waiting requests leave promptly.
+        self._on_degraded = on_degraded
         self.stages = {name: MonitoringStage() for name in MONITOR_STAGES}
         self.core_consecutive = 0
         self.core_failures = 0
@@ -147,6 +150,8 @@ class MonitoringLedger:
                     "core_consecutive": self.core_consecutive,
                 }
             )
+            if self._on_degraded is not None:
+                self._on_degraded()
 
     def snapshot(self) -> dict[str, Any]:
         """Render the ledger for `/narwhal/state`."""
@@ -312,7 +317,7 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
                 router.cfg.liveness_misses,
             )
             continue
-        if router.scheduler.eject(iid):
+        if router.scheduler.eject(iid, "liveness"):
             misses.pop(iid, None)
             gone.append(iid)
             log.warning(
