@@ -34,7 +34,18 @@ DEFAULT_PANEL_FROM = "now-15m"
 DEFAULT_PANEL_REFRESH = "5s"
 RESTORE_HOOK = "restore"
 REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
-_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load", "console"}
+_KEYS = {
+    "host",
+    "port",
+    "token_env",
+    "runs_dir",
+    "fleet",
+    "hooks",
+    "router",
+    "prometheus_url",
+    "load",
+    "console",
+}
 _HOOK_KEYS = {"argv", "timeout_s"}
 _ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
 _CONSOLE_KEYS = {
@@ -100,7 +111,10 @@ class ConsoleConfig:
 
 @dataclass(frozen=True)
 class ControlConfig:
-    """Listener, credential, record location, baseline fleet, router, hooks, load and console."""
+    """Listener, credential, record location, baseline fleet, router, hooks, load and console.
+
+    `prometheus_url` is the Prometheus the service asks for firing alerts; None reports none.
+    """
 
     fleet: Path
     hooks: Mapping[str, Hook]
@@ -109,6 +123,7 @@ class ControlConfig:
     token_env: str = DEFAULT_TOKEN_ENV
     runs_dir: Path = DEFAULT_RUNS_DIR
     router: RouterEndpoint = RouterEndpoint()
+    prometheus_url: str | None = None
     load: LoadConfig | None = None
     console: ConsoleConfig | None = None
 
@@ -156,6 +171,9 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         problems.append("fleet must name the baseline fleet configuration (or set NARWHAL_FLEET)")
     hooks = _read_hooks(problems, raw.get("hooks"))
     router = _read_router(problems, raw.get("router", {}))
+    prometheus = raw.get("prometheus_url")
+    if prometheus is not None and (not isinstance(prometheus, str) or not _is_http_url(prometheus)):
+        problems.append(f"prometheus_url must be an http or https URL, got {prometheus!r}")
     load = read_load(problems, raw["load"]) if "load" in raw else None
     console = read_console(problems, raw["console"]) if "console" in raw else None
     if problems:
@@ -168,6 +186,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         token_env=str(token_env),
         runs_dir=Path(str(runs_dir)),
         router=router,
+        prometheus_url=None if prometheus is None else str(prometheus).rstrip("/"),
         load=load,
         console=console,
     )

@@ -37,6 +37,7 @@ from tools.fleet_control.console import (
 from tools.fleet_control.engines import ACTIONS, EngineActions, engine_routes
 from tools.fleet_control.overlays import Overlays, overlay_routes
 from tools.fleet_control.service import ControlService
+from tools.fleet_control.signals import FleetSignals, signal_routes
 from tools.fleet_control.workloads import LoadConfig, Workload
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -256,6 +257,7 @@ class ConsoleCase(unittest.IsolatedAsyncioTestCase):
                 console_routes(self.config, TOKEN),
                 engine_routes(EngineActions(service)),
                 overlay_routes(Overlays(service)),
+                signal_routes(FleetSignals(service)),
                 workload_routes(LOAD),
             ],
             public=PUBLIC_PATHS,

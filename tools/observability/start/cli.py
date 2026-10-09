@@ -10,7 +10,12 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from tools.observability.artifacts import console_url, stage_artifacts
+from tools.observability.artifacts import (
+    ControlTarget,
+    console_url,
+    control_target,
+    stage_artifacts,
+)
 from tools.observability.make_targets import TargetContract, load_contract
 
 from .listeners import check_listeners
@@ -26,13 +31,14 @@ def start(
     *,
     get: HttpGet = http_get,
     timeout_s: float = DEFAULT_READY_TIMEOUT_S,
-    target_writer: Callable[[TargetContract, str], None] = stage_artifacts,
+    target_writer: Callable[[TargetContract, str, ControlTarget | None], None] = stage_artifacts,
 ) -> dict[str, Container]:
     """Check listeners, launch Compose and verify the resulting services."""
     services = configured_services(env)
     console = console_url(env)
+    control = control_target(env)
     check_listeners(services, stack)
-    target_writer(contract, console)
+    target_writer(contract, console, control)
     stack.up()
     launched = wait_ready(services, stack, get=get, timeout_s=timeout_s)
     prometheus = next(service for service in services if service.name == "prometheus")

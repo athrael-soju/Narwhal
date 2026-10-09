@@ -406,7 +406,7 @@ class ReadinessTests(unittest.TestCase):
                 {},
                 stack,
                 self.contract,
-                target_writer=lambda contract, console: calls.append(f"targets {console}"),
+                target_writer=lambda contract, console, control: calls.append(f"targets {console}"),
             )
         self.assertEqual(calls, ["listeners", "targets http://127.0.0.1:18020/console", "up"])
 

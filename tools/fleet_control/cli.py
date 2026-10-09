@@ -19,6 +19,7 @@ from .console import PUBLIC_PATHS, console_routes
 from .engines import EngineActions, engine_routes
 from .overlays import Overlays, overlay_routes
 from .service import ControlService
+from .signals import FleetSignals, signal_routes
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -49,6 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         console_routes(config, token),
         engine_routes(EngineActions(service)),
         overlay_routes(Overlays(service)),
+        signal_routes(FleetSignals(service)),
     ]
     if config.load is not None:
         routers.append(workload_routes(config.load))
