@@ -1,13 +1,16 @@
 """Engine actions: hook-driven pause, resume, stop and start, and router drain and readmit.
 
 Each action names one engine from the session's baseline fleet configuration and records
-that engine's router state before and after the action.
+that engine's router state before and after the action. Start and resume also wait until the
+router returns the engine to service, because a hook can exit 0 before the engine answers.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -39,6 +42,10 @@ ACTION_PARAMS: dict[str, frozenset[str]] = {"drain": frozenset({"deadline_s"})}
 STATE_PATH = "/narwhal/state"
 # State reads use this shorter limit so a hung router cannot hold an action for router.timeout_s.
 STATE_TIMEOUT_S = 10.0
+# Hook actions after which the engine must be back in service. The router probes an ejected
+# engine every 10 s by default and readmits it once its checks pass.
+RETURNING_ACTIONS = frozenset({"start", "resume"})
+RETURN_POLL_S = 2.0
 
 
 class StateUnavailable(Exception):
@@ -49,10 +56,14 @@ class EngineActions:
     """Run engine actions through the service so each one is recorded."""
 
     def __init__(
-        self, service: ControlService, transport: httpx.AsyncBaseTransport | None = None
+        self,
+        service: ControlService,
+        transport: httpx.AsyncBaseTransport | None = None,
+        poll_s: float = RETURN_POLL_S,
     ) -> None:
         self.service = service
         self._transport = transport
+        self._poll_s = poll_s
 
     def _client(self) -> httpx.AsyncClient:
         router = self.service.config.router
@@ -73,6 +84,10 @@ class EngineActions:
                 try:
                     if hook is not None:
                         effect = await self._run_hook(hook, session, engine, action)
+                        if action in RETURNING_ACTIONS:
+                            effect["service"] = await self._await_service(
+                                client, iid, before, effect
+                            )
                     else:
                         effect = await self._lifecycle(client, iid, action, params)
                 except ActionError as exc:
@@ -112,6 +127,40 @@ class EngineActions:
         if not result.ok:
             raise ActionError(f"{hook.name} hook {hook_failure(hook, result)}", result=effect)
         return effect
+
+    async def _await_service(
+        self,
+        client: httpx.AsyncClient,
+        iid: str,
+        before: Mapping[str, Any],
+        effect: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Wait up to `router.timeout_s` for the router to return `iid` to service.
+
+        Fail early when the router blocks the engine's readmission or reports that its profiles
+        no longer match the restarted process.
+        """
+        limit = self.service.config.router.timeout_s
+        started = time.monotonic()
+        seen = before.get("event")
+        while True:
+            state = await self.engine_state(client, iid)
+            waited = round(time.monotonic() - started, 3)
+            report = {"in_service": False, "waited_s": waited}
+            if "error" not in state:
+                if not state["ejected"]:
+                    return {**report, "in_service": True}
+                problem = _return_blocked(iid, state, seen)
+                if problem:
+                    raise ActionError(problem, result={**effect, "service": report})
+            if waited >= limit:
+                reason = state.get("error") or f"the router still ejects {iid}"
+                raise ActionError(
+                    f"{iid} did not return to service within {limit:g}s: {reason}",
+                    status=504,
+                    result={**effect, "service": report},
+                )
+            await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
 
     async def _lifecycle(
         self, client: httpx.AsyncClient, iid: str, action: str, params: Mapping[str, Any]
@@ -186,10 +235,12 @@ def engine_slice(state: Mapping[str, Any], iid: str) -> dict[str, Any]:
     """Return one engine's part of a `narwhal.state` document.
 
     The slice holds the engine's pool, its availability flags, its resident work, its breaker
-    streaks, its lifecycle record and process start, and the router's readiness and wave.
+    streaks, its lifecycle record and process start, the router's readiness and wave, and the
+    router's latest lifecycle event for the engine, which names why an ejected engine stays out.
     """
     pools = state["pools"]
     lifecycle = state["lifecycle"]
+    events = [e for e in lifecycle.get("events", []) if isinstance(e, dict) and e.get("iid") == iid]
     return {
         "known": iid in state["resident"],
         "role": next((role for role in ("prefill", "decode") if iid in pools[role]), None),
@@ -204,7 +255,27 @@ def engine_slice(state: Mapping[str, Any], iid: str) -> dict[str, Any]:
         "process_start": lifecycle.get("process_starts", {}).get(iid),
         "router": lifecycle["router"],
         "wave": lifecycle["wave"],
+        "event": _event(events[-1]) if events else None,
     }
+
+
+def _event(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: event.get(key) for key in ("action", "at", "error")}
+
+
+def _return_blocked(iid: str, state: Mapping[str, Any], seen: object) -> str:
+    """Return why the router will not readmit `iid` without an operator, or an empty string."""
+    lifecycle = state.get("lifecycle") or {}
+    if lifecycle.get("state") == "blocked":
+        return f"the router blocked readmission of {iid}: {lifecycle.get('error') or 'no reason'}"
+    event = state.get("event")
+    if (
+        event != seen
+        and isinstance(event, dict)
+        and event.get("action") == "profile_recovery_blocked"
+    ):
+        return f"{iid} needs fresh profiles before the router readmits it: {event.get('error')}"
+    return ""
 
 
 def hook_failure(hook: Hook, result: HookResult) -> str:

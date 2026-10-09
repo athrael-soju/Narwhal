@@ -31,7 +31,7 @@ export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 
 ### Scraping the fleet control service
 
-To mark [fleet control](../operate/06-Controlling-the-Fleet.md#dashboard-annotations) actions and load jobs on the **Fleet control** dashboard, Prometheus must scrape the fleet control service. Before `make observe`, set its address and token:
+To mark [fleet control](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations) actions and load jobs on the **Fleet control** dashboard, Prometheus must scrape the fleet control service. Before `make observe`, set its address and token:
 
 ```bash
 export NARWHAL_CONTROL_METRICS_URL=http://127.0.0.1:8020

@@ -481,8 +481,14 @@ dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
       <div class="fields">
         <div class="field wide"><label for="job-workload" class="lbl">Workload</label><select id="job-workload"></select></div>
         <div class="field"><label for="job-rate" class="lbl">Rate (req/s)</label><input id="job-rate" type="number" min="0" step="any" inputmode="decimal"></div>
+        <div class="field"><label for="job-arrival" class="lbl">Arrival</label><select id="job-arrival">
+          <option value="">Random (default)</option><option value="steady">Steady</option><option value="bursty">Bursty</option>
+        </select></div>
         <div class="field"><label for="job-concurrency" class="lbl">Concurrency</label><input id="job-concurrency" type="number" min="1" step="1" inputmode="numeric"></div>
+        <div class="field"><label for="job-ramp" class="lbl">Ramp-up (s)</label><input id="job-ramp" type="number" min="0" step="any" inputmode="decimal"></div>
         <div class="field"><label for="job-duration" class="lbl">Duration (s)</label><input id="job-duration" type="number" min="0" step="any" inputmode="decimal"></div>
+        <div class="field"><label for="job-requests" class="lbl">Requests</label><input id="job-requests" type="number" min="1" step="1" inputmode="numeric"></div>
+        <div class="field"><label for="job-warmup" class="lbl">Warm-up requests</label><input id="job-warmup" type="number" min="1" step="1" inputmode="numeric"></div>
       </div>
       <p id="workload-hint" class="hint"></p>
       <div class="row">
@@ -977,18 +983,40 @@ function engineStatus(slice, process) {
   if (process) return { label: process.state, tone: "muted" };
   const lifecycle = lifecycleState(slice);
   if (lifecycle && lifecycle !== "active") return { label: lifecycle.replace("_", " "), tone: LIFECYCLE_TONES[lifecycle] || "muted" };
-  if (slice.ejected) return { label: "ejected", tone: "bad" };
+  if (slice.ejected) return { label: needsProfiles(slice) ? "needs profiles" : "ejected", tone: "bad" };
   if (slice.quarantined) return { label: "quarantined", tone: "orange" };
   if (slice.probation) return { label: "probation", tone: "warn" };
   if (!slice.known) return { label: "not in router", tone: "muted" };
   return { label: "in service", tone: "ok" };
 }
 
+// Start and resume wait until the router returns the engine to service.
+function returningStatus(iid) {
+  const pending = state.pending.get("engine:" + iid);
+  const match = pending && /^(start|resume) /.exec(pending.label);
+  if (!match) return null;
+  return { label: (match[1] === "start" ? "starting" : "resuming") + " · " + wholeSeconds(Date.now() - pending.started) + " s", tone: "warn" };
+}
+
+// The router keeps a restarted engine ejected until its profiles match the new process.
+function needsProfiles(slice) {
+  return Boolean(slice && !slice.error && slice.event && slice.event.action === "profile_recovery_blocked");
+}
+
+function ejectedReason(iid, slice) {
+  if (needsProfiles(slice)) {
+    return iid + " needs fresh profiles before the router readmits it (" + text(slice.event.error)
+      + "). Profile the engine and restart the router with the new profiles.";
+  }
+  const event = slice.event ? " Latest router event: " + slice.event.action.replace(/_/g, " ") + "." : "";
+  return "The router readmits " + iid + " when its recovery checks pass." + event;
+}
+
 function engineTags(slice, status) {
   if (!slice || slice.error) return [];
   const tags = [];
   for (const flag of ["ejected", "quarantined", "probation", "pinned"]) {
-    if (slice[flag] && status.label !== flag) tags.push(flag);
+    if (slice[flag] && status.label !== flag && !(flag === "ejected" && needsProfiles(slice))) tags.push(flag);
   }
   return tags;
 }
@@ -1020,7 +1048,7 @@ function primaryAction(slice, process) {
   if (process) return process.state === "stopped" ? "start" : "resume";
   const lifecycle = lifecycleState(slice);
   if (lifecycle && lifecycle !== "active") return "readmit";
-  // The router readmits an ejected engine by itself once the engine answers its checks.
+  // Readmit stays the main action for an ejected engine so its row shows the router's reason.
   if (slice && !slice.error && slice.ejected) return "readmit";
   return "drain";
 }
@@ -1040,7 +1068,7 @@ function engineGate(iid, action, slice, process, others) {
     if (others) return others + "; the router runs one lifecycle action at a time.";
   } else if (action === "readmit") {
     if (!lifecycle) return "The router state is unavailable.";
-    if (lifecycle === "active" && slice.ejected) return "The router readmits " + iid + " by itself once its health and attestation checks pass.";
+    if (lifecycle === "active" && slice.ejected) return ejectedReason(iid, slice);
     if (restartPending(slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
     if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
   } else if (action === "pause") {
@@ -1249,7 +1277,7 @@ function renderEngines() {
     const process = processes[iid];
     const row = engineRow(iid);
     const role = slice && !slice.error ? slice.role : null;
-    const status = engineStatus(slice, process);
+    const status = returningStatus(iid) || engineStatus(slice, process);
     if (role && !process && !(slice.ejected)) serving[role] += 1;
     const drain = activeDrain(iid, slice, last[iid]);
     row.tr.classList.toggle("active", Boolean(drain));
@@ -1404,7 +1432,8 @@ async function engineAction(iid, action) {
   if (action === "drain" && deadline !== "") body.deadline_s = Number(deadline);
   const effects = {
     pause: "Runs the engine_pause hook for " + iid + ". The router ejects an engine that stops answering, so it leaves service until it resumes.",
-    stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering.",
+    stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering. "
+      + "Start runs the engine_start hook and waits until the router returns the engine to service.",
     drain: "The router stops placing new requests on " + iid + " and waits for its resident requests to finish"
       + (body.deadline_s ? ", for at most " + body.deadline_s + " s." : ", until the router's default deadline. Set Drain deadline in the session strip to limit it."),
   };
@@ -1432,24 +1461,74 @@ async function loadWorkloads(enabled) {
   state.workloads = {};
   const options = reply.body.workloads.map((workload) => {
     state.workloads[workload.name] = workload;
-    return el("option", { value: workload.name, textContent: workload.name });
+    return el("option", { value: workload.name, textContent: workload.label || workload.name });
   });
   $("job-workload").replaceChildren(...options);
   workloadHint();
 }
 
+const CACHE_BUST_PLACES = {
+  system_prefix: "start of the system prompt",
+  system_suffix: "end of the system prompt",
+  first_turn_prefix: "start of the first message",
+  first_turn_suffix: "end of the first message",
+};
+
+const DATASET_NAMES = { sharegpt: "ShareGPT" };
+
+function tokens(value) {
+  return amount(value, 0) + " tokens";
+}
+
+function tokenSized(value) {
+  return amount(value, 0) + "-token";
+}
+
+function workloadShape(workload) {
+  // Without ignore_eos the model can end an answer before the requested length.
+  const answer = workload.ignore_eos ? "full-length answers of about " : "answers of up to about ";
+  if (workload.kind === "synthetic") {
+    return "Generated prompts of about " + tokens(workload.isl) + " with " + answer + tokens(workload.osl) + ".";
+  }
+  if (workload.kind === "mixed") {
+    const sizes = workload.mix.map((size) => amount(size.percent, 0) + "% " + amount(size.isl, 0) + " in, " + amount(size.osl, 0) + " out");
+    return "Generated prompts in " + workload.mix.length + " sizes (" + sizes.join("; ") + " tokens).";
+  }
+  if (workload.kind === "multi_turn") {
+    return "Generated conversations of about " + amount(workload.turns, 0) + " turns, " + amount(workload.turn_delay_s) + " s apart. Each turn adds about "
+      + tokens(workload.isl) + " and asks for " + answer + tokens(workload.osl) + ". Rate counts turns; Concurrency counts conversations.";
+  }
+  if (workload.kind === "public_dataset") return "Recorded chat prompts from the " + (DATASET_NAMES[workload.dataset] || workload.dataset) + " dataset, each answer up to its recorded length.";
+  if (workload.kind === "timestamped_trace") return "Replays a recorded trace at the times its requests originally arrived.";
+  return "Replays a recorded trace whose prompts share opening text, at the pace you set.";
+}
+
+function workloadExtras(workload) {
+  const extras = [];
+  if (workload.system_prompt_tokens) extras.push("Every request shares one " + tokenSized(workload.system_prompt_tokens) + " system prompt.");
+  if (workload.prefix_prompts) extras.push("Each request starts with one of " + amount(workload.prefix_prompts, 0) + " shared " + tokenSized(workload.prefix_tokens) + " prefixes.");
+  if (workload.cache_bust) extras.push("A unique marker at the " + CACHE_BUST_PLACES[workload.cache_bust] + " stops prefix reuse between conversations.");
+  if (workload.cancel_percent) extras.push(amount(workload.cancel_percent, 0) + "% of requests are cancelled " + amount(workload.cancel_after_s) + " s after sending.");
+  return extras;
+}
+
 function workloadHint() {
   const workload = state.workloads[$("job-workload").value];
   if (!workload) { $("workload-hint").textContent = ""; return; }
-  const shape = workload.kind === "synthetic"
-    ? "Synthetic prompts of " + amount(workload.isl, 0) + " input and " + amount(workload.osl, 0) + " output tokens. "
-    : capital(workload.kind.replace("_", " ")) + ". ";
-  $("workload-hint").textContent = shape + (workload.kind === "timestamped_trace"
-    ? "The trace replays its recorded arrival times: leave Rate empty. Concurrency and Duration are optional caps."
-    : "Set Duration and a Rate, a Concurrency or both.");
+  const pacing = workload.kind === "timestamped_trace"
+    ? "The trace sets arrival times: leave Rate, Arrival, Ramp-up and Warm-up empty. Concurrency, Duration and Requests are optional caps."
+    : "Set a Rate, a Concurrency or both, and a Duration, a Requests limit or both. Arrival applies to Rate.";
+  // The configuration's description replaces the summary built from the workload's settings.
+  const summary = workload.description ? [workload.description] : [workloadShape(workload), ...workloadExtras(workload)];
+  const parts = [...summary, pacing];
+  $("workload-hint").textContent = parts.filter(Boolean).join(" ");
 }
 
-const JOB_FIELDS = [["rate", "job-rate"], ["concurrency", "job-concurrency"], ["duration_s", "job-duration"]];
+const JOB_FIELDS = [
+  ["rate", "job-rate"], ["concurrency", "job-concurrency"], ["ramp_s", "job-ramp"],
+  ["duration_s", "job-duration"], ["requests", "job-requests"], ["warmup_requests", "job-warmup"],
+];
+const JOB_INPUTS = ["job-workload", "job-arrival", ...JOB_FIELDS.map(([, id]) => id)];
 
 function jobParams() {
   const params = { workload: $("job-workload").value };
@@ -1457,6 +1536,7 @@ function jobParams() {
     const value = $(id).value;
     if (value !== "") params[key] = Number(value);
   }
+  if ($("job-arrival").value) params.arrival = $("job-arrival").value;
   return params;
 }
 
@@ -1490,7 +1570,7 @@ function renderJob() {
   const gate = sessionGate();
   setControl($("job-start"), state.pending.has("job") ? "The job request is running." : gate || (running ? job.id + " is running." : ""));
   setControl($("job-stop"), state.pending.has("job") ? "The job request is running." : !health.session ? "Start a session first." : running ? "" : "No load job is running.");
-  for (const id of ["job-workload", "job-rate", "job-concurrency", "job-duration"]) $(id).disabled = running;
+  for (const id of JOB_INPUTS) $(id).disabled = running;
   $("job-title").textContent = job ? "· " + job.id : "";
   const progress = jobProgress(job);
   $("job-state").textContent = job ? job.state + (progress && progress.label ? " · " + progress.label : "") : "No load job";
@@ -1505,6 +1585,7 @@ function renderJob() {
   if (running) {
     if (state.workloads[job.params.workload]) $("job-workload").value = job.params.workload;
     for (const [field, id] of JOB_FIELDS) $(id).value = job.params[field] === undefined ? "" : job.params[field];
+    $("job-arrival").value = job.params.arrival || "";
     workloadHint();
   }
   const result = (job && !running && job.result) || {};

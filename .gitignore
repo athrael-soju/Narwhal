@@ -36,6 +36,8 @@ dist/
 htmlcov/
 site/
 .hypothesis/
+# AIPerf public datasets, downloaded under the load job's working directory
+.cache/
 
 # Vendored / generated
 local/bin/

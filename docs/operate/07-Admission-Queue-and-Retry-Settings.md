@@ -181,14 +181,14 @@ Change the limit under these conditions:
 - Raise it when served streams on your engines or workload show longer inter-chunk gaps, such as on a decode engine that runs long prefills locally.
 - Lower it to end streams on a hung decode engine sooner, while keeping it above the largest gap of healthy streams.
 
-A [configuration overlay](06-Controlling-the-Fleet.md#configuration-overlays-cold-restarts-and-restores) cannot change the `engine` section. Change this field in the fleet file, then restart the router.
+A [configuration overlay](fleet-control/07-Configuration-Changes.md#configuration-overlays) cannot change the `engine` section. Change this field in the fleet file, then restart the router.
 
 ## Checking a changed setting
 
 Run a candidate value against the same request mix and offered load as the current value:
 
-1. On a test fleet, apply the value with a [configuration overlay](06-Controlling-the-Fleet.md#configuration-overlays-cold-restarts-and-restores), or edit the fleet file and restart the router.
-2. Run load at and above the fleet's capacity with a [load job](06-Controlling-the-Fleet.md#load-jobs).
+1. On a test fleet, apply the value with a [configuration overlay](fleet-control/07-Configuration-Changes.md#configuration-overlays), or edit the fleet file and restart the router.
+2. Run load at and above the fleet's capacity with a [load job](fleet-control/06-Load-Jobs.md).
 3. Classify the outcomes by reason with the queries in [Fleet overload with healthy engines](../Troubleshoot.md#1-classify-outcomes-by-reason).
 4. Compare completed requests and the requests meeting the SLO, from `narwhal_served_total` and `narwhal_slo_met_total`, with the current value's run.
 

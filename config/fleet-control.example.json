@@ -51,18 +51,109 @@
       "inter_token_latency": 125
     },
     "workloads": {
-      "synthetic-512-256": {
+      "short-chat": {
         "kind": "synthetic",
+        "label": "Short chat",
+        "description": "Generated chat prompts of about 512 tokens with answers of up to about 256 tokens.",
         "isl": 512,
-        "osl": 256
+        "isl_stddev": 128,
+        "osl": 256,
+        "osl_stddev": 64
       },
-      "timestamped-trace": {
+      "long-prompt-short-answer": {
+        "kind": "synthetic",
+        "label": "Long prompt, short answer",
+        "description": "8192-token prompts with 128-token answers. Most of the work is prefill.",
+        "isl": 8192,
+        "osl": 128,
+        "ignore_eos": true
+      },
+      "short-prompt-long-answer": {
+        "kind": "synthetic",
+        "label": "Short prompt, long answer",
+        "description": "256-token prompts with 2048-token answers. Most of the work is decode.",
+        "isl": 256,
+        "osl": 2048,
+        "ignore_eos": true
+      },
+      "mixed-sizes": {
+        "kind": "mixed",
+        "label": "Mixed request sizes",
+        "description": "A quarter short, half medium and a quarter long requests, drawn at random.",
+        "mix": [
+          {"isl": 128, "osl": 64, "percent": 25},
+          {"isl": 512, "osl": 256, "percent": 50},
+          {"isl": 4096, "osl": 256, "percent": 25}
+        ]
+      },
+      "shared-system-prompt": {
+        "kind": "synthetic",
+        "label": "Same system prompt on every request",
+        "description": "Every request starts with the same 2000-token system prompt, followed by a 512-token question.",
+        "isl": 512,
+        "osl": 256,
+        "system_prompt_tokens": 2000
+      },
+      "repeated-documents": {
+        "kind": "synthetic",
+        "label": "Questions about a few documents",
+        "description": "Each request starts with one of 8 shared 4096-token documents, followed by a 256-token question.",
+        "isl": 256,
+        "osl": 256,
+        "prefix_prompts": 8,
+        "prefix_tokens": 4096
+      },
+      "no-prompt-reuse": {
+        "kind": "synthetic",
+        "label": "No prompt reuse",
+        "description": "512-token prompts that each start with a unique marker, so no request reuses another's cached prefix.",
+        "isl": 512,
+        "osl": 256,
+        "cache_bust": "first_turn_prefix"
+      },
+      "multi-turn-chat": {
+        "kind": "multi_turn",
+        "label": "Multi-turn conversations",
+        "description": "Conversations of about 4 turns with 2 seconds between turns. Each turn resends the conversation so far.",
+        "isl": 256,
+        "osl": 256,
+        "turns": 4,
+        "turns_stddev": 1,
+        "turn_delay_s": 2
+      },
+      "real-chat-prompts": {
+        "kind": "public_dataset",
+        "label": "Real chat prompts (ShareGPT)",
+        "description": "Recorded human chat prompts from the ShareGPT dataset, with each answer up to the recorded answer's length.",
+        "dataset": "sharegpt"
+      },
+      "clients-give-up": {
+        "kind": "synthetic",
+        "label": "Clients that give up",
+        "description": "Short chat requests where 10% of clients cancel 2 seconds after sending.",
+        "isl": 512,
+        "osl": 256,
+        "cancel_percent": 10,
+        "cancel_after_s": 2
+      },
+      "recorded-traffic": {
         "kind": "timestamped_trace",
-        "file": "/path/to/timestamped-trace.jsonl"
+        "label": "Recorded traffic, original timing",
+        "description": "Replays recorded requests at the times they originally arrived, including bursts and quiet gaps.",
+        "file": "/path/to/recorded-traffic.jsonl"
       },
-      "reused-prefix-trace": {
+      "recorded-prompts-paced": {
         "kind": "prefix_trace",
-        "file": "/path/to/reused-prefix-trace.jsonl",
+        "label": "Recorded prompts at a set pace",
+        "description": "Replays recorded prompts whose opening text repeats across requests, at the rate or concurrency you set.",
+        "file": "/path/to/recorded-prompts.jsonl",
+        "block_size": 512
+      },
+      "coding-agent-sessions": {
+        "kind": "prefix_trace",
+        "label": "Coding agent sessions",
+        "description": "Long coding-agent sessions whose context grows each turn, generated with aiperf synthesize agentic-code.",
+        "file": "/path/to/coding-agent-sessions.jsonl",
         "block_size": 512
       }
     }

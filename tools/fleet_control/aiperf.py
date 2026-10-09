@@ -23,7 +23,7 @@ from .config import ControlConfig
 from .hooks import tail, terminate
 from .jobs import Job
 from .records import owner_only
-from .workloads import LoadConfig, Workload, validate_params
+from .workloads import ARRIVALS, BURSTY_SMOOTHNESS, LoadConfig, Workload, validate_params
 
 ARTIFACTS = "aiperf"
 LOG = "aiperf.log"
@@ -62,30 +62,86 @@ def command(
         argv.append("--streaming")
     argv += ["--ui", "none", "--no-gpu-telemetry", "--export-level", "records"]
     argv += ["--artifact-dir", str(artifacts)]
-    if workload.kind == "synthetic":
-        assert workload.isl is not None and workload.osl is not None
-        argv += ["--isl", _value(workload.isl), "--isl-stddev", _value(workload.isl_stddev)]
-        argv += ["--osl", _value(workload.osl), "--osl-stddev", _value(workload.osl_stddev)]
-    else:
-        argv += ["--input-file", str(workload.file), "--custom-dataset-type", TRACE_FORMAT]
-        if workload.kind == "timestamped_trace":
-            argv += ["--fixed-schedule", "--fixed-schedule-auto-offset"]
-        else:
-            # Pace the trace by the job's rate and concurrency, not by any record timestamps.
-            argv.append("--no-fixed-schedule")
-        if workload.block_size is not None:
-            argv += ["--isl-block-size", _value(workload.block_size)]
+    argv += _dataset_args(workload)
+    if workload.system_prompt_tokens is not None:
+        argv += ["--shared-system-prompt-length", _value(workload.system_prompt_tokens)]
+    if workload.prefix_prompts is not None and workload.prefix_tokens is not None:
+        argv += ["--num-prefix-prompts", _value(workload.prefix_prompts)]
+        argv += ["--prefix-prompt-length", _value(workload.prefix_tokens)]
+    if workload.cache_bust is not None:
+        argv += ["--cache-bust", workload.cache_bust]
+    if workload.cancel_percent is not None:
+        argv += ["--request-cancellation-rate", _value(workload.cancel_percent)]
+        argv += ["--request-cancellation-delay", _value(workload.cancel_after_s)]
     if "rate" in params:
         argv += ["--request-rate", _value(params["rate"])]
+        pattern = ARRIVALS.get(params.get("arrival", ""))
+        if pattern is not None:
+            argv += ["--arrival-pattern", pattern]
+            if pattern == "gamma":
+                argv += ["--arrival-smoothness", _value(BURSTY_SMOOTHNESS)]
     if "concurrency" in params:
         argv += ["--concurrency", _value(params["concurrency"])]
+    if "ramp_s" in params:
+        ramp = _value(params["ramp_s"])
+        if "rate" in params:
+            argv += ["--request-rate-ramp-duration", ramp]
+        if "concurrency" in params:
+            argv += ["--concurrency-ramp-duration", ramp]
+    if "requests" in params:
+        argv += ["--request-count", _value(params["requests"])]
     if "duration_s" in params:
         argv += ["--benchmark-duration", _value(params["duration_s"])]
         if load.grace_period_s is not None:
             argv += ["--benchmark-grace-period", _value(load.grace_period_s)]
+    if "warmup_requests" in params:
+        argv += ["--warmup-request-count", _value(params["warmup_requests"])]
     if load.goodput:
         argv += ["--goodput", " ".join(f"{t}:{_value(v)}" for t, v in load.goodput.items())]
+    if workload.ignore_eos:
+        argv += ["--extra-inputs", "ignore_eos:true"]
     return argv + list(load.extra_args)
+
+
+def _dataset_args(workload: Workload) -> list[str]:
+    """Return the AIPerf arguments that select the workload's prompts."""
+    if workload.kind in ("synthetic", "multi_turn"):
+        assert workload.isl is not None and workload.osl is not None
+        argv = ["--isl", _value(workload.isl), "--isl-stddev", _value(workload.isl_stddev)]
+        argv += ["--osl", _value(workload.osl), "--osl-stddev", _value(workload.osl_stddev)]
+        if workload.kind == "multi_turn":
+            assert workload.turns is not None
+            argv += ["--conversation-turn-mean", _value(workload.turns)]
+            argv += ["--conversation-turn-stddev", _value(workload.turns_stddev)]
+            # AIPerf takes turn delays in milliseconds.
+            delay, spread = workload.turn_delay_s * 1000, workload.turn_delay_stddev_s * 1000
+            argv += ["--conversation-turn-delay-mean", _value(delay)]
+            argv += ["--conversation-turn-delay-stddev", _value(spread)]
+        return argv
+    if workload.kind == "mixed":
+        pairs = [
+            {
+                "isl": entry.isl,
+                "isl_stddev": entry.isl_stddev,
+                "osl": entry.osl,
+                "osl_stddev": entry.osl_stddev,
+                "prob": entry.percent,
+            }
+            for entry in workload.mix
+        ]
+        return ["--seq-dist", json.dumps({"pairs": pairs}, separators=(",", ":"))]
+    if workload.kind == "public_dataset":
+        assert workload.dataset is not None
+        return ["--public-dataset", workload.dataset]
+    argv = ["--input-file", str(workload.file), "--custom-dataset-type", TRACE_FORMAT]
+    if workload.kind == "timestamped_trace":
+        argv += ["--fixed-schedule", "--fixed-schedule-auto-offset"]
+    else:
+        # Pace the trace by the job's rate and concurrency, not by any record timestamps.
+        argv.append("--no-fixed-schedule")
+    if workload.block_size is not None:
+        argv += ["--isl-block-size", _value(workload.block_size)]
+    return argv
 
 
 def _metric(summary: Mapping[str, Any], tag: str) -> dict[str, Any] | None:

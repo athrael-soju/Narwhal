@@ -1,0 +1,55 @@
+---
+description: Diagnose fleet control console problems from the first visible symptom, including empty console panels, missing chart markers, and engines stuck after a drain or stop.
+---
+
+# Troubleshooting the console
+
+## A console panel shows a browser error page
+
+The browser refused to show the console in a Grafana frame. From the router shell, read the console's framing headers:
+
+```bash
+curl -sS -D - -o /dev/null http://127.0.0.1:8020/console | grep -iE 'x-frame-options|content-security-policy'
+```
+
+- `X-Frame-Options: DENY` or `frame-ancestors 'none'`: `console.embed_in_grafana` is off. Set it to `true` and restart the service.
+- `frame-ancestors` with another origin: `console.grafana_url` differs from the Grafana address in the browser. Set it to the origin in the browser's address bar and restart the service.
+
+Reload the dashboard. Each console panel shows **Control token** or connects.
+
+## Charts in the standalone console are empty frames
+
+Grafana is refusing to be framed. The `make observe` Compose file sets `GF_SECURITY_ALLOW_EMBEDDING` to `true`, but a Grafana instance started before that setting existed still sends `X-Frame-Options: deny`.
+
+Run `make observe` on the router host to recreate Grafana, then reload the console.
+
+## Chart markers are missing for actions and load jobs
+
+Query the scrape status of the control service:
+
+```bash
+curl -fsSG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=up{job="fleet-control"}' \
+  | python3 -m json.tool
+```
+
+- Empty result: `NARWHAL_CONTROL_METRICS_URL` was unset when `make observe` last ran. Set it and `NARWHAL_CONTROL_TOKEN`, as in [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations), and run `make observe` again.
+- Value `0`: open Prometheus `/targets` and read the `fleet-control` scrape error. HTTP 401 means Prometheus holds an old token; export the current token and run `make observe` again. A refused connection means `NARWHAL_CONTROL_METRICS_URL` names the wrong address.
+
+Run an engine action to confirm the fix. Its marker appears on **Request outcomes** after the action finishes.
+
+## Readmit stays disabled after a drain
+
+**Readmit** shows `<engine> must restart before readmission: stop and start it, or restart the engine wave.`
+
+The router readmits this engine only after its process restarts.
+
+1. Restart the engine with **Stop**, then **Start**. Without those hooks, restart it through its process manager, as in [Replacing the process](../03-Restart-Engines.md#72-replacing-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave).
+2. Wait until **Readmit** is enabled.
+3. Select **Readmit**. The engine returns to `in service`.
+
+## An engine fails to start after a stop
+
+**Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release).
+
+Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave). The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
