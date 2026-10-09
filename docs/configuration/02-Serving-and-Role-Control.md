@@ -141,6 +141,7 @@ A hold ends waiting requests with the HTTP 503 of a router that is [not ready](.
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | [Whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
 | Degraded engine monitoring                                                      | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
+| Lost or failed router lease                                                     | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
 
 A request in its prefill leg when a whole-wave hold begins receives the 503 when its prefill completes. The router also returns the 503 to a request that reaches prefill placement during a whole-wave hold. The same applies while the router is standby, fenced or in degraded engine monitoring.
 

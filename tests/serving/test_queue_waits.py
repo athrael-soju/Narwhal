@@ -268,6 +268,20 @@ class HoldTests(QueueWaitHarness):
         release_decode()
         self.assert_released()
 
+    async def test_a_lost_lease_ends_prefill_waits_and_lets_prefilled_requests_decode(self):
+        release_decode, prefilled, prefilling, seat, admission = await self.start_waiters()
+        self.router.standby = True
+        self.router.failover_blocked = "lease renewal failed"
+        for task in (seat, admission):
+            self.assert_held_503(await asyncio.wait_for(task, timeout=2), "lease renewal failed")
+        self.assertFalse(prefilled.done())
+        release_decode(1)
+        self.assertEqual((await asyncio.wait_for(prefilled, timeout=2)).status_code, 200)
+        self.blocked.set()
+        self.assertEqual((await asyncio.wait_for(prefilling, timeout=2)).status_code, 200)
+        release_decode()
+        self.assert_released()
+
 
 class ProducerDecodeTests(QueueWaitHarness):
     async def test_a_decode_seat_wait_skips_its_producer_after_a_role_change(self):

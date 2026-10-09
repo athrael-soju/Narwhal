@@ -90,7 +90,7 @@ class NarwhalRouter:
         self.lease: FileLease | None = None
         self.lease_epoch = 0
         self.lease_holder = ""
-        self.failover_blocked = ""
+        self._failover_blocked = ""
         self._lifecycle_blocked = ""
         self.first_token_calibration = CalibrationCheck("uncalibrated")
         # One injectable monotonic clock for scheduling and measurement.
@@ -265,6 +265,17 @@ class NarwhalRouter:
         self.monitoring = MonitoringLedger(
             clock, on_event=self.journal.write, on_degraded=self.wake_waiters
         )
+
+    @property
+    def failover_blocked(self) -> str:
+        """Why a lost or unclaimed lease fences prefill placement, empty while serving."""
+        return self._failover_blocked
+
+    @failover_blocked.setter
+    def failover_blocked(self, reason: str) -> None:
+        self._failover_blocked = reason
+        if reason:
+            self.wake_waiters()
 
     @property
     def lifecycle_blocked(self) -> str:
