@@ -56,7 +56,7 @@ groups:
           severity: warn
         annotations:
           summary: "Deadlines expired {{ $value | humanizePercentage }} of offered requests over 5m"
-          description: "Expired requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_expired_total by reason: queue_timeout means the admission wait reached serving.queue_timeout_s, and deadline means serving.request_timeout_s expired. Compare queue depth and wait by stage on the dashboard."
+          description: "Expired requests alone exceed 1% of offered requests, the share at which the dashboard's Dropped headline turns yellow. Split narwhal_expired_total by reason: queue_timeout means a queue wait reached serving.queue_timeout_s, deadline means serving.request_timeout_s expired, and handoff means a prefilled request reached its KV handoff bound before decode dispatch. Compare queue depth and wait by stage, and expired KV by producer, on the dashboard."
 
       - alert: NarwhalRetryDeniedRising
         expr: rate(narwhal_retry_denied_total[5m]) / rate(narwhal_offered_total[5m]) > 0.01
