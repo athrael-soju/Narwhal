@@ -1,0 +1,13 @@
+{
+  "host": "127.0.0.1",
+  "port": 8020,
+  "token_env": "NARWHAL_CONTROL_TOKEN",
+  "runs_dir": "runs/fleet-control",
+  "fleet": "config/fleet.production.json",
+  "hooks": {
+    "restore": {
+      "argv": ["/path/to/restore-baseline"],
+      "timeout_s": 900
+    }
+  }
+}
