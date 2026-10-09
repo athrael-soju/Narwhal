@@ -236,6 +236,10 @@ async def _prepare_once(
 ) -> PreparedAttempt:
     router, req = state.router, state.request
     req.prefill_instance = None
+    # A hold that drains engines answers before their absence does.
+    hold = placement_hold(router, Phase.PREFILL)
+    if hold:
+        raise RouterHeld(hold)
     for role in (Role.PREFILL, Role.DECODE):
         if not router.scheduler.role_placeable(role):
             raise NoEngine(f"no schedulable engines for the {role.value} role")

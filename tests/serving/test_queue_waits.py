@@ -251,6 +251,25 @@ class HoldTests(QueueWaitHarness):
         self.router.lifecycle_blocked = ""
         self.assert_released()
 
+    async def test_a_whole_wave_hold_during_sizing_ends_the_request_with_503(self):
+        client = self.client()
+        size = self.router.sizer.size
+        reason = "whole-wave drain wave-test"
+
+        async def drain_while_sizing(body):
+            # The wave drains every engine before the request reaches placement.
+            for iid in self.router.monitor.instances:
+                self.router.scheduler.drain(iid)
+            self.router.lifecycle_blocked = reason
+            return await size(body)
+
+        with patch.object(self.router.sizer, "size", side_effect=drain_while_sizing):
+            response = await self.post(client)
+        self.assert_held_503(response, reason)
+        self.router.lifecycle_blocked = ""
+        self.router.scheduler.draining.clear()
+        self.assert_released()
+
     async def test_degraded_monitoring_ends_prefill_waits_and_lets_prefilled_requests_decode(self):
         release_decode, prefilled, prefilling, seat, admission = await self.start_waiters()
         monitoring = self.router.monitoring
