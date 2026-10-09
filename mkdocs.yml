@@ -105,6 +105,7 @@ nav:
           - Engine restart and process replacement: operate/03-Restart-Engines.md
           - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
           - Release drills: operate/05-Release-Drills.md
+          - Controlling the fleet: operate/06-Controlling-the-Fleet.md
       - Troubleshooting a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md

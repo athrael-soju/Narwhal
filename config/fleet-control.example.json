@@ -64,5 +64,12 @@
         "block_size": 512
       }
     }
+  },
+  "console": {
+    "grafana_url": "http://127.0.0.1:13000",
+    "dashboard_uid": "narwhal-router",
+    "panels": [105, 106, 50, 51, 8, 37],
+    "from": "now-15m",
+    "refresh": "5s"
   }
 }

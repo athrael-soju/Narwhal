@@ -22,6 +22,8 @@ To open a monitoring tunnel:
 
 The dashboard opens at `http://127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator`, and Prometheus opens at `http://127.0.0.1:19090`. Grafana grants anonymous Viewer access through the local tunnel.
 
+Grafana also allows its panels to be framed by other pages. The fleet control console uses this to show dashboard panels beside its controls. [Reaching the console through the tunnel](../operate/06-Controlling-the-Fleet.md#reaching-the-console-through-the-tunnel) adds the control service port to this tunnel.
+
 ## Isolating a second monitoring stack
 
 Grafana listens on `NARWHAL_GRAFANA_BIND_ADDRESS`, default `127.0.0.1`. Prometheus listens on `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`, default `127.0.0.1:9090`.

@@ -268,6 +268,24 @@ The [router benchmark](docs/measure/09-Router-Benchmark.md) runs `tools/measurem
 | `tools/measurement/router_benchmark/run.py`        | One run: engines, router, rate sweep and report               |
 | `tools/measurement/router_benchmark/cli.py`        | Options and command                                           |
 
+The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `tools/fleet_control/cli.py`:
+
+| Module                               | Contents                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| `tools/fleet_control/config.py`      | Private configuration, hooks, router, console settings and the token    |
+| `tools/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
+| `tools/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
+| `tools/fleet_control/records.py`     | Action log and per-session run records                                  |
+| `tools/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
+| `tools/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
+| `tools/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
+| `tools/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
+| `tools/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
+| `tools/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
+| `tools/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
+| `tools/fleet_control/console.html`   | Console page                                                            |
+| `tools/fleet_control/cli.py`         | Options and command                                                     |
+
 ### Working files and deployment artifacts
 
 Keep evaluation builders, generators, deployment-specific datasets, experiment configurations, generated results, research ledgers, and paper working files outside the tracked source tree.
@@ -277,6 +295,8 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Local profiles, journals, and run outputs | `runs/`                                                                                          |
 | Working fleet configurations              | `config/fleet.json` or the ignored `config/fleet.*.json` pattern                                 |
 | Live engine addresses and site paths      | Those ignored files, or node URLs from the ignored `.env` through the documented endpoint syntax |
+| Fleet control configurations and hooks    | The ignored `config/fleet-control.*.json` pattern                                                |
+| Fleet control action log and run records  | `runs/fleet-control/`                                                                            |
 
 Site automation provides host credentials, the source distribution, network configuration, and engine process launch. [Gate D: Proving the transfer fabric against the serving cache](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
 

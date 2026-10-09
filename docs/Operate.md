@@ -49,6 +49,12 @@ TLS, authentication, WAF, model routing
 
     Validate every release with restart, whole-wave, and failover drills.
 
+-   [Controlling the fleet](operate/06-Controlling-the-Fleet.md)
+
+    ---
+
+    Run engine actions, configuration overlays, and load jobs from the control service and its console, and read each session's run record.
+
 -   [Troubleshooting a fleet](Troubleshoot.md)
 
     ---
