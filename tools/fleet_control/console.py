@@ -5,20 +5,25 @@ and holds no fleet data: the operator pastes the token into the page, which keep
 tab's sessionStorage and sends it as `Authorization: Bearer` on every API request. The API
 routes keep refusing requests without the token, and no cookie carries it, so another site
 cannot make the browser send an authenticated request.
+
+With `console.auto_connect`, the page carries the token in a meta element instead and connects
+on load. Anyone who can reach the listener can then read the token, so the page is served only
+for loopback Host headers, which refuses pages that rebind their own domain name to loopback.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import html as markup
 import re
 from functools import cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
-from fastapi import APIRouter
-from fastapi.responses import RedirectResponse, Response
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from .app import API
 from .config import ConsoleConfig, ControlConfig
@@ -28,12 +33,31 @@ CONSOLE_PATH = "/console"
 # Paths served without the token. `/` redirects to the console page.
 PUBLIC_PATHS = ("/", CONSOLE_PATH)
 _INLINE = re.compile(r"<(script|style)>(.*?)</\1>", re.DOTALL)
+# The page reads its token from this element when the configuration sets `auto_connect`.
+_TOKEN_ANCHOR = '<meta name="referrer" content="no-referrer">\n'
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 @cache
 def page() -> str:
     """Return the console page."""
     return PAGE.read_text(encoding="utf-8")
+
+
+def with_token(html: str, token: str) -> str:
+    """Return the page with `token` in its `narwhal-control-token` meta element."""
+    element = f'<meta name="narwhal-control-token" content="{markup.escape(token)}">\n'
+    if html.count(_TOKEN_ANCHOR) != 1:
+        raise ValueError("the console page has no token anchor")
+    return html.replace(_TOKEN_ANCHOR, _TOKEN_ANCHOR + element)
+
+
+def loopback_host(host: str) -> bool:
+    """Return whether a Host header names a loopback address."""
+    try:
+        return urlsplit(f"//{host}").hostname in LOOPBACK_HOSTS
+    except ValueError:
+        return False
 
 
 def inline_hashes(html: str) -> dict[str, list[str]]:
@@ -52,9 +76,14 @@ def origin(url: str) -> str:
 
 
 def content_security_policy(html: str, console: ConsoleConfig | None) -> str:
-    """Admit only the page's own inline code, API requests to this service and Grafana frames."""
+    """Admit only the page's own inline code, API requests to this service and Grafana frames.
+
+    Grafana may frame the page only when the configuration opts in with `embed_in_grafana`.
+    """
     hashes = inline_hashes(html)
-    frames = "'none'" if console is None else origin(console.grafana_url)
+    grafana = None if console is None else origin(console.grafana_url)
+    frames = grafana if console is not None and console.panels else "'none'"
+    ancestors = grafana if console is not None and console.embed_in_grafana else "'none'"
     return "; ".join(
         (
             "default-src 'none'",
@@ -64,7 +93,7 @@ def content_security_policy(html: str, console: ConsoleConfig | None) -> str:
             f"frame-src {frames}",
             "base-uri 'none'",
             "form-action 'none'",
-            "frame-ancestors 'none'",
+            f"frame-ancestors {ancestors}",
         )
     )
 
@@ -96,24 +125,39 @@ def console_document(config: ControlConfig) -> dict[str, Any]:
     return {"grafana": grafana, "load": config.load is not None}
 
 
-def console_routes(config: ControlConfig) -> APIRouter:
-    """Return the public console page, its redirect and the token-protected console settings."""
+def console_routes(config: ControlConfig, token: str = "") -> APIRouter:
+    """Return the public console page, its redirect and the token-protected console settings.
+
+    With `console.auto_connect`, the page carries `token` and is served only for loopback hosts.
+    """
     routes = APIRouter()
     html = page()
+    auto_connect = config.console is not None and config.console.auto_connect
+    if auto_connect:
+        if not token:
+            raise ValueError("console.auto_connect requires the bearer token")
+        html = with_token(html, token)
     headers = {
         "Content-Security-Policy": content_security_policy(html, config.console),
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
     }
+    # X-Frame-Options cannot name an allowed origin; `frame-ancestors` admits Grafana instead.
+    if config.console is None or not config.console.embed_in_grafana:
+        headers["X-Frame-Options"] = "DENY"
 
     @routes.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
         return RedirectResponse(CONSOLE_PATH)
 
     @routes.get(CONSOLE_PATH, include_in_schema=False)
-    async def console_page() -> Response:
+    async def console_page(request: Request) -> Response:
+        if auto_connect and not loopback_host(request.headers.get("host", "")):
+            detail = "the console page carries its token only to loopback addresses"
+            return JSONResponse(
+                {"detail": detail}, status_code=421, headers={"Cache-Control": "no-store"}
+            )
         return Response(html, media_type="text/html; charset=utf-8", headers=headers)
 
     @routes.get(f"{API}/console")

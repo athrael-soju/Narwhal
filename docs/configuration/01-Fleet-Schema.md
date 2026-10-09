@@ -40,6 +40,7 @@ Set these variables in the process environment, or in the workstation `.env` tha
 | `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                  |
 | `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`      |
 | `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090` |
+| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address that `make observe` writes into the **Fleet control** dashboard, as the workstation browser reaches it | `http://127.0.0.1:18020/console` |
 
 An engine `url` or `attestation_url` expands from the environment when the entire JSON string is a single `${NAME}` reference:
 

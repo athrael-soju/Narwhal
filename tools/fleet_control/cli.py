@@ -46,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     service = ControlService(config, runner=runner_for(config, os.environ))
     routers = [
-        console_routes(config),
+        console_routes(config, token),
         engine_routes(EngineActions(service)),
         overlay_routes(Overlays(service)),
     ]

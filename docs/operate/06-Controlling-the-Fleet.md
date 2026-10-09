@@ -12,7 +12,7 @@ The fleet control service runs operator test actions against a running Narwhal f
 - baseline restores
 - AIPerf load jobs
 
-It records each action with its time and effect in a private run record. Its console page shows every control beside embedded Grafana dashboard panels.
+It records each action with its time and effect in a private run record. Its console page shows every control beside embedded Grafana dashboard panels. The **Fleet control** Grafana dashboard can also frame the console beside the live dashboard panels.
 
 The service runs on the router host, listens only on loopback, and refuses every API request that lacks its bearer token. Operators reach the service and Grafana from a workstation through the operator tunnel.
 
@@ -133,9 +133,11 @@ Workload names use letters, digits, `.`, `_` and `-`, up to 64 characters. Each 
 | ----------------------- | ---------------- | ---------------------------------------------------------------------------------------------------- |
 | `console.grafana_url`   | none             | Grafana base URL as the operator's browser reaches it, without credentials, query or fragment        |
 | `console.dashboard_uid` | `narwhal-router` | Dashboard UID. The default names the shipped Narwhal Orchestrator dashboard                          |
-| `console.panels`        | none             | Non-empty list of distinct dashboard panel IDs, in display order                                     |
+| `console.panels`        | none             | Non-empty list of distinct dashboard panel IDs, in display order. Without it, the console embeds no panels |
 | `console.from`          | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`        |
 | `console.refresh`       | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                   |
+| `console.embed_in_grafana` | `false`       | Whether pages from the `console.grafana_url` origin may frame the console, as in [Using the console from Grafana](#using-the-console-from-grafana) |
+| `console.auto_connect`  | `false`          | Whether the console page carries the bearer token and connects without asking for it, as in [Connecting without the token field](#connecting-without-the-token-field) |
 
 `console.grafana_url` is a workstation address, usually the tunnel's local Grafana port, and not Grafana's address on the router host. The example configuration embeds the shipped dashboard's **Requests**, **Latency**, **Time to first token**, **Time per output token**, **Engine role history** and **Fleet events** panels. [Reading the dashboard](../observability/05-Dashboard.md) describes each panel.
 
@@ -201,9 +203,59 @@ The local Grafana port must match the origin of `console.grafana_url`. If you fo
 
 After **Connect**, the page keeps the token in the browser tab's session storage and sends it as an `Authorization: Bearer` header on each API request. The token stays in that tab until the tab closes or the operator selects **Forget token**. No cookie carries the token, so another site cannot make the browser send an authenticated request. When the service answers 401, the page discards the token and asks for it again.
 
+### Connecting without the token field
+
+With `console.auto_connect` set to `true`, the service writes its bearer token into the console page, and the page connects when it loads. The operator does not paste the token, and the page hides **Control token** and **Forget token**. API requests still carry the token in the `Authorization` header, so another site still cannot make the browser send an authenticated request.
+
+Any client that can reach the control listener can then read the token from `GET /console`. The SSH tunnel and the loopback listener become the only access control: every user and process on the router host, and every local process on a workstation with an open tunnel, can control the fleet. Leave `console.auto_connect` unset when the router host or the workstation has users who must not control the fleet.
+
+The service serves the page only when the request's `Host` header names `127.0.0.1`, `localhost` or `::1`. Other hosts receive HTTP 421 without the token, which stops a site that points its own domain name at the loopback address from reading the page. When the service restarts with another token, an open page loses its connection and asks for a reload.
+
 After it connects, the page reads `GET /api/console`. The response holds `grafana`, with the dashboard UID, the full dashboard URL and each panel's ID and URL, or `null` without a `console` section. It also holds `load`, which is `true` when load jobs are configured.
 
-The page's content security policy admits only its own inline script and style, requests to the control service, and frames from the `console.grafana_url` origin. The page cannot itself be framed.
+The page's content security policy admits only its own inline script and style, requests to the control service, and, when `console.panels` is set, frames from the `console.grafana_url` origin. Other pages cannot frame the console unless `console.embed_in_grafana` is `true`. [Using the console from Grafana](#using-the-console-from-grafana) describes that boundary.
+
+## Using the console from Grafana
+
+`make observe` provisions a **Fleet control** dashboard, UID `narwhal-fleet-control`. Its **Fleet control** panel frames the console beside copies of the **Requests**, **Latency**, **Time to first token**, **Time per output token**, **Engine role history** and **Fleet events** panels from the Narwhal Orchestrator dashboard. The console refuses the frame until the control configuration allows it.
+
+1. In the router shell, set `console` in `config/fleet-control.local.json` to the workstation's Grafana origin, with framing allowed and no panels:
+
+    ```json
+    "console": {
+      "grafana_url": "http://127.0.0.1:13000",
+      "embed_in_grafana": true
+    }
+    ```
+
+    Without `console.panels`, a framed console shows its controls only, because the dashboard already shows the panels. Add `"auto_connect": true` to connect without pasting the token, after reading [Connecting without the token field](#connecting-without-the-token-field).
+
+2. Restart the control service, as in [Start the service](#3-start-the-service).
+3. When the workstation reaches the console at an address other than `http://127.0.0.1:18020/console`, set `NARWHAL_CONTROL_CONSOLE_URL` to that address in the router shell. The value must be an `http` or `https` URL without credentials, query or fragment.
+4. Run `make observe` on the router host. It writes the console address into the staged Fleet control dashboard and recreates Grafana with the settings below.
+5. Open the tunnel with the control port and Grafana, as in [Reaching the console through the tunnel](#reaching-the-console-through-the-tunnel).
+6. Open `http://127.0.0.1:13000/d/narwhal-fleet-control/fleet-control` on the workstation.
+7. Paste the bearer token into **Control token** in the **Fleet control** panel and select **Connect**. With `console.auto_connect`, the panel connects without this step.
+
+The connected panel shows the console's status line, such as `Session none · load job none`, above the session, engine, load job, configuration and action log controls.
+
+### Framing boundary
+
+With `console.embed_in_grafana` set to `true`, `GET /console` sends `frame-ancestors` with the `console.grafana_url` origin and omits `X-Frame-Options`. Browsers refuse frames from every other origin. The API routes still refuse every request without the token.
+
+The dashboard frames the console with the sandbox permissions `allow-scripts allow-same-origin allow-forms allow-modals`. The console keeps its own origin, so Grafana pages cannot read its token. The framed console keeps the token in that frame's session storage until the Grafana tab closes or the operator selects **Forget token**.
+
+Grafana's HTML sanitizer adds an empty `sandbox` attribute to a Text panel frame, which stops the console's script. The `make observe` Compose file therefore sets `GF_PANELS_DISABLE_SANITIZE_HTML` to `true`, and every Text panel renders its HTML as written. A Grafana user who can edit dashboards can then add script that runs in other users' Grafana pages. The stack grants anonymous users Viewer access only; grant edit rights only to operators.
+
+### The Fleet control panel shows a browser error page
+
+The browser refused the frame. Check the console's framing headers from the router shell:
+
+```bash
+curl -sS -D - -o /dev/null http://127.0.0.1:8020/console | grep -iE 'x-frame-options|content-security-policy'
+```
+
+When the response holds `X-Frame-Options: DENY` or `frame-ancestors 'none'`, set `console.embed_in_grafana` to `true` and restart the service. When `frame-ancestors` names another origin, set `console.grafana_url` to the origin in the browser's address bar and restart the service. Reload the dashboard to verify that the panel shows **Control token**.
 
 ## Sessions
 

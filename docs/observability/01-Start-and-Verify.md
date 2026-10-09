@@ -50,6 +50,7 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | Grafana datasource | The `Prometheus` datasource points at the Prometheus listener |
 | Dashboard | `narwhal-router` loads from Grafana's `dashboard.grafana.app/v2beta1` API with its `router` selector defaulting to All (regex `.*`) |
 | Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present |
+| Fleet control dashboard | `narwhal-fleet-control` loads from the same API |
 | `narwhal-router` job | Exactly one healthy target at `NARWHAL_ROUTER_URL` |
 | `engines` job | One healthy target per fleet engine, labelled with its `iid` |
 | Router readiness | `narwhal_router_ready` reports `1` |
@@ -88,6 +89,7 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL` | `prometheus/targets/router.json`, `prometheus/targets/engines.json` |
 | `tools/observability/grafana/provisioning/` | `grafana-provisioning/` |
 | `tools/observability/grafana-narwhal.json` | `grafana-dashboards/narwhal.json` |
+| `tools/observability/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL` | `grafana-dashboards/fleet-control.json` |
 
 The staged files and the renderer token have these modes:
 

@@ -1,6 +1,6 @@
 # Observability asset contracts
 
-The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** dashboard, and the Grafana Image Renderer.
+The pinned Compose project starts Prometheus with the Narwhal alert rules, Grafana with the provisioned **Narwhal Orchestrator** and **Fleet control** dashboards, and the Grafana Image Renderer.
 
 Follow [Setting up observability](../../docs/Observability.md) to select listeners, start and verify monitoring, access the dashboard, and recover failed components.
 
@@ -62,6 +62,10 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
       <td><code>runs/observability/mounts/grafana-dashboards/narwhal.json</code></td>
     </tr>
     <tr>
+      <td>Derived Fleet control dashboard</td>
+      <td><code>runs/observability/mounts/grafana-dashboards/fleet-control.json</code></td>
+    </tr>
+    <tr>
       <td>Grafana poll interval</td>
       <td>30 seconds</td>
     </tr>
@@ -69,6 +73,8 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 </table>
 
 Grafana replaces UI edits with the staged file.
+
+`make observe` builds the **Fleet control** dashboard from the source dashboard. It copies the panels listed in `CONSOLE_PANELS` in `tools/observability/artifacts.py`, with the source variables, annotations and time settings, and frames the console at `NARWHAL_CONTROL_CONSOLE_URL`. A change to a copied panel in the source dashboard reaches both dashboards.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 

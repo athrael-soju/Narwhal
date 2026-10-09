@@ -86,6 +86,7 @@ main {
   padding: 12px 16px;
 }
 @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+main.controls-only { grid-template-columns: 1fr; }
 #controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 section, aside {
   background: var(--panel);
@@ -282,6 +283,8 @@ const ROUTES = {
 };
 const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit"];
 const TOKEN_KEY = "narwhal-control-token";
+// A service with console.auto_connect places its token in this meta element.
+const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]') || {}).content || "";
 const POLL_MS = 3000;
 const MAX_RESPONSES = 50;
 
@@ -340,7 +343,9 @@ async function call(name, params, body) {
   }
   let data = null;
   try { data = await response.json(); } catch (error) { data = null; }
-  if (response.status === 401) disconnect("The service refused the token.");
+  if (response.status === 401) {
+    disconnect(PAGE_TOKEN ? "The service refused the page's token. Reload the page." : "The service refused the token.");
+  }
   return { status: response.status, path, body: data };
 }
 
@@ -606,10 +611,14 @@ function renderJob(job) {
   $("job-results").replaceChildren(...rows);
 }
 
-// Dashboard panels.
+// Dashboard panels. A console framed by a Grafana dashboard without panels shows its controls only.
 function renderDashboard(grafana) {
-  if (!grafana || !grafana.panels.length) {
-    $("dashboard-note").textContent = "No dashboard panels are configured. Add a console section to the control configuration to embed Grafana panels here.";
+  const panels = grafana ? grafana.panels : [];
+  const controlsOnly = !panels.length && window.self !== window.top;
+  $("dashboard").hidden = controlsOnly;
+  $("main").classList.toggle("controls-only", controlsOnly);
+  if (!panels.length) {
+    $("dashboard-note").textContent = "No dashboard panels are configured. List Grafana panel IDs in console.panels of the control configuration to embed them here.";
     $("panels").replaceChildren();
     return;
   }
@@ -630,10 +639,10 @@ async function connect() {
     if (reply.status !== 401) $("connect-message").textContent = "Connection failed: " + text(reply.body && reply.body.detail);
     return;
   }
-  storeToken(token);
+  if (!PAGE_TOKEN) storeToken(token);
   $("connect-message").textContent = "";
   $("token-form").hidden = true;
-  $("forget").hidden = false;
+  $("forget").hidden = Boolean(PAGE_TOKEN);
   $("main").hidden = false;
   renderDashboard(reply.body.grafana);
   await loadWorkloads(reply.body.load);
@@ -707,7 +716,8 @@ $("restore").addEventListener("click", (event) => {
   confirmThen("Restore the recorded baseline deployment?", () => act(button, "restore baseline", "restore"))();
 });
 
-token = readStoredToken();
+token = PAGE_TOKEN || readStoredToken();
+if (PAGE_TOKEN) $("token-form").hidden = true;
 if (token) connect();
 </script>
 </body>

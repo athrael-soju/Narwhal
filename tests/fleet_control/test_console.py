@@ -27,7 +27,13 @@ from tools.fleet_control.config import (
     Hook,
     load_config,
 )
-from tools.fleet_control.console import PAGE, PUBLIC_PATHS, console_routes, panel_url
+from tools.fleet_control.console import (
+    PAGE,
+    PUBLIC_PATHS,
+    console_routes,
+    panel_url,
+    with_token,
+)
 from tools.fleet_control.engines import ACTIONS, EngineActions, engine_routes
 from tools.fleet_control.overlays import Overlays, overlay_routes
 from tools.fleet_control.service import ControlService
@@ -148,6 +154,14 @@ class ConsoleConfigTests(unittest.TestCase):
             console = load_config(path, {}).console
         self.assertEqual(console, ConsoleConfig(GRAFANA, (50,), "narwhal-router", "now-15m", "5s"))
 
+    def test_panels_are_optional_and_grafana_framing_is_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.write(folder, {"grafana_url": GRAFANA, "embed_in_grafana": True})
+            console = load_config(path, {}).console
+        self.assertEqual(console, ConsoleConfig(GRAFANA, (), embed_in_grafana=True))
+        self.assertFalse(ConsoleConfig(GRAFANA).embed_in_grafana)
+        self.assertFalse(ConsoleConfig(GRAFANA).auto_connect)
+
     def test_the_console_section_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "fleet-control.local.json"
@@ -182,6 +196,14 @@ class ConsoleConfigTests(unittest.TestCase):
                 {"grafana_url": GRAFANA, "panels": [1], "refresh": "0s"},
                 "console.refresh must be an interval",
             ),
+            "embed": (
+                {"grafana_url": GRAFANA, "embed_in_grafana": "yes"},
+                "console.embed_in_grafana must be true or false",
+            ),
+            "auto connect": (
+                {"grafana_url": GRAFANA, "auto_connect": 1},
+                "console.auto_connect must be true or false",
+            ),
         }
         for label, (console, problem) in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as folder:
@@ -211,6 +233,9 @@ class ConsoleConfigTests(unittest.TestCase):
     def test_grafana_allows_the_console_to_frame_its_panels(self) -> None:
         self.assertIn('GF_SECURITY_ALLOW_EMBEDDING: "true"', COMPOSE.read_text())
 
+    def test_grafana_text_panels_keep_the_console_frame_scripted(self) -> None:
+        self.assertIn('GF_PANELS_DISABLE_SANITIZE_HTML: "true"', COMPOSE.read_text())
+
 
 class ConsoleCase(unittest.IsolatedAsyncioTestCase):
     console: ConsoleConfig | None = CONSOLE
@@ -228,7 +253,7 @@ class ConsoleCase(unittest.IsolatedAsyncioTestCase):
             service,
             TOKEN,
             routers=[
-                console_routes(self.config),
+                console_routes(self.config, TOKEN),
                 engine_routes(EngineActions(service)),
                 overlay_routes(Overlays(service)),
                 workload_routes(LOAD),
@@ -336,6 +361,75 @@ class ConsoleWithoutGrafanaTests(ConsoleCase):
         settings = await self.client.get("/api/console", headers=self.auth)
         self.assertEqual(settings.json(), {"grafana": None, "load": True})
         self.assertIn("No dashboard panels are configured", HTML)
+
+
+class EmbeddedConsoleTests(ConsoleCase):
+    console = ConsoleConfig(GRAFANA, (), embed_in_grafana=True)
+
+    async def test_only_grafana_may_frame_the_page(self) -> None:
+        response = await self.client.get("/console")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("x-frame-options", response.headers)
+        policy = csp(response)
+        self.assertEqual(policy["frame-ancestors"], [GRAFANA])
+        self.assertEqual(policy["frame-src"], ["'none'"])
+        self.assertEqual(policy["connect-src"], ["'self'"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+
+    async def test_the_settings_list_no_panels(self) -> None:
+        settings = await self.client.get("/api/console", headers=self.auth)
+        self.assertEqual(settings.json()["grafana"]["panels"], [])
+        unauthenticated = await self.client.get("/api/console")
+        self.assertEqual(unauthenticated.status_code, 401)
+
+
+class AutoConnectTests(ConsoleCase):
+    console = ConsoleConfig(GRAFANA, (), embed_in_grafana=True, auto_connect=True)
+
+    async def test_the_page_carries_the_token_to_loopback_hosts_only(self) -> None:
+        for host in ("127.0.0.1:18020", "localhost:18020", "[::1]:18020", "127.0.0.1"):
+            with self.subTest(host=host):
+                response = await self.client.get("/console", headers={"host": host})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    f'<meta name="narwhal-control-token" content="{TOKEN}">', response.text
+                )
+                self.assertEqual(response.headers["cache-control"], "no-store")
+        for host in ("control", "attacker.example:18020", "127.0.0.1.attacker.example", "[::1"):
+            with self.subTest(host=host):
+                response = await self.client.get("/console", headers={"host": host})
+                self.assertEqual(response.status_code, 421)
+                self.assertNotIn(TOKEN, response.text)
+
+    async def test_the_injected_page_keeps_its_policy_and_the_api_its_guard(self) -> None:
+        response = await self.client.get("/console", headers={"host": "127.0.0.1:18020"})
+        policy = csp(response)
+        page = elements(response.text)
+        self.assertEqual(policy["script-src"], [sha256_source(page.text["script"][0])])
+        self.assertEqual(page.external, [])
+        settings = await self.client.get("/api/console", headers={"host": "127.0.0.1:18020"})
+        self.assertEqual(settings.status_code, 401)
+
+    def test_the_token_is_escaped_and_required(self) -> None:
+        escaped = with_token(HTML, 'a"<b>' + "x" * 32)
+        self.assertIn('content="a&quot;&lt;b&gt;' + "x" * 32 + '"', escaped)
+        with self.assertRaisesRegex(ValueError, "requires the bearer token"):
+            console_routes(self.config)
+
+    def test_the_page_connects_with_its_token_when_present(self) -> None:
+        self.assertIn('meta[name="narwhal-control-token"]', HTML)
+        self.assertIn("token = PAGE_TOKEN || readStoredToken();", HTML)
+
+
+class EmbeddedConsoleWithPanelsTests(ConsoleCase):
+    console = ConsoleConfig(GRAFANA, (105,), embed_in_grafana=True)
+
+    async def test_the_page_frames_panels_from_its_framing_grafana(self) -> None:
+        policy = csp(await self.client.get("/console"))
+        self.assertEqual(policy["frame-ancestors"], [GRAFANA])
+        self.assertEqual(policy["frame-src"], [GRAFANA])
 
 
 class PageRequestTests(ConsoleCase):

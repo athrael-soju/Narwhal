@@ -37,7 +37,15 @@ REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
 _KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load", "console"}
 _HOOK_KEYS = {"argv", "timeout_s"}
 _ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
-_CONSOLE_KEYS = {"grafana_url", "dashboard_uid", "panels", "from", "refresh"}
+_CONSOLE_KEYS = {
+    "grafana_url",
+    "dashboard_uid",
+    "panels",
+    "from",
+    "refresh",
+    "embed_in_grafana",
+    "auto_connect",
+}
 _DASHBOARD_UID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RELATIVE_TIME = re.compile(r"^now(-[1-9][0-9]*[smhdwMy])?$")
 _INTERVAL = re.compile(r"^[1-9][0-9]*[smhd]$")
@@ -72,17 +80,22 @@ class RouterEndpoint:
 
 @dataclass(frozen=True)
 class ConsoleConfig:
-    """The Grafana dashboard panels the console page embeds beside its controls.
+    """The console's Grafana: the dashboard panels it embeds and whether Grafana may frame it.
 
     `grafana_url` is the Grafana address as the operator's browser reaches it, usually the
-    workstation end of the operator tunnel rather than the address on the router host.
+    workstation end of the operator tunnel rather than the address on the router host. Without
+    `panels`, the console shows its controls only. With `embed_in_grafana`, pages from the
+    `grafana_url` origin may frame the console. With `auto_connect`, the console page carries the
+    bearer token and connects without asking for it.
     """
 
     grafana_url: str
-    panels: tuple[int, ...]
+    panels: tuple[int, ...] = ()
     dashboard_uid: str = DEFAULT_DASHBOARD_UID
     time_from: str = DEFAULT_PANEL_FROM
     refresh: str = DEFAULT_PANEL_REFRESH
+    embed_in_grafana: bool = False
+    auto_connect: bool = False
 
 
 @dataclass(frozen=True)
@@ -244,7 +257,7 @@ def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
     if not isinstance(uid, str) or not _DASHBOARD_UID.match(uid):
         problems.append("console.dashboard_uid must be a Grafana dashboard UID")
     panels = raw.get("panels")
-    if (
+    if "panels" in raw and (
         not isinstance(panels, list)
         or not panels
         or not all(isinstance(p, int) and not isinstance(p, bool) and p >= 1 for p in panels)
@@ -257,14 +270,22 @@ def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
     refresh = raw.get("refresh", DEFAULT_PANEL_REFRESH)
     if not isinstance(refresh, str) or not _INTERVAL.match(refresh):
         problems.append("console.refresh must be an interval such as 5s or 1m")
+    embed = raw.get("embed_in_grafana", False)
+    if not isinstance(embed, bool):
+        problems.append("console.embed_in_grafana must be true or false")
+    auto_connect = raw.get("auto_connect", False)
+    if not isinstance(auto_connect, bool):
+        problems.append("console.auto_connect must be true or false")
     if len(problems) > count:
         return None
     return ConsoleConfig(
         grafana_url=str(url).rstrip("/"),
-        panels=tuple(panels),
+        panels=tuple(panels or ()),
         dashboard_uid=str(uid),
         time_from=str(time_from),
         refresh=str(refresh),
+        embed_in_grafana=embed,
+        auto_connect=auto_connect,
     )
 
 
