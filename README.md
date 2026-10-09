@@ -18,10 +18,6 @@
   <a href="https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributing-0f766e" alt="Contributing"></a>
 </p>
 
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Recognition/"><img src="https://img.shields.io/badge/%F0%9F%8F%86%20Recognition-d4a017" alt="Recognition"></a>
-</p>
-
 ## What is Narwhal?
 
 Narwhal is an adaptive, disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, and without having to reload model weights. It can scale from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
