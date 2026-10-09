@@ -147,7 +147,7 @@ class ConfigCliTests(unittest.TestCase):
         self.assertIs(engine["pin"], False)
         self.assertIsNone(engine["shared_device"])
         self.assertEqual(data["settings"]["engine"]["control_connections"], 4)
-        self.assertEqual(data["settings"]["serving"]["max_connections"], 512)
+        self.assertEqual(data["settings"]["serving"]["max_connections"], 768)
         self.assertEqual(data["working_directory"], str(self.root))
         self.assertEqual(
             data["artifact_paths"],

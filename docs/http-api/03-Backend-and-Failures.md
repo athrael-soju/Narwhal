@@ -146,7 +146,7 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 
 ### Retries
 
-`serving.max_attempts` sets the prefill/decode attempts per admitted request, from `1` (default) to `3`.
+`serving.max_attempts` sets the prefill/decode attempts per admitted request, from `1` to `3`. The default, `2`, allows one retry. [Retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries) gives the client outcome of each value and the conditions for changing it.
 
 A fresh attempt starts for a transient fault before visible output when:
 

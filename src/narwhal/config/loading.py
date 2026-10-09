@@ -406,7 +406,7 @@ def load(path: str | Path) -> FleetConfig:
             problems, "engine.tokenize_timeout_s", engine_raw.get("tokenize_timeout_s", 2.0)
         ),
         max_connections=_read_int(
-            problems, "serving.max_connections", serving_raw.get("max_connections", 512)
+            problems, "serving.max_connections", serving_raw.get("max_connections", 768)
         ),
         serving=serving,
         control_connections=_read_int(
@@ -461,7 +461,7 @@ def load(path: str | Path) -> FleetConfig:
         decode_read_timeout_s=_read_float(
             problems,
             "engine.decode_read_timeout_s",
-            engine_raw.get("decode_read_timeout_s", 60.0),
+            engine_raw.get("decode_read_timeout_s", 10.0),
         ),
         first_token_timeout_s=_read_float(
             problems,

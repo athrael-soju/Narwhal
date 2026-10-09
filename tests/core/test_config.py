@@ -47,7 +47,7 @@ class ConfigTests(unittest.TestCase):
         for source in ("tests/data/fleet.json", "config/fleet.example.json"):
             with self.subTest(source=source):
                 cfg = FleetConfig.load(ROOT / source)
-                cfg.serving = ServingPolicy(max_attempts=2)
+                cfg.serving = ServingPolicy(max_attempts=3)
                 cfg.save(self.path)
                 restored = FleetConfig.load(self.path)
                 self.assertEqual(restored, cfg)
@@ -366,6 +366,12 @@ class ConfigTests(unittest.TestCase):
                 cfg,
                 profile_validation=replace(cfg.profile_validation, max_decode_fit_mape=0.99),
             ).validate()
+
+    def test_serving_retries_a_failed_attempt_once_by_default(self):
+        """A fleet file without serving limits allows two attempts and keeps the queue off."""
+        serving = self.load(self.raw).serving
+        self.assertEqual((serving.max_attempts, serving.queue_capacity), (2, 0))
+        self.assertEqual(serving.retry_policy().max_attempts, 2)
 
     def test_serving_policy_rejects_mistyped_and_contradictory_limits(self):
         """Queue and retry policies require bounded resources and a valid handoff age."""

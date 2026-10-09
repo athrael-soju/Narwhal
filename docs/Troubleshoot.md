@@ -189,7 +189,7 @@ Check: `narwhal_waiting_decode` stays above `0`, and the expired rows' `queue_wa
 
 Cause: every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks, so the router ends the attempt instead of dispatching its decode leg.
 
-Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
+Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, as in the default of `2`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
 
 #### Engine-side overload
 
@@ -211,6 +211,8 @@ Action: reduce the offered rate, or add capacity. In `open` mode, compare a run 
 2. Test two offered rates under those conditions.
 3. Compare completed throughput and the share of requests meeting the service-level objective, from `narwhal_served_total` and `narwhal_slo_met_total`.
 4. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
+
+Before you change an admission, queue, retry or in-flight setting, read [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md) for the measurement behind its default and the client outcomes of each value.
 
 The class is resolved when the counter series that identified it stops increasing at the offered rate, and the journal shows no new terminal rows with that reason.
 

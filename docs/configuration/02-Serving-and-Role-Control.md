@@ -12,14 +12,14 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
 | `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
-| `serving.max_connections`    | `512`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
+| `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
 | `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 In `predictive` mode, the router returns HTTP 429 when a request fails the time to first token (TTFT) check or the decode admission check. `open` mode disables predictive refusals.
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
-Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy.
+Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit) gives the measurement behind the default and the client outcomes of each mode and limit.
 
 #### In-flight limit
 
@@ -109,7 +109,7 @@ In `predictive` mode, only an original request's first attempt is priced against
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
 | `serving.queue_timeout_s`     | `0.0`      | Most time one request waits for an admission seat and prefill seats combined, capped by the original request deadline. | Positive when `serving.queue_capacity` is positive                         |
-| `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
+| `serving.max_attempts`        | `2`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                                              | At least `serving.retry_base_s`                                            |
 | `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit when it dispatches.          | Zero or greater                                                            |
@@ -197,9 +197,10 @@ The original request deadline covers tokenization, queue wait, retry backoff, en
 
 Tune queueing and retries:
 
-1. Set queue capacity and deadlines from the workload's measured latency and capacity.
-2. Verify that the backend releases abandoned KV handoffs when the lease expires.
-3. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
+1. Read [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) for the measurement behind each default and the client outcomes of each value.
+2. Set queue capacity and deadlines from the workload's measured latency and capacity.
+3. Verify that the backend releases abandoned KV handoffs when the lease expires.
+4. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
 
 ### 4.3 Streaming failure semantics
 
@@ -283,7 +284,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | `serving.prefill_timeout_s`           | `120.0` | Elapsed-time deadline for the prefill leg.                                                  | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_timeout_s`        | `2.5`   | Deadline to the first decode token.                                                         | Positive, at most `serving.request_timeout_s` |
 | `engine.first_token_calibration_path` | `""`    | Path to a completed first-token calibration artifact under `runs/`.                         |                                               |
-| `engine.decode_read_timeout_s`        | `60.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
+| `engine.decode_read_timeout_s`        | `10.0`  | Maximum silent interval between decode chunks after the first token.                        | `0` disables the gap limit                    |
 | `engine.tokenize`                     | `true`  | Requests exact token counts for text and chat input from the dialect tokenization endpoint. |                                               |
 | `engine.tokenize_timeout_s`           | `2.0`   | Elapsed-time deadline for an exact token count.                                             | Positive                                      |
 | `engine.chars_per_token`              | `3.8`   | Characters per token for the fallback estimate.                                             | Positive                                      |
@@ -329,7 +330,7 @@ Preflight and router startup respond to these conditions:
 
 ### 6.3 Decode stream gaps
 
-Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget.
+Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget. [Decode stream gaps](../operate/07-Admission-Queue-and-Retry-Settings.md#decode-stream-gaps) gives the client outcome of a positive limit and of `0`.
 
 Disable the gap limit:
 

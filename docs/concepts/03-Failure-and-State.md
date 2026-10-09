@@ -153,7 +153,7 @@ An operator drain survives healthy responses, resume, and takeover until readmis
 
 ## Serving saturation and retries
 
-With the default `serving.max_attempts` of `1`, each admitted request gets one prefill and one decode attempt. With the default `serving.queue_capacity` of `0`, the router refuses new requests immediately when every admission seat is occupied.
+With the default `serving.max_attempts` of `2`, an admitted request that fails transiently before visible output can retry once on other engines, within its original deadline and the shared retry credits. With the default `serving.queue_capacity` of `0`, the router refuses new requests immediately when every admission seat is occupied.
 
 [Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue a request or [retry](01-Request-and-Topology.md#how-a-request-executes) it within its original deadline.
 
