@@ -33,11 +33,10 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | Degraded engine monitoring begins, or the router loses its lease, while the request waits for an admission or prefill seat | `503` | `standby` | `standby` | `1` |
 | No engine can take a leg of the request before its first prefill dispatch | `503` | `no_schedulable_engines` | `no_schedulable_engines` | `1` |
 | After the first prefill dispatch, no engine outside the request's failed engines can take its decode leg or a retry's leg | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
-| The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s` | `504` | `queue_expired` | | |
-| A prefill-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches the remaining `serving.queue_timeout_s` | `504` | `expired` | `expired` | |
+| The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s` before the original request deadline | `504` | `queue_expired` | | |
+| A prefill-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches the remaining `serving.queue_timeout_s` before the original request deadline | `504` | `expired` | `expired` | |
 | The KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
-| Original request deadline expires before response headers | `504` | `request_expired` | | |
-| Original request deadline ends input sizing, a seat wait, or an engine leg before the router answers with `request_expired` | `504` | `expired` | `expired` | |
+| The original request deadline expires before response headers, at any stage, including a seat wait | `504` | `request_expired` | | |
 
 An engine fault before output starts returns HTTP `502` or `504` with the request phase as its error type. [Engine failure handling](03-Backend-and-Failures.md#engine-failure-handling) lists those responses and the terminal event of a stream that fails after output starts.
 

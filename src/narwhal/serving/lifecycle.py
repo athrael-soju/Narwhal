@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..types import Instance, Phase, Request
-from .outcomes import RequestExpired, failure_reason
+from .outcomes import DEADLINE_MESSAGE, RequestExpired, failure_reason
 from .retry import transient
 
 if TYPE_CHECKING:
@@ -98,14 +98,14 @@ class RequestLifecycle:
         """Apply the remaining original budget without resetting it per leg."""
         remaining = self.deadline - self.router._clock()
         if remaining <= 0:
-            raise RequestExpired("original request deadline expired")
+            raise RequestExpired(DEADLINE_MESSAGE)
         timer = asyncio.timeout(remaining)
         try:
             async with timer:
                 return await operation()
         except TimeoutError as exc:
             if timer.expired():
-                raise RequestExpired("original request deadline expired") from exc
+                raise RequestExpired(DEADLINE_MESSAGE) from exc
             raise
 
     def admit(self) -> None:
@@ -249,8 +249,11 @@ class RequestLifecycle:
         if self.terminal is not None:
             return
         if terminal == "cancelled" and self.router._clock() >= self.deadline:
-            terminal, error, status = "expired", "original request deadline expired", 504
-            reason, error_type, error_code = "deadline", self.phase, "expired"
+            # The deadline cancelled the request; repeat the body its client receives.
+            terminal, error, status, reason = "expired", DEADLINE_MESSAGE, 504, "deadline"
+            error_type, error_code = (
+                (self.phase, "expired") if self.output_started else ("request_expired", None)
+            )
         self.terminal = terminal
         router = self.router
         req = self.request

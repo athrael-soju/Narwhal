@@ -47,7 +47,7 @@ from ..outcomes import (
     error_response,
     failure_reason,
 )
-from ..records import not_ready_response, overloaded_response, refuse_request
+from ..records import deadline_response, not_ready_response, overloaded_response, refuse_request
 from ..retry import RetryBudget
 from ..saturation import (
     SIZING_MIN_SAMPLES,
@@ -407,14 +407,18 @@ class NarwhalRouter:
         except RouterHeld as exc:
             response = not_ready_response(self, state, reason=str(exc))
         except (QueueExpired, RequestExpired) as exc:
-            state.finish(
-                "expired",
-                error="queue deadline expired",
-                status=504,
-                reason=failure_reason(exc, deadline_passed=self._clock() >= state.deadline),
-                error_type="queue_expired",
-            )
-            response = error_response(504, "queue_expired", "queue deadline expired")
+            if failure_reason(exc, deadline_passed=self._clock() >= state.deadline) == "deadline":
+                # Ingress answers the same deadline; both give the client one body.
+                response = deadline_response(state)
+            else:
+                state.finish(
+                    "expired",
+                    error="queue deadline expired",
+                    status=504,
+                    reason="queue_timeout",
+                    error_type="queue_expired",
+                )
+                response = error_response(504, "queue_expired", "queue deadline expired")
         except asyncio.CancelledError:
             state.finish("cancelled")
             raise

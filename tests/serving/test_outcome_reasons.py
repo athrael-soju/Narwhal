@@ -262,12 +262,14 @@ class OutcomeReasonTests(HttpHarness):
         self.cfg.request_timeout_s = 0.05
         self.blocked = asyncio.Event()
         client = self.client()
-        self.assertEqual((await self.post(client)).status_code, 504)
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json()["error"]["type"], "request_expired")
         row = self.terminal_rows()[-1]
         self.assertEqual(
             (row["terminal"], row["reason"], row["status"]), ("expired", "deadline", 504)
         )
-        self.assertEqual((row["error_type"], row["error_code"]), ("expired", "expired"))
+        self.assertEqual((row["error_type"], row["error_code"]), ("request_expired", None))
 
         self.cfg.request_timeout_s = 5.0
         self.cfg.serving = ServingPolicy(**{**QUEUED, "queue_timeout_s": 0.01})
@@ -281,6 +283,39 @@ class OutcomeReasonTests(HttpHarness):
         self.assertGreater(row["queue_waits"]["admission"], 0.0)
         self.assertIsNone(row["queue_waits"]["prefill"])
         self.assertIn('narwhal_expired_total{reason="queue_timeout"} 1', await self.metrics(client))
+
+    async def test_a_deadline_before_headers_records_the_body_the_client_received(self):
+        """Both deadline timers fire before headers; the row repeats the 504 body."""
+        for wait in ("prefill_leg", "admission_seat"):
+            with self.subTest(wait=wait):
+                self.cfg.request_timeout_s = 0.05
+                if wait == "prefill_leg":
+                    self.blocked = asyncio.Event()
+                else:
+                    self.blocked = None
+                    self.cfg.serving = ServingPolicy(**QUEUED)
+                client = self.client()
+                if wait == "admission_seat":
+                    self.router.inflight = self.router.max_concurrent
+                response = await self.post(client)
+                self.router.inflight = 0
+                self.assertEqual(response.status_code, 504)
+                error = response.json()["error"]
+                self.assertEqual(
+                    error,
+                    {"message": "original request deadline expired", "type": "request_expired"},
+                )
+                row = self.terminal_rows()[-1]
+                self.assertEqual(
+                    (row["terminal"], row["reason"], row["status"]), ("expired", "deadline", 504)
+                )
+                self.assertEqual(
+                    (row["error_type"], row["error_code"]), (error["type"], error.get("code"))
+                )
+                text = await self.metrics(client)
+                self.assertIn('narwhal_expired_total{reason="deadline"} 1', text)
+                self.assertIn('narwhal_expired_total{reason="queue_timeout"} 0', text)
+                self.assert_released()
 
     async def test_queue_waits_split_by_stage(self):
         for policy, reached in (

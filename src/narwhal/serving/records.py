@@ -12,7 +12,7 @@ from ..runtime.standby import control_ready
 from ..types import Request
 from .admission import PlacementRefused
 from .lifecycle import RequestLifecycle
-from .outcomes import error_response
+from .outcomes import DEADLINE_MESSAGE, error_response
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
@@ -37,6 +37,24 @@ def overloaded_response(state: RequestLifecycle, message: str, *, reason: str) -
         "rejected", error=message, status=429, reason=reason, error_type="server_overloaded_error"
     )
     return error_response(429, "server_overloaded_error", message, headers={"retry-after": "1"})
+
+
+def deadline_response(
+    state: RequestLifecycle, *, headers: dict[str, str] | None = None
+) -> JSONResponse:
+    """Record and return the 504 of an original deadline that expires before response headers.
+
+    Ingress and every router wait answer the deadline with this one body, so the journal row
+    repeats the body the client receives whichever deadline timer fires first.
+    """
+    state.finish(
+        "expired",
+        error=DEADLINE_MESSAGE,
+        status=504,
+        reason="deadline",
+        error_type="request_expired",
+    )
+    return error_response(504, "request_expired", DEADLINE_MESSAGE, headers=headers)
 
 
 def monitoring_degraded_reason(router: NarwhalRouter) -> str:

@@ -127,7 +127,7 @@ With `serving.queue_capacity` above `0`, a request can wait at three stages. Eac
 | Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full          | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left    | HTTP `504`, error type `expired`          |
 | Decode seat    | Every engine that can take the decode leg has its decode seats full                             | The producer's [KV handoff bound](#kv-handoff-bound)                                                                     | HTTP `504`, error type `handoff_expired`  |
 
-The original request deadline also ends each wait, with HTTP `504`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
+The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
 
 A request with no queue budget left still takes a free prefill seat, but it does not wait for one.
 

@@ -12,8 +12,8 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
-from .outcomes import INFLIGHT_LIMIT_MESSAGE, error_response
-from .records import overloaded_response
+from .outcomes import INFLIGHT_LIMIT_MESSAGE
+from .records import deadline_response, overloaded_response
 from .response import RequestStreamResponse
 from .saturation import saturated
 
@@ -94,23 +94,12 @@ class ServingIngress:
             async with state.ingress_timer:
                 await self.app(scope, receive, record_start)
         except TimeoutError:
-            state.finish(
-                "expired",
-                error="original request deadline expired",
-                status=504,
-                reason="deadline",
-                error_type="request_expired",
-            )
+            response = deadline_response(state, headers={"x-request-id": state.rid})
             if started:
                 raise
             # A zero timeout cancels the write as soon as it blocks.
             async with asyncio.timeout(0):
-                await error_response(
-                    504,
-                    "request_expired",
-                    "original request deadline expired",
-                    headers={"x-request-id": state.rid},
-                )(scope, receive, send)
+                await response(scope, receive, send)
         except ClientDisconnect:
             state.finish("cancelled")
         except asyncio.CancelledError:

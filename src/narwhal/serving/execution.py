@@ -31,7 +31,13 @@ from .outcomes import (
     error_response,
     failure_reason,
 )
-from .records import forward_headers, not_ready_response, refuse_request, ttft_refusal_cause
+from .records import (
+    deadline_response,
+    forward_headers,
+    not_ready_response,
+    refuse_request,
+    ttft_refusal_cause,
+)
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
 from .seats import decode_seat_map
@@ -326,6 +332,10 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
 
 
 def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
+    reason = failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline)
+    if reason == "deadline" and not state.output_started:
+        # Ingress answers the same deadline; both give the client one body.
+        return deadline_response(state)
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired | HandoffExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
@@ -361,7 +371,7 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         terminal,
         error=detail,
         status=status,
-        reason=failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline),
+        reason=reason,
         error_type=error_type,
         error_code=error_code,
     )
