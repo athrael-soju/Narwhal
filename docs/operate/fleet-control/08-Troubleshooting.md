@@ -19,7 +19,7 @@ Reload the dashboard. Each console panel shows **Control token** or connects.
 
 ## Charts in the standalone console are empty frames
 
-Grafana is refusing to be framed. The `make observe` Compose file sets `GF_SECURITY_ALLOW_EMBEDDING` to `true`, but a Grafana instance started before that setting existed still sends `X-Frame-Options: deny`.
+Grafana was started before `make observe` enabled embedding with `GF_SECURITY_ALLOW_EMBEDDING`.
 
 Run `make observe` on the router host to recreate Grafana, then reload the console.
 
@@ -34,7 +34,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
 ```
 
 - Empty result: `NARWHAL_CONTROL_METRICS_URL` was unset when `make observe` last ran. Set it and `NARWHAL_CONTROL_TOKEN`, as in [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations), and run `make observe` again.
-- Value `0`: open Prometheus `/targets` and read the `fleet-control` scrape error. HTTP 401 means Prometheus holds an old token; export the current token and run `make observe` again. A refused connection means `NARWHAL_CONTROL_METRICS_URL` names the wrong address.
+- Value `0`: open Prometheus `/targets` and read the `fleet-control` scrape error. For HTTP 401, Prometheus holds an old token. Export the current token and run `make observe` again. For a refused connection, `NARWHAL_CONTROL_METRICS_URL` names the wrong address.
 
 Run an engine action to confirm the fix. Its marker appears on **Request outcomes** after the action finishes.
 
@@ -60,8 +60,8 @@ The router readmits this engine only after its process restarts.
 
 ## An engine fails to start after a stop
 
-**Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release).
+**Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
 
-Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave). The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
+On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release). Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave).
 
-With `UCX_CUDA_IPC_CACHE` set to `n` in `runtime.environment` and UCX 1.22 or later in the engine image, peers release a stopped engine's GPU memory, and **Start** succeeds without a wave restart. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.
+To let **Start** succeed without a wave restart, set `UCX_CUDA_IPC_CACHE` to `n` in `runtime.environment` and use UCX 1.22 or later in the engine image. Peers then release a stopped engine's GPU memory. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.

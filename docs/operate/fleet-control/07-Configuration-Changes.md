@@ -18,7 +18,7 @@ An overlay is a partial fleet document that the service merges onto the current 
 
 An overlay may change the `slo`, `controller`, `serving` and `recovery` sections, plus keys that start with `_`. [Serving and role control](../../configuration/02-Serving-and-Role-Control.md) and [Recovery and validation](../../configuration/03-Recovery-and-Validation.md) define those sections' fields.
 
-For example, this overlay adds 10% of the TTFT target to the admission budget. The value is illustrative:
+For example, this overlay adds 10% of the TTFT target to the admission budget:
 
 ```json
 {"serving": {"admission_margin": 0.1}}
@@ -32,7 +32,7 @@ Applying an overlay requires the `router_restart` hook.
 2. Select **Check overlay**. This dry run lists each setting the overlay changes, with its current and new value, or the validation errors.
 3. Select **Apply overlay** and confirm.
 
-The service checks the merged document with the fleet configuration loader that `narwhal config validate` runs, writes the merged file to the session directory, and runs the `router_restart` hook with `NARWHAL_CONTROL_FLEET` naming that file.
+The service validates the merged configuration as `narwhal config validate` does, saves it in the session directory, and restarts the router with it through the `router_restart` hook.
 
 ## Cold restart
 
@@ -44,6 +44,6 @@ The service checks the merged document with the fleet configuration loader that 
 
 ## Router readiness
 
-After an overlay, cold restart or restore, the service polls the router's `GET /ready` every second until it returns HTTP 200. If `router.timeout_s` passes first, the action fails with HTTP 504.
+After an overlay, cold restart or restore, the service polls the router's `GET /ready` every second until it returns HTTP 200. When `router.timeout_s` passes first, the action fails with HTTP 504.
 
-An overlay applied by a successful `router_restart` hook governs the session even when the readiness wait then fails.
+If the `router_restart` hook succeeds but the router misses that deadline, the overlay still applies to the session.

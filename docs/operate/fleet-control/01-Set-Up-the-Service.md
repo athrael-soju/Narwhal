@@ -4,7 +4,7 @@ description: Write the fleet control service's private configuration, set its be
 
 # Setting up the control service
 
-This procedure configures and starts the fleet control service on the router host.
+Configure and start the fleet control service on the router host.
 
 ## Prerequisites
 
@@ -23,19 +23,19 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment. The `restore` hook is required; the other hooks and the `load` and `console` sections enable their features. [Configuration reference](09-Configuration-Reference.md) lists every key.
+Edit the copy for your deployment. The `restore` hook is required. Each other hook, and the `load` and `console` sections, enables one feature. [Configuration reference](09-Configuration-Reference.md) lists every key.
 
-The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`. Git ignores `config/fleet-control.*.json` except the example, and `make publication` rejects a tracked copy.
+The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 
 ## 2. Set the bearer token
 
-In the router shell, generate a token into the configured variable:
+In the router shell, generate a token:
 
 ```bash
 export NARWHAL_CONTROL_TOKEN="$(openssl rand -hex 32)"
 ```
 
-Store the token in the deployment's private secret store. The service strips the token variable from the environment of hooks and AIPerf.
+Keep the token in your secret store. The console and every API request need it.
 
 ## 3. Start the service
 
@@ -45,9 +45,9 @@ In the router shell, from the checkout root, run:
 .venv/bin/python -m tools.fleet_control.cli --config config/fleet-control.local.json
 ```
 
-The service runs in the foreground. `--log-level` sets the uvicorn log threshold: `critical`, `error`, `warning`, `info` (default) or `debug`.
+The service runs in the foreground. To change the log level, add `--log-level` with `critical`, `error`, `warning`, `info` (default) or `debug`.
 
-The service validates the whole configuration at startup and reports every problem in one message. If the configuration is invalid, the token is missing or too short, or the listener address is unavailable, it exits with status `2` and a `fleet control failed:` message.
+If the configuration or token is invalid, or the listener address is unavailable, the service exits with status `2` and lists every problem after `fleet control failed:`.
 
 ## 4. Check the service
 
@@ -67,4 +67,4 @@ Next, [open the console](02-Open-the-Console.md).
 
 ## Stop the service
 
-Press Ctrl+C in the service's shell. On shutdown, the service stops any running load job and records the stop.
+Press Ctrl+C in the service's shell. This also stops any running load job.

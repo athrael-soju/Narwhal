@@ -4,7 +4,7 @@ description: The files a fleet control session writes, the run.json schema, the 
 
 # Run record
 
-The service writes every record under `runs_dir`, `runs/fleet-control/` by default, which Git ignores. It creates directories with mode `0700` and files with mode `0600`.
+The service writes every record under `runs_dir`, `runs/fleet-control/` by default. It creates directories with mode `0700` and files with mode `0600`.
 
 ## Directory layout
 
@@ -87,7 +87,10 @@ A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, 
 
 ## Journal extracts
 
-Each load job and each session keeps a copy of the router journal rows written while it ran. Journal times are relative to the router process, so the service selects rows by file position instead. It records the journal's size when the run starts, and when the run ends it copies the bytes appended after that offset.
+Each load job and each session keeps a copy of the router journal rows written while it ran. Journal times are relative to the router process, so the service selects rows by file position:
+
+1. When the run starts, the service records the journal's size.
+2. When the run ends, it copies the bytes appended after that offset.
 
 - Rows written after the copy starts are left out.
 - An incomplete last row is left out.

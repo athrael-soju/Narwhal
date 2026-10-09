@@ -618,6 +618,7 @@ const state = {
   enginesError: "",
   fleet: null,
   workloads: {},
+  limits: {},
   pending: new Map(),
   feedback: new Map(),
   overlayCheck: null,
@@ -755,7 +756,8 @@ async function call(name, params, body) {
   }
   let response;
   try {
-    response = await fetch(path, init);
+    // Relative to the page, so a proxy can serve the console under a path.
+    response = await fetch("." + path, init);
   } catch (error) {
     return { status: 0, path, body: { detail: "the control service is unreachable: " + error.message } };
   }
@@ -1464,7 +1466,29 @@ async function loadWorkloads(enabled) {
     return el("option", { value: workload.name, textContent: workload.label || workload.name });
   });
   $("job-workload").replaceChildren(...options);
+  state.limits = reply.body.limits || {};
+  for (const [key, id] of JOB_FIELDS) {
+    const limit = state.limits[key];
+    if (!limit) continue;
+    Object.assign($(id), { min: limit.min, max: limit.max, step: limit.integer ? 1 : "any", title: "From " + limit.min + " to " + limit.max });
+  }
+  jobDefaults();
   workloadHint();
+}
+
+// A timestamped trace keeps its recorded timing, so its timing inputs clear. Other workloads start
+// an empty Rate and Concurrency pair, or Duration and Requests pair, at the service's default.
+function jobDefaults() {
+  const workload = state.workloads[$("job-workload").value];
+  if (!workload) return;
+  if (workload.kind === "timestamped_trace") {
+    for (const id of ["job-rate", "job-arrival", "job-ramp", "job-warmup"]) $(id).value = "";
+    return;
+  }
+  for (const [key, id, other] of [["rate", "job-rate", "job-concurrency"], ["duration_s", "job-duration", "job-requests"]]) {
+    const limit = state.limits[key];
+    if (limit && limit.default !== null && $(id).value === "" && $(other).value === "") $(id).value = limit.default;
+  }
 }
 
 const CACHE_BUST_PLACES = {
@@ -1913,7 +1937,10 @@ $("run-record").addEventListener("click", (event) => {
   if (state.record) download("run-" + state.record.session + ".json", state.record);
 });
 
-$("job-workload").addEventListener("change", workloadHint);
+$("job-workload").addEventListener("change", () => {
+  jobDefaults();
+  workloadHint();
+});
 $("job-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if ($("job-start").disabled) return;

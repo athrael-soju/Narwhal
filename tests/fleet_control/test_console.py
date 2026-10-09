@@ -374,7 +374,7 @@ class EmbeddedConsoleTests(ConsoleCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("x-frame-options", response.headers)
         policy = csp(response)
-        self.assertEqual(policy["frame-ancestors"], [GRAFANA])
+        self.assertEqual(policy["frame-ancestors"], ["'self'", GRAFANA])
         self.assertEqual(policy["frame-src"], ["'none'"])
         self.assertEqual(policy["connect-src"], ["'self'"])
         self.assertEqual(response.headers["cache-control"], "no-store")
@@ -403,8 +403,9 @@ class AutoConnectTests(ConsoleCase):
         for host in ("control", "attacker.example:18020", "127.0.0.1.attacker.example", "[::1"):
             with self.subTest(host=host):
                 response = await self.client.get("/console", headers={"host": host})
-                self.assertEqual(response.status_code, 421)
+                self.assertEqual(response.status_code, 200)
                 self.assertNotIn(TOKEN, response.text)
+                self.assertIn('id="token-form"', response.text)
 
     async def test_the_injected_page_keeps_its_policy_and_the_api_its_guard(self) -> None:
         response = await self.client.get("/console", headers={"host": "127.0.0.1:18020"})
@@ -431,7 +432,7 @@ class EmbeddedConsoleWithPanelsTests(ConsoleCase):
 
     async def test_the_page_frames_panels_from_its_framing_grafana(self) -> None:
         policy = csp(await self.client.get("/console"))
-        self.assertEqual(policy["frame-ancestors"], [GRAFANA])
+        self.assertEqual(policy["frame-ancestors"], ["'self'", GRAFANA])
         self.assertEqual(policy["frame-src"], [GRAFANA])
 
 
@@ -467,7 +468,7 @@ class PageRequestTests(ConsoleCase):
 
     def test_every_request_goes_through_the_route_table(self) -> None:
         self.assertEqual(HTML.count("fetch("), 1)
-        self.assertIn("response = await fetch(path, init);", HTML)
+        self.assertIn('response = await fetch("." + path, init);', HTML)
         # Each control names its ROUTES entry; an unused entry would be a missing control.
         script = HTML.split("const ENGINE_ACTIONS", 1)[1]
         for name in page_routes():

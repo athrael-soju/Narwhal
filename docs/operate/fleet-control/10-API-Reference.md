@@ -61,36 +61,36 @@ Before and after each engine action, the service reads the router's `GET /narwha
 
 When the state read fails, the record holds the reason in `error` and the action still runs.
 
-During a session, `GET /api/engines` reads the engine IDs from the session's baseline; outside one, it reads them from the `fleet` file. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
+`GET /api/engines` reads the engine IDs from the session's baseline, or from the `fleet` file outside a session. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
 
 ## Load jobs
 
 `POST /api/jobs` takes a JSON object with these fields:
 
-| Field             | Meaning                                                          |
-| ----------------- | ---------------------------------------------------------------- |
-| `workload`        | Name of a workload from `load.workloads`. Required               |
-| `rate`            | Requests per second, a positive number                           |
-| `arrival`         | `steady`, `random` or `bursty`                                   |
-| `concurrency`     | In-flight request limit, a positive integer                      |
-| `ramp_s`          | Seconds to reach the rate and the concurrency, a positive number |
-| `duration_s`      | Load duration in seconds, a positive number                      |
-| `requests`        | Requests to send, a positive integer                             |
-| `warmup_requests` | Requests sent before measurement, a positive integer             |
+| Field             | Meaning                                                      |
+| ----------------- | ------------------------------------------------------------ |
+| `workload`        | Name of a workload from `load.workloads`. Required           |
+| `rate`            | Requests per second, 0.1 to 1000                             |
+| `arrival`         | `steady`, `random` or `bursty`                               |
+| `concurrency`     | In-flight request limit, an integer from 1 to 4096           |
+| `ramp_s`          | Seconds to reach the rate and the concurrency, 1 to 3600     |
+| `duration_s`      | Load duration in seconds, 1 to 86400                         |
+| `requests`        | Requests to send, an integer from 1 to 1000000               |
+| `warmup_requests` | Requests sent before measurement, an integer from 1 to 10000 |
 
 [Start a job](06-Load-Jobs.md#start-a-job) lists which fields each workload kind requires, accepts or rejects.
 
-| Route                         | Status | Meaning                                                                                                                                                                               |
-| ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/jobs`              | 201    | The job started                                                                                                                                                                       |
-|                               | 409    | No session is active, a job is running, or an exclusive action is in progress                                                                                                         |
-|                               | 422    | The body is not a JSON object or the parameters are invalid; the message names every problem                                                                                          |
-|                               | 501    | The configuration has no `load` section                                                                                                                                               |
-| `POST /api/jobs/current/stop` | 200    | The job stopped                                                                                                                                                                       |
-|                               | 409    | No job is running, no session is active, or an exclusive action is in progress                                                                                                        |
-| `GET /api/jobs/current`       | 200    | The running job, or the last one to finish                                                                                                                                            |
-|                               | 404    | No job has run                                                                                                                                                                        |
-| `GET /api/workloads`          | 200    | The workload library. Each entry holds `name`, `kind`, `label`, `description`, `ignore_eos` and the workload's other keys, except `file`. The route exists only with a `load` section |
+| Route                         | Status | Meaning                                                                                                                                                                                                                                                                                           |
+| ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/jobs`              | 201    | The job started                                                                                                                                                                                                                                                                                   |
+|                               | 409    | No session is active, a job is running, or an exclusive action is in progress                                                                                                                                                                                                                     |
+|                               | 422    | The body is not a JSON object or the parameters are invalid; the message names every problem                                                                                                                                                                                                      |
+|                               | 501    | The configuration has no `load` section                                                                                                                                                                                                                                                           |
+| `POST /api/jobs/current/stop` | 200    | The job stopped                                                                                                                                                                                                                                                                                   |
+|                               | 409    | No job is running, no session is active, or an exclusive action is in progress                                                                                                                                                                                                                    |
+| `GET /api/jobs/current`       | 200    | The running job, or the last one to finish                                                                                                                                                                                                                                                        |
+|                               | 404    | No job has run                                                                                                                                                                                                                                                                                    |
+| `GET /api/workloads`          | 200    | The workload library. `workloads` lists each entry with `name`, `kind`, `label`, `description`, `ignore_eos` and the workload's other keys, except `file`. `limits` maps each numeric job field to its `min`, `max`, `integer` and console `default`. The route exists only with a `load` section |
 
 When a job finishes or stops, the service copies the job's [journal extract](11-Run-Record.md#journal-extracts) and records a `job.complete` action with the job document. The job document holds:
 

@@ -30,7 +30,7 @@ The service must be set up as in [Setting up the control service](01-Set-Up-the-
 
 2. To show firing alerts in the session strip, set `prometheus_url` to `http://127.0.0.1:9090`.
 3. Restart the control service.
-4. If the browser reaches the console at an address other than `http://127.0.0.1:18020/console`, set `NARWHAL_CONTROL_CONSOLE_URL` to that address in the router shell.
+4. If the browser reaches the console at an address other than `http://127.0.0.1:18020/console`, set `NARWHAL_CONTROL_CONSOLE_URL` to that address in the router shell. For a console served under Grafana's own address, use its path, such as `/fleet-control/console`.
 5. To mark actions and load jobs on the charts, set up [dashboard annotations](#dashboard-annotations).
 6. Run `make observe` on the router host.
 7. Open the tunnel, as in [Reaching the console through the tunnel](02-Open-the-Console.md#reaching-the-console-through-the-tunnel).
@@ -89,15 +89,15 @@ Prometheus reads these events from the control service's `GET /metrics`. To add 
 
     A value of `1` marks a successful scrape.
 
-`make observe` reads the token from `NARWHAL_CONTROL_TOKEN` regardless of the service's `token_env`, and stops with an error when `NARWHAL_CONTROL_METRICS_URL` is set without it. After the service restarts with a new token, run `make observe` again.
+`make observe` reads the token from `NARWHAL_CONTROL_TOKEN`, even when the service's `token_env` names another variable. After the service restarts with a new token, run `make observe` again.
 
 ## Framing boundary
 
-With `console.embed_in_grafana` set, the console's `frame-ancestors` policy admits only the `console.grafana_url` origin. A framed console authenticates with the bearer token, as the standalone page does.
+With `console.embed_in_grafana` set, the console accepts frames from the `console.grafana_url` origin and from its own origin.
 
-Each console panel loads the console in a sandboxed frame with its own origin, which keeps the token out of reach of Grafana pages. The sandbox permits downloads, for **Run record** and **Job document**, and lets **From session start** open the dashboard in the Grafana tab.
+A console served under Grafana's own address, such as `/fleet-control/console`, shares Grafana's origin, so script in Grafana pages can read its token. Serve the console on its own port to keep the token separate from Grafana.
 
-Grafana sanitizes Text panel HTML by default, which would remove the frames that load the console. `make observe` sets `GF_PANELS_DISABLE_SANITIZE_HTML` to keep them.
+Grafana removes the console frames from Text panels unless HTML sanitizing is off. `make observe` turns it off with `GF_PANELS_DISABLE_SANITIZE_HTML`.
 
 !!! warning
     With sanitizing off, any user who can edit a dashboard can add script that runs in other users' Grafana pages. Grafana gives anonymous users Viewer access. Grant dashboard edit rights to operators only.

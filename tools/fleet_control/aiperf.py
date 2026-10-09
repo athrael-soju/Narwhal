@@ -23,7 +23,14 @@ from .config import ControlConfig
 from .hooks import tail, terminate
 from .jobs import Job
 from .records import owner_only
-from .workloads import ARRIVALS, BURSTY_SMOOTHNESS, LoadConfig, Workload, validate_params
+from .workloads import (
+    ARRIVALS,
+    BURSTY_SMOOTHNESS,
+    LoadConfig,
+    Workload,
+    limits_document,
+    validate_params,
+)
 
 ARTIFACTS = "aiperf"
 LOG = "aiperf.log"
@@ -379,6 +386,9 @@ def workload_routes(load: LoadConfig) -> APIRouter:
     async def workloads() -> dict[str, Any]:
         # Trace file paths stay in the private configuration.
         documents = [entry.document() for entry in load.workloads.values()]
-        return {"workloads": [{k: v for k, v in d.items() if k != "file"} for d in documents]}
+        return {
+            "workloads": [{k: v for k, v in d.items() if k != "file"} for d in documents],
+            "limits": limits_document(),
+        }
 
     return routes

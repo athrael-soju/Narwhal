@@ -93,16 +93,19 @@ def _directory(path: Path, mode: int) -> None:
 
 
 def console_url(env: Mapping[str, str]) -> str:
-    """Return the console URL the Fleet control dashboard frames, from `CONSOLE_URL_ENV`."""
+    """Return the console URL the Fleet control dashboard frames, from `CONSOLE_URL_ENV`.
+
+    A path, such as `/fleet-control/console`, frames the console from Grafana's own origin.
+    """
     value = env.get(CONSOLE_URL_ENV, DEFAULT_CONSOLE_URL)
     parts = urlsplit(value)
-    if (
-        not _URL_CHARACTERS.fullmatch(value)
-        or parts.scheme not in {"http", "https"}
-        or not parts.hostname
+    path = not parts.scheme and not parts.netloc and value.startswith("/")
+    if not _URL_CHARACTERS.fullmatch(value) or not (
+        path or (parts.scheme in {"http", "https"} and parts.hostname)
     ):
         raise ValueError(
-            f"{CONSOLE_URL_ENV} must be an http or https URL without credentials, query or fragment"
+            f"{CONSOLE_URL_ENV} must be an http or https URL or a path, "
+            "without credentials, query or fragment"
         )
     return value
 

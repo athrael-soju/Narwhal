@@ -11,13 +11,13 @@ The fleet control service runs operator test actions against a running Narwhal f
 - cold restarts and baseline restores
 - AIPerf load jobs
 
-Each action, with its time and effect, goes into a private run record. The console runs on its own page or inside the **Fleet control** Grafana dashboard, beside the fleet's charts.
+The service records each action, with its time and effect, in a private run record. The console runs on its own page or inside the **Fleet control** Grafana dashboard, beside the fleet's charts.
 
 The service runs on the router host, listens on loopback, and authenticates API requests with a bearer token. Operators reach the console and Grafana from a workstation through the operator tunnel.
 
-Hooks are the deployment-specific commands that perform each change, such as stopping an engine or restarting the router. The private configuration defines them. Drains and readmits use the router's lifecycle API.
+Hooks are the commands, defined in the private configuration, that perform each change, such as stopping an engine or restarting the router. Drains and readmits use the router's lifecycle API instead.
 
-Work happens in sessions. Starting a session copies the baseline fleet configuration; ending it runs the `restore` hook to return the deployment to that baseline.
+Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it runs the `restore` hook, which returns the deployment to that baseline.
 
 ## Pages
 

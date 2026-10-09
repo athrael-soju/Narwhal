@@ -14,39 +14,43 @@ The service runs one AIPerf job at a time against `router.url`. To change the ra
 
 ## Choose a workload
 
-The **Workload** list shows each workload's `label`. The hint under the inputs shows the workload's `description`, or a summary of its settings when the workload has no description, and then the input rules for that workload. [Workloads](09-Configuration-Reference.md#workloads) defines the workload kinds and their keys.
+The hint under the inputs describes the selected workload and the inputs it accepts. [Workloads](09-Configuration-Reference.md#workloads) defines the workload kinds and their keys.
 
 ## Start a job
 
 In the **Load job** view, select a workload and set its inputs:
 
-| Input            | Field             | Meaning                                                                                                  |
-| ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| Rate (req/s)     | `rate`            | Requests per second                                                                                      |
-| Arrival          | `arrival`         | Spacing of requests at the rate. **Random** sends Poisson arrivals, **Steady** spaces requests evenly, and **Bursty** sends gamma arrivals with smoothness 0.5 |
-| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               |
-| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         |
-| Duration (s)     | `duration_s`      | Seconds of load                                                                                          |
-| Requests         | `requests`        | Number of requests to send                                                                               |
-| Warm-up requests | `warmup_requests` | Requests sent before measurement starts. The results leave them out                                      |
+| Input            | Field             | Meaning                                                                                                  | Range        | Default  |
+| ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
+| Rate (req/s)     | `rate`            | Requests per second                                                                                      | 0.1 to 1000  | 2        |
+| Arrival          | `arrival`         | Spacing of requests at the rate: `random` (Poisson), `steady` (even) or `bursty` (gamma, smoothness 0.5) |              | `random` |
+| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               | 1 to 4096    |          |
+| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    |          |
+| Duration (s)     | `duration_s`      | Seconds of load                                                                                          | 1 to 86400   | 300      |
+| Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 |          |
+| Warm-up requests | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   |          |
+
+Concurrency, Requests and Warm-up requests take whole numbers. The console and the service refuse values outside the range.
+
+Selecting a workload fills in the defaults. Rate starts at 2 when Rate and Concurrency are both empty, and Duration at 300 when Duration and Requests are both empty. A `timestamped_trace` workload clears Rate, Arrival, Ramp-up and Warm-up, because the trace sets its own arrival times.
 
 Each workload kind accepts these inputs:
 
-| Input              | `synthetic`, `mixed`, `multi_turn`, `public_dataset`, `prefix_trace` | `timestamped_trace`                                  |
-| ------------------ | -------------------------------------------------------------------- | ---------------------------------------------------- |
-| `rate`             | Set `rate`, `concurrency` or both                                    | Rejected                                             |
-| `arrival`          | Optional. `steady`, `random` or `bursty`, default `random`. Requires `rate` | Rejected                                      |
-| `concurrency`      | Set `rate`, `concurrency` or both                                    | Optional. Caps the requests in flight                |
-| `ramp_s`           | Optional. Ramps the rate and the concurrency that are set            | Rejected                                             |
-| `duration_s`       | Set `duration_s`, `requests` or both                                 | Optional. Shortens the replay                        |
-| `requests`         | Set `duration_s`, `requests` or both                                 | Optional. Ends the replay after this many requests   |
-| `warmup_requests`  | Optional                                                             | Rejected                                             |
+| Input             | `synthetic`, `mixed`, `multi_turn`, `public_dataset`, `prefix_trace` | `timestamped_trace`                                |
+| ----------------- | -------------------------------------------------------------------- | -------------------------------------------------- |
+| `rate`            | Set `rate`, `concurrency` or both                                    | Rejected                                           |
+| `arrival`         | Optional. Requires `rate`                                            | Rejected                                           |
+| `concurrency`     | Set `rate`, `concurrency` or both                                    | Optional. Caps the requests in flight              |
+| `ramp_s`          | Optional. Ramps the rate and the concurrency that are set            | Rejected                                           |
+| `duration_s`      | Set `duration_s`, `requests` or both                                 | Optional. Shortens the replay                      |
+| `requests`        | Set `duration_s`, `requests` or both                                 | Optional. Ends the replay after this many requests |
+| `warmup_requests` | Optional                                                             | Rejected                                           |
 
 A `timestamped_trace` workload sends each request at its recorded time. With both `duration_s` and `requests` set, the job stops at the first limit it reaches. In a `multi_turn` workload, `rate` counts turns and `concurrency` counts conversations.
 
 ## While the job runs
 
-The view locks its inputs, and the session strip shows the job's progress. **Stop job** stops the job's whole AIPerf process group.
+The view locks its inputs, and the session strip shows the job's progress. **Stop job** stops AIPerf.
 
 ## Results
 

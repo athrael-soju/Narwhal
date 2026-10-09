@@ -50,7 +50,7 @@ Only `restore` is required. An action whose hook is missing returns HTTP 501, an
 
 ### How hooks run
 
-A hook succeeds when it exits `0` within its timeout. The service runs each hook in its own process group with standard input closed, and writes its standard output and standard error to a log in the session directory. At the timeout, the service sends SIGTERM to the process group, then SIGKILL 5 seconds later.
+A hook succeeds when it exits `0` within its timeout. The service runs each hook in its own process group with standard input closed, and writes the hook's standard output and standard error to a log in the session directory. At the timeout, the service sends SIGTERM to the process group, then SIGKILL 5 seconds later.
 
 Each hook inherits the service's environment, minus the bearer token variable, plus these variables:
 
@@ -155,7 +155,7 @@ The service checks these rules when it starts:
 
 Each input and output length must fit the served model's context length.
 
-AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dataset` job and keeps it in `.cache/aiperf/` under the service's working directory, which Git ignores. Later jobs reuse that copy.
+AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dataset` job and keeps it in `.cache/aiperf/` under the service's working directory. Later jobs reuse that copy.
 
 `aiperf synthesize agentic-code` writes a `mooncake_trace` file of coding-agent sessions. Use it as a `prefix_trace` workload with `block_size` 512.
 
@@ -170,7 +170,7 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 | `console.panels`           | none             | Non-empty list of distinct panel IDs that the standalone console embeds, in display order                                                        |
 | `console.from`             | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`                                                   |
 | `console.refresh`          | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                                                               |
-| `console.embed_in_grafana` | `false`          | Whether pages from the `console.grafana_url` origin may frame the console. See [Framing boundary](03-Grafana-Dashboard.md#framing-boundary)      |
+| `console.embed_in_grafana` | `false`          | Whether pages from the `console.grafana_url` origin and the console's own origin may frame the console. See [Framing boundary](03-Grafana-Dashboard.md#framing-boundary)      |
 | `console.auto_connect`     | `false`          | Whether the console page carries the token and connects on load. See [Connecting automatically](02-Open-the-Console.md#connecting-automatically) |
 
 `console.grafana_url` is Grafana's address as your workstation browser sees it, usually the tunnel's local Grafana port such as `http://127.0.0.1:13000`.

@@ -33,9 +33,9 @@ Each row has a main button for the engine's current state and a **…** menu wit
 | Ejected by the router        | **Readmit**, disabled. The tooltip gives the router's reason        |
 | In service                   | **Drain**                                                           |
 
-**Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. Meanwhile the engine's state reads `starting` or `resuming` with the seconds waited. The action fails when the engine stays ejected for that long, when the router blocks its readmission, or when the router reports that the engine needs fresh profiles. The error names the reason, and [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected) lists the fixes.
+**Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. While they wait, the engine's state reads `starting` or `resuming` with the seconds waited. The action fails if the engine stays ejected for the whole wait, the router blocks its readmission, or the engine needs fresh profiles. [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected) lists the fixes.
 
-The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline (s)** from the session strip when it is set, and the router's default of 300 seconds otherwise. During a drain, a bar under the engine's resident requests shows the drained fraction.
+The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline (s)** from the session strip, or the router's default of 300 seconds when that field is empty. During a drain, a bar under the engine's resident requests shows the drained fraction.
 
 ## When an action is disabled
 
@@ -49,12 +49,12 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 - **Pause**, **Resume**, **Stop** and **Start** require their hooks. **Resume** requires a paused engine, and **Start** a stopped or ejected engine.
 - **Drain** requires an engine in service. The router runs one drain or readmit at a time.
-- **Readmit** for an ejected engine stays disabled, because the router readmits an ejected engine after its own checks pass. The tooltip shows the router's latest lifecycle event for the engine. When that event is `profile_recovery_blocked`, the engine's state reads `needs profiles`.
+- The router readmits an ejected engine itself once its checks pass, so **Readmit** stays disabled for it. The tooltip shows the router's latest lifecycle event for the engine. When that event is `profile_recovery_blocked`, the engine's state reads `needs profiles`.
 - **Readmit** requires a drained or blocked engine. When the router requires a restart after the drain, **Readmit** stays disabled until the engine restarts. See [Readmit stays disabled after a drain](08-Troubleshooting.md#readmit-stays-disabled-after-a-drain).
 - All engine actions require an active session and are disabled during an [exclusive action](04-Sessions.md#exclusive-actions).
 
 ## Paused and stopped engines
 
-Pause and stop run through hooks, outside the router's view, so the console derives the paused and stopped states from the session's run record. A baseline restore or a cold restart clears them.
+The console tracks paused and stopped engines within the session. A baseline restore or a cold restart clears those states.
 
 The **Last action** line under the table shows the latest engine action and the change in the engine's state and resident requests. The run record holds the engine's full router state before and after each action.

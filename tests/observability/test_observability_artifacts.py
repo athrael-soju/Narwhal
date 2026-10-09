@@ -236,6 +236,7 @@ class FleetControlDashboardTests(unittest.TestCase):
         for value in (
             "https://[::1]:8443/console",
             "http://control.example:18020/console",
+            "/fleet-control/console",
         ):
             with self.subTest(value=value):
                 self.assertEqual(artifacts.console_url({artifacts.CONSOLE_URL_ENV: value}), value)
@@ -249,6 +250,8 @@ class FleetControlDashboardTests(unittest.TestCase):
             'http://127.0.0.1/"><script>',
             "http:///console",
             "http://127.0.0.1/con sole",
+            "//control.example/console",
+            "fleet-control/console",
         ):
             with (
                 self.subTest(value=value),

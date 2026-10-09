@@ -4,20 +4,20 @@ description: Start and end a fleet control session, read the session strip, know
 
 # Running a test session
 
-A session is one operator test run. Every action except **Start session** requires an active session; the service returns HTTP 409 otherwise.
+A session is one operator test run. Start a session before any other action.
 
 ## Start and end a session
 
-**Start session** loads the baseline fleet configuration through the fleet configuration loader, copies it into a new session directory, and records it as the session's first configuration.
+**Start session** validates the baseline fleet configuration and copies it into a new session directory.
 
 **End session and restore** asks for confirmation, then:
 
-1. stops a running load job and records `job.stop`
-2. runs the `restore` hook and records `baseline.restore`
+1. stops a running load job
+2. runs the `restore` hook
 3. copies the session's [journal extract](11-Run-Record.md#journal-extracts)
-4. records `session.end` and closes the session
+4. closes the session
 
-Unlike **Restore baseline**, ending a session skips the router readiness wait. If the restore hook fails, the session stays open so you can retry.
+It returns once the restore hook finishes, before the router reports ready. If the restore hook fails, the session stays open, and you can end it again.
 
 ## Session strip
 
@@ -41,13 +41,11 @@ The session strip runs along the top of the console.
 | **Drain deadline (s)** | Deadline for drains started from this tab. Empty uses the router's default                                                    |
 | Buttons                | **Start session** or **End session and restore**, and **Forget token**                                                        |
 
-The console polls the service's status every 2 seconds, the engine table every 3 seconds, and router readiness and alerts every 5 seconds.
-
 ## Exclusive actions
 
-Session start and end, configuration overlays, cold restarts and baseline restores are exclusive. While one runs, the service returns HTTP 409 with the message `<action> is in progress` to every other action. Status reads such as `GET /api/health` continue to work.
+Session start and end, configuration overlays, cold restarts and baseline restores are exclusive. While one runs, the service refuses every other action with `<action> is in progress`.
 
-Engine actions and load jobs run concurrently, so you can drain an engine during a load job.
+Engine actions and load jobs can run at the same time, so a drain can run during a load job.
 
 ## Activity
 

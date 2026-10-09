@@ -41,6 +41,32 @@ PARAMS = (
     "requests",
     "warmup_requests",
 )
+
+
+@dataclass(frozen=True)
+class Limit:
+    """Accepted range of a numeric job parameter, and the value the console starts it at."""
+
+    minimum: float
+    maximum: float
+    integer: bool = False
+    default: float | None = None
+
+
+# The defaults apply to workloads other than timestamped traces, which keep their recorded timing.
+LIMITS = {
+    "rate": Limit(0.1, 1000, default=2),
+    "concurrency": Limit(1, 4096, integer=True),
+    "ramp_s": Limit(1, 3600),
+    "duration_s": Limit(1, 86400, default=300),
+    "requests": Limit(1, 1_000_000, integer=True),
+    "warmup_requests": Limit(1, 10_000, integer=True),
+}
+LIMIT_UNITS = {
+    "rate": " requests per second",
+    "ramp_s": " seconds",
+    "duration_s": " seconds",
+}
 LABEL_MAX = 60
 DESCRIPTION_MAX = 300
 
@@ -187,6 +213,30 @@ def _positive_int(value: object) -> bool:
 
 def _number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _within(value: object, limit: Limit) -> bool:
+    if not (_positive_int(value) if limit.integer else _number(value)):
+        return False
+    assert isinstance(value, int | float)
+    return limit.minimum <= value <= limit.maximum
+
+
+def _plain(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def limits_document() -> dict[str, dict[str, Any]]:
+    """Return each numeric job parameter's range and console default, for the console."""
+    return {
+        key: {
+            "min": limit.minimum,
+            "max": limit.maximum,
+            "integer": limit.integer,
+            "default": limit.default,
+        }
+        for key, limit in LIMITS.items()
+    }
 
 
 def _text(value: object) -> bool:
@@ -413,20 +463,17 @@ def validate_params(workloads: Mapping[str, Workload], params: Mapping[str, Any]
     if workload is None:
         problems.append(f"workload must name a library entry: {', '.join(sorted(workloads))}")
     rate = params.get("rate")
-    if rate is not None and not (_number(rate) and rate > 0):
-        problems.append("rate must be a positive number of requests per second")
     arrival = params.get("arrival")
     if arrival is not None and arrival not in ARRIVALS:
         problems.append(f"arrival must be one of {', '.join(ARRIVALS)}")
-    problems.extend(
-        f"{key} must be a positive integer"
-        for key in ("concurrency", "requests", "warmup_requests")
-        if params.get(key) is not None and not _positive_int(params[key])
-    )
-    for key in ("duration_s", "ramp_s"):
+    for key, limit in LIMITS.items():
         value = params.get(key)
-        if value is not None and not (_number(value) and value > 0):
-            problems.append(f"{key} must be a positive number of seconds")
+        if value is not None and not _within(value, limit):
+            kind = "an integer" if limit.integer else "a number"
+            problems.append(
+                f"{key} must be {kind} from {_plain(limit.minimum)} to {_plain(limit.maximum)}"
+                + LIMIT_UNITS.get(key, "")
+            )
     if arrival is not None and rate is None:
         problems.append("arrival needs a rate")
     if workload is not None:

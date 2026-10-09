@@ -315,15 +315,27 @@ class ParameterTests(unittest.TestCase):
         self.refused("workload must name a library entry: chat-512-256, prefix, replay")
         self.refused("workload must name a library entry", workload="missing")
         self.refused("unknown job parameter 'users'", workload="replay", users=10)
-        for value in (0, -1, "2", True, float("inf")):
+        for value in (0, 0.05, -1, "2", True, float("inf"), 1001):
             with self.subTest(rate=value):
-                self.refused("rate must be a positive number", workload="prefix", rate=value)
-        for value in (0, 1.5, True):
+                self.refused(
+                    "rate must be a number from 0.1 to 1000 requests per second",
+                    workload="prefix",
+                    rate=value,
+                )
+        for value in (0, 1.5, True, 4097):
             with self.subTest(concurrency=value):
                 self.refused(
-                    "concurrency must be a positive integer", workload="replay", concurrency=value
+                    "concurrency must be an integer from 1 to 4096",
+                    workload="replay",
+                    concurrency=value,
                 )
-        self.refused("duration_s must be a positive number", workload="replay", duration_s=0)
+        for value in (0, 86401):
+            with self.subTest(duration_s=value):
+                self.refused(
+                    "duration_s must be a number from 1 to 86400 seconds",
+                    workload="replay",
+                    duration_s=value,
+                )
 
 
 COMMON = (
@@ -651,6 +663,14 @@ class CompletedJobTests(RunnerCase):
         response = await self.client.get("/api/workloads")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
+            response.json()["limits"]["rate"],
+            {"min": 0.1, "max": 1000, "integer": False, "default": 2},
+        )
+        self.assertEqual(
+            response.json()["limits"]["concurrency"],
+            {"min": 1, "max": 4096, "integer": True, "default": None},
+        )
+        self.assertEqual(
             response.json()["workloads"],
             [
                 {
@@ -975,10 +995,21 @@ class JobOptionTests(unittest.TestCase):
             duration_s=5,
         )
         self.refused("needs duration_s, requests or both", workload="chat-512-256", concurrency=2)
-        for key in ("requests", "warmup_requests"):
-            with self.subTest(key=key):
-                self.refused(f"{key} must be a positive integer", workload="replay", **{key: 0})
-        self.refused("ramp_s must be a positive number of seconds", workload="prefix", ramp_s=0)
+        for key, maximum in (("requests", 1_000_000), ("warmup_requests", 10_000)):
+            for value in (0, maximum + 1):
+                with self.subTest(key=key, value=value):
+                    self.refused(
+                        f"{key} must be an integer from 1 to {maximum}",
+                        workload="replay",
+                        **{key: value},
+                    )
+        for value in (0.5, 3601):
+            with self.subTest(ramp_s=value):
+                self.refused(
+                    "ramp_s must be a number from 1 to 3600 seconds",
+                    workload="prefix",
+                    ramp_s=value,
+                )
 
     def test_timestamped_traces_refuse_timing_options(self) -> None:
         self.refused(
