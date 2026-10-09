@@ -116,7 +116,7 @@ class ControlTarget:
 
 
 def control_target(env: Mapping[str, str]) -> ControlTarget | None:
-    """Return the control service named by `CONTROL_METRICS_URL_ENV`, or None to scrape none."""
+    """Return the control service named by `CONTROL_METRICS_URL_ENV`, or None when it is unset."""
     url = env.get(CONTROL_METRICS_URL_ENV, "")
     if not url:
         return None
@@ -253,7 +253,8 @@ def _latency_bars(source: Mapping[str, Any], panel_id: int) -> dict[str, Any]:
         panel_id,
         "Latency against SLO",
         "The p95 time to first token and time per output token over the displayed interval, "
-        "as a share of each SLO target. A bar turns red at the target, 100%. The bar scale "
+        "as a share of each SLO target. A bar turns yellow at 80% of the target and red at 100%. "
+        "The bar scale "
         "runs from 0 to 150% of the target.",
         queries,
         "bargauge",
@@ -336,7 +337,7 @@ def _console_view(panel_id: int, console: str, view: str, title: str) -> dict[st
 
 
 def _row(title: str, collapse: bool, items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Return a dashboard row; a row without a title shows no header and cannot collapse."""
+    """Return a dashboard row; an untitled row has no header and stays expanded."""
     spec: dict[str, Any] = {
         "title": title,
         "collapse": collapse,
@@ -418,8 +419,8 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
         "spec": {
             "annotations": [*spec["annotations"], *map(_annotation, CONTROL_ANNOTATIONS)],
             "cursorSync": spec["cursorSync"],
-            "description": "Fleet control: the operator console among the live Narwhal "
-            "Orchestrator panels.",
+            "description": "Fleet control console views beside panels from the Narwhal "
+            "Orchestrator dashboard.",
             "editable": spec["editable"],
             "elements": elements,
             "layout": {"kind": "RowsLayout", "spec": {"rows": rows}},
@@ -457,8 +458,8 @@ def stage_artifacts(
     """Copy the named configs and discovery targets with explicit container permissions.
 
     The Fleet control dashboard is derived from the shipped dashboard and frames `console`.
-    Prometheus scrapes `control` with its token; without one, the fleet-control job has no
-    target and its token file is empty.
+    Prometheus scrapes `control` with its token. When `control` is None, the fleet-control target
+    list and token file are empty.
     """
     _directory(root, 0o700)
     for relative in (

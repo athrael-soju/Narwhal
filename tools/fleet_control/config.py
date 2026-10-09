@@ -91,7 +91,7 @@ class RouterEndpoint:
 
 @dataclass(frozen=True)
 class ConsoleConfig:
-    """The console's Grafana: the dashboard panels it embeds and whether Grafana may frame it.
+    """Grafana panels the console embeds, Grafana framing, and token delivery for the console page.
 
     `grafana_url` is the Grafana address as the operator's browser reaches it, usually the
     workstation end of the operator tunnel rather than the address on the router host. Without
@@ -113,7 +113,7 @@ class ConsoleConfig:
 class ControlConfig:
     """Listener, credential, record location, baseline fleet, router, hooks, load and console.
 
-    `prometheus_url` is the Prometheus the service asks for firing alerts; None reports none.
+    `prometheus_url` is the Prometheus queried for firing alerts, or None to skip the query.
     """
 
     fleet: Path

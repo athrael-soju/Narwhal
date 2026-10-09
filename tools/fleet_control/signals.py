@@ -68,8 +68,8 @@ def metrics(service: ControlService) -> str:
         "# HELP narwhal_control_session_active Whether an operator session is active.",
         "# TYPE narwhal_control_session_active gauge",
         _sample("narwhal_control_session_active", {}, int(session is not None)),
-        "# HELP narwhal_control_action_started_ms Start of each attempted action of the active "
-        "session, in Unix milliseconds.",
+        "# HELP narwhal_control_action_started_ms Start of each engine action, overlay, cold "
+        "restart and restore that ran in the active session, in Unix milliseconds.",
         "# TYPE narwhal_control_action_started_ms gauge",
     ]
     for action in [] if session is None else session.actions:
@@ -108,7 +108,7 @@ class FleetSignals:
         self._transport = transport
 
     async def document(self) -> dict[str, Any]:
-        """Return the router's readiness and the firing alerts, or None without Prometheus."""
+        """Return the router's readiness and, when `prometheus_url` is set, the firing alerts."""
         return {"router": await self.router(), "alerts": await self.alerts()}
 
     async def router(self) -> dict[str, Any]:

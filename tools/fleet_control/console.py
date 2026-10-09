@@ -6,9 +6,10 @@ tab's sessionStorage and sends it as `Authorization: Bearer` on every API reques
 routes keep refusing requests without the token, and no cookie carries it, so another site
 cannot make the browser send an authenticated request.
 
-With `console.auto_connect`, the page carries the token in a meta element instead and connects
-on load. Anyone who can reach the listener can then read the token, so the page is served only
-for loopback Host headers, which refuses pages that rebind their own domain name to loopback.
+With `console.auto_connect`, the page carries the token in a meta element and connects on load,
+so any client that reaches the listener can read the token. The route serves the page for a
+loopback Host header and answers HTTP 421 to any other, including the Host header of a site that
+rebinds its own domain name to loopback.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ def with_token(html: str, token: str) -> str:
     """Return the page with `token` in its `narwhal-control-token` meta element."""
     element = f'<meta name="narwhal-control-token" content="{markup.escape(token)}">\n'
     if html.count(_TOKEN_ANCHOR) != 1:
-        raise ValueError("the console page has no token anchor")
+        raise ValueError("the console page needs exactly one token anchor")
     return html.replace(_TOKEN_ANCHOR, _TOKEN_ANCHOR + element)
 
 

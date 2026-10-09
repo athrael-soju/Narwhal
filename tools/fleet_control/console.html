@@ -6,8 +6,8 @@
 <meta name="referrer" content="no-referrer">
 <title>Narwhal fleet control</title>
 <style>
-/* Grafana's default theme. The role colours follow the dashboard colour key in
-   tools/observability/README.md, so the console matches the Engine role history panel. */
+/* Grafana's light and dark theme colours. The role colours follow the dashboard colour key in
+   docs/observability/05-Dashboard.md, so the console matches the Engine role history panel. */
 :root {
   color-scheme: light;
   --bg: #f4f5f5;
@@ -581,7 +581,7 @@ const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]')
 const POLL_MS = 2000;
 const ENGINE_POLL_MS = 3000;
 const FLEET_POLL_MS = 5000;
-// The run record is re-read every this many status polls during a session.
+// Status polls between run record reads during a session.
 const RECORD_EVERY = 3;
 
 const THEME = new URLSearchParams(window.location.search).get("theme");
@@ -941,7 +941,8 @@ function render() {
 
 // Engine state.
 function processStates() {
-  // Pause, resume, stop and start are hooks the router cannot see; the run record keeps them.
+  // Pause, resume, stop and start run as hooks outside the router, so their state comes from
+  // the run record.
   const states = {};
   for (const action of (state.record ? state.record.actions : [])) {
     if (action.outcome !== "ok") continue;
