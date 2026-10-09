@@ -14,6 +14,7 @@ from narwhal.runtime.listeners import check_http_bind
 
 from .app import create_app
 from .config import DEFAULT_CONFIG, ConfigError, load_config, read_token
+from .engines import EngineActions, engine_routes
 from .service import ControlService
 
 
@@ -40,7 +41,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ConfigError, OSError) as exc:
         print(f"fleet control failed: {exc}", file=sys.stderr)
         return 2
-    app = create_app(ControlService(config), token)
+    service = ControlService(config)
+    app = create_app(service, token, routers=[engine_routes(EngineActions(service))])
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level)
     return 0
 

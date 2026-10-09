@@ -9,6 +9,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 DEFAULT_CONFIG = Path("config/fleet-control.local.json")
 DEFAULT_HOST = "127.0.0.1"
@@ -16,12 +17,16 @@ DEFAULT_PORT = 8020
 DEFAULT_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 DEFAULT_RUNS_DIR = Path("runs/fleet-control")
 DEFAULT_HOOK_TIMEOUT_S = 900.0
+DEFAULT_ROUTER_URL = "http://127.0.0.1:8000"
+# Lifecycle readmission validates the engine and its KV peers before it answers.
+DEFAULT_ROUTER_TIMEOUT_S = 600.0
 # A token from `openssl rand -hex 32` or `secrets.token_urlsafe(32)` clears this floor.
 MIN_TOKEN_LENGTH = 32
 RESTORE_HOOK = "restore"
 REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
-_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks"}
+_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router"}
 _HOOK_KEYS = {"argv", "timeout_s"}
+_ROUTER_KEYS = {"url", "timeout_s"}
 
 
 class ConfigError(ValueError):
@@ -38,8 +43,16 @@ class Hook:
 
 
 @dataclass(frozen=True)
+class RouterEndpoint:
+    """The Narwhal router whose state and lifecycle API the service calls."""
+
+    url: str = DEFAULT_ROUTER_URL
+    timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S
+
+
+@dataclass(frozen=True)
 class ControlConfig:
-    """Listener, credential, record location, baseline fleet and hook commands."""
+    """Listener, credential, record location, baseline fleet, router and hook commands."""
 
     fleet: Path
     hooks: Mapping[str, Hook]
@@ -47,6 +60,7 @@ class ControlConfig:
     port: int = DEFAULT_PORT
     token_env: str = DEFAULT_TOKEN_ENV
     runs_dir: Path = DEFAULT_RUNS_DIR
+    router: RouterEndpoint = RouterEndpoint()
 
     def hook(self, name: str) -> Hook:
         """Return the configured hook, or raise when the deployment did not name one."""
@@ -91,6 +105,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
     if not isinstance(fleet, str) or not fleet:
         problems.append("fleet must name the baseline fleet configuration (or set NARWHAL_FLEET)")
     hooks = _read_hooks(problems, raw.get("hooks"))
+    router = _read_router(problems, raw.get("router", {}))
     if problems:
         raise ConfigError(f"{path}: " + "; ".join(problems))
     return ControlConfig(
@@ -100,6 +115,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         port=int(port),
         token_env=str(token_env),
         runs_dir=Path(str(runs_dir)),
+        router=router,
     )
 
 
@@ -134,6 +150,34 @@ def _read_hooks(problems: list[str], raw: object) -> dict[str, Hook]:
         hooks[name] = Hook(name, tuple(argv), float(timeout))
     problems.extend(f"hooks.{name} is required" for name in sorted(REQUIRED_HOOKS - set(raw)))
     return hooks
+
+
+def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
+    if not isinstance(raw, dict):
+        problems.append("router must be an object")
+        return RouterEndpoint()
+    problems.extend(f"unknown key router.{key}" for key in sorted(set(raw) - _ROUTER_KEYS))
+    url = raw.get("url", DEFAULT_ROUTER_URL)
+    if not isinstance(url, str) or not _is_http_url(url):
+        problems.append(f"router.url must be an http or https URL, got {url!r}")
+    timeout = raw.get("timeout_s", DEFAULT_ROUTER_TIMEOUT_S)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int | float)
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
+        problems.append("router.timeout_s must be a positive number of seconds")
+        timeout = DEFAULT_ROUTER_TIMEOUT_S
+    return RouterEndpoint(str(url).rstrip("/"), float(timeout))
+
+
+def _is_http_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
 
 
 def read_token(config: ControlConfig, env: Mapping[str, str] = os.environ) -> str:
