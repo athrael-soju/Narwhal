@@ -22,7 +22,7 @@ This page covers the router settings that decide whether a request is admitted, 
 | KV handoff bound | Derived per producer | The producer's attested KV lease |
 | Engine seats | Derived per engine | The engine's attestation and profile |
 
-The runs behind these defaults load one fleet and pause and kill its engines. A fleet with a different engine count, engine configuration or workload can need different values. Measure the outcomes on your own fleet before you change a setting, as [Checking a changed setting](#checking-a-changed-setting) describes.
+The runs behind these defaults load one fleet of 8 engines with synthetic 512-token prompts and 256-token outputs, against a TTFT target of 2.1 seconds and a TPOT target of 45 milliseconds. Each admission, queue and retry run lasts 90 seconds. Loads are stated relative to the fleet's measured capacity, and a good request completed within both targets. A fleet with a different engine count, engine configuration or workload can need different values. Measure the outcomes on your own fleet before you change a setting, as [Checking a changed setting](#checking-a-changed-setting) describes.
 
 The router reads these settings from the fleet file when it starts. A changed value takes effect after a router restart.
 
@@ -39,14 +39,30 @@ The TTFT check prices the request's prefill on the cheapest live prefill engine,
 
 In both modes, the router records the [admission price](../telemetry/01-Journal.md#admission-price) of each prefill placement in the journal. Open mode records the price without enforcing it.
 
-Default evidence: [TODO(task9): goodput and refusals by cause of the predictive and open runs with the queue and retries off, at loads below, at and above measured capacity, and the recorded `price_s` against the observed `ttft_s` of completed rows].
+### Admission measurements
+
+With the queue off and one attempt per request, the two modes served these good requests of those offered:
+
+| Load | `predictive` | `open` |
+| --- | --- | --- |
+| Below capacity | 3,564 of 3,564 | 3,564 of 3,564 |
+| At capacity | 5,294 of 5,338 | 5,338 of 5,338 |
+| Above capacity | 5,066 of 7,200 | 3,732 of 7,200 |
+
+At capacity, the 44 requests that predictive mode lost were saturation 429s. Above capacity, predictive mode answered 800 saturation 429s, 3 refusals with cause `slot_wait` and 1 in-flight-limit 429, and open mode answered 287 in-flight-limit 429s.
+
+In a six-minute replay of a quiet phase followed by a burst above capacity, predictive mode served about 7,250 good requests of the 14,345 offered in the burst, with a TTFT p95 of about 2.1 seconds. Open mode served 5,405, with a TTFT p95 of 8.7 seconds. In burst runs of either mode, the role controller can hold a split with too few prefill engines through the burst, and health drift scoring can eject engines that are overloaded but healthy. Both lower goodput independently of these settings.
+
+On served first attempts, the median ratio of observed TTFT to admission price was 0.88 to 1.04 across the runs, and the 95th percentile was 1.5 to 2.0. Observed TTFT exceeded the price for about 40 to 55 percent of requests. The price estimates the median TTFT, not an upper bound, so some admitted requests miss the TTFT target even when the price fits the budget.
+
+### Changing the mode
 
 Change the mode under these conditions:
 
 - Keep `predictive` when clients should receive an immediate 429 with `Retry-After` instead of a first token later than the TTFT budget.
 - Use `open` to measure the fleet without predictive refusals, such as an in-flight sweep. Open mode returns no `refused` outcomes, so overload appears as SLO misses and engine faults.
-- Before you rely on predictive refusals, compare `price_s` with `ttft_s` on completed journal rows. When the price stays below the observed TTFT, predictive mode admits requests that miss the budget. When it stays above, predictive mode refuses requests the fleet would serve within the budget. Remeasure the [engine profiles](../measure/01-Profile.md) in either case.
-- Raise `serving.admission_margin` to admit requests whose projected TTFT exceeds `slo.ttft_s` by up to that fraction of it.
+- Before you rely on predictive refusals, compare `price_s` with `ttft_s` on completed journal rows. When the median ratio of `ttft_s` to `price_s` moves well above 1, predictive mode admits more requests that miss the budget. When it moves well below 1, predictive mode refuses requests the fleet would serve within the budget. Remeasure the [engine profiles](../measure/01-Profile.md) in either case.
+- Raise `serving.admission_margin` to admit requests whose projected TTFT exceeds `slo.ttft_s` by up to that fraction of it. The margin must be zero or greater, so it only widens the budget: a positive margin admits more requests that miss the TTFT target and cannot add headroom below it.
 
 ## Queue
 
@@ -65,16 +81,39 @@ With the queue on, a request can wait at three stages:
 | Prefill seat | The part of `serving.queue_timeout_s` the request has left | HTTP 504 `expired` |
 | Decode seat | The producer's [KV handoff bound](#kv-handoff-bound) | A retry when attempts remain, otherwise HTTP 504 `handoff_expired` |
 
-The router answers HTTP 429 with message `router in-flight limit reached` once the requests it counts reach the in-flight limit plus `serving.queue_capacity`. The original request deadline ends any wait with HTTP 504 `request_expired`. A whole-wave hold, degraded engine monitoring or a lost router lease ends waiting requests with HTTP 503 `standby`, as [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes.
+The router answers HTTP 429 with message `router in-flight limit reached` once the requests it counts reach the in-flight limit plus `serving.queue_capacity`. The original request deadline ends any wait with HTTP 504 `request_expired`.
+
+The router sets each wait's timer at its bound, but the timer fires only when the router's event loop runs it. Under event-loop lag, a wait can therefore run past its bound by about the lag, and a seat that frees in that time still serves the request. `narwhal_router_loop_lag_seconds` reports the lag, and the [router saturation](../configuration/02-Serving-and-Role-Control.md#router-saturation) check rejects new requests with HTTP 429 once it reaches a quarter of `slo.ttft_s`. A whole-wave hold, degraded engine monitoring or a lost router lease ends waiting requests with HTTP 503 `standby`, as [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes.
 
 In `predictive` mode, the router prices a first attempt each time its admission-seat or prefill-seat wait starts or wakes, and the price includes the time waited. A priced first attempt therefore leaves its wait with the TTFT check's HTTP 429, cause `queue`, before its wait exceeds the TTFT budget. A `serving.queue_timeout_s` longer than the TTFT budget still bounds the waits the router does not price: a retry's prefill-seat wait, and every wait in `open` mode.
 
-Default evidence: [TODO(task9): goodput, waits by stage and outcomes by reason of the queue-on and queue-off runs under each admission mode, at and above capacity].
+The router does not price decode-seat waits in either mode. A decode-seat wait delays the client's first token after the request has passed admission, so under sustained overload queued requests can reach the client after the TTFT target.
 
-Turn the queue on under these conditions:
+### Queue measurements
 
+The queue-on runs set `serving.queue_capacity` to `256` and `serving.queue_timeout_s` to `2.0`.
+
+At capacity, the queue changed little: predictive mode served 5,336 good requests of 5,338, and open mode 5,338 of 5,338. The longest prefill-seat wait was 0.03 to 0.06 seconds, and the longest decode-seat wait 1.65 to 1.67 seconds.
+
+Above capacity, under sustained load, the queue cost most of the goodput:
+
+| Admission | Queue on | Queue off |
+| --- | --- | --- |
+| `predictive` | 878 of 7,200 | 5,066 of 7,200 |
+| `open` | 619 of 7,200 | 3,732 of 7,200 |
+
+With the queue on, predictive mode refused 1,756 requests with cause `slot_wait`, and its longest decode-seat wait was 2.5 seconds. No admission-seat wait exceeded the 2-second bound. Open mode answered 1,327 HTTP 504 `queue_expired` responses and 205 saturation 429s, and its longest decode-seat wait was 5.2 seconds.
+
+In the open-mode run, `narwhal_router_loop_lag_seconds` peaked at 0.72 seconds, and 2,585 of the 7,200 requests waited longer than the 2-second bound for an admission seat, up to 2.75 seconds. Of those, 1,176 then expired with HTTP 504 `queue_expired`, and a seat served the other 1,409.
+
+In the burst replay, the queue absorbed the burst. With the queue on and predictive admission, the fleet served 10,016 good requests of the 14,345 offered in the burst, with a TTFT p95 of 1.94 seconds, against about 7,250 with the queue off.
+
+### Turning the queue on
+
+Keep `serving.queue_capacity` at `0` unless the workload's overload comes in short bursts. Turn the queue on when both conditions hold:
+
+- Overload arrives in short bursts, not as sustained load above capacity.
 - Clients should wait for a seat instead of receiving an immediate 429 at the in-flight limit.
-- At the offered load, engine-side failures such as `engine_timeout` rise while engines queue requests above their seats.
 
 Set `serving.queue_timeout_s` to the longest time a client should wait before its request starts prefill. Raising it lengthens waits without adding seats.
 
@@ -101,11 +140,24 @@ The router derives each producer's handoff bound from the KV lease in its attest
 handoff bound = kv_lease_duration - kv_lease_duration // 6
 ```
 
-At the launcher's default lease of 30 seconds, the bound is 25 seconds. A producer whose attestation records no lease has no handoff bound, and the original request deadline bounds its handoffs.
+At the launcher's default lease of 30 seconds, the bound is 25 seconds. A producer whose attestation records no lease has no handoff bound, and the original request deadline bounds its handoffs and its requests' decode-seat waits.
 
 When a handoff reaches its bound before decode dispatch, the attempt ends. With attempts remaining, the request retries with a fresh prefill. Without them, the client receives HTTP 504 `handoff_expired`, and the journal records terminal `expired` with reason `handoff`.
 
-Default evidence: [TODO(task9): handoff expiries and each engine's expired-KV count in the queue-on run with every decode seat held, and whether the expired-KV counts match the router's requests that ended between prefill completion and decode dispatch].
+### KV handoff measurements
+
+These runs used engines that attest a 6-second lease, so each producer's handoff bound was 5 seconds. Admission was `open`, with `serving.queue_capacity` at `512` and `serving.queue_timeout_s` at `30`. Requests asked for 1,024 output tokens, so every decode seat stayed held.
+
+| `serving.max_attempts` | Handoff expiries | Client outcomes | Producers' expired-KV count |
+| --- | --- | --- | --- |
+| `1` | 3,404 attempts | 3,404 HTTP 504 `handoff_expired`, 160 served | Rose by 3,404 |
+| `2` | 3,426 attempts | 3,404 HTTP 504 `handoff_expired`, 3 served after a retry that followed a handoff expiry | Rose by 3,426 |
+
+In both runs, the producers' expired-KV count matched the router's handoff expiries attempt for attempt. In the one-attempt run, no request decoded on its own producer, and the expired requests' decode-seat waits lasted 5.00 to 5.13 seconds. In the two-attempt run, each attempt's decode-seat wait ended at the 5-second bound, and a request's waits totalled up to 10.03 seconds across its two attempts.
+
+A run on engines whose attestation records no lease had no handoff bound. Decode-seat waits reached 63.8 seconds, and the producers expired the KV of 1,649 requests while the router recorded no handoff expiry. Deploy engines whose attestation carries the lease, which the [engine launcher](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets, so the router enforces the bound.
+
+### Changing the lease
 
 [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets the lease at engine launch. A longer lease lets a prefilled request wait longer for a decode seat, and a producer holds the KV blocks of an abandoned handoff for longer. A shorter lease frees producer KV blocks sooner, and decode-seat waits end sooner. Relaunch and attest the engines after you change the lease.
 
@@ -143,7 +195,18 @@ A retry can end the request with these responses:
 
 A failure after visible output never retries. A streaming response then ends its HTTP 200 stream with a terminal error event of type `decode`. A request that completes on a later attempt increments `narwhal_served_after_retry_total`.
 
-Default evidence: [TODO(task9): each affected request's attempts, engines and outcome in the prefill-engine kill and the decode-engine kill before output under load, with retries off and with retries on, and the count of retries that landed on an engine that already failed the same request].
+### Retry measurements
+
+With the other settings at their defaults, one prefill engine and one decode engine were killed under load:
+
+| `serving.max_attempts` | Requests hit before output | Outcome |
+| --- | --- | --- |
+| `2` | 7 | All 7 completed on another engine. |
+| `1` | 5 | All 5 ended with HTTP 502 and `retry_reason` `attempt_limit`: 3 in prefill, with reasons `engine_unreachable` (2) and `engine_connection` (1), and 2 in decode, with reason `engine_connection`. |
+
+No retry landed on an engine that had already failed the same request. In each kill, 18 to 23 requests whose output had started on the killed engine ended with the stream error event and did not retry.
+
+### Changing the attempt limit
 
 Change `serving.max_attempts` under these conditions:
 
@@ -169,7 +232,7 @@ Raise `serving.retry_budget` when `narwhal_retry_denied_total` rises during an e
 
 A local connection-pool wait, and an engine HTTP 4xx response other than 408 or 429, start no quarantine. An engine that is not covered stays in placement. `narwhal_engine_held{kind="timed"}` and `holds.timed` in `/narwhal/state` report quarantined engines. [Failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine) describes when quarantine ends.
 
-Default evidence: [TODO(task9): each affected request's attempts, engines and outcome in the prefill-engine kill and the decode-engine kill with retries on and a positive `recovery.failure_quarantine_s`, compared with the same kills at `0.0`].
+In the same engine kills with retries on and `recovery.failure_quarantine_s` at `5`, 3 requests were hit before output, and all 3 completed on another engine. Two timed holds started and ended. Client outcomes did not differ from the runs at `0.0`, so the default stays `0.0`.
 
 Set a positive value when one engine fails successive requests faster than the breaker removes it, and the remaining engines can carry the load for the quarantine period.
 
@@ -215,7 +278,18 @@ The default sits above the largest inter-chunk gap of streams served while the f
 
 A stream that receives no chunk for the limit fails. After output starts, it ends with the terminal error event and does not retry. A stalled stream on a hung decode engine therefore ends after the limit.
 
-[TODO(task9): the stream stalls recorded with a paused decode engine under load, and how long each stalled stream ran before the gap limit ended it].
+With the limit at 10 seconds, a decode engine paused for 40 seconds under load produced this sequence:
+
+| Time | Event |
+| --- | --- |
+| 10.3 s after the pause | The router placed an inference hold on the engine. |
+| 19.0 s after the pause | Liveness probing ejected the engine. |
+| 23.3 s after the pause | An inference probe through a live producer failed. |
+| 1.7 s after the resume | The router readmitted the engine. |
+
+The 23 streams whose output had started on the paused engine ended with the stream error event after the 10-second gap. The 13 requests on that engine that had not started output completed on another engine.
+
+A prefill engine paused under load was ejected after a failed health probe 12.1 seconds after the pause, and readmitted 7.4 seconds after the resume. Both engines returned to placement within `recovery.readmit_every` monitor intervals, 10 intervals of 1 second.
 
 Change the limit under these conditions:
 
