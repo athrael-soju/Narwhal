@@ -6,6 +6,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,13 +23,24 @@ DEFAULT_HOOK_TIMEOUT_S = 900.0
 DEFAULT_ROUTER_URL = "http://127.0.0.1:8000"
 # Lifecycle readmission validates the engine and its KV peers before it answers.
 DEFAULT_ROUTER_TIMEOUT_S = 600.0
+# The largest router journal extract copied for one session or load job.
+DEFAULT_JOURNAL_MAX_BYTES = 256 * 1024 * 1024
 # A token from `openssl rand -hex 32` or `secrets.token_urlsafe(32)` clears this floor.
 MIN_TOKEN_LENGTH = 32
+# The UID of the shipped Narwhal Orchestrator dashboard, tools/observability/grafana-narwhal.json.
+DEFAULT_DASHBOARD_UID = "narwhal-router"
+# The shipped dashboard's own time range and refresh interval.
+DEFAULT_PANEL_FROM = "now-15m"
+DEFAULT_PANEL_REFRESH = "5s"
 RESTORE_HOOK = "restore"
 REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
-_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load"}
+_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load", "console"}
 _HOOK_KEYS = {"argv", "timeout_s"}
-_ROUTER_KEYS = {"url", "timeout_s"}
+_ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
+_CONSOLE_KEYS = {"grafana_url", "dashboard_uid", "panels", "from", "refresh"}
+_DASHBOARD_UID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+_RELATIVE_TIME = re.compile(r"^now(-[1-9][0-9]*[smhdwMy])?$")
+_INTERVAL = re.compile(r"^[1-9][0-9]*[smhd]$")
 
 
 class ConfigError(ValueError):
@@ -46,15 +58,36 @@ class Hook:
 
 @dataclass(frozen=True)
 class RouterEndpoint:
-    """The Narwhal router whose state and lifecycle API the service calls."""
+    """The Narwhal router whose state and lifecycle API the service calls.
+
+    `journal` is the router's request journal on this host, from which sessions and load jobs
+    copy the rows they produced; None records no extract.
+    """
 
     url: str = DEFAULT_ROUTER_URL
     timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S
+    journal: Path | None = None
+    journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
+
+
+@dataclass(frozen=True)
+class ConsoleConfig:
+    """The Grafana dashboard panels the console page embeds beside its controls.
+
+    `grafana_url` is the Grafana address as the operator's browser reaches it, usually the
+    workstation end of the operator tunnel rather than the address on the router host.
+    """
+
+    grafana_url: str
+    panels: tuple[int, ...]
+    dashboard_uid: str = DEFAULT_DASHBOARD_UID
+    time_from: str = DEFAULT_PANEL_FROM
+    refresh: str = DEFAULT_PANEL_REFRESH
 
 
 @dataclass(frozen=True)
 class ControlConfig:
-    """Listener, credential, record location, baseline fleet, router, hooks and load jobs."""
+    """Listener, credential, record location, baseline fleet, router, hooks, load and console."""
 
     fleet: Path
     hooks: Mapping[str, Hook]
@@ -64,6 +97,7 @@ class ControlConfig:
     runs_dir: Path = DEFAULT_RUNS_DIR
     router: RouterEndpoint = RouterEndpoint()
     load: LoadConfig | None = None
+    console: ConsoleConfig | None = None
 
     def hook(self, name: str) -> Hook:
         """Return the configured hook, or raise when the deployment did not name one."""
@@ -110,6 +144,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
     hooks = _read_hooks(problems, raw.get("hooks"))
     router = _read_router(problems, raw.get("router", {}))
     load = read_load(problems, raw["load"]) if "load" in raw else None
+    console = read_console(problems, raw["console"]) if "console" in raw else None
     if problems:
         raise ConfigError(f"{path}: " + "; ".join(problems))
     return ControlConfig(
@@ -121,6 +156,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         runs_dir=Path(str(runs_dir)),
         router=router,
         load=load,
+        console=console,
     )
 
 
@@ -174,7 +210,62 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
     ):
         problems.append("router.timeout_s must be a positive number of seconds")
         timeout = DEFAULT_ROUTER_TIMEOUT_S
-    return RouterEndpoint(str(url).rstrip("/"), float(timeout))
+    journal = raw.get("journal")
+    # The file may not exist yet: the router creates it when it starts.
+    if journal is not None and (not isinstance(journal, str) or not Path(journal).is_absolute()):
+        problems.append("router.journal must be the absolute path of the router's journal file")
+        journal = None
+    max_bytes = raw.get("journal_max_bytes", DEFAULT_JOURNAL_MAX_BYTES)
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+        problems.append("router.journal_max_bytes must be a positive number of bytes")
+        max_bytes = DEFAULT_JOURNAL_MAX_BYTES
+    return RouterEndpoint(
+        str(url).rstrip("/"),
+        float(timeout),
+        None if journal is None else Path(journal),
+        max_bytes,
+    )
+
+
+def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
+    """Validate the `console` section, appending each problem to `problems`."""
+    if not isinstance(raw, dict):
+        problems.append("console must be an object")
+        return None
+    count = len(problems)
+    problems.extend(f"unknown key console.{key}" for key in sorted(set(raw) - _CONSOLE_KEYS))
+    url = raw.get("grafana_url")
+    if not isinstance(url, str) or not _is_http_url(url) or any(c in url for c in "?#@"):
+        problems.append(
+            "console.grafana_url must be an http or https URL without credentials, "
+            "query or fragment"
+        )
+    uid = raw.get("dashboard_uid", DEFAULT_DASHBOARD_UID)
+    if not isinstance(uid, str) or not _DASHBOARD_UID.match(uid):
+        problems.append("console.dashboard_uid must be a Grafana dashboard UID")
+    panels = raw.get("panels")
+    if (
+        not isinstance(panels, list)
+        or not panels
+        or not all(isinstance(p, int) and not isinstance(p, bool) and p >= 1 for p in panels)
+        or len(set(panels)) != len(panels)
+    ):
+        problems.append("console.panels must be a non-empty list of distinct Grafana panel IDs")
+    time_from = raw.get("from", DEFAULT_PANEL_FROM)
+    if not isinstance(time_from, str) or not _RELATIVE_TIME.match(time_from):
+        problems.append("console.from must be a relative Grafana time such as now-15m")
+    refresh = raw.get("refresh", DEFAULT_PANEL_REFRESH)
+    if not isinstance(refresh, str) or not _INTERVAL.match(refresh):
+        problems.append("console.refresh must be an interval such as 5s or 1m")
+    if len(problems) > count:
+        return None
+    return ConsoleConfig(
+        grafana_url=str(url).rstrip("/"),
+        panels=tuple(panels),
+        dashboard_uid=str(uid),
+        time_from=str(time_from),
+        refresh=str(refresh),
+    )
 
 
 def _is_http_url(url: str) -> bool:

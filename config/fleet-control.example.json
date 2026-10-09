@@ -6,7 +6,9 @@
   "fleet": "config/fleet.production.json",
   "router": {
     "url": "http://127.0.0.1:8000",
-    "timeout_s": 600
+    "timeout_s": 600,
+    "journal": "/path/to/router/journal.jsonl",
+    "journal_max_bytes": 268435456
   },
   "hooks": {
     "restore": {
@@ -64,5 +66,12 @@
         "block_size": 512
       }
     }
+  },
+  "console": {
+    "grafana_url": "http://127.0.0.1:13000",
+    "dashboard_uid": "narwhal-router",
+    "panels": [105, 106, 50, 51, 8, 37],
+    "from": "now-15m",
+    "refresh": "5s"
   }
 }

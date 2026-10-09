@@ -19,15 +19,22 @@ API = "/api"
 
 
 class BearerAuth:
-    """Refuse every HTTP request whose Authorization header lacks the control token."""
+    """Refuse every HTTP request whose Authorization header lacks the control token.
 
-    def __init__(self, app: ASGIApp, token: str) -> None:
+    A GET request for one of the `public` paths passes without the token. Those paths serve
+    the console page, which holds no fleet data and sends the token with each API request.
+    """
+
+    def __init__(self, app: ASGIApp, token: str, public: Iterable[str] = ()) -> None:
         self.app = app
         self._token = token.encode()
+        self._public = frozenset(public)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Pass lifespan events through and admit only HTTP requests carrying the token."""
-        if scope["type"] == "lifespan" or (scope["type"] == "http" and self._admits(scope)):
+        if scope["type"] == "lifespan" or (
+            scope["type"] == "http" and (self._is_public(scope) or self._admits(scope))
+        ):
             await self.app(scope, receive, send)
             return
         if scope["type"] == "websocket":
@@ -47,6 +54,9 @@ class BearerAuth:
             }
         )
         await send({"type": "http.response.body", "body": body})
+
+    def _is_public(self, scope: Scope) -> bool:
+        return scope["method"] == "GET" and scope["path"] in self._public
 
     def _admits(self, scope: Scope) -> bool:
         values = [value for name, value in scope["headers"] if name == b"authorization"]
@@ -108,8 +118,16 @@ def core_routes(service: ControlService) -> APIRouter:
     return routes
 
 
-def create_app(service: ControlService, token: str, routers: Iterable[APIRouter] = ()) -> FastAPI:
-    """Build the control app; `routers` add further action routes behind the same token."""
+def create_app(
+    service: ControlService,
+    token: str,
+    routers: Iterable[APIRouter] = (),
+    public: Iterable[str] = (),
+) -> FastAPI:
+    """Build the control app; `routers` add further routes behind the same token.
+
+    GET requests for the `public` paths pass without the token; only data-free pages belong there.
+    """
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -136,5 +154,5 @@ def create_app(service: ControlService, token: str, routers: Iterable[APIRouter]
             body["action"] = exc.action.document()
         return JSONResponse(body, status_code=exc.status)
 
-    app.add_middleware(BearerAuth, token=token)
+    app.add_middleware(BearerAuth, token=token, public=tuple(public))
     return app
