@@ -34,6 +34,11 @@ def private_path(name: str) -> bool:
             and name != "config/hosts.example.json"
         )
         or (
+            name.startswith("config/fleet-control.")
+            and name.endswith(".json")
+            and name != "config/fleet-control.example.json"
+        )
+        or (
             name.startswith("config/fleet.")
             and name.endswith(".json")
             and name != "config/fleet.example.json"

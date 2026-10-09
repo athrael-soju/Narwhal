@@ -5,7 +5,8 @@ include .release-please-manifest.json release-please-config.json
 include constraints-dev.txt
 include mkdocs.yml
 include config/engine-attestation.example.json config/engine-launch.example.json
-include config/fleet.example.json config/hosts.example.json
+include config/fleet.example.json config/hosts.example.json config/fleet-control.example.json
+include tools/fleet_control/console.html
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
 recursive-include overrides *.html *.py

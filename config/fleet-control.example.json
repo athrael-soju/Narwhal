@@ -1,0 +1,77 @@
+{
+  "host": "127.0.0.1",
+  "port": 8020,
+  "token_env": "NARWHAL_CONTROL_TOKEN",
+  "runs_dir": "runs/fleet-control",
+  "fleet": "config/fleet.production.json",
+  "router": {
+    "url": "http://127.0.0.1:8000",
+    "timeout_s": 600,
+    "journal": "/path/to/router/journal.jsonl",
+    "journal_max_bytes": 268435456
+  },
+  "hooks": {
+    "restore": {
+      "argv": ["/path/to/restore-baseline"],
+      "timeout_s": 900
+    },
+    "engine_pause": {
+      "argv": ["/path/to/engine-control", "pause"],
+      "timeout_s": 60
+    },
+    "engine_resume": {
+      "argv": ["/path/to/engine-control", "resume"],
+      "timeout_s": 60
+    },
+    "engine_stop": {
+      "argv": ["/path/to/engine-control", "stop"],
+      "timeout_s": 300
+    },
+    "engine_start": {
+      "argv": ["/path/to/engine-control", "start"],
+      "timeout_s": 900
+    },
+    "router_restart": {
+      "argv": ["/path/to/restart-router"],
+      "timeout_s": 300
+    },
+    "cold_restart": {
+      "argv": ["/path/to/restart-fleet"],
+      "timeout_s": 1800
+    }
+  },
+  "load": {
+    "aiperf": "/path/to/aiperf-venv/bin/aiperf",
+    "model": "<served-model>",
+    "tokenizer": "/path/to/tokenizer",
+    "endpoint_type": "chat",
+    "streaming": true,
+    "goodput": {
+      "time_to_first_token": 10000,
+      "inter_token_latency": 125
+    },
+    "workloads": {
+      "synthetic-512-256": {
+        "kind": "synthetic",
+        "isl": 512,
+        "osl": 256
+      },
+      "timestamped-trace": {
+        "kind": "timestamped_trace",
+        "file": "/path/to/timestamped-trace.jsonl"
+      },
+      "reused-prefix-trace": {
+        "kind": "prefix_trace",
+        "file": "/path/to/reused-prefix-trace.jsonl",
+        "block_size": 512
+      }
+    }
+  },
+  "console": {
+    "grafana_url": "http://127.0.0.1:13000",
+    "dashboard_uid": "narwhal-router",
+    "panels": [105, 106, 50, 51, 8, 37],
+    "from": "now-15m",
+    "refresh": "5s"
+  }
+}
