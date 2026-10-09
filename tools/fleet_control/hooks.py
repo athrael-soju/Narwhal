@@ -71,9 +71,9 @@ async def run_hook(hook: Hook, env: Mapping[str, str], log: Path) -> HookResult:
             await asyncio.wait_for(process.wait(), hook.timeout_s)
         except TimeoutError:
             timed_out = True
-            await _terminate(process)
+            await terminate(process)
         except asyncio.CancelledError:
-            await asyncio.shield(_terminate(process))
+            await asyncio.shield(terminate(process))
             raise
     return HookResult(
         hook.name,
@@ -82,11 +82,12 @@ async def run_hook(hook: Hook, env: Mapping[str, str], log: Path) -> HookResult:
         timed_out,
         time.monotonic() - started,
         log,
-        _tail(log),
+        tail(log),
     )
 
 
-async def _terminate(process: asyncio.subprocess.Process) -> None:
+async def terminate(process: asyncio.subprocess.Process) -> None:
+    """Send SIGTERM, then SIGKILL after a grace period, to the process's whole group."""
     for sig, grace in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, None)):
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, sig)
@@ -97,7 +98,8 @@ async def _terminate(process: asyncio.subprocess.Process) -> None:
             continue
 
 
-def _tail(path: Path) -> str:
+def tail(path: Path) -> str:
+    """Return the last TAIL_BYTES of a log file as text."""
     with open(path, "rb") as stream:
         stream.seek(max(0, path.stat().st_size - TAIL_BYTES))
         return stream.read().decode(errors="replace")
