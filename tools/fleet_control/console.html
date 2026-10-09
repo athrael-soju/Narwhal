@@ -1007,12 +1007,21 @@ function activeDrain(iid, slice, recorded) {
   return { action: recorded, deadline: recorded.params.deadline_s, start: before && !before.error ? before.resident : null };
 }
 
+// A drain that requires a new engine process, while the router still sees the old one.
+function restartPending(slice) {
+  const record = slice && !slice.error ? slice.lifecycle : null;
+  if (!record || !record.restart_required || !record.old_process_start) return false;
+  // An unknown process start leaves the decision to the router.
+  return slice.process_start === record.old_process_start;
+}
+
 // The action an engine's row offers first, for the state the engine is in.
 function primaryAction(slice, process) {
   if (process) return process.state === "stopped" ? "start" : "resume";
   const lifecycle = lifecycleState(slice);
   if (lifecycle && lifecycle !== "active") return "readmit";
-  if (slice && !slice.error && slice.ejected) return "start";
+  // The router readmits an ejected engine by itself once the engine answers its checks.
+  if (slice && !slice.error && slice.ejected) return "readmit";
   return "drain";
 }
 
@@ -1032,6 +1041,8 @@ function engineGate(iid, action, slice, process, others) {
     if (others) return others + "; the router runs one lifecycle action at a time.";
   } else if (action === "readmit") {
     if (!lifecycle) return "The router state is unavailable.";
+    if (lifecycle === "active" && slice.ejected) return "The router readmits " + iid + " by itself once its health and attestation checks pass.";
+    if (restartPending(slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
     if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
   } else if (action === "pause") {
     if (paused) return iid + " is paused; resume it first.";
@@ -1063,7 +1074,7 @@ function inProgress() {
     const since = health.in_progress_since ? " · " + wholeSeconds(elapsedSince(health.in_progress_since)) + " s" : "";
     items.add(shortName(health.in_progress) + since);
   }
-  for (const pending of state.pending.values()) items.add(pending.label);
+  for (const [key, pending] of state.pending) if (key.startsWith("engine:")) items.add(pending.label);
   const context = engineContext();
   for (const iid of context.ids) {
     if (lifecycleState(context.engines[iid]) === "draining") items.add("drain " + iid);
@@ -1486,6 +1497,7 @@ function renderJob() {
     // The inputs show what the running job uses.
     if (state.workloads[job.params.workload]) $("job-workload").value = job.params.workload;
     for (const [field, id] of JOB_FIELDS) $(id).value = job.params[field] === undefined ? "" : job.params[field];
+    workloadHint();
   }
   const result = (job && !running && job.result) || {};
   const tiles = [];

@@ -398,16 +398,16 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
     for name in ("panel-8", "panel-37", "panel-50", "panel-51"):
         elements[name] = shipped[name]
     items = [
-        _grid_item("console-status", 0, 0, 24, 3),
-        _grid_item("panel-requests", 0, 3, 15, 4),
-        _grid_item("panel-latency", 15, 3, 9, 4),
-        _grid_item("console-engines", 0, 7, 10, 13),
-        _grid_item("panel-8", 10, 7, 14, 13),
-        _grid_item("panel-11", 0, 20, 14, 8),
-        _grid_item("panel-37", 14, 20, 10, 8),
-        _grid_item("panel-50", 0, 28, 12, 8),
-        _grid_item("panel-51", 12, 28, 12, 8),
-        _grid_item("console-activity", 0, 36, 24, 8),
+        _grid_item("console-status", 0, 0, 24, 4),
+        _grid_item("panel-requests", 0, 4, 15, 4),
+        _grid_item("panel-latency", 15, 4, 9, 4),
+        _grid_item("console-engines", 0, 8, 12, 13),
+        _grid_item("panel-8", 12, 8, 12, 13),
+        _grid_item("panel-11", 0, 21, 14, 8),
+        _grid_item("panel-37", 14, 21, 10, 8),
+        _grid_item("panel-50", 0, 29, 12, 8),
+        _grid_item("panel-51", 12, 29, 12, 8),
+        _grid_item("console-activity", 0, 37, 24, 8),
     ]
     rows = [
         _row("", False, items),

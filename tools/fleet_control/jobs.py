@@ -89,6 +89,11 @@ class JobSlot:
         """Return whether a job occupies the slot."""
         return self._task is not None
 
+    def clear(self) -> None:
+        """Forget the last finished job, so a new session starts without one."""
+        if self._task is None:
+            self._job = None
+
     def start(self, job: Job) -> Job:
         """Start `job`, or raise SlotBusy while another job runs."""
         if self._task is not None and self._job is not None:

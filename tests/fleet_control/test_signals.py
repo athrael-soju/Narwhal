@@ -211,6 +211,14 @@ class MetricsTests(SignalCase):
         self.assertNotIn("narwhal_control_load_job_running{", await self.scrape())
         self.assertEqual(metrics(self.service).count("# TYPE"), 3)
 
+    async def test_a_new_session_does_not_report_the_previous_sessions_job(self) -> None:
+        await self.service.start_session()
+        await self.service.start_job({"workload": "short", "duration_s": 60})
+        await self.service.end_session()
+        self.assertEqual(self.service.status()["job"]["state"], "stopped")
+        await self.service.start_session()
+        self.assertIsNone(self.service.status()["job"])
+
 
 class PrometheusConfigTests(unittest.TestCase):
     def load(self, extra: dict[str, Any]) -> ControlConfig:
