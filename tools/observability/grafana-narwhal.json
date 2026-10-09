@@ -1350,7 +1350,7 @@
         "spec": {
           "id": 12,
           "title": "Retries and early exits",
-          "description": "Retry attempts per second, and requests per second that ended before input sizing.",
+          "description": "Retry attempts, retries the shared quota denied, requests completed after a retry, and requests that ended before input sizing, per second.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -1378,6 +1378,40 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
+                        "expr": "sum(rate(narwhal_retry_denied_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                        "legendFormat": "retries denied"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "sum(rate(narwhal_served_after_retry_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                        "legendFormat": "completed after retry"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
                         "expr": "sum(rate(narwhal_unsized_offered_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
                         "legendFormat": "ended before sizing"
                       }
@@ -1386,7 +1420,7 @@
                       "type": "prometheus",
                       "uid": "${DS_PROMETHEUS}"
                     },
-                    "refId": "B"
+                    "refId": "D"
                   }
                 }
               ],
@@ -1426,6 +1460,36 @@
                         "value": {
                           "mode": "fixed",
                           "fixedColor": "#B877D9"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "retries denied"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#F2CC0C"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "completed after retry"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#56A64B"
                         }
                       }
                     ]
@@ -1824,7 +1888,7 @@
         "spec": {
           "id": 52,
           "title": "Request waiting time",
-          "description": "The selected router's p95 queue wait and admission-seat duration separate waiting from retained request lifetime.",
+          "description": "The selected router's p95 wait at each queue stage, and its p95 admission-seat duration.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -1835,8 +1899,8 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
-                        "legendFormat": "queue wait p95"
+                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"admission\"}[$__rate_interval])))",
+                        "legendFormat": "admission wait p95"
                       }
                     },
                     "datasource": {
@@ -1844,6 +1908,40 @@
                       "uid": "${DS_PROMETHEUS}"
                     },
                     "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"prefill\"}[$__rate_interval])))",
+                        "legendFormat": "prefill seat wait p95"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"decode\"}[$__rate_interval])))",
+                        "legendFormat": "decode seat wait p95"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
                   }
                 },
                 {
@@ -1860,7 +1958,7 @@
                       "type": "prometheus",
                       "uid": "${DS_PROMETHEUS}"
                     },
-                    "refId": "B"
+                    "refId": "D"
                   }
                 }
               ],
@@ -1892,7 +1990,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "queue wait p95"
+                      "options": "admission wait p95"
                     },
                     "properties": [
                       {
@@ -1900,6 +1998,36 @@
                         "value": {
                           "mode": "fixed",
                           "fixedColor": "#A352CC"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "prefill seat wait p95"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#299E97"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "decode seat wait p95"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#336B9E"
                         }
                       }
                     ]
@@ -3002,6 +3130,709 @@
             }
           }
         }
+      },
+      "panel-54": {
+        "kind": "Panel",
+        "spec": {
+          "id": 54,
+          "title": "Dropped requests by reason",
+          "description": "Refused, rejected, failed and expired requests on the selected router over the displayed interval, by reason. Reasons with no requests are hidden.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "round(sum by(cause) (increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
+                        "instant": true,
+                        "legendFormat": "refused: {{cause}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "round(sum by(reason) (increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
+                        "instant": true,
+                        "legendFormat": "rejected: {{reason}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "round(sum by(reason) (increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
+                        "instant": true,
+                        "legendFormat": "failed: {{reason}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "round(sum by(reason) (increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
+                        "instant": true,
+                        "legendFormat": "expired: {{reason}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "D"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "bargauge",
+            "spec": {
+              "options": {
+                "orientation": "horizontal",
+                "displayMode": "basic",
+                "valueMode": "color",
+                "namePlacement": "left",
+                "showUnfilled": true,
+                "sizing": "auto",
+                "minVizWidth": 8,
+                "minVizHeight": 16,
+                "maxVizHeight": 24,
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "legend": {
+                  "showLegend": false,
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "None"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^refused: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#F2CC0C"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^rejected: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#FF9830"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^failed: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#D44A3A"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^expired: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#C4162A"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-55": {
+        "kind": "Panel",
+        "spec": {
+          "id": 55,
+          "title": "Failed attempts by reason",
+          "description": "Failed attempts on the selected router over the displayed interval, by the phase the attempt reached and the failure reason. Reasons with no failures are hidden.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "round(sum by(phase, reason) (increase(narwhal_attempt_failures_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
+                        "instant": true,
+                        "legendFormat": "{{phase}}: {{reason}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "bargauge",
+            "spec": {
+              "options": {
+                "orientation": "horizontal",
+                "displayMode": "basic",
+                "valueMode": "color",
+                "namePlacement": "left",
+                "showUnfilled": true,
+                "sizing": "auto",
+                "minVizWidth": 8,
+                "minVizHeight": 16,
+                "maxVizHeight": 24,
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "legend": {
+                  "showLegend": false,
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "calcs": []
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "None"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^(admission|queue): "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#A352CC"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^prefill: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#299E97"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byRegexp",
+                      "options": "^decode: "
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#336B9E"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-56": {
+        "kind": "Panel",
+        "spec": {
+          "id": 56,
+          "title": "Expired KV by producer",
+          "description": "Requests per second whose KV expired on each producer engine, from the vLLM NIXL connector counter.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))",
+                        "legendFormat": "{{iid}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "timeseries",
+            "spec": {
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ops",
+                  "min": 0,
+                  "custom": {
+                    "fillOpacity": 9,
+                    "gradientMode": "opacity",
+                    "lineWidth": 2,
+                    "showPoints": "never"
+                  },
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "#C4162A"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-57": {
+        "kind": "Panel",
+        "spec": {
+          "id": 57,
+          "title": "Admission in-flight",
+          "description": "Requests holding an admission seat on the selected router, against the router in-flight limit.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_admission_inflight{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "in-flight"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_admission_inflight_limit{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "limit"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "timeseries",
+            "spec": {
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "min": 0,
+                  "custom": {
+                    "fillOpacity": 9,
+                    "gradientMode": "opacity",
+                    "lineWidth": 2,
+                    "showPoints": "never"
+                  },
+                  "decimals": 0
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "in-flight"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#CA95E5"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "limit"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.fillOpacity",
+                        "value": 0
+                      },
+                      {
+                        "id": "custom.lineStyle",
+                        "value": {
+                          "fill": "dash",
+                          "dash": [
+                            10,
+                            10
+                          ]
+                        }
+                      },
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#F2CC0C"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-58": {
+        "kind": "Panel",
+        "spec": {
+          "id": 58,
+          "title": "Queue depth",
+          "description": "Requests waiting on the selected router in the admission queue and for a prefill or decode seat.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_queued{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "admission"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_waiting_prefill{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "prefill"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_waiting_decode{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "decode"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "timeseries",
+            "spec": {
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "min": 0,
+                  "custom": {
+                    "fillOpacity": 9,
+                    "gradientMode": "opacity",
+                    "lineWidth": 2,
+                    "showPoints": "never"
+                  },
+                  "decimals": 0
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "admission"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#A352CC"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "prefill"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#299E97"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "decode"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#336B9E"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-59": {
+        "kind": "Panel",
+        "spec": {
+          "id": 59,
+          "title": "Retry credits",
+          "description": "Retry credits the selected router has available for new retries.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(narwhal_retry_credits{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "legendFormat": "available"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "timeseries",
+            "spec": {
+              "options": {
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "min": 0,
+                  "custom": {
+                    "fillOpacity": 9,
+                    "gradientMode": "opacity",
+                    "lineWidth": 2,
+                    "showPoints": "never"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "available"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#B877D9"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -3090,7 +3921,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 27,
+              "y": 35,
               "width": 24,
               "height": 8,
               "element": {
@@ -3129,7 +3960,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 35,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -3142,7 +3973,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 8,
-              "y": 35,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -3154,8 +3985,8 @@
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "x": 8,
-              "y": 43,
+              "x": 0,
+              "y": 59,
               "width": 8,
               "height": 8,
               "element": {
@@ -3168,7 +3999,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 43,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {
@@ -3180,8 +4011,8 @@
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "x": 16,
-              "y": 43,
+              "x": 8,
+              "y": 59,
               "width": 8,
               "height": 8,
               "element": {
@@ -3194,7 +4025,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 35,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -3207,12 +4038,90 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 51,
+              "y": 67,
               "width": 24,
               "height": 8,
               "element": {
                 "kind": "ElementReference",
                 "name": "panel-53"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 27,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-54"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 8,
+              "y": 27,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-55"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 16,
+              "y": 27,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-56"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 8,
+              "y": 51,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-57"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 16,
+              "y": 51,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-58"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 16,
+              "y": 59,
+              "width": 8,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-59"
               }
             }
           }

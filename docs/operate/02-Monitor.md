@@ -62,9 +62,14 @@ Prometheus and Grafana setup: [Setting up observability](../Observability.md).
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
 | `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
+| `NarwhalRejectedRising` | Rejected requests above 1% of offered requests over 5m | 5m | `warn` |
+| `NarwhalExpiredRising` | Expired requests above 1% of offered requests over 5m | 5m | `warn` |
+| `NarwhalRetryDeniedRising` | Retries denied by the shared retry quota above 1% of offered requests over 5m | 5m | `warn` |
 | `NarwhalUnservedRising` | Phase placements where every eligible candidate exceeds the configured SLO, above 0.2/s over 10m | 10m | `warn` |
 | `NarwhalPoolStarved` | A pool with zero engines | 2m | `warn` |
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
+
+`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The three share rules divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
 
 Request journals record per-request placement and timing. Metrics hold process-level summaries since the last counter reset.
