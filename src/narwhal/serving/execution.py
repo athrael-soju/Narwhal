@@ -23,8 +23,21 @@ from .completion import reassemble
 from .dispatch import placement_hold
 from .handoff import handoff_bound
 from .lifecycle import RequestLifecycle
-from .outcomes import NoEngine, RequestExpired, ResponseLimitExceeded, RouterHeld, failure_reason
-from .records import forward_headers, not_ready_response, refuse_request, ttft_refusal_cause
+from .outcomes import (
+    NoEngine,
+    RequestExpired,
+    ResponseLimitExceeded,
+    RouterHeld,
+    error_response,
+    failure_reason,
+)
+from .records import (
+    deadline_response,
+    forward_headers,
+    not_ready_response,
+    refuse_request,
+    ttft_refusal_cause,
+)
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
 from .seats import decode_seat_map
@@ -47,28 +60,19 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
     """Reject unsupported models and sampling widths before recording demand."""
     asked = body.get("model")
     if asked and asked != router.cfg.model:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "error": {
-                    "message": f"model {asked!r} is not served here; "
-                    f"this router serves {router.cfg.model!r}",
-                    "type": "invalid_request_error",
-                    "code": "model_not_found",
-                }
-            },
+        return error_response(
+            404,
+            "invalid_request_error",
+            f"model {asked!r} is not served here; this router serves {router.cfg.model!r}",
+            code="model_not_found",
         )
     for field in ("n", "best_of"):
         if int(body.get(field) or 1) > 1:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": f"{field} > 1 cannot be served across a split: the prefill leg "
-                        "runs with max_tokens=1 and the two legs would disagree on sampling width",
-                        "type": "invalid_request_error",
-                    }
-                },
+            return error_response(
+                400,
+                "invalid_request_error",
+                f"{field} > 1 cannot be served across a split: the prefill leg "
+                "runs with max_tokens=1 and the two legs would disagree on sampling width",
             )
     return None
 
@@ -328,6 +332,10 @@ def _terminal_failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
 
 
 def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
+    reason = failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline)
+    if reason == "deadline" and not state.output_started:
+        # Ingress answers the same deadline; both give the client one body.
+        return deadline_response(state)
     status = _status_of(exc)
     expired = isinstance(exc, RequestExpired | QueueExpired | HandoffExpired)
     detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
@@ -348,6 +356,14 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         public_detail = "Invalid non-streaming upstream response"
     else:
         public_detail = "Upstream request failed"
+    # An unregistered status and type raises here, before the outcome settles.
+    response = error_response(
+        status,
+        kind,
+        public_detail,
+        headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
+        code=kind,
+    )
     terminal = "expired" if expired else "failed"
     # After output starts, the stream's terminal event carries the phase and terminal state.
     error_type, error_code = (state.phase, terminal) if state.output_started else (kind, kind)
@@ -355,16 +371,12 @@ def _failure(state: RequestLifecycle, exc: Exception) -> JSONResponse:
         terminal,
         error=detail,
         status=status,
-        reason=failure_reason(exc, deadline_passed=state.router._clock() >= state.deadline),
+        reason=reason,
         error_type=error_type,
         error_code=error_code,
     )
     state.outcome["public_error"] = public_detail
-    return JSONResponse(
-        status_code=status,
-        headers={"retry-after": "1"} if isinstance(exc, NoEngine) else None,
-        content={"error": {"message": public_detail, "type": kind, "code": kind}},
-    )
+    return response
 
 
 def _failure_response(state: RequestLifecycle) -> JSONResponse:

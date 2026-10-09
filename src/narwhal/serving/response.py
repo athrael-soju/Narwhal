@@ -13,6 +13,7 @@ from starlette.types import Message, Receive, Scope, Send
 
 from ..engines.stream import SseEvent
 from .lifecycle import RequestLifecycle
+from .outcomes import DEADLINE_MESSAGE
 
 
 @dataclass
@@ -102,7 +103,7 @@ class RequestStreamResponse(StreamingResponse):
             )
             self.lifecycle.finish(
                 "expired",
-                error="original request deadline expired",
+                error=DEADLINE_MESSAGE,
                 status=504,
                 reason="deadline",
                 error_type=error_type,
