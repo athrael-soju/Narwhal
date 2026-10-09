@@ -27,7 +27,7 @@ Terminal and event rows carry these fields:
 Build metadata row:
 
 ```json
-{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"0.3.1","git":"<commit>","source":"sha256:...","token_accounting":"token_ids","admission":{"mode":"predictive","margin":0.0}}}
+{"meta":{"schema":"narwhal.journal","schema_version":1,"package":"narwhal-inference","version":"<version>","git":"<commit>","source":"sha256:...","token_accounting":"token_ids","admission":{"mode":"predictive","margin":0.0}}}
 ```
 
 | Field | Meaning |

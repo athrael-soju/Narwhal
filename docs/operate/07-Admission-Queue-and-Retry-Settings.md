@@ -154,7 +154,7 @@ Set a positive value when one engine fails successive requests faster than the b
 
 The router counts each completion request from its arrival until its response ends. When the counted requests reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429 `server_overloaded_error`, message `router in-flight limit reached`, and `Retry-After: 1`. It sends that response before it reads the body, so the predictive checks never run for these requests. The journal and `narwhal_rejected_total` record reason `inflight_limit`.
 
-The in-flight limit protects the router, not goodput. It should bind before the router's [saturation check](../configuration/02-Serving-and-Role-Control.md#router-saturation) rejects requests for event-loop lag or request-sizing delay. A fleet usually stops meeting its SLO at an in-flight count well below that point, so in `open` mode the excess appears as SLO misses. To give clients a 429 instead of an SLO miss, use [`predictive` admission](#admission-mode).
+The in-flight limit protects the router, not goodput. It should bind before the router's [saturation check](../configuration/02-Serving-and-Role-Control.md#router-saturation) rejects requests for event-loop lag or request-sizing delay. In `open` mode, requests admitted above the in-flight count at which the fleet meets its SLO appear as SLO misses. To give clients a 429 instead of an SLO miss, use [`predictive` admission](#admission-mode).
 
 | Change | Client outcome |
 | --- | --- |

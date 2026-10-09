@@ -59,7 +59,7 @@ TLS, authentication, WAF, model routing
 
     ---
 
-    Choose the admission mode, queue, retries, failure quarantine, in-flight limit and decode-gap limit from each default's evidence and client outcomes.
+    Choose the admission mode, queue, retries, failure quarantine, in-flight limit and decode-gap limit from the client outcomes of each value.
 
 -   [Troubleshooting a fleet](Troubleshoot.md)
 

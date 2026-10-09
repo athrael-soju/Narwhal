@@ -237,7 +237,7 @@ These panels show how long requests wait and how the router retries failed attem
 
 <div class="narwhal-panel-row" markdown>
 
-![Request waiting time with seat time p95 near 6 seconds and queue wait near zero.](../assets/observability/request-waiting-time.png)
+![Request waiting time p95 by stage, with seat time p95.](../assets/observability/request-waiting-time.png)
 
 </div>
 
