@@ -43,6 +43,8 @@ class Job:
     finished_at: str | None = None
     result: Mapping[str, Any] | None = None
     error: str | None = None
+    # The router journal rows the job produced, set when it finishes.
+    journal: Mapping[str, Any] | None = None
 
     def document(self) -> dict[str, Any]:
         """Return the job's status document."""
@@ -54,6 +56,7 @@ class Job:
             "finished_at": self.finished_at,
             "result": None if self.result is None else dict(self.result),
             "error": self.error,
+            "journal": None if self.journal is None else dict(self.journal),
         }
 
 

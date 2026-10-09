@@ -6,7 +6,9 @@
   "fleet": "config/fleet.production.json",
   "router": {
     "url": "http://127.0.0.1:8000",
-    "timeout_s": 600
+    "timeout_s": 600,
+    "journal": "/path/to/router/journal.jsonl",
+    "journal_max_bytes": 268435456
   },
   "hooks": {
     "restore": {

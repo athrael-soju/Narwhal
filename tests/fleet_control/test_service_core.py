@@ -415,7 +415,13 @@ class RestoreTests(ServiceCase):
         self.assertEqual(restore["log"], "hooks/001-restore.log")
         self.assertIn(f"restoring test-model {session}", restore["tail"])
         self.assertIn("token visible: False", restore["tail"])
-        self.assertEqual(record["actions"][5]["result"], {"restore_seq": 5})
+        self.assertEqual(
+            record["actions"][5]["result"],
+            {
+                "restore_seq": 5,
+                "journal": {"extract": None, "notes": ["router.journal is not configured"]},
+            },
+        )
         self.assertEqual([entry["source"] for entry in record["configurations"]], ["baseline"] * 2)
         log = self.runs / "sessions" / session / restore["log"]
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)

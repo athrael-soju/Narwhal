@@ -23,6 +23,8 @@ DEFAULT_HOOK_TIMEOUT_S = 900.0
 DEFAULT_ROUTER_URL = "http://127.0.0.1:8000"
 # Lifecycle readmission validates the engine and its KV peers before it answers.
 DEFAULT_ROUTER_TIMEOUT_S = 600.0
+# The largest router journal extract copied for one session or load job.
+DEFAULT_JOURNAL_MAX_BYTES = 256 * 1024 * 1024
 # A token from `openssl rand -hex 32` or `secrets.token_urlsafe(32)` clears this floor.
 MIN_TOKEN_LENGTH = 32
 # The UID of the shipped Narwhal Orchestrator dashboard, tools/observability/grafana-narwhal.json.
@@ -34,7 +36,7 @@ RESTORE_HOOK = "restore"
 REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
 _KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load", "console"}
 _HOOK_KEYS = {"argv", "timeout_s"}
-_ROUTER_KEYS = {"url", "timeout_s"}
+_ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
 _CONSOLE_KEYS = {"grafana_url", "dashboard_uid", "panels", "from", "refresh"}
 _DASHBOARD_UID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RELATIVE_TIME = re.compile(r"^now(-[1-9][0-9]*[smhdwMy])?$")
@@ -56,10 +58,16 @@ class Hook:
 
 @dataclass(frozen=True)
 class RouterEndpoint:
-    """The Narwhal router whose state and lifecycle API the service calls."""
+    """The Narwhal router whose state and lifecycle API the service calls.
+
+    `journal` is the router's request journal on this host, from which sessions and load jobs
+    copy the rows they produced; None records no extract.
+    """
 
     url: str = DEFAULT_ROUTER_URL
     timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S
+    journal: Path | None = None
+    journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
 
 
 @dataclass(frozen=True)
@@ -202,7 +210,21 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
     ):
         problems.append("router.timeout_s must be a positive number of seconds")
         timeout = DEFAULT_ROUTER_TIMEOUT_S
-    return RouterEndpoint(str(url).rstrip("/"), float(timeout))
+    journal = raw.get("journal")
+    # The file may not exist yet: the router creates it when it starts.
+    if journal is not None and (not isinstance(journal, str) or not Path(journal).is_absolute()):
+        problems.append("router.journal must be the absolute path of the router's journal file")
+        journal = None
+    max_bytes = raw.get("journal_max_bytes", DEFAULT_JOURNAL_MAX_BYTES)
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+        problems.append("router.journal_max_bytes must be a positive number of bytes")
+        max_bytes = DEFAULT_JOURNAL_MAX_BYTES
+    return RouterEndpoint(
+        str(url).rstrip("/"),
+        float(timeout),
+        None if journal is None else Path(journal),
+        max_bytes,
+    )
 
 
 def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:

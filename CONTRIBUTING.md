@@ -276,6 +276,7 @@ The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `tool
 | `tools/fleet_control/app.py`         | Bearer-token middleware, session, health and load-job routes            |
 | `tools/fleet_control/service.py`     | Sessions, recorded actions, exclusive actions and baseline restore      |
 | `tools/fleet_control/records.py`     | Action log and per-session run records                                  |
+| `tools/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
 | `tools/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
 | `tools/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
 | `tools/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |

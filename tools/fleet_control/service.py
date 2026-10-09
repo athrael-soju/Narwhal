@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from narwhal.config.loading import load as load_fleet
@@ -14,6 +15,7 @@ from narwhal.contracts import canonical_digest
 from .config import RESTORE_HOOK, ControlConfig, Hook
 from .hooks import HookResult, run_hook
 from .jobs import Job, JobRunner, JobSlot
+from .journal import SESSION_EXTRACT, Mark, extract, mark
 from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
@@ -64,6 +66,9 @@ class ControlService:
         self._now = now
         self._exclusive: str | None = None
         self._job_count = 0
+        # Router journal positions where the session and each load job began.
+        self._session_mark: Mark | None = None
+        self._job_marks: dict[str, Mark | None] = {}
         self.jobs = None if runner is None else JobSlot(runner, self._job_finished, self.stamp)
 
     def stamp(self) -> str:
@@ -143,6 +148,7 @@ class ControlService:
                 f"baseline fleet configuration is invalid: {exc}", status=500
             ) from exc
         self.session = self.store.open_session(self._now(), str(source), baseline)
+        self._session_mark = mark(self.config.router.journal)
         self._job_count = 0
         return {"session": self.session.id, "baseline_digest": canonical_digest(baseline)}
 
@@ -160,8 +166,14 @@ class ControlService:
         if self.jobs is not None and self.jobs.busy:
             await self._perform("job.stop", {}, self._stop_job, True)
         restore = await self._perform("baseline.restore", {}, self._restore, True)
+        journal = self.journal_extract(session.directory, SESSION_EXTRACT, self._session_mark)
         session.ended_at = self.stamp()
-        return {"restore_seq": restore.seq}
+        return {"restore_seq": restore.seq, "journal": journal}
+
+    def journal_extract(self, directory: Path, name: str, start: Mark | None) -> dict[str, Any]:
+        """Copy the router journal rows appended since `start` into the session directory."""
+        router = self.config.router
+        return extract(router.journal, start, directory, name, router.journal_max_bytes)
 
     async def restore_baseline(self) -> Action:
         """Run the restore hook against the session's recorded baseline."""
@@ -222,6 +234,7 @@ class ControlService:
             job_id = f"job-{self._job_count:03d}"
             directory = session.directory / "jobs" / job_id
             directory.mkdir(mode=0o700, parents=True)
+            self._job_marks[job_id] = mark(self.config.router.journal)
             job = self.jobs.start(Job(job_id, normalized, directory, self.stamp()))
             return {"job": job.document()}
 
@@ -238,6 +251,9 @@ class ControlService:
         return {"job": job.document()}
 
     def _job_finished(self, job: Job) -> None:
+        # The job directory is <session>/jobs/<job id>.
+        start = self._job_marks.pop(job.id, None)
+        job.journal = self.journal_extract(job.directory.parent.parent, f"{job.id}.jsonl", start)
         self.store.record(
             self.session,
             "job.complete",

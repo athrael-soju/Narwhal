@@ -94,12 +94,16 @@ Each hook inherits the service's environment without the bearer token variable, 
 
 #### Router
 
-| Key                | Default                 | Meaning                                                                                                    |
-| ------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `router.url`       | `http://127.0.0.1:8000` | Router base URL, `http` or `https`. AIPerf load jobs also send their requests here                         |
-| `router.timeout_s` | `600`                   | Limit for lifecycle calls and for the readiness wait after a restart or restore                            |
+| Key                        | Default                 | Meaning                                                                                       |
+| -------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `router.url`               | `http://127.0.0.1:8000` | Router base URL, `http` or `https`. AIPerf load jobs also send their requests here            |
+| `router.timeout_s`         | `600`                   | Limit for lifecycle calls and for the readiness wait after a restart or restore               |
+| `router.journal`           | absent                  | Absolute path of the router's request journal on this host. The file need not exist at startup |
+| `router.journal_max_bytes` | `268435456` (256 MiB)   | Largest journal extract copied for one session or load job, a positive number of bytes        |
 
 Engine state reads use the shorter of 10 seconds and `router.timeout_s`.
+
+Set `router.journal` to the path the router writes, which is `narwhal-serve --journal` or `journal.jsonl` beside `profiles.path` by default. [Request journal](../telemetry/01-Journal.md) describes the file. Without `router.journal`, sessions and load jobs record no [journal extract](#journal-extracts).
 
 #### Load
 
@@ -207,7 +211,7 @@ A session is one operator test run. Every action except session start requires a
 
 **Start session** (`POST /api/session`) loads the baseline fleet configuration through the fleet configuration loader, copies it into a new session directory, and records it as the session's first configuration. It returns HTTP 201 with the `session.start` action entry, whose result holds the session ID and the baseline digest.
 
-**End session and restore** (`POST /api/session/end`) stops a running load job, runs the `restore` hook, and closes the session. It records `job.stop` when a job ran, `baseline.restore`, and `session.end`. Ending a session does not wait for router readiness. When the restore fails, the session stays open so the operator can retry.
+**End session and restore** (`POST /api/session/end`) stops a running load job, runs the `restore` hook, copies the session's [journal extract](#journal-extracts), and closes the session. It records `job.stop` when a job ran, `baseline.restore`, and `session.end`. Ending a session does not wait for router readiness. When the restore fails, the session stays open so the operator can retry.
 
 The session section shows the session ID, its start time, any exclusive action in progress, and the full run record from `GET /api/session`. The console polls `GET /api/health` every 3 seconds.
 
@@ -279,11 +283,12 @@ A `synthetic` or `prefix_trace` workload requires `duration_s` and at least one 
 
 **Stop job** (`POST /api/jobs/current/stop`) stops the running job's whole AIPerf process group and returns the stopped job. **Refresh status** reads `GET /api/jobs/current`, which returns the running job or the last one to finish, or HTTP 404 when no job has run.
 
-When AIPerf finishes, the service records a `job.complete` action with the job document. The job document holds:
+When the job finishes or stops, the service copies the job's [journal extract](#journal-extracts) and records a `job.complete` action with the job document. The job document holds:
 
 - `id`, `params`, `started_at`, `finished_at` and `error`
 - `state`: `running`, `succeeded`, `failed` or `stopped`
 - `result`, the client results
+- `journal`, the job's journal extract entry, `null` while the job runs
 
 The client results hold:
 
@@ -361,6 +366,9 @@ runs/fleet-control/
       baseline.json              copy of the baseline fleet configuration
       hooks/<nnn>-<hook>.log     output of each hook run, numbered from 001
       overlays/<nnn>-fleet.json  merged fleet configuration of each applied overlay
+      journal/
+        job-<nnn>.jsonl          router journal rows written during each load job
+        session.jsonl            router journal rows written during the session
       jobs/job-<nnn>/
         aiperf.log               AIPerf output
         aiperf/                  AIPerf artifact directory
@@ -376,7 +384,7 @@ runs/fleet-control/
 | `schema_version` | `1`                                                                                                 |
 | `session`        | Session ID                                                                                          |
 | `started_at`     | Session start, ISO 8601 UTC                                                                         |
-| `ended_at`       | Time the restore completed while ending the session, or `null`                                      |
+| `ended_at`       | Time the session closed after its restore and journal extract, or `null`                            |
 | `baseline`       | `source`, the baseline file the service read, and `copy`, `baseline.json`                           |
 | `configuration`  | The configuration that currently governs the session, the last entry of `configurations`           |
 | `configurations` | Every applied configuration in order                                                                |
@@ -411,7 +419,7 @@ The service records these action names:
 | Action                                                     | `result`                                                                                                   |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `session.start`                                            | `session` and `baseline_digest`                                                                            |
-| `session.end`                                              | `restore_seq`, the `seq` of the restore it ran                                                             |
+| `session.end`                                              | `restore_seq`, the `seq` of the restore it ran, and `journal`, the session's journal extract entry         |
 | `baseline.restore`                                         | The hook run                                                                                               |
 | `engine.pause`, `engine.resume`, `engine.stop`, `engine.start` | `engine`, `before`, `hook` and `after`                                                                 |
 | `engine.drain`, `engine.readmit`                           | `engine`, `before`, `router` and `after`; `router` holds the lifecycle call's `path`, `body`, `status` and `error` |
@@ -423,4 +431,32 @@ The service records these action names:
 
 A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log` relative to the session directory, and `tail`, the last 4096 bytes of its output. `readiness` holds the readiness `path`, `ready`, `attempts`, `waited_s`, the last `status_code` and the router's stated `reason`.
 
-The run record does not include an extract of the router's request journal. Retain the router journal for the session's time range separately, as described in [Request journal](../telemetry/01-Journal.md).
+### Journal extracts
+
+Journal rows carry router-monotonic times, not wall-clock times, so the service bounds each extract by file position. When a session or load job starts, it records the inode and size of `router.journal`. When the job finishes or stops, or the session ends, it copies the lines appended since that position into `journal/job-<nnn>.jsonl` or `journal/session.jsonl`.
+
+The copy follows these rules:
+
+- It stops at the journal's size when the copy starts, so rows written later are left out.
+- It copies whole lines only and leaves out an incomplete last line.
+- It stops before the line that would exceed `router.journal_max_bytes`.
+- When the journal has a different inode or is smaller than the recorded size, the journal was replaced or truncated after the start, so the copy starts from the beginning of the current file.
+- When the journal did not exist at the start, the copy starts from the beginning of the file.
+
+A restarted router appends to an existing journal and writes a new build metadata row, so a session extract can hold rows from several router processes. The `run` field of each terminal and event row identifies its process.
+
+The service copies the extract while it handles the request, so a large extract delays other requests until the copy completes.
+
+The `journal` entry in the job document and the `session.end` result holds:
+
+| Field          | Meaning                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| `extract`      | Extract file relative to the session directory, or `null` when nothing was copied            |
+| `start_offset` | Journal byte offset where the copy started                                                   |
+| `end_offset`   | Journal byte offset after the last copied line                                               |
+| `lines`        | Copied lines                                                                                 |
+| `bytes`        | Copied bytes                                                                                 |
+| `terminal`     | Count of terminal request rows by `terminal` value, such as `completed` or `refused`         |
+| `notes`        | Conditions that shaped the copy: journal not configured, journal missing, created or replaced after the start, incomplete last line left out, or truncated at the size cap |
+
+Without `router.journal`, or when the journal does not exist when the copy starts, the entry holds only `extract` set to `null` and the reason in `notes`. [Request journal](../telemetry/01-Journal.md) defines the rows.

@@ -596,6 +596,12 @@ function renderJob(job) {
   if (result.goodput) add("Goodput requests/s", result.goodput.requests_per_s);
   if (result.exit_code !== undefined) add("AIPerf exit code", result.exit_code);
   if (result.summary_error) add("Summary error", result.summary_error);
+  if (job.journal) {
+    add("Journal extract", job.journal.extract
+      ? job.journal.extract + " (" + job.journal.lines + " lines)" : job.journal.notes.join("; "));
+    if (job.journal.extract) add("Journal terminal rows", job.journal.terminal);
+    if (job.journal.extract && job.journal.notes.length) add("Journal notes", job.journal.notes.join("; "));
+  }
   if (!rows.length) rows.push(el("tr", {}, el("td", { colSpan: 2, class: "muted" }, "No client results yet.")));
   $("job-results").replaceChildren(...rows);
 }
