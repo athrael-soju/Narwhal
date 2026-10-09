@@ -50,7 +50,7 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
 | `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
-| `narwhal_expired_total` | counter | `reason` | Deadline expiries: `deadline` or `queue_timeout`. |
+| `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 | `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
 | `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |
