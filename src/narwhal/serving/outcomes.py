@@ -17,6 +17,13 @@ class NoEngine(Exception):
     """No eligible engine can receive this phase in queue-free serving."""
 
 
+class RouterHeld(Exception):
+    """A lifecycle hold or a router readiness fence ends a waiting or prefilled request.
+
+    The message is the readiness reason the 503 response carries.
+    """
+
+
 class ResponseLimitExceeded(ValueError):
     """A response exceeds local retention policy, without backend failure evidence."""
 
@@ -58,6 +65,8 @@ def failure_reason(exc: BaseException, *, deadline_passed: bool) -> str:
         return exc.cause
     if isinstance(exc, NoEngine):
         return "no_engine"
+    if isinstance(exc, RouterHeld):
+        return "not_ready"
     if isinstance(exc, HandoffExpired):
         return "handoff"
     if isinstance(exc, ResponseLimitExceeded):

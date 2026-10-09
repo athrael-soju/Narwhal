@@ -369,18 +369,15 @@ def reference_cache_placement(
 def reference_schedule(
     scheduler: GlobalScheduler, request: Request, exclude: set[str] | None = None
 ) -> Instance:
-    exclude = exclude or set()
+    exclude = set(exclude or ())
+    # A decode leg avoids its producer while the decode pool holds another engine.
+    if request.phase is Phase.DECODE and request.prefill_instance is not None:
+        pool = scheduler.role_pool(Role.DECODE, scheduler.live_instances(exclude=exclude))
+        if any(i.iid != request.prefill_instance for i in pool):
+            exclude.add(request.prefill_instance)
     instances = scheduler.live_instances(exclude=exclude)
     if not instances:
         raise RuntimeError("no schedulable instances")
-    if (
-        request.phase is Phase.DECODE
-        and request.prefill_instance
-        and request.prefill_instance not in exclude
-    ):
-        prior = next((i for i in instances if i.iid == request.prefill_instance), None)
-        if prior is not None and prior.role is Role.DECODE:
-            return prior
     want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
     candidates = scheduler.role_pool(want, instances)
     if not candidates:

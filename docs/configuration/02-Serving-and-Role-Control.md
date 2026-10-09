@@ -108,7 +108,7 @@ In `predictive` mode, only an original request's first attempt is priced against
 | Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
-| `serving.queue_timeout_s`     | `0.0`      | Maximum admission wait, capped by the original request deadline.                                                      | Positive when `serving.queue_capacity` is positive                         |
+| `serving.queue_timeout_s`     | `0.0`      | Most time one request waits for an admission seat and prefill seats combined, capped by the original request deadline. | Positive when `serving.queue_capacity` is positive                         |
 | `serving.max_attempts`        | `1`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
 | `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
 | `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                                              | At least `serving.retry_base_s`                                            |
@@ -116,6 +116,33 @@ In `predictive` mode, only an original request's first attempt is priced against
 | `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request.                                                                 | 0 to 1                                                                     |
 | `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                                       | At least 1                                                                 |
 | `serving.max_response_bytes`  | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output. | At least 1                                                                 |
+
+#### Queue waits
+
+With `serving.queue_capacity` above `0`, a request can wait at three stages. Each wait has its own bound:
+
+| Wait           | The request waits while                                                                         | The wait ends at                                                                                                         | Response when the bound ends the wait     |
+| -------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| Admission seat | Requests hold every seat under the [in-flight limit](#in-flight-limit)                          | `serving.queue_timeout_s`                                                                                                | HTTP `504`, error type `queue_expired`    |
+| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full          | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left    | HTTP `504`, error type `expired`          |
+| Decode seat    | Every engine that can take the decode leg has its decode seats full                             | The producer's [KV handoff bound](#kv-handoff-bound)                                                                     | HTTP `504`, error type `handoff_expired`  |
+
+The original request deadline also ends each wait, with HTTP `504`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
+
+A request with no queue budget left still takes a free prefill seat, but it does not wait for one.
+
+Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat. An arriving request therefore meets a full queue only while requests hold every seat.
+
+In `predictive` mode, the router prices an original request's first attempt when it starts an admission-seat or prefill-seat wait. It prices the request again each time the wait wakes. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. The price grows with the time waited, so the router also prices the request when that growth alone would exceed the TTFT budget. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+
+A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
+
+| Hold begins                                                                     | Requests that end with the 503                                                                     | Requests that continue                                        |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [Whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
+| Degraded engine monitoring                                                      | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
+
+A request in its prefill leg when a whole-wave hold begins receives the 503 when its prefill completes. The router also returns the 503 to a request that reaches prefill placement during a whole-wave hold. The same applies while the router is standby, fenced or in degraded engine monitoring.
 
 #### Engine seats
 
@@ -198,6 +225,8 @@ Fit client-side retries inside the caller's remaining deadline.
 Placement selects the lowest-cost engine that passes the role, availability, exclusion, and projected service-level objective (SLO) filters. Ties go to the lowest instance ID.
 
 When every candidate violates its projected SLO, placement selects the lowest-cost candidate as an unserved placement.
+
+A decode leg avoids its producer, the engine that ran its prefill. On its producer, the decode leg reuses that engine's local prefix cache and never pulls the KV handoff. The producer then holds the handoff's KV blocks until its lease expires. Placement puts the decode leg on the producer only when no other engine in the decode pool can take it. The rule applies when a role change moves a producer into the decode pool, including while its requests wait for a decode seat.
 
 A live role change:
 

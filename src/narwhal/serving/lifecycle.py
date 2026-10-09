@@ -121,15 +121,21 @@ class RequestLifecycle:
 
     def release(self) -> None:
         """Release owned engine reservations and unassigned demand once."""
-        for iid in self.owned:
-            self.router.monitor.finished(iid, self.rid)
-        self.owned.clear()
+        # Each release can hand the seat to a waiter in the same pass.
+        while self.owned:
+            self.router.monitor.finished(self.owned.pop(), self.rid)
         self.router.monitor.waiting.pop(self.rid, None)
 
     @property
     def queue_wait_s(self) -> float:
         """Total seconds waited across every stage."""
         return sum(self.queue_waits.values())
+
+    @property
+    def queue_budget_s(self) -> float:
+        """Seconds of `serving.queue_timeout_s` left after the admission and prefill-seat waits."""
+        spent = self.queue_waits.get("admission", 0.0) + self.queue_waits.get("prefill", 0.0)
+        return self.router.cfg.serving.queue_timeout_s - spent
 
     def waited(self, stage: str, seconds: float) -> None:
         """Add one wait at `stage`; the stage counts as reached even at zero seconds."""

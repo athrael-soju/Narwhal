@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from fastapi.responses import JSONResponse
 
+from ..runtime.standby import control_ready
 from ..types import Request
 from .admission import PlacementRefused
 from .lifecycle import RequestLifecycle
@@ -38,6 +39,55 @@ def overloaded_response(state: RequestLifecycle, message: str, *, reason: str) -
         status_code=429,
         headers={"retry-after": "1"},
         content={"error": {"message": message, "type": "server_overloaded_error"}},
+    )
+
+
+def monitoring_degraded_reason(router: NarwhalRouter) -> str:
+    """Render the degraded streak's first failure as `stage class`, endpoint-free."""
+    degraded = router.monitoring_degraded
+    if not degraded:
+        return ""
+    klass, _, stage = degraded.partition(":")
+    return f"monitoring degraded: {stage} {klass}"
+
+
+def not_ready_response(
+    router: NarwhalRouter, state: RequestLifecycle | None, *, reason: str = ""
+) -> JSONResponse:
+    """Record and return a retryable refusal while control or backends are unavailable.
+
+    `reason` names the hold that ended a waiting or prefilled request.
+    """
+    backend_unavailable = (
+        not reason
+        and control_ready(router)
+        and not router.lifecycle_blocked
+        and not router.scheduler.live_instances()
+    )
+    reason = (
+        reason
+        or router.failover_blocked
+        or router.lifecycle_blocked
+        or monitoring_degraded_reason(router)
+        or ("engine identity validation pending" if not router.lifecycle.identities_ready else "")
+        or ("no available engines" if backend_unavailable else "")
+        or "standby: the primary router is serving"
+    )
+    code = "backend_unavailable" if backend_unavailable else "standby"
+    if state is not None:
+        state.finish(
+            "rejected",
+            error=f"router not ready: {reason}",
+            status=503,
+            reason="not_ready",
+            error_type=code,
+            error_code=code,
+            extra={"readiness_reason": reason},
+        )
+    return JSONResponse(
+        content={"error": {"message": reason, "type": code, "code": code}},
+        status_code=503,
+        headers={"retry-after": "1"},
     )
 
 
@@ -107,7 +157,14 @@ def refuse_request(state: RequestLifecycle, exc: PlacementRefused) -> JSONRespon
             f"cheapest placement prices TTFT at {priced_s:.2f}s against "
             f"the {budget:.2f}s budget; retry as the priced queue drains{caveat}"
         )
-        headers = {"retry-after": str(max(1, math.ceil(priced_s - budget)))}
+        # The placement price without the time this request has already waited.
+        price = state.admission_price or {}
+        placement_s = (
+            price["price_s"] - price["elapsed_s"]
+            if price.get("price_s") is not None and price.get("elapsed_s") is not None
+            else priced_s
+        )
+        headers = {"retry-after": str(max(1, math.ceil(placement_s - budget)))}
         log.info("refused %s: priced %.2fs vs %.2fs budget", rid, priced_s, budget)
     state.finish(
         "refused",

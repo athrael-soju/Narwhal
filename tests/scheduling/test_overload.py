@@ -103,7 +103,9 @@ class DispatcherFallbackTests(unittest.IsolatedAsyncioTestCase):
                 self.addAsyncCleanup(router.engines.aclose)
                 router.scheduler.eject("e3")
                 request = Request("r", 10, phase=Phase.DECODE)
-                place = router.dispatcher.place(request, deadline=router._clock() + 0.05)
+                place = router.dispatcher.place(
+                    request, deadline=router._clock() + 0.05, claim=lambda inst: None
+                )
                 if pinned:
                     with self.assertRaises(QueueExpired):
                         await place

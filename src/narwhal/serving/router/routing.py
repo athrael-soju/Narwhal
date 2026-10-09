@@ -33,14 +33,20 @@ from ...scheduling.health import DriftTracker
 from ...scheduling.monitor import InstanceMonitor
 from ...scheduling.scheduler.placement import GlobalScheduler
 from ...types import Instance, Phase, Role
-from ..admission import AdmissionQueue, QueueExpired, QueueFull
+from ..admission import AdmissionQueue, PlacementRefused, QueueExpired, QueueFull
 from ..completion import output_cap
-from ..dispatch import Dispatcher
-from ..execution import request_error, serve_request
+from ..dispatch import Dispatcher, placement_hold
+from ..execution import price_waiting, request_error, serve_request
 from ..handoff import snapshot as handoff_snapshot
 from ..lifecycle import QUEUE_STAGES, RequestLifecycle
-from ..outcomes import INFLIGHT_LIMIT_MESSAGE, OUTCOME_REASONS, RequestExpired, failure_reason
-from ..records import overloaded_response
+from ..outcomes import (
+    INFLIGHT_LIMIT_MESSAGE,
+    OUTCOME_REASONS,
+    RequestExpired,
+    RouterHeld,
+    failure_reason,
+)
+from ..records import not_ready_response, overloaded_response, refuse_request
 from ..retry import RetryBudget
 from ..saturation import (
     SIZING_MIN_SAMPLES,
@@ -85,7 +91,7 @@ class NarwhalRouter:
         self.lease_epoch = 0
         self.lease_holder = ""
         self.failover_blocked = ""
-        self.lifecycle_blocked = ""
+        self._lifecycle_blocked = ""
         self.first_token_calibration = CalibrationCheck("uncalibrated")
         # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
@@ -256,7 +262,25 @@ class NarwhalRouter:
         # Request ID to the time it took an admission seat.
         self._seat_since: dict[str, float] = {}
         self.seat = slo_histogram(cfg.slo.ttft_s)
-        self.monitoring = MonitoringLedger(clock, on_event=self.journal.write)
+        self.monitoring = MonitoringLedger(
+            clock, on_event=self.journal.write, on_degraded=self.wake_waiters
+        )
+
+    @property
+    def lifecycle_blocked(self) -> str:
+        """The whole-wave hold reason while a lifecycle hold withdraws readiness."""
+        return self._lifecycle_blocked
+
+    @lifecycle_blocked.setter
+    def lifecycle_blocked(self, reason: str) -> None:
+        self._lifecycle_blocked = reason
+        if reason:
+            self.wake_waiters()
+
+    def wake_waiters(self) -> None:
+        """Wake every queued request to recheck its hold, as when a hold begins."""
+        self.admission_queue.wake_all()
+        self.dispatcher.wake_all()
 
     @property
     def monitoring_degraded(self) -> str:
@@ -326,6 +350,13 @@ class NarwhalRouter:
             state.admit()
             return True
 
+        def check() -> float | None:
+            # A waiting request leaves on a prefill hold and is priced while it waits.
+            hold = placement_hold(self, Phase.PREFILL)
+            if hold:
+                raise RouterHeld(hold)
+            return price_waiting(state)
+
         state.phase = "queue"
         try:
             self.monitor.waiting[rid] = req
@@ -334,7 +365,12 @@ class NarwhalRouter:
             began = self._clock()
             try:
                 await state.wait(
-                    lambda: self.admission_queue.acquire(reserve, deadline=state.deadline)
+                    lambda: self.admission_queue.acquire(
+                        reserve,
+                        deadline=state.deadline,
+                        wait_s=state.queue_budget_s,
+                        check=check,
+                    )
                 )
             finally:
                 self.monitor.waiting.pop(rid, None)
@@ -344,6 +380,10 @@ class NarwhalRouter:
         except QueueFull:
             # A full queue is the same in-flight limit that ingress checks on arrival.
             response = overloaded_response(state, INFLIGHT_LIMIT_MESSAGE, reason="inflight_limit")
+        except PlacementRefused as exc:
+            response = refuse_request(state, exc)
+        except RouterHeld as exc:
+            response = not_ready_response(self, state, reason=str(exc))
         except (QueueExpired, RequestExpired) as exc:
             state.finish(
                 "expired",
