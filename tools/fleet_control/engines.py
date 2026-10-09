@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -141,11 +142,11 @@ class EngineActions:
         except StateUnavailable as exc:
             return {"error": str(exc)}
 
-    async def fleet_state(self, session: Session) -> dict[str, Any]:
-        """Return the router's view of every baseline engine."""
+    async def fleet_state(self, iids: list[str]) -> dict[str, Any]:
+        """Return the router's view of each named engine."""
         async with self._client() as client:
             try:
-                return await self._slices(client, list(baseline_engines(session)))
+                return await self._slices(client, iids)
             except StateUnavailable as exc:
                 raise ActionError(str(exc)) from exc
 
@@ -165,6 +166,12 @@ class EngineActions:
 def baseline_engines(session: Session) -> dict[str, Mapping[str, Any]]:
     """Return the engines of the session's baseline fleet configuration, keyed by ID."""
     return {str(engine["iid"]): engine for engine in session.baseline["engines"]}
+
+
+def configured_engines(fleet: Path) -> list[str]:
+    """Return the engine IDs of the configured baseline fleet file, for reads outside a session."""
+    document = json.loads(fleet.read_text(encoding="utf-8"))
+    return [str(engine["iid"]) for engine in document["engines"]]
 
 
 def baseline_engine(session: Session, iid: str) -> Mapping[str, Any]:
@@ -237,9 +244,16 @@ def engine_routes(actions: EngineActions) -> APIRouter:
 
     @routes.get("")
     async def engines() -> JSONResponse:
-        if service.session is None:
-            return JSONResponse({"detail": "no session is active"}, status_code=409)
-        return JSONResponse({"engines": await actions.fleet_state(service.session)})
+        # Outside a session, the engines come from the configured baseline fleet file.
+        if service.session is not None:
+            iids = list(baseline_engines(service.session))
+        else:
+            try:
+                iids = configured_engines(service.config.fleet)
+            except (OSError, ValueError, LookupError, TypeError) as exc:
+                detail = f"baseline fleet configuration is unreadable: {exc}"
+                return JSONResponse({"detail": detail}, status_code=500)
+        return JSONResponse({"engines": await actions.fleet_state(iids)})
 
     def add(action: str) -> None:
         async def run(iid: str, request: Request) -> JSONResponse:

@@ -7,260 +7,483 @@
 <title>Narwhal fleet control</title>
 <style>
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
+  color-scheme: light;
+  --bg: #f4f5f7;
   --panel: #ffffff;
-  --text: #1c2430;
-  --muted: #5b6676;
-  --line: #d8dde4;
-  --accent: #0f766e;
+  --panel-2: #f7f8fa;
+  --text: #1f2328;
+  --muted: #59636e;
+  --line: #d5d9de;
+  --accent: #1a7f78;
   --accent-text: #ffffff;
-  --ok: #17803d;
-  --warn: #9a6700;
-  --bad: #b42318;
-  --changed: #fff4cc;
+  --danger: #b42318;
+  --danger-text: #ffffff;
+  --focus: #2f6fde;
   --code: #eef1f4;
+  --backdrop: rgb(15 18 23 / 45%);
+  /* The dashboard colour key: tools/observability docs, "Colours". */
+  --green: #56a64b;
+  --amber: #c8963e;
+  --orange: #e0752d;
+  --red: #d44a3a;
+  --maroon: #a11d1d;
+  --magenta: #9e4aa4;
+  --grey: #8e9196;
+  --teal: #299e97;
+  --blue: #336b9e;
+  --violet: #8c84ce;
+  --tint: 16%;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418;
-    --panel: #1a1f25;
-    --text: #e6e9ed;
-    --muted: #9aa4b1;
-    --line: #2f3741;
-    --accent: #2bb3a3;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111217;
+    --panel: #181b1f;
+    --panel-2: #1e2228;
+    --text: #d8d9e0;
+    --muted: #9da3ad;
+    --line: #2f343b;
+    --accent: #299e97;
     --accent-text: #0b1214;
-    --ok: #4cc27a;
-    --warn: #e0b341;
-    --bad: #f07167;
-    --changed: #3d3418;
-    --code: #232a32;
+    --danger: #f07167;
+    --danger-text: #1b0b0a;
+    --focus: #6e9fff;
+    --code: #22262c;
+    --backdrop: rgb(0 0 0 / 60%);
+    --tint: 24%;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111217;
+  --panel: #181b1f;
+  --panel-2: #1e2228;
+  --text: #d8d9e0;
+  --muted: #9da3ad;
+  --line: #2f343b;
+  --accent: #299e97;
+  --accent-text: #0b1214;
+  --danger: #f07167;
+  --danger-text: #1b0b0a;
+  --focus: #6e9fff;
+  --code: #22262c;
+  --backdrop: rgb(0 0 0 / 60%);
+  --tint: 24%;
+}
 * { box-sizing: border-box; }
+html, body { margin: 0; }
 body {
-  margin: 0;
   background: var(--bg);
   color: var(--text);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-h1 { font-size: 17px; margin: 0; }
-h2 { font-size: 15px; margin: 0 0 8px; }
-h3 { font-size: 13px; margin: 12px 0 6px; }
-#status-line { color: var(--muted); flex: 1 1 auto; }
-#status-line strong { color: var(--text); font-weight: 600; }
-form { margin: 0; }
-label { display: inline-flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
-input, select, textarea, button { font: inherit; color: var(--text); }
-input, select, textarea {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 6px;
-}
-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
-button {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 10px;
-  cursor: pointer;
-}
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.danger { border-color: var(--bad); color: var(--bad); }
-button:disabled { opacity: 0.5; cursor: progress; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 6px 0; }
-main {
-  display: grid;
-  grid-template-columns: minmax(380px, 5fr) minmax(320px, 6fr);
-  gap: 12px;
-  padding: 12px 16px;
-}
-@media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
-main.controls-only { grid-template-columns: 1fr; }
-#controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-section, aside {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 12px;
-  min-width: 0;
-}
-aside { align-self: start; }
-#panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
-#panels iframe { width: 100%; height: 260px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-td.actions, td.nowrap { white-space: nowrap; }
-td.actions button { padding: 1px 6px; font-size: 12px; margin: 1px; }
-tr.changed td { background: var(--changed); }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0; font-size: 12px; }
-dt { color: var(--muted); }
-dd { margin: 0; overflow-wrap: anywhere; }
+h1 { font-size: 16px; margin: 0; }
+h2 { font-size: 15px; margin: 0; }
+code, pre, textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+code { overflow-wrap: anywhere; }
 pre {
   background: var(--code);
   border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 8px;
   max-height: 320px;
   overflow: auto;
-  margin: 4px 0;
+  margin: 6px 0 0;
 }
-code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
-.muted { color: var(--muted); }
-.note { color: var(--muted); font-size: 12px; margin: 4px 0; }
-.outcome-ok { color: var(--ok); font-weight: 600; }
-.outcome-refused { color: var(--warn); font-weight: 600; }
-.outcome-failed { color: var(--bad); font-weight: 600; }
-.message { margin: 6px 0; font-size: 12px; }
-summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.scroll { overflow-x: auto; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 [hidden] { display: none !important; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Controls. */
+input, select, textarea, button { font: inherit; color: var(--text); }
+input, select, textarea {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+  min-width: 0;
+}
+textarea { width: 100%; min-height: 120px; resize: vertical; font-size: 12px; }
+textarea[aria-invalid="true"], input[aria-invalid="true"] { border-color: var(--danger); }
+button {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button.danger-solid { background: var(--danger); border-color: var(--danger); color: var(--danger-text); font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: not-allowed; color: var(--muted); border-color: var(--line); background: transparent; font-weight: 400; }
+button[aria-busy="true"] { cursor: progress; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.spacer { flex: 1 1 auto; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.notice {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--grey);
+  font-size: 13px;
+}
+.notice.bad { border-left-color: var(--red); }
+progress { accent-color: var(--accent); height: 8px; }
+
+/* Status bar. */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.bar-title { display: flex; align-items: center; gap: 12px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.conn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--grey); }
+.conn.ok .dot { background: var(--green); }
+.conn.bad .dot { background: var(--red); }
+.bar-status { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0; flex: 1 1 auto; }
+.bar-status > div { display: flex; align-items: center; gap: 6px; }
+.bar-status dt { color: var(--muted); font-size: 12px; }
+.bar-status dd { margin: 0; display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.bar-status progress { width: 90px; }
+.bar-actions { display: flex; align-items: center; gap: 8px; }
+.tz { color: var(--muted); font-size: 12px; }
+.bar .feedback { flex-basis: 100%; margin: 0; }
+
+/* Connection card. */
+.connect {
+  max-width: 460px;
+  margin: 48px auto;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.connect form { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; }
+.connect label { flex: 1 1 auto; }
+.message { margin: 10px 0 0; font-size: 13px; }
+
+/* Board. */
+.page { display: grid; gap: 12px; padding: 12px 16px 24px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1500px) {
+  .page.with-panels { grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); align-items: start; }
+}
+.board {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas: "engines engines" "load config" "activity activity";
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .board { grid-template-columns: minmax(0, 1fr); grid-template-areas: "engines" "load" "config" "activity"; }
+  .bar-status { flex-basis: 100%; }
+}
+.area-engines { grid-area: engines; }
+.area-load { grid-area: load; }
+.area-config { grid-area: config; }
+.area-activity { grid-area: activity; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.card-head .card-state { color: var(--muted); font-size: 12px; }
+.card-head .end { margin-left: auto; }
+.card-head label { flex-direction: row; align-items: center; gap: 6px; }
+.card-head input { width: 110px; }
+
+/* Tables. */
+.scroll { overflow-x: auto; margin-top: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+.engines td { vertical-align: middle; }
+.area-engines { container-type: inline-size; }
+/* In a narrow panel each engine becomes a two-line card: its state, then its actions. */
+@container (max-width: 720px) {
+  .engines thead { display: none; }
+  .engines tr {
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+    gap: 6px 10px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .engines tbody tr:last-child { border-bottom: 0; }
+  .engines td { padding: 0; border: 0; }
+  .engines td.last-cell { grid-column: 1 / -1; }
+  .engines td.last-cell:has(.none) { display: none; }
+  .engines td.actions-cell { grid-column: 1 / -1; }
+}
+.actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.actions button { padding: 2px 8px; font-size: 12px; }
+.actions .sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
+.empty { color: var(--muted); }
+
+/* Badges. Each carries its meaning in text; the colour repeats it. */
+.badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  --hue: var(--grey);
+  background: color-mix(in srgb, var(--hue) var(--tint), transparent);
+}
+.badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--hue); flex: none; }
+.badge.outline { background: transparent; border: 1px solid var(--line); }
+.badge.outline::before { display: none; }
+.tone-ok { --hue: var(--green); }
+.tone-warn { --hue: var(--amber); }
+.tone-orange { --hue: var(--orange); }
+.tone-bad { --hue: var(--red); }
+.tone-maroon { --hue: var(--maroon); }
+.tone-magenta { --hue: var(--magenta); }
+.tone-grey { --hue: var(--grey); }
+.tone-prefill { --hue: var(--teal); }
+.tone-decode { --hue: var(--blue); }
+.tone-colocated { --hue: var(--violet); }
+.outcome { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; white-space: nowrap; }
+.outcome .icon { font-weight: 700; }
+.outcome-ok .icon { color: var(--green); }
+.outcome-refused .icon { color: var(--amber); }
+.outcome-failed .icon { color: var(--red); }
+.feedback { font-size: 13px; margin: 8px 0 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.feedback .detail { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+.last { font-size: 12px; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; }
+.last .when { color: var(--muted); }
+.spin {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; border-top-color: var(--line); } }
+
+/* Load job and configuration. */
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.fields label:first-child { grid-column: 1 / -1; }
+.progress-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+.progress-line progress { flex: 1 1 auto; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 10px 0 0; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 10px 0 0; }
+.tiles > div { background: var(--panel-2); border-radius: 4px; padding: 6px 8px; }
+.tiles dt { color: var(--muted); font-size: 12px; }
+.tiles dd { margin: 2px 0 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.block-label { margin-top: 12px; }
+.check { margin-top: 8px; }
+.check ul { margin: 4px 0 0; padding-left: 18px; color: var(--danger); font-size: 13px; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.changed { font-weight: 600; }
+
+/* Dashboard panels. */
+.dashboard { align-self: start; }
+#panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; margin-top: 8px; }
+#panels iframe { width: 100%; height: 260px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+
+/* Confirmation dialog. */
+dialog {
+  max-width: min(520px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 20px;
+  background: var(--panel);
+  color: var(--text);
+}
+dialog::backdrop { background: var(--backdrop); }
+dialog p { margin: 8px 0 0; }
+dialog ul { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Narwhal fleet control</h1>
-  <div id="status-line">Not connected.</div>
-  <form id="token-form">
-    <div class="row">
-      <label>Control token
-        <input id="token-input" type="password" autocomplete="off" spellcheck="false" required>
-      </label>
-      <button class="primary" type="submit">Connect</button>
-    </div>
-  </form>
-  <button id="forget" type="button" hidden>Forget token</button>
+<header class="bar" id="bar">
+  <div class="bar-title">
+    <h1>Fleet control</h1>
+    <span id="conn" class="conn"><span class="dot" aria-hidden="true"></span><span id="conn-text">Not connected</span></span>
+  </div>
+  <dl class="bar-status" id="bar-status" hidden>
+    <div><dt>Session</dt><dd id="bar-session">none</dd></div>
+    <div><dt>Load job</dt><dd><span id="bar-job">none</span><progress id="bar-job-progress" max="1" value="0" aria-label="Load job progress" hidden></progress></dd></div>
+    <div id="bar-busy-item" hidden><dt>In progress</dt><dd><span class="spin" aria-hidden="true"></span><span id="bar-busy"></span></dd></div>
+  </dl>
+  <div class="bar-actions" id="bar-actions" hidden>
+    <span class="tz">Times in UTC</span>
+    <button id="session-start" class="primary" type="button">Start session</button>
+    <button id="session-end" class="danger" type="button" hidden>End session…</button>
+    <button id="forget" type="button" hidden>Forget token</button>
+  </div>
+  <p id="fb-session" class="feedback" hidden></p>
 </header>
-<p id="connect-message" class="message"></p>
-<main id="main" hidden>
-  <div id="controls">
-    <section id="session-panel">
-      <h2>Session</h2>
-      <dl>
-        <dt>Session</dt><dd id="session-id">none</dd>
-        <dt>Started</dt><dd id="session-started">-</dd>
-        <dt>In progress</dt><dd id="session-busy">-</dd>
-      </dl>
-      <div class="row">
-        <button id="session-start" class="primary" type="button">Start session</button>
-        <button id="session-end" class="danger" type="button">End session and restore</button>
-        <button id="session-refresh" type="button">Refresh run record</button>
-      </div>
-      <details>
-        <summary>Run record</summary>
-        <pre id="run-record">No session is active.</pre>
-      </details>
-    </section>
 
-    <section id="engines-panel">
-      <h2>Engines</h2>
-      <div class="row">
-        <label>Drain deadline (s)
-          <input id="drain-deadline" type="number" min="0" step="any" placeholder="router default">
+<section id="connect" class="connect" aria-labelledby="connect-title">
+  <h2 id="connect-title">Connect to the control service</h2>
+  <form id="token-form">
+    <label>Control token
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false" required>
+    </label>
+    <button class="primary" type="submit">Connect</button>
+  </form>
+  <p id="connect-message" class="message" role="alert"></p>
+</section>
+
+<div id="page" class="page" hidden>
+  <main id="board" class="board">
+    <section class="card area-engines" aria-labelledby="engines-title">
+      <div class="card-head">
+        <h2 id="engines-title">Engines</h2>
+        <span id="engines-state" class="card-state"></span>
+        <label class="end">Drain deadline (s)
+          <input id="drain-deadline" type="number" min="0" step="any" placeholder="default">
         </label>
-        <button id="engines-refresh" type="button">Refresh engines</button>
       </div>
-      <p id="engines-message" class="note"></p>
+      <p id="engines-notice" class="notice" hidden></p>
       <div class="scroll">
-        <table>
-          <thead><tr><th>Engine</th><th>Role</th><th>State</th><th>Actions</th></tr></thead>
+        <table class="engines">
+          <thead><tr><th scope="col">Engine</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Resident</th><th scope="col">Last action</th><th scope="col">Actions</th></tr></thead>
           <tbody id="engines"></tbody>
         </table>
       </div>
-      <h3 id="engine-change-title">Last engine action</h3>
-      <p id="engine-change-message" class="note">No engine action yet.</p>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
-          <tbody id="engine-change"></tbody>
-        </table>
-      </div>
     </section>
 
-    <section id="load-panel">
-      <h2>Load job</h2>
-      <p id="load-message" class="note"></p>
+    <section class="card area-load" aria-labelledby="load-title">
+      <div class="card-head">
+        <h2 id="load-title">Load job</h2>
+        <span id="job-state" class="card-state"></span>
+      </div>
+      <p id="load-notice" class="notice" hidden></p>
       <form id="job-form">
-        <div class="row">
+        <div class="fields">
           <label>Workload <select id="job-workload"></select></label>
-          <label>Rate (req/s) <input id="job-rate" type="number" min="0" step="any"></label>
-          <label>Concurrency <input id="job-concurrency" type="number" min="1" step="1"></label>
-          <label>Duration (s) <input id="job-duration" type="number" min="0" step="any"></label>
+          <label>Rate (req/s) <input id="job-rate" type="number" min="0" step="any" inputmode="decimal"></label>
+          <label>Concurrency <input id="job-concurrency" type="number" min="1" step="1" inputmode="numeric"></label>
+          <label>Duration (s) <input id="job-duration" type="number" min="0" step="any" inputmode="decimal"></label>
         </div>
+        <p id="workload-hint" class="hint"></p>
         <div class="row">
           <button id="job-start" class="primary" type="submit">Start job</button>
           <button id="job-stop" class="danger" type="button">Stop job</button>
-          <button id="job-refresh" type="button">Refresh status</button>
         </div>
       </form>
-      <p id="workload-hint" class="note"></p>
-      <dl id="job-status"></dl>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Client result</th><th>Value</th></tr></thead>
-          <tbody id="job-results"></tbody>
-        </table>
+      <p id="fb-job" class="feedback" hidden></p>
+      <div id="job-progress-line" class="progress-line" hidden>
+        <progress id="job-progress" max="1" value="0" aria-label="Load job progress"></progress>
+        <span id="job-progress-text"></span>
       </div>
-      <details>
+      <dl id="job-summary" class="kv"></dl>
+      <dl id="job-results" class="tiles"></dl>
+      <details id="job-raw">
         <summary>Job document</summary>
         <pre id="job-document">No load job has run.</pre>
       </details>
     </section>
 
-    <section id="config-panel">
-      <h2>Configuration</h2>
-      <dl id="config-current"></dl>
-      <label for="overlay">Overlay (JSON merge patch on the current fleet configuration)</label>
-      <textarea id="overlay" spellcheck="false">{
+    <section class="card area-config" aria-labelledby="config-title">
+      <div class="card-head">
+        <h2 id="config-title">Configuration</h2>
+        <span id="config-state" class="card-state"></span>
+      </div>
+      <dl id="config-current" class="kv"></dl>
+      <label for="overlay" class="block-label">Overlay: a JSON merge patch on the current fleet configuration, changing slo, controller, serving or recovery</label>
+      <textarea id="overlay" spellcheck="false" rows="7" aria-describedby="overlay-status">{
   "serving": {}
 }</textarea>
+      <p id="overlay-status" class="hint"></p>
+      <div id="overlay-check" class="check" hidden></div>
       <div class="row">
-        <button id="overlay-apply" class="primary" type="button">Apply overlay</button>
-        <button id="cold-restart" class="danger" type="button">Cold restart</button>
-        <button id="restore" class="danger" type="button">Restore baseline</button>
+        <button id="overlay-check-button" type="button">Check overlay</button>
+        <button id="overlay-apply" class="primary" type="button">Apply overlay…</button>
+        <span class="spacer"></span>
+        <button id="cold-restart" class="danger" type="button">Cold restart…</button>
+        <button id="restore" class="danger" type="button">Restore baseline…</button>
       </div>
+      <p id="fb-config" class="feedback" hidden></p>
     </section>
 
-    <section id="log-panel">
-      <h2>Action log</h2>
-      <p class="note">Actions of the active session, from its run record.</p>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>#</th><th>Action</th><th>Parameters</th><th>Time (UTC)</th><th>Outcome</th><th>Result</th></tr></thead>
-          <tbody id="action-log"></tbody>
-        </table>
+    <section class="card area-activity" aria-labelledby="activity-title">
+      <div class="card-head">
+        <h2 id="activity-title">Activity</h2>
+        <span id="activity-state" class="card-state"></span>
       </div>
-      <h3>Responses in this tab</h3>
       <div class="scroll">
         <table>
-          <thead><tr><th>Time</th><th>Request</th><th>HTTP</th><th>Detail</th></tr></thead>
-          <tbody id="responses"></tbody>
+          <thead><tr><th scope="col">#</th><th scope="col">Started</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Duration</th><th scope="col">Outcome</th></tr></thead>
+          <tbody id="activity"></tbody>
         </table>
       </div>
       <details>
-        <summary>Last response body</summary>
+        <summary>Requests from this tab</summary>
+        <div class="scroll">
+          <table>
+            <thead><tr><th scope="col">Time</th><th scope="col">Request</th><th scope="col">HTTP</th><th scope="col">Detail</th></tr></thead>
+            <tbody id="responses"></tbody>
+          </table>
+        </div>
         <pre id="last-response">-</pre>
       </details>
+      <details>
+        <summary>Run record</summary>
+        <pre id="run-record">No session is active.</pre>
+      </details>
     </section>
-  </div>
+  </main>
 
-  <aside id="dashboard">
-    <h2>Dashboard</h2>
-    <p id="dashboard-note" class="note"></p>
+  <aside id="dashboard" class="card dashboard" aria-labelledby="dashboard-title">
+    <h2 id="dashboard-title">Dashboard</h2>
+    <p id="dashboard-note" class="hint"></p>
     <div id="panels"></div>
   </aside>
-</main>
+</div>
+
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-effect">
+  <h2 id="confirm-title"></h2>
+  <p id="confirm-effect"></p>
+  <ul id="confirm-details"></ul>
+  <div class="dialog-actions">
+    <button id="confirm-cancel" type="button">Cancel</button>
+    <button id="confirm-ok" class="danger-solid" type="button">Confirm</button>
+  </div>
+</dialog>
+<div id="announcer" class="sr-only" aria-live="polite"></div>
 <script>
 "use strict";
 
@@ -277,29 +500,56 @@ const ROUTES = {
   jobStart: ["POST", "/api/jobs"],
   jobCurrent: ["GET", "/api/jobs/current"],
   jobStop: ["POST", "/api/jobs/current/stop"],
+  overlayCheck: ["POST", "/api/config/overlay/check"],
   overlay: ["POST", "/api/config/overlay"],
   coldRestart: ["POST", "/api/config/cold-restart"],
   restore: ["POST", "/api/config/restore"],
 };
 const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit"];
+// Engine actions that run a deployment hook, by the hook they need.
+const HOOK_ACTIONS = { pause: "engine_pause", resume: "engine_resume", stop: "engine_stop", start: "engine_start" };
+const LIFECYCLE_TONES = { draining: "grey", drained: "grey", deadline_exceeded: "warn", validating: "magenta", blocked: "maroon" };
 const TOKEN_KEY = "narwhal-control-token";
 // A service with console.auto_connect places its token in this meta element.
 const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]') || {}).content || "";
-const POLL_MS = 3000;
+const POLL_MS = 2000;
+const ENGINE_POLL_MS = 3000;
+// The run record is re-read every this many status polls during a session.
+const RECORD_EVERY = 3;
 const MAX_RESPONSES = 50;
+
+// The Fleet control dashboard frames the console with ?theme=dark to match Grafana.
+const THEME = new URLSearchParams(window.location.search).get("theme");
+if (THEME === "dark" || THEME === "light") document.documentElement.dataset.theme = THEME;
 
 const $ = (id) => document.getElementById(id);
 let token = "";
-let poller = null;
-let lastStatus = "";
-let lastRecord = null;
-let workloads = {};
-const responses = [];
+const state = {
+  settings: null,
+  health: null,
+  record: null,
+  recordKey: "",
+  polls: 0,
+  reachable: true,
+  engines: null,
+  enginesError: "",
+  workloads: {},
+  pending: new Map(),
+  feedback: new Map(),
+  overlayCheck: null,
+  checking: false,
+  responses: [],
+  activityKey: "",
+  timers: [],
+};
+const rows = new Map();
 
+// Elements and formatting.
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props || {})) {
     if (key === "class") node.className = value;
+    else if (key.startsWith("aria-") || key.startsWith("data-")) node.setAttribute(key, value);
     else node[key] = value;
   }
   for (const child of children) node.append(child instanceof Node ? child : text(child));
@@ -316,6 +566,67 @@ function pretty(value) {
   return value === null || value === undefined ? "-" : JSON.stringify(value, null, 2);
 }
 
+function clock(stamp) {
+  const time = Date.parse(stamp);
+  return Number.isNaN(time) ? "-" : new Date(time).toISOString().slice(11, 19);
+}
+
+function elapsedSince(stamp) {
+  const time = typeof stamp === "number" ? stamp : Date.parse(stamp);
+  return Number.isNaN(time) ? null : Math.max(0, Date.now() - time);
+}
+
+function duration(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
+  const total = Math.floor(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
+}
+
+// A recorded action's run time: seconds below a minute, then minutes and seconds.
+function brief(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
+  if (ms < 1000) return "<1 s";
+  if (ms < 60000) return Math.round(ms / 1000) + " s";
+  return duration(ms);
+}
+
+function between(start, end) {
+  const from = Date.parse(start);
+  const to = Date.parse(end);
+  return Number.isNaN(from) || Number.isNaN(to) ? null : to - from;
+}
+
+function amount(value, digits) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return number.toLocaleString("en-US", { maximumFractionDigits: digits === undefined ? 2 : digits });
+}
+
+function capital(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+function badge(tone, label) {
+  return el("span", { class: "badge tone-" + tone }, label);
+}
+
+const OUTCOME_ICONS = { ok: "✓", refused: "⚠", failed: "✗" };
+
+function outcomeMark(outcome) {
+  const kind = OUTCOME_ICONS[outcome] ? outcome : "failed";
+  return el("span", { class: "outcome outcome-" + kind },
+    el("span", { class: "icon", "aria-hidden": "true" }, OUTCOME_ICONS[kind]), outcome || "failed");
+}
+
+function announce(message) {
+  $("announcer").textContent = message;
+}
+
+// Token storage and requests.
 function readStoredToken() {
   try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (error) { return ""; }
 }
@@ -349,214 +660,431 @@ async function call(name, params, body) {
   return { status: response.status, path, body: data };
 }
 
-function outcomeClass(outcome) {
-  return "outcome-" + (outcome || "failed");
-}
-
 // An action reply is the recorded entry; a refused or failed one nests it under `action`.
 function actionEntry(body) {
   if (!body) return null;
   return body.action && typeof body.action === "object" ? body.action : body;
 }
 
-function noteResponse(label, reply) {
+function outcomeOf(reply) {
   const body = reply.body || {};
-  const action = actionEntry(body);
-  const detail = body.detail || action.error || action.outcome || "";
-  responses.unshift({ at: new Date().toLocaleTimeString(), label, status: reply.status, detail });
-  responses.length = Math.min(responses.length, MAX_RESPONSES);
-  const rows = responses.map((entry) => el("tr", {},
-    el("td", {}, entry.at), el("td", {}, entry.label), el("td", {}, entry.status || "-"),
-    el("td", {}, entry.detail)));
-  $("responses").replaceChildren(...rows);
+  const entry = actionEntry(body);
+  let kind = entry && OUTCOME_ICONS[entry.outcome] ? entry.outcome : "";
+  if (!kind) {
+    if (reply.status >= 200 && reply.status < 300) kind = "ok";
+    else if (reply.status === 0 || reply.status >= 500) kind = "failed";
+    else kind = "refused";
+  }
+  return { kind, detail: body.detail || (entry && entry.error) || "" };
+}
+
+function noteResponse(label, reply) {
+  const outcome = outcomeOf(reply);
+  state.responses.unshift({ at: new Date().toISOString(), label, status: reply.status, detail: outcome.detail || outcome.kind });
+  state.responses.length = Math.min(state.responses.length, MAX_RESPONSES);
+  $("responses").replaceChildren(...state.responses.map((entry) => el("tr", {},
+    el("td", { class: "num" }, clock(entry.at)), el("td", {}, entry.label),
+    el("td", { class: "num" }, entry.status || "-"), el("td", {}, entry.detail))));
   $("last-response").textContent = pretty(reply.body);
 }
 
-// Run one control: disable its button, call the route, log the response, refresh the views.
-async function act(button, label, name, params, body) {
-  button.disabled = true;
+// Run one control: mark it pending, call its route, keep its outcome beside it, refresh the views.
+async function act(key, label, name, params, body) {
+  if (state.pending.has(key)) return null;
+  state.pending.set(key, { label, started: Date.now() });
+  state.feedback.delete(key);
+  render();
+  let reply;
   try {
-    const reply = await call(name, params || {}, body);
-    noteResponse(label, reply);
-    return reply;
+    reply = await call(name, params || {}, body);
   } finally {
-    button.disabled = false;
-    if (token) {
-      await refreshStatus(true);
-    }
+    state.pending.delete(key);
   }
+  const outcome = outcomeOf(reply);
+  const summary = outcome.kind === "ok" ? label + " succeeded" : label + " " + outcome.kind;
+  state.feedback.set(key, { kind: outcome.kind, label: summary, detail: outcome.kind === "ok" ? "" : outcome.detail, at: new Date().toISOString() });
+  announce(summary + (outcome.detail && outcome.kind !== "ok" ? ": " + outcome.detail : "."));
+  noteResponse(label, reply);
+  if (token) await refresh(true);
+  return reply;
 }
 
-function confirmThen(message, run) {
-  return () => { if (window.confirm(message)) run(); };
+function renderFeedback(node, key) {
+  const pending = state.pending.get(key);
+  const done = state.feedback.get(key);
+  if (pending) {
+    node.replaceChildren(el("span", { class: "spin", "aria-hidden": "true" }),
+      el("span", {}, pending.label + "…"), el("span", { class: "detail" }, duration(elapsedSince(pending.started))));
+  } else if (done) {
+    const parts = [outcomeMark(done.kind), el("span", {}, done.label), el("span", { class: "detail" }, "at " + clock(done.at))];
+    if (done.detail) parts.push(el("span", { class: "detail" }, done.detail));
+    node.replaceChildren(...parts);
+  }
+  // A session start or end that succeeded leaves the status bar after a while.
+  const stale = key === "session" && done && done.kind === "ok" && elapsedSince(done.at) > 15000;
+  node.hidden = (!pending && !done) || (!pending && stale);
 }
 
-// Status, polled while connected.
-async function refreshStatus(force) {
+// Confirmation: an in-page dialog that names the target and the effect.
+let confirmResolve = null;
+
+function confirmAction(title, effect, details, confirmLabel) {
+  $("confirm-title").textContent = title;
+  $("confirm-effect").textContent = effect;
+  $("confirm-details").replaceChildren(...(details || []).map((line) => el("li", {}, line)));
+  $("confirm-details").hidden = !(details && details.length);
+  $("confirm-ok").textContent = confirmLabel;
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    $("confirm-dialog").showModal();
+    $("confirm-cancel").focus();
+  });
+}
+
+function closeConfirm(result) {
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if ($("confirm-dialog").open) $("confirm-dialog").close();
+  if (resolve) resolve(result);
+}
+
+// Gates the service applies to every action, so the page disables a control instead of sending it.
+function sessionGate() {
+  if (!state.health || !state.health.session) return "Start a session first.";
+  return busyGate();
+}
+
+function busyGate() {
+  if (state.health && state.health.in_progress) return state.health.in_progress + " is in progress.";
+  if (state.pending.has("session") || state.pending.has("config")) return "Wait for the running action to finish.";
+  return "";
+}
+
+function hookConfigured(name) {
+  return Boolean(state.settings && state.settings.hooks && state.settings.hooks.includes(name));
+}
+
+function setControl(button, reason) {
+  button.disabled = Boolean(reason);
+  button.title = reason || "";
+}
+
+// Status polling.
+async function refresh(force) {
   const reply = await call("health", {});
   if (reply.status !== 200 || !reply.body) {
-    $("status-line").textContent = "Status unavailable: " + text(reply.body && reply.body.detail);
+    state.reachable = false;
+    render();
     return;
   }
-  const status = reply.body;
-  const job = status.job;
-  const summary = [status.session, job && job.id, job && job.state, status.in_progress].join("|");
-  const line = [];
-  line.push(el("span", {}, "Session "), el("strong", {}, status.session || "none"));
-  line.push(el("span", {}, " · load job "), el("strong", {}, job ? job.id + " " + job.state : "none"));
-  if (status.in_progress) line.push(el("span", {}, " · in progress "), el("strong", {}, status.in_progress));
-  $("status-line").replaceChildren(...line);
-  $("session-id").textContent = status.session || "none";
-  $("session-busy").textContent = status.in_progress || "-";
-  renderJob(job);
-  if (force || summary !== lastStatus) {
-    lastStatus = summary;
+  state.reachable = true;
+  const health = reply.body;
+  state.health = health;
+  state.polls += 1;
+  const job = health.job;
+  const key = [health.session, health.in_progress, job && job.id, job && job.state].join("|");
+  if (force || key !== state.recordKey || (health.session && state.polls % RECORD_EVERY === 0)) {
+    state.recordKey = key;
     await refreshRecord();
   }
+  render();
 }
 
 async function refreshRecord() {
-  const reply = await call("sessionRecord", {});
-  const record = reply.status === 200 ? reply.body : null;
-  lastRecord = record;
-  $("run-record").textContent = record ? pretty(record) : "No session is active.";
-  $("session-started").textContent = record ? record.started_at : "-";
-  renderConfiguration(record && record.configuration);
-  renderActions(record ? record.actions : []);
-}
-
-function renderConfiguration(current) {
-  const rows = [];
-  if (current) {
-    for (const key of ["source", "fleet", "digest", "applied_at"]) {
-      rows.push(el("dt", {}, key), el("dd", {}, el("code", {}, current[key])));
-    }
+  if (!state.health || !state.health.session) {
+    state.record = null;
   } else {
-    rows.push(el("dt", {}, "Current"), el("dd", {}, "no session is active"));
+    const reply = await call("sessionRecord", {});
+    state.record = reply.status === 200 ? reply.body : null;
   }
-  $("config-current").replaceChildren(...rows);
-}
-
-function renderActions(actions) {
-  const clock = (stamp) => (stamp ? String(stamp).slice(11, 19) : "-");
-  const rows = (actions || []).slice().reverse().map((action) => el("tr", {},
-    el("td", {}, action.seq),
-    el("td", { class: "nowrap" }, el("code", {}, action.action)),
-    el("td", {}, el("code", {}, text(action.params))),
-    el("td", { class: "nowrap", title: action.started_at + " to " + action.finished_at },
-      clock(action.started_at) + " to " + clock(action.finished_at)),
-    el("td", {}, el("span", { class: outcomeClass(action.outcome) }, action.outcome),
-      ...(action.error ? [el("div", { class: "note" }, action.error)] : [])),
-    el("td", {}, action.result
-      ? el("details", {}, el("summary", {}, "view"), el("pre", {}, pretty(action.result)))
-      : "-")));
-  if (!rows.length) rows.push(el("tr", {}, el("td", { colSpan: 6, class: "muted" }, "No recorded actions.")));
-  $("action-log").replaceChildren(...rows);
-}
-
-// Engines.
-function engineState(slice) {
-  if (!slice || slice.error) return slice ? slice.error : "unknown";
-  const flags = ["ejected", "draining", "quarantined", "probation", "pinned"].filter((flag) => slice[flag]);
-  const lifecycle = slice.lifecycle && slice.lifecycle.state;
-  const parts = [];
-  if (!slice.known) parts.push("unknown to router");
-  if (lifecycle) parts.push("lifecycle " + lifecycle);
-  if (flags.length) parts.push(flags.join(", "));
-  return parts.length ? parts.join("; ") : "in service";
-}
-
-// Engine IDs from the session's baseline fleet configuration, for when router state is unreadable.
-function baselineEngines() {
-  const baseline = lastRecord && lastRecord.configurations && lastRecord.configurations[0];
-  const engines = baseline && baseline.document && baseline.document.engines;
-  return Array.isArray(engines) ? engines.map((engine) => String(engine.iid)) : [];
+  $("run-record").textContent = state.record ? pretty(state.record) : "No session is active.";
 }
 
 async function refreshEngines() {
   const reply = await call("engines", {});
-  let engines = {};
   if (reply.status === 200 && reply.body) {
-    $("engines-message").textContent = "";
-    engines = reply.body.engines;
+    state.engines = reply.body.engines;
+    state.enginesError = "";
   } else {
-    const detail = text(reply.body && reply.body.detail);
-    $("engines-message").textContent = detail;
-    for (const iid of baselineEngines()) engines[iid] = { error: "state unavailable" };
+    state.enginesError = text(reply.body && reply.body.detail);
   }
-  const rows = Object.entries(engines).map(([iid, slice]) => {
-    const buttons = ENGINE_ACTIONS.map((action) => {
-      const button = el("button", { type: "button", textContent: action });
-      if (action === "stop" || action === "drain") button.className = "danger";
-      button.addEventListener("click", () => engineAction(button, iid, action));
-      return button;
-    });
-    return el("tr", {},
-      el("td", {}, el("code", {}, iid)),
-      el("td", {}, slice && slice.role),
-      el("td", {}, engineState(slice)),
-      el("td", { class: "actions" }, ...buttons));
-  });
-  $("engines").replaceChildren(...rows);
+  renderEngines();
 }
 
-async function engineAction(button, iid, action) {
+function render() {
+  renderStatus();
+  renderEngines();
+  renderJob();
+  renderConfiguration();
+  renderActivity();
+}
+
+// Status bar.
+function renderStatus() {
+  const connected = Boolean(state.settings);
+  const conn = $("conn");
+  conn.classList.toggle("ok", connected && state.reachable);
+  conn.classList.toggle("bad", connected && !state.reachable);
+  $("conn-text").textContent = !connected ? "Not connected" : state.reachable ? "Connected" : "Service unreachable";
+  const health = state.health || {};
+  const session = health.session;
+  const sessionNode = $("bar-session");
+  if (session) {
+    const started = state.record && state.record.started_at;
+    sessionNode.textContent = session.slice(-6) + (started ? " · " + duration(elapsedSince(started)) : "");
+    sessionNode.title = session;
+  } else {
+    sessionNode.textContent = "none";
+    sessionNode.title = "";
+  }
+  const job = health.job;
+  const progress = jobProgress(job);
+  $("bar-job").textContent = job ? job.id + " " + job.state + (progress ? " · " + progress.label : "") : "none";
+  $("bar-job-progress").hidden = !(progress && progress.fraction !== null);
+  if (progress && progress.fraction !== null) $("bar-job-progress").value = progress.fraction;
+  $("bar-busy-item").hidden = !health.in_progress;
+  if (health.in_progress) {
+    const since = health.in_progress_since ? " · " + duration(elapsedSince(health.in_progress_since)) : "";
+    $("bar-busy").textContent = health.in_progress + since;
+  }
+  $("session-start").hidden = Boolean(session);
+  $("session-end").hidden = !session;
+  setControl($("session-start"), state.pending.has("session") ? "Starting the session." : busyGate());
+  setControl($("session-end"), state.pending.has("session") ? "Ending the session." : busyGate());
+  $("session-start").setAttribute("aria-busy", String(state.pending.has("session")));
+  renderFeedback($("fb-session"), "session");
+}
+
+// Engines.
+function processStates() {
+  // Pause, resume, stop and start are hooks the router cannot see; the run record keeps them.
+  const states = {};
+  for (const action of (state.record ? state.record.actions : [])) {
+    if (action.outcome !== "ok") continue;
+    if (action.action === "baseline.restore" || action.action === "config.cold_restart") {
+      for (const iid of Object.keys(states)) delete states[iid];
+      continue;
+    }
+    const match = /^engine\.(pause|resume|stop|start)$/.exec(action.action);
+    if (!match) continue;
+    const iid = action.params && action.params.engine;
+    if (match[1] === "pause") states[iid] = { state: "paused", at: action.finished_at };
+    else if (match[1] === "stop") states[iid] = { state: "stopped", at: action.finished_at };
+    else delete states[iid];
+  }
+  return states;
+}
+
+function lastEngineActions() {
+  const last = {};
+  for (const action of (state.record ? state.record.actions : [])) {
+    if (action.action.startsWith("engine.") && action.params) last[action.params.engine] = action;
+  }
+  return last;
+}
+
+function lifecycleState(slice) {
+  return slice && !slice.error && slice.lifecycle ? slice.lifecycle.state : null;
+}
+
+function engineBadges(slice, process) {
+  if (!slice || slice.error) return [badge("grey", "state unavailable")];
+  const badges = [];
+  if (!slice.known) badges.push(badge("grey", "not in router"));
+  const lifecycle = lifecycleState(slice);
+  if (lifecycle && lifecycle !== "active") badges.push(badge(LIFECYCLE_TONES[lifecycle] || "grey", lifecycle.replace("_", " ")));
+  if (slice.ejected) badges.push(badge("bad", "ejected"));
+  if (slice.quarantined) badges.push(badge("orange", "quarantined"));
+  if (slice.probation) badges.push(badge("warn", "probation"));
+  if (process) badges.push(badge("grey", process.state + " " + clock(process.at)));
+  if (!badges.length) badges.push(badge("ok", "in service"));
+  if (slice.pinned) badges.push(el("span", { class: "badge outline" }, "pinned"));
+  return badges;
+}
+
+function resident(slice) {
+  const counts = slice && !slice.error ? slice.resident : null;
+  if (!counts || typeof counts !== "object") return "-";
+  return "P " + amount(counts.prefill, 0) + " · D " + amount(counts.decode, 0);
+}
+
+// Why an engine action is unavailable, or "" when the page offers it.
+function engineGate(iid, action, slice, process, others) {
+  const gate = sessionGate();
+  if (gate) return gate;
+  if (state.pending.has("engine:" + iid)) return "An action on " + iid + " is running.";
+  const hook = HOOK_ACTIONS[action];
+  if (hook && !hookConfigured(hook)) return "No " + hook + " hook is configured.";
+  const lifecycle = lifecycleState(slice);
+  const paused = process && process.state === "paused";
+  const stopped = process && process.state === "stopped";
+  if (action === "drain") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (lifecycle !== "active") return "Drain needs an active engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+    if (others) return others + "; the router runs one lifecycle action at a time.";
+  } else if (action === "readmit") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+  } else if (action === "pause") {
+    if (paused) return iid + " is paused; resume it first.";
+    if (stopped) return iid + " is stopped; start it first.";
+  } else if (action === "resume") {
+    if (!paused) return "Resume follows a pause in this session.";
+  } else if (action === "stop") {
+    if (stopped) return iid + " is stopped; start it first.";
+  } else if (action === "start") {
+    if (!stopped && !(slice && slice.ejected)) return "Start follows a stop or an ejection.";
+  }
+  return "";
+}
+
+function engineRow(iid) {
+  let row = rows.get(iid);
+  if (row) return row;
+  const cells = {
+    id: el("td", {}, el("code", {}, iid)),
+    role: el("td", {}),
+    state: el("td", {}, el("div", { class: "badges" })),
+    resident: el("td", { class: "num" }),
+    last: el("td", { class: "last-cell" }, el("div", { class: "last" })),
+    actions: el("td", { class: "actions-cell" }, el("div", { class: "actions" })),
+  };
+  const buttons = {};
+  const group = cells.actions.firstChild;
+  for (const action of ENGINE_ACTIONS) {
+    if (action === "drain") group.append(el("span", { class: "sep", "aria-hidden": "true" }));
+    const button = el("button", { type: "button", textContent: action });
+    if (action === "stop" || action === "drain" || action === "pause") button.className = "danger";
+    button.addEventListener("click", () => engineAction(iid, action));
+    buttons[action] = button;
+    group.append(button);
+  }
+  row = { tr: el("tr", {}, ...Object.values(cells)), cells, buttons };
+  rows.set(iid, row);
+  return row;
+}
+
+function renderLast(node, iid, recorded) {
+  const key = "engine:" + iid;
+  const pending = state.pending.get(key);
+  const mine = state.feedback.get(key);
+  if (pending) {
+    node.replaceChildren(el("span", { class: "spin", "aria-hidden": "true" }),
+      el("span", {}, pending.label.split(" ")[0]), el("span", { class: "when" }, duration(elapsedSince(pending.started))));
+    return;
+  }
+  // This tab's outcome wins until the run record holds a newer entry.
+  if (mine && (!recorded || Date.parse(recorded.finished_at) < Date.parse(mine.at))) {
+    const parts = [outcomeMark(mine.kind), el("span", { class: "when" }, clock(mine.at))];
+    if (mine.detail) parts.push(el("span", { class: "when" }, mine.detail));
+    node.replaceChildren(...parts);
+    return;
+  }
+  if (recorded) {
+    const parts = [outcomeMark(recorded.outcome), el("span", {}, recorded.action.slice(7)),
+      el("span", { class: "when" }, clock(recorded.finished_at) + " (" + brief(between(recorded.started_at, recorded.finished_at)) + ")")];
+    if (recorded.error) parts.push(el("span", { class: "when" }, recorded.error));
+    node.replaceChildren(...parts);
+    return;
+  }
+  node.replaceChildren(el("span", { class: "when none" }, "-"));
+}
+
+function renderEngines() {
+  const engines = state.engines || {};
+  const ids = Object.keys(engines).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const notice = $("engines-notice");
+  const gate = sessionGate();
+  if (state.enginesError) {
+    notice.textContent = state.enginesError;
+    notice.className = "notice bad";
+  } else if (gate) {
+    notice.textContent = "Engine actions are unavailable: " + gate;
+    notice.className = "notice";
+  }
+  notice.hidden = !state.enginesError && !gate;
+  $("engines-state").textContent = ids.length ? ids.length + " engines" : "";
+  const processes = processStates();
+  const last = lastEngineActions();
+  const busy = ids.filter((iid) => { const lifecycle = lifecycleState(engines[iid]); return lifecycle && lifecycle !== "active"; });
+  const ordered = [];
+  for (const iid of ids) {
+    const slice = engines[iid];
+    const row = engineRow(iid);
+    const role = slice && !slice.error ? slice.role : null;
+    row.cells.role.replaceChildren(role ? badge(role, role) : el("span", { class: "empty" }, "-"));
+    row.cells.state.firstChild.replaceChildren(...engineBadges(slice, processes[iid]));
+    row.cells.resident.textContent = resident(slice);
+    renderLast(row.cells.last.firstChild, iid, last[iid]);
+    const other = busy.find((name) => name !== iid);
+    const others = other ? other + " is " + lifecycleState(engines[other]).replace("_", " ") : "";
+    for (const action of ENGINE_ACTIONS) {
+      const reason = engineGate(iid, action, slice, processes[iid], others);
+      const button = row.buttons[action];
+      setControl(button, reason);
+      button.setAttribute("aria-label", capital(action) + " " + iid + (reason ? " (unavailable: " + reason + ")" : ""));
+    }
+    ordered.push(row.tr);
+  }
+  for (const iid of [...rows.keys()]) if (!(iid in engines)) rows.delete(iid);
+  const body = $("engines");
+  if (!ordered.length) {
+    body.replaceChildren(el("tr", {}, el("td", { colSpan: 6, class: "empty" }, state.enginesError ? "Engine state is unavailable." : "Reading engine state…")));
+  } else if (ordered.length !== body.children.length || ordered.some((tr, index) => body.children[index] !== tr)) {
+    body.replaceChildren(...ordered);
+  }
+}
+
+async function engineAction(iid, action) {
   const body = {};
   const deadline = $("drain-deadline").value;
   if (action === "drain" && deadline !== "") body.deadline_s = Number(deadline);
-  const reply = await act(button, action + " " + iid, "engineAction", { iid, action }, body);
-  renderEngineChange(iid, action, actionEntry(reply.body));
-  await refreshEngines();
-}
-
-function renderEngineChange(iid, action, entry) {
-  const result = entry && entry.result;
-  const message = [el("code", {}, action + " " + iid), " ",
-    el("span", { class: outcomeClass(entry && entry.outcome) }, text(entry && entry.outcome))];
-  const error = (entry && entry.error) || (!entry || !entry.outcome ? text(entry && entry.detail) : "");
-  if (error) message.push(" " + error);
-  $("engine-change-message").replaceChildren(...message);
-  if (!result || !result.before || !result.after) {
-    $("engine-change").replaceChildren();
-    return;
+  const effects = {
+    pause: "Runs the engine_pause hook for " + iid + ". The router ejects an engine that stops answering, so it leaves service until it resumes.",
+    stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering.",
+    drain: "The router stops placing new requests on " + iid + " and waits for its resident requests to finish"
+      + (body.deadline_s ? ", for at most " + body.deadline_s + " s." : ", until the router's default deadline."),
+  };
+  if (effects[action]) {
+    const confirmed = await confirmAction(capital(action) + " engine " + iid + "?", effects[action], [], capital(action) + " " + iid);
+    if (!confirmed) return;
   }
-  const keys = [...new Set([...Object.keys(result.before), ...Object.keys(result.after)])];
-  const rows = keys.map((key) => {
-    const before = text(result.before[key]);
-    const after = text(result.after[key]);
-    return el("tr", { class: before === after ? "" : "changed" },
-      el("td", {}, key), el("td", {}, el("code", {}, before)), el("td", {}, el("code", {}, after)));
-  });
-  $("engine-change").replaceChildren(...rows);
+  await act("engine:" + iid, action + " " + iid, "engineAction", { iid, action }, body);
+  await refreshEngines();
 }
 
 // Load jobs.
 async function loadWorkloads(enabled) {
   if (!enabled) {
-    $("load-message").textContent = "Load jobs are not configured: the control configuration has no load section.";
+    $("load-notice").textContent = "Load jobs are not configured: the control configuration has no load section.";
+    $("load-notice").hidden = false;
     $("job-form").hidden = true;
     return;
   }
   const reply = await call("workloads", {});
   if (reply.status !== 200 || !reply.body) {
-    $("load-message").textContent = "Workloads unavailable: " + text(reply.body && reply.body.detail);
+    $("load-notice").textContent = "Workloads are unavailable: " + text(reply.body && reply.body.detail);
+    $("load-notice").hidden = false;
     return;
   }
-  workloads = {};
+  state.workloads = {};
   const options = reply.body.workloads.map((workload) => {
-    workloads[workload.name] = workload;
-    return el("option", { value: workload.name, textContent: workload.name + " (" + workload.kind + ")" });
+    state.workloads[workload.name] = workload;
+    return el("option", { value: workload.name, textContent: workload.name + " (" + workload.kind.replace("_", " ") + ")" });
   });
   $("job-workload").replaceChildren(...options);
   workloadHint();
 }
 
 function workloadHint() {
-  const workload = workloads[$("job-workload").value];
+  const workload = state.workloads[$("job-workload").value];
   if (!workload) { $("workload-hint").textContent = ""; return; }
-  $("workload-hint").textContent = workload.kind === "timestamped_trace"
-    ? "Timestamped traces replay their recorded arrival times: leave Rate empty; Concurrency and Duration are optional caps."
-    : "Set Duration and a Rate, a Concurrency or both.";
+  const shape = workload.kind === "synthetic"
+    ? "Synthetic prompts of " + amount(workload.isl, 0) + " input and " + amount(workload.osl, 0) + " output tokens. "
+    : "";
+  $("workload-hint").textContent = shape + (workload.kind === "timestamped_trace"
+    ? "The trace replays its recorded arrival times: leave Rate empty. Concurrency and Duration are optional caps."
+    : "Set Duration and a Rate, a Concurrency or both.");
 }
 
 function jobParams() {
@@ -569,46 +1097,252 @@ function jobParams() {
   return params;
 }
 
-function renderJob(job) {
+function jobProgress(job) {
+  if (!job) return null;
+  const limit = job.params && job.params.duration_s;
+  if (job.state !== "running") {
+    const took = between(job.started_at, job.finished_at);
+    return { fraction: null, label: took === null ? "" : "ran " + duration(took) };
+  }
+  const elapsed = elapsedSince(job.started_at);
+  if (!limit) return { fraction: null, label: duration(elapsed) };
+  const label = duration(elapsed) + " / " + duration(limit * 1000) + (elapsed > limit * 1000 ? " · finishing" : "");
+  return { fraction: Math.min(1, elapsed / (limit * 1000)), label };
+}
+
+function jobTarget(params) {
+  if (!params) return "-";
+  const parts = [params.workload];
+  if (params.rate !== undefined) parts.push(amount(params.rate) + " req/s");
+  if (params.concurrency !== undefined) parts.push("concurrency " + amount(params.concurrency, 0));
+  if (params.duration_s !== undefined) parts.push(amount(params.duration_s) + " s");
+  return parts.join(" · ");
+}
+
+function tile(label, value) {
+  return el("div", {}, el("dt", {}, label), el("dd", {}, value));
+}
+
+function latencyTile(label, stats) {
+  if (!stats) return null;
+  const values = [stats.p50, stats.p95, stats.p99].map((value) => amount(value, 1)).join(" / ");
+  return tile(label + " p50/p95/p99 (" + stats.unit + ")", values);
+}
+
+function renderJob() {
+  const health = state.health || {};
+  const job = health.job;
+  const running = Boolean(job && job.state === "running");
+  const gate = sessionGate();
+  setControl($("job-start"), state.pending.has("job") ? "The job request is running." : gate || (running ? job.id + " is running." : ""));
+  setControl($("job-stop"), state.pending.has("job") ? "The job request is running." : !health.session ? "Start a session first." : running ? "" : "No load job is running.");
+  $("job-state").textContent = job ? job.id + " · " + job.state : "No load job";
+  renderFeedback($("fb-job"), "job");
+  const progress = jobProgress(job);
+  $("job-progress-line").hidden = !running;
+  if (running) {
+    $("job-progress").hidden = progress.fraction === null;
+    if (progress.fraction !== null) $("job-progress").value = progress.fraction;
+    $("job-progress-text").textContent = progress.label;
+  }
+  const summaryKey = job ? JSON.stringify([job.id, job.state, job.finished_at, job.error]) : "";
+  if ($("job-summary").dataset.key === summaryKey) return;
+  $("job-summary").dataset.key = summaryKey;
   if (!job) {
-    $("job-status").replaceChildren(el("dt", {}, "Job"), el("dd", {}, "none"));
+    $("job-summary").replaceChildren();
     $("job-results").replaceChildren();
     $("job-document").textContent = "No load job has run.";
     return;
   }
-  const status = [["Job", job.id], ["State", job.state], ["Parameters", job.params],
-    ["Started", job.started_at], ["Finished", job.finished_at], ["Error", job.error]];
-  $("job-status").replaceChildren(...status.flatMap(([key, value]) =>
-    [el("dt", {}, key), el("dd", {}, text(value))]));
+  const summary = [["Parameters", jobTarget(job.params)], ["Started", clock(job.started_at)]];
+  if (job.finished_at) summary.push(["Finished", clock(job.finished_at) + " (" + duration(between(job.started_at, job.finished_at)) + ")"]);
+  if (job.error) summary.push(["Error", job.error]);
+  $("job-summary").replaceChildren(...summary.flatMap(([key, value]) => [el("dt", {}, key), el("dd", {}, value)]));
   $("job-document").textContent = pretty(job);
   const result = job.result || {};
-  const rows = [];
-  const add = (label, value) => rows.push(el("tr", {}, el("td", {}, label), el("td", {}, text(value))));
+  const tiles = [];
   if (result.requests) {
-    add("Requests", result.requests.total);
-    add("Completed", result.requests.completed);
-    add("Errors", result.requests.errors);
-    if (result.requests.errors) add("Errors by type", result.requests.errors_by_type);
+    tiles.push(tile("Completed", amount(result.requests.completed, 0) + " / " + amount(result.requests.total, 0)));
+    tiles.push(tile("Errors", amount(result.requests.errors, 0)));
   }
   if (result.throughput) {
-    add("Requests/s", result.throughput.requests_per_s);
-    add("Output tokens/s", result.throughput.output_tokens_per_s);
+    tiles.push(tile("Requests/s", amount(result.throughput.requests_per_s)));
+    tiles.push(tile("Output tokens/s", amount(result.throughput.output_tokens_per_s, 0)));
   }
+  if (result.goodput) tiles.push(tile("Goodput requests/s", amount(result.goodput.requests_per_s)));
+  const latency = result.latency || {};
   for (const [metric, label] of [["ttft", "TTFT"], ["itl", "ITL"], ["request", "Request latency"]]) {
-    const stats = result.latency && result.latency[metric];
-    if (stats) add(label + " p50 / p95 / p99 (" + stats.unit + ")", [stats.p50, stats.p95, stats.p99].map(text).join(" / "));
+    const node = latencyTile(label, latency[metric]);
+    if (node) tiles.push(node);
   }
-  if (result.goodput) add("Goodput requests/s", result.goodput.requests_per_s);
-  if (result.exit_code !== undefined) add("AIPerf exit code", result.exit_code);
-  if (result.summary_error) add("Summary error", result.summary_error);
-  if (job.journal) {
-    add("Journal extract", job.journal.extract
-      ? job.journal.extract + " (" + job.journal.lines + " lines)" : job.journal.notes.join("; "));
-    if (job.journal.extract) add("Journal terminal rows", job.journal.terminal);
-    if (job.journal.extract && job.journal.notes.length) add("Journal notes", job.journal.notes.join("; "));
+  if (result.exit_code !== undefined && result.exit_code !== null) tiles.push(tile("AIPerf exit code", String(result.exit_code)));
+  if (job.journal) tiles.push(tile("Journal extract", job.journal.extract ? amount(job.journal.lines, 0) + " lines" : "none"));
+  $("job-results").replaceChildren(...tiles);
+}
+
+// Configuration and overlays.
+function currentConfiguration() {
+  return state.record && state.record.configuration;
+}
+
+function overlaySource() {
+  const source = $("overlay").value;
+  try {
+    const value = JSON.parse(source);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "The overlay must be a JSON object." };
+    return { source, value };
+  } catch (error) {
+    return { error: "The overlay is not valid JSON: " + error.message };
   }
-  if (!rows.length) rows.push(el("tr", {}, el("td", { colSpan: 2, class: "muted" }, "No client results yet.")));
-  $("job-results").replaceChildren(...rows);
+}
+
+function flatten(value, prefix, out) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [key, child] of Object.entries(value)) flatten(child, prefix ? prefix + "." + key : key, out);
+  } else if (prefix) {
+    out[prefix] = JSON.stringify(value);
+  }
+  return out;
+}
+
+function changes(before, after) {
+  const old = flatten(before, "", {});
+  const next = flatten(after, "", {});
+  const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])].sort();
+  return keys.filter((key) => old[key] !== next[key]).map((key) => ({ key, from: old[key], to: next[key] }));
+}
+
+function overlayGate() {
+  const gate = sessionGate();
+  if (gate) return gate;
+  if (!hookConfigured("router_restart")) return "No router_restart hook is configured.";
+  return "";
+}
+
+function renderConfiguration() {
+  const current = currentConfiguration();
+  const rowsList = [];
+  if (current) {
+    rowsList.push(["Source", current.source], ["Digest", el("code", { title: current.digest }, String(current.digest).slice(0, 16))]);
+    if (current.fleet) rowsList.push(["Fleet file", el("code", {}, current.fleet)]);
+    rowsList.push(["Applied", clock(current.applied_at)]);
+    const count = state.record.configurations ? state.record.configurations.length : 1;
+    $("config-state").textContent = count > 1 ? (count - 1) + " change" + (count > 2 ? "s" : "") + " this session" : "baseline";
+  } else {
+    rowsList.push(["Current", "Start a session to see and change the configuration."]);
+    $("config-state").textContent = "";
+  }
+  $("config-current").replaceChildren(...rowsList.flatMap(([key, value]) => [el("dt", {}, key), el("dd", {}, value)]));
+  const parsed = overlaySource();
+  $("overlay").setAttribute("aria-invalid", String(Boolean(parsed.error)));
+  const check = state.overlayCheck;
+  const checked = check && !parsed.error && check.source === parsed.source && current && check.result.base_digest === current.digest;
+  const gate = overlayGate();
+  let status = parsed.error || "";
+  if (!status) {
+    if (state.checking) status = "Checking the overlay…";
+    else if (!checked) status = "Check the overlay to see the changes it makes before you apply it.";
+    else if (check.result.errors.length) status = "The overlay is invalid.";
+    else status = "The overlay is valid. Apply it to restart the router with these changes.";
+  }
+  $("overlay-status").textContent = status;
+  $("overlay-check").hidden = !checked;
+  setControl($("overlay-check-button"), parsed.error || (state.checking ? "Checking the overlay." : sessionGate()));
+  setControl($("overlay-apply"), state.pending.has("config") ? "A configuration action is running." : gate
+    || parsed.error || (!checked ? "Check the overlay first." : check.result.errors.length ? "The overlay is invalid." : ""));
+  setControl($("cold-restart"), state.pending.has("config") ? "A configuration action is running." : sessionGate()
+    || (hookConfigured("cold_restart") ? "" : "No cold_restart hook is configured."));
+  setControl($("restore"), state.pending.has("config") ? "A configuration action is running." : sessionGate());
+  renderFeedback($("fb-config"), "config");
+}
+
+function renderCheck() {
+  const check = state.overlayCheck;
+  const node = $("overlay-check");
+  if (!check) { node.replaceChildren(); return; }
+  if (check.result.errors.length) {
+    node.replaceChildren(el("ul", {}, ...check.result.errors.map((error) => el("li", {}, error))));
+    return;
+  }
+  const current = currentConfiguration();
+  const list = changes(current ? current.document : {}, check.result.document);
+  check.changes = list;
+  if (!list.length) {
+    node.replaceChildren(el("p", { class: "hint" }, "The overlay changes no setting."));
+    return;
+  }
+  node.replaceChildren(el("div", { class: "scroll" }, el("table", {},
+    el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "Setting"), el("th", { scope: "col" }, "Current"), el("th", { scope: "col" }, "After"))),
+    el("tbody", {}, ...list.map((change) => el("tr", {},
+      el("td", {}, el("code", {}, change.key)),
+      el("td", {}, el("code", {}, change.from === undefined ? "default" : change.from)),
+      el("td", { class: "changed" }, el("code", {}, change.to === undefined ? "default" : change.to))))))));
+}
+
+async function checkOverlay() {
+  const parsed = overlaySource();
+  if (parsed.error) return;
+  state.checking = true;
+  renderConfiguration();
+  const reply = await call("overlayCheck", {}, parsed.source);
+  state.checking = false;
+  if (reply.status === 200 && reply.body) {
+    state.overlayCheck = { source: parsed.source, result: reply.body };
+    renderCheck();
+    announce(reply.body.errors.length ? "The overlay is invalid." : "The overlay is valid.");
+  } else {
+    state.overlayCheck = null;
+    state.feedback.set("config", { kind: outcomeOf(reply).kind, label: "Overlay check " + outcomeOf(reply).kind, detail: outcomeOf(reply).detail, at: new Date().toISOString() });
+    noteResponse("check overlay", reply);
+  }
+  renderConfiguration();
+}
+
+// Activity.
+function actionTarget(action) {
+  const params = action.params || {};
+  if (params.engine) return "engine " + params.engine;
+  if (params.overlay) return Object.keys(params.overlay).join(", ");
+  if (params.workload) return jobTarget(params);
+  if (params.job) return params.job;
+  const keys = Object.keys(params);
+  return keys.length ? text(params) : "-";
+}
+
+function actionDetails(action) {
+  const result = action.result;
+  if (!result) return null;
+  const parts = [];
+  if (result.before && result.after && typeof result.before === "object" && typeof result.after === "object") {
+    const fields = [...new Set([...Object.keys(result.before), ...Object.keys(result.after)])];
+    const changed = fields.filter((field) => text(result.before[field]) !== text(result.after[field]));
+    parts.push(changed.length
+      ? el("table", {}, el("thead", {}, el("tr", {}, el("th", { scope: "col" }, "Field"), el("th", { scope: "col" }, "Before"), el("th", { scope: "col" }, "After"))),
+        el("tbody", {}, ...changed.map((field) => el("tr", {}, el("td", {}, field),
+          el("td", {}, el("code", {}, text(result.before[field]))), el("td", {}, el("code", {}, text(result.after[field])))))))
+      : el("p", { class: "hint" }, "The router state did not change."));
+  }
+  parts.push(el("pre", {}, pretty(result)));
+  return el("details", {}, el("summary", {}, "Details"), ...parts);
+}
+
+function renderActivity() {
+  const actions = state.record ? state.record.actions : [];
+  const lastEntry = actions[actions.length - 1];
+  const key = (state.record ? state.record.session : "") + "|" + actions.length + "|" + (lastEntry ? lastEntry.finished_at : "");
+  if (key === state.activityKey) return;
+  state.activityKey = key;
+  $("activity-state").textContent = state.record ? actions.length + " recorded actions" : "";
+  const list = actions.slice().reverse().map((action) => el("tr", {},
+    el("td", { class: "num" }, action.seq),
+    el("td", { class: "num", title: action.started_at }, clock(action.started_at)),
+    el("td", {}, el("code", {}, action.action)),
+    el("td", {}, actionTarget(action)),
+    el("td", { class: "num" }, brief(between(action.started_at, action.finished_at))),
+    el("td", {}, outcomeMark(action.outcome), ...(action.error ? [el("div", { class: "hint" }, action.error)] : []),
+      ...[actionDetails(action)].filter(Boolean))));
+  if (!list.length) list.push(el("tr", {}, el("td", { colSpan: 6, class: "empty" }, state.record ? "No recorded actions." : "Start a session to record actions.")));
+  $("activity").replaceChildren(...list);
 }
 
 // Dashboard panels. A console framed by a Grafana dashboard without panels shows its controls only.
@@ -616,7 +1350,8 @@ function renderDashboard(grafana) {
   const panels = grafana ? grafana.panels : [];
   const controlsOnly = !panels.length && window.self !== window.top;
   $("dashboard").hidden = controlsOnly;
-  $("main").classList.toggle("controls-only", controlsOnly);
+  $("page").classList.toggle("controls-only", controlsOnly);
+  $("page").classList.toggle("with-panels", panels.length > 0);
   if (!panels.length) {
     $("dashboard-note").textContent = "No dashboard panels are configured. List Grafana panel IDs in console.panels of the control configuration to embed them here.";
     $("panels").replaceChildren();
@@ -633,38 +1368,62 @@ function renderDashboard(grafana) {
 }
 
 // Connection.
+function startPolling() {
+  stopPolling();
+  state.timers = [
+    window.setInterval(() => refresh(false), POLL_MS),
+    window.setInterval(refreshEngines, ENGINE_POLL_MS),
+    // Elapsed times and progress advance between polls.
+    window.setInterval(() => { renderStatus(); renderEngines(); renderJob(); renderFeedback($("fb-config"), "config"); }, 1000),
+  ];
+}
+
+function stopPolling() {
+  for (const timer of state.timers) window.clearInterval(timer);
+  state.timers = [];
+}
+
 async function connect() {
   const reply = await call("console", {});
   if (reply.status !== 200 || !reply.body) {
     if (reply.status !== 401) $("connect-message").textContent = "Connection failed: " + text(reply.body && reply.body.detail);
+    $("connect").hidden = false;
     return;
   }
   if (!PAGE_TOKEN) storeToken(token);
+  state.settings = reply.body;
   $("connect-message").textContent = "";
-  $("token-form").hidden = true;
+  $("connect").hidden = true;
+  $("page").hidden = false;
+  $("bar-status").hidden = false;
+  $("bar-actions").hidden = false;
   $("forget").hidden = Boolean(PAGE_TOKEN);
-  $("main").hidden = false;
   renderDashboard(reply.body.grafana);
   await loadWorkloads(reply.body.load);
-  await refreshStatus(true);
+  await refresh(true);
   await refreshEngines();
-  if (poller === null) poller = window.setInterval(() => refreshStatus(false), POLL_MS);
+  startPolling();
 }
 
 function disconnect(message) {
   token = "";
   storeToken("");
-  lastStatus = "";
-  lastRecord = null;
-  if (poller !== null) { window.clearInterval(poller); poller = null; }
-  $("main").hidden = true;
+  stopPolling();
+  closeConfirm(false);
+  Object.assign(state, { settings: null, health: null, record: null, recordKey: "", engines: null, enginesError: "", activityKey: "" });
+  state.pending.clear();
+  rows.clear();
+  $("engines").replaceChildren();
   $("panels").replaceChildren();
-  $("token-form").hidden = false;
-  $("forget").hidden = true;
-  $("status-line").textContent = "Not connected.";
+  $("page").hidden = true;
+  $("bar-status").hidden = true;
+  $("bar-actions").hidden = true;
+  $("connect").hidden = false;
   $("connect-message").textContent = message || "";
+  renderStatus();
 }
 
+// Controls.
 $("token-form").addEventListener("submit", (event) => {
   event.preventDefault();
   token = $("token-input").value.trim();
@@ -672,52 +1431,71 @@ $("token-form").addEventListener("submit", (event) => {
   if (token) connect();
 });
 $("forget").addEventListener("click", () => disconnect("The token was removed from this tab."));
+$("confirm-ok").addEventListener("click", () => closeConfirm(true));
+$("confirm-cancel").addEventListener("click", () => closeConfirm(false));
+$("confirm-dialog").addEventListener("cancel", (event) => { event.preventDefault(); closeConfirm(false); });
 
-$("session-start").addEventListener("click", async (event) => {
-  await act(event.currentTarget, "start session", "sessionStart");
+$("session-start").addEventListener("click", async () => {
+  await act("session", "Start session", "sessionStart");
   await refreshEngines();
 });
-$("session-end").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("End the session? The service stops any load job and runs the restore hook.",
-    async () => { await act(button, "end session", "sessionEnd"); await refreshEngines(); })();
+$("session-end").addEventListener("click", async () => {
+  const session = state.health && state.health.session;
+  const confirmed = await confirmAction("End session " + session + "?",
+    "The service stops any running load job, runs the restore hook to return the deployment to the baseline fleet configuration, and closes the session.",
+    [], "End session and restore");
+  if (!confirmed) return;
+  await act("session", "End session", "sessionEnd");
+  await refreshEngines();
 });
-$("session-refresh").addEventListener("click", () => refreshStatus(true));
-$("engines-refresh").addEventListener("click", refreshEngines);
 
 $("job-workload").addEventListener("change", workloadHint);
 $("job-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  act($("job-start"), "start load job", "jobStart", {}, jobParams());
+  if ($("job-start").disabled) return;
+  act("job", "Start load job", "jobStart", {}, jobParams());
 });
-$("job-stop").addEventListener("click", (event) => act(event.currentTarget, "stop load job", "jobStop"));
-$("job-refresh").addEventListener("click", async (event) => {
-  const reply = await act(event.currentTarget, "load job status", "jobCurrent");
-  if (reply.status === 200) renderJob(reply.body);
+$("job-stop").addEventListener("click", () => act("job", "Stop load job", "jobStop"));
+$("job-raw").addEventListener("toggle", async () => {
+  if (!$("job-raw").open || !state.health || !state.health.job) return;
+  const reply = await call("jobCurrent", {});
+  if (reply.status === 200) $("job-document").textContent = pretty(reply.body);
 });
 
-$("overlay-apply").addEventListener("click", (event) => {
-  const source = $("overlay").value;
-  try {
-    JSON.parse(source);
-  } catch (error) {
-    noteResponse("apply overlay", { status: 0, body: { detail: "the overlay is not valid JSON: " + error.message } });
-    return;
-  }
-  act(event.currentTarget, "apply overlay", "overlay", {}, source);
+$("overlay").addEventListener("input", renderConfiguration);
+$("overlay-check-button").addEventListener("click", checkOverlay);
+$("overlay-apply").addEventListener("click", async () => {
+  const check = state.overlayCheck;
+  const parsed = overlaySource();
+  if (!check || parsed.error || check.source !== parsed.source) return;
+  const details = (check.changes || []).map((change) => change.key + ": " + (change.from === undefined ? "default" : change.from) + " → " + (change.to === undefined ? "default" : change.to));
+  const confirmed = await confirmAction("Apply the overlay?",
+    "The service writes the merged fleet configuration and restarts the router with it through the router_restart hook. The router serves no requests until it reports ready.",
+    details.length ? details : ["The overlay changes no setting."], "Apply and restart the router");
+  if (!confirmed) return;
+  await act("config", "Apply overlay", "overlay", {}, parsed.source);
+  state.overlayCheck = null;
+  renderCheck();
+  renderConfiguration();
 });
-$("cold-restart").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("Restart every engine and the router from the current fleet configuration?",
-    () => act(button, "cold restart", "coldRestart"))();
+$("cold-restart").addEventListener("click", async () => {
+  const confirmed = await confirmAction("Cold restart the fleet?",
+    "The cold_restart hook restarts every engine and the router from the current fleet configuration. The fleet serves no requests until the router reports ready.",
+    [], "Cold restart");
+  if (!confirmed) return;
+  await act("config", "Cold restart", "coldRestart");
 });
-$("restore").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("Restore the recorded baseline deployment?", () => act(button, "restore baseline", "restore"))();
+$("restore").addEventListener("click", async () => {
+  const confirmed = await confirmAction("Restore the baseline?",
+    "The restore hook returns the deployment to the baseline fleet configuration recorded when the session started, then the service waits for the router to report ready.",
+    [], "Restore baseline");
+  if (!confirmed) return;
+  await act("config", "Restore baseline", "restore");
 });
 
 token = PAGE_TOKEN || readStoredToken();
-if (PAGE_TOKEN) $("token-form").hidden = true;
+if (PAGE_TOKEN) $("connect").hidden = true;
+renderStatus();
 if (token) connect();
 </script>
 </body>

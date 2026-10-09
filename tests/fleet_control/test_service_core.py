@@ -231,7 +231,14 @@ class AuthenticationTests(ServiceCase):
         response = await self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            response.json(), {"status": "ok", "session": None, "job": None, "in_progress": None}
+            response.json(),
+            {
+                "status": "ok",
+                "session": None,
+                "job": None,
+                "in_progress": None,
+                "in_progress_since": None,
+            },
         )
 
 

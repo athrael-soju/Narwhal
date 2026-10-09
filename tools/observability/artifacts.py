@@ -33,6 +33,8 @@ DEFAULT_CONSOLE_URL = "http://127.0.0.1:18020/console"
 # Panels of the shipped dashboard shown beside the console, in display order: Requests, Latency,
 # Time to first token, Time per output token, Engine role history and Fleet events.
 CONSOLE_PANELS = (105, 106, 50, 51, 8, 37)
+# The console matches Grafana's default dark theme when framed with this query.
+CONSOLE_THEME = "?theme=dark"
 # Grid columns the console occupies of Grafana's 24.
 CONSOLE_WIDTH = 10
 # The console runs its own script, keeps its token in session storage, submits its forms through
@@ -89,7 +91,7 @@ def fleet_control_dashboard(source: Mapping[str, Any], console: str) -> dict[str
         y += heights[name]
     panel_id = max(element["spec"]["id"] for element in spec["elements"].values()) + 1
     frame = (
-        f'<iframe src="{html.escape(console)}" title="Fleet control console" '
+        f'<iframe src="{html.escape(console + CONSOLE_THEME)}" title="Fleet control console" '
         f'sandbox="{CONSOLE_SANDBOX}" referrerpolicy="no-referrer" '
         'style="display:block;width:100%;height:100%;border:0"></iframe>'
     )

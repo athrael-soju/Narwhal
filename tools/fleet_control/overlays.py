@@ -14,6 +14,7 @@ import asyncio
 import copy
 import json
 import os
+import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -151,6 +152,33 @@ class Overlays:
         effect["readiness"] = await self._ready(effect)
         return effect
 
+    def check(self, overlay: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the overlay's problems and merged document, without applying or recording it."""
+        session = self.service.session
+        if session is None:
+            raise refused("no session is active; start one with POST /api/session")
+        current = session.configurations[-1]
+        merged = merge(current["document"], overlay)
+        problems = overlay_problems(overlay)
+        if not problems:
+            directory = session.directory / OVERLAYS
+            directory.mkdir(mode=0o700, exist_ok=True)
+            # Load the candidate beside the applied overlays so relative paths resolve the same.
+            descriptor, name = tempfile.mkstemp(dir=directory, prefix=".check-", suffix=".json")
+            os.close(descriptor)
+            candidate = Path(name)
+            try:
+                write_private(candidate, merged)
+                problems = fleet_problems(candidate)
+            finally:
+                candidate.unlink(missing_ok=True)
+        return {
+            "errors": problems,
+            "base_digest": current["digest"],
+            "digest": None if problems else canonical_digest(merged),
+            "document": merged,
+        }
+
     async def cold_restart(self) -> Action:
         """Restart every engine and the router from the session's current fleet file."""
 
@@ -269,16 +297,27 @@ def overlay_routes(overlays: Overlays) -> APIRouter:
     """Return the configuration overlay, cold restart and baseline restore routes."""
     routes = APIRouter(prefix=f"{API}/config")
 
-    @routes.post("/overlay")
-    async def apply_overlay(request: Request) -> JSONResponse:
+    async def read_overlay(request: Request) -> dict[str, Any] | None:
         raw = await request.body()
         try:
             overlay = json.loads(raw, parse_constant=reject_constant) if raw else None
         except ValueError:
-            overlay = None
-        if not isinstance(overlay, dict):
+            return None
+        return overlay if isinstance(overlay, dict) else None
+
+    @routes.post("/overlay")
+    async def apply_overlay(request: Request) -> JSONResponse:
+        overlay = await read_overlay(request)
+        if overlay is None:
             return JSONResponse({"detail": "the overlay must be a JSON object"}, 422)
         return action_reply(await overlays.apply(overlay))
+
+    @routes.post("/overlay/check")
+    async def check_overlay(request: Request) -> JSONResponse:
+        overlay = await read_overlay(request)
+        if overlay is None:
+            return JSONResponse({"detail": "the overlay must be a JSON object"}, 422)
+        return JSONResponse(overlays.check(overlay))
 
     @routes.post("/cold-restart")
     async def cold_restart() -> JSONResponse:

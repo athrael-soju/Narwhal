@@ -347,6 +347,7 @@ class ConsolePageTests(ConsoleCase):
                     ],
                 },
                 "load": True,
+                "hooks": ["restore"],
             },
         )
 
@@ -359,7 +360,7 @@ class ConsoleWithoutGrafanaTests(ConsoleCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(csp(response)["frame-src"], ["'none'"])
         settings = await self.client.get("/api/console", headers=self.auth)
-        self.assertEqual(settings.json(), {"grafana": None, "load": True})
+        self.assertEqual(settings.json(), {"grafana": None, "load": True, "hooks": ["restore"]})
         self.assertIn("No dashboard panels are configured", HTML)
 
 
@@ -445,6 +446,20 @@ class PageRequestTests(ConsoleCase):
             with self.subTest(method=method, path=path):
                 self.assertIn((method, path), requests)
 
+    def test_the_page_confirms_in_the_page_and_never_opens_browser_dialogs(self) -> None:
+        script = elements(HTML).text["script"][0]
+        for dialog in ("alert(", "confirm(", "prompt("):
+            with self.subTest(dialog=dialog):
+                self.assertIsNone(
+                    re.search(rf"(?<![\w.]){re.escape(dialog)}|window\.{re.escape(dialog)}", script)
+                )
+        self.assertIn('<dialog id="confirm-dialog"', HTML)
+        self.assertIn(".showModal()", script)
+
+    def test_the_page_takes_its_theme_from_the_url(self) -> None:
+        self.assertIn('new URLSearchParams(window.location.search).get("theme")', HTML)
+        self.assertIn(':root[data-theme="dark"]', HTML)
+
     def test_the_page_offers_every_engine_action(self) -> None:
         self.assertEqual(page_engine_actions(), list(ACTIONS))
 
@@ -487,7 +502,7 @@ class ConsoleCliTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(page.status_code, 200)
         self.assertEqual(health.status_code, 401)
-        self.assertEqual(settings.json(), {"grafana": None, "load": False})
+        self.assertEqual(settings.json(), {"grafana": None, "load": False, "hooks": ["restore"]})
 
 
 if __name__ == "__main__":

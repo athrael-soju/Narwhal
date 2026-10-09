@@ -174,7 +174,7 @@ curl -fsS -H "Authorization: Bearer $NARWHAL_CONTROL_TOKEN" http://127.0.0.1:802
 A running service with no session returns:
 
 ```json
-{"status": "ok", "session": null, "job": null, "in_progress": null}
+{"status": "ok", "session": null, "job": null, "in_progress": null, "in_progress_since": null}
 ```
 
 Press Ctrl+C to stop the service. On shutdown it stops a running load job and records the stop.
@@ -211,7 +211,9 @@ Any client that can reach the control listener can then read the token from `GET
 
 The service serves the page only when the request's `Host` header names `127.0.0.1`, `localhost` or `::1`. Other hosts receive HTTP 421 without the token, which stops a site that points its own domain name at the loopback address from reading the page. When the service restarts with another token, an open page loses its connection and asks for a reload.
 
-After it connects, the page reads `GET /api/console`. The response holds `grafana`, with the dashboard UID, the full dashboard URL and each panel's ID and URL, or `null` without a `console` section. It also holds `load`, which is `true` when load jobs are configured.
+After it connects, the page reads `GET /api/console`. The response holds `grafana`, with the dashboard UID, the full dashboard URL and each panel's ID and URL, or `null` without a `console` section. It also holds `load`, which is `true` when load jobs are configured, and `hooks`, the names of the configured hooks. The console disables each control whose hook is not configured.
+
+The console shows every time in UTC. It follows the browser's colour scheme unless its URL carries `theme=light` or `theme=dark`.
 
 The page's content security policy admits only its own inline script and style, requests to the control service, and, when `console.panels` is set, frames from the `console.grafana_url` origin. Other pages cannot frame the console unless `console.embed_in_grafana` is `true`. [Using the console from Grafana](#using-the-console-from-grafana) describes that boundary.
 
@@ -237,7 +239,7 @@ The page's content security policy admits only its own inline script and style, 
 6. Open `http://127.0.0.1:13000/d/narwhal-fleet-control/fleet-control` on the workstation.
 7. Paste the bearer token into **Control token** in the **Fleet control** panel and select **Connect**. With `console.auto_connect`, the panel connects without this step.
 
-The connected panel shows the console's status line, such as `Session none · load job none`, above the session, engine, load job, configuration and action log controls.
+The connected panel shows the console's status bar, with the session and the load job, above the engine, load job, configuration and activity sections. The dashboard frames the console with `theme=dark`, which matches Grafana's default theme. In a panel narrower than 720 pixels, the console shows each engine as a card with its actions on a second line.
 
 ### Framing boundary
 
@@ -265,7 +267,7 @@ A session is one operator test run. Every action except session start requires a
 
 **End session and restore** (`POST /api/session/end`) stops a running load job, runs the `restore` hook, copies the session's [journal extract](#journal-extracts), and closes the session. It records `job.stop` when a job ran, `baseline.restore`, and `session.end`. Ending a session does not wait for router readiness. When the restore fails, the session stays open so the operator can retry.
 
-The session section shows the session ID, its start time, any exclusive action in progress, and the full run record from `GET /api/session`. The console polls `GET /api/health` every 3 seconds.
+The console's status bar shows the end of the session ID and the session's age, the load job with its progress, and any exclusive action in progress with its elapsed time. **Start session** and **End session** sit at its right. The console polls `GET /api/health` every 2 seconds. It reads the run record from `GET /api/session` when the status changes, and every 6 seconds during a session so that actions from other clients appear. **Run record** under **Activity** shows the full record.
 
 | Route                   | Status | Meaning                                                                                  |
 | ----------------------- | ------ | ---------------------------------------------------------------------------------------- |
@@ -277,7 +279,7 @@ The session section shows the session ID, its start time, any exclusive action i
 |                         | 502    | The restore hook failed to start, exited non-zero or timed out; the session stays open  |
 | `GET /api/session`      | 200    | The active session's run record                                                          |
 |                         | 404    | No session is active                                                                     |
-| `GET /api/health`       | 200    | `status`, the active `session`, the current or last load `job`, and `in_progress`        |
+| `GET /api/health`       | 200    | `status`, the active `session`, the current or last load `job`, `in_progress` and `in_progress_since`, the start time of the exclusive action in progress |
 
 ### Exclusive actions
 
@@ -285,7 +287,7 @@ Session start, session end, configuration overlays, cold restarts and baseline r
 
 ## Engine actions
 
-The engines table lists each engine from the session's baseline fleet configuration with its role and router state. Each row has **pause**, **resume**, **stop**, **start**, **drain** and **readmit**.
+The engines table lists each engine from the baseline fleet configuration with its role, its router state, its resident requests and its last recorded action. The console reads `GET /api/engines` every 3 seconds. Each row has **pause**, **resume**, **stop**, **start**, **drain** and **readmit**.
 
 | Action    | Route                                | Effect                                                                                   |
 | --------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
@@ -305,9 +307,27 @@ Before and after the action, the service reads the router's `GET /narwhal/state`
 - `lifecycle` and `process_start`
 - the router's `router` and `wave` lifecycle state
 
-When the state cannot be read, the record holds the reason in `error` and the action still runs. **Last engine action** shows the before and after values side by side and highlights the fields that changed.
+When the state cannot be read, the record holds the reason in `error` and the action still runs. Under **Activity**, **Details** for an engine action shows the fields whose values changed, before and after.
 
-`GET /api/engines` returns the same state for every baseline engine. It returns HTTP 409 without a session and HTTP 502 when the router state cannot be read; the console then lists the baseline engines with their state unavailable.
+`GET /api/engines` returns the same state for every baseline engine. During a session, the engines come from the session's baseline. Outside a session, they come from the configured `fleet` file, and the route returns HTTP 500 when that file cannot be read. It returns HTTP 502 when the router state cannot be read.
+
+### Available actions
+
+The console enables an engine action only when the service would attempt it and the engine's state allows it. A disabled button names the reason in its tooltip and accessible label.
+
+| Action    | Enabled when                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| All       | A session is active, no exclusive action is in progress, and no action from this tab is running on the engine |
+| `pause`   | The `engine_pause` hook is configured and the session has not paused or stopped the engine                    |
+| `resume`  | The `engine_resume` hook is configured and the session paused the engine                                      |
+| `stop`    | The `engine_stop` hook is configured and the session has not stopped the engine                               |
+| `start`   | The `engine_start` hook is configured and the session stopped the engine, or the router has ejected it        |
+| `drain`   | The engine's lifecycle state is `active` and no other engine is in a lifecycle action                         |
+| `readmit` | The engine's lifecycle state is `drained` or `blocked`                                                        |
+
+The router cannot observe the hook actions, so the console derives the paused and stopped states from the session's successful actions. A successful baseline restore or cold restart clears them. The router accepts one lifecycle action at a time, which is why `drain` waits for every other engine to return to `active`. [Lifecycle API](../http-api/07-Handoff-and-Lifecycle.md#lifecycle-api) defines the lifecycle states.
+
+The console asks for confirmation in the page before **pause**, **stop** and **drain**, naming the engine and the effect.
 
 | Status | Meaning                                                                                                            |
 | ------ | ------------------------------------------------------------------------------------------------------------------ |
@@ -333,7 +353,9 @@ The service runs one AIPerf job at a time against `router.url`. A different rate
 
 A `synthetic` or `prefix_trace` workload requires `duration_s` and at least one of `rate` and `concurrency`. A `timestamped_trace` workload keeps its recorded arrival times, so it refuses `rate`; `concurrency` and `duration_s` optionally cap and shorten its replay. The console fills the workload list from `GET /api/workloads`, which omits trace file paths.
 
-**Stop job** (`POST /api/jobs/current/stop`) stops the running job's whole AIPerf process group and returns the stopped job. **Refresh status** reads `GET /api/jobs/current`, which returns the running job or the last one to finish, or HTTP 404 when no job has run.
+**Stop job** (`POST /api/jobs/current/stop`) stops the running job's whole AIPerf process group and returns the stopped job. `GET /api/jobs/current` returns the running job or the last one to finish, or HTTP 404 when no job has run. The console reads it when **Job document** opens.
+
+While a job runs, the console shows its elapsed time against `duration_s` in the load job section and the status bar. When it finishes, the section shows the client results as figures: completed and failed requests, request and output-token throughput, goodput, and TTFT, inter-token and request latency percentiles.
 
 When the job finishes or stops, the service copies the job's [journal extract](#journal-extracts) and records a `job.complete` action with the job document. The job document holds:
 
@@ -382,11 +404,15 @@ For example, this overlay adds 10% of the TTFT target to the admission budget. T
 {"serving": {"admission_margin": 0.1}}
 ```
 
+**Check overlay** (`POST /api/config/overlay/check`) merges the overlay onto the current configuration and runs the same checks without writing the result, running a hook or recording an action. It returns HTTP 200 with `errors`, the reasons the overlay would be refused, `base_digest`, the current configuration's digest, `digest`, the merged document's digest or `null` when it has errors, and `document`, the merged document. It returns HTTP 409 without a session and HTTP 422 when the body is not a JSON object.
+
+The console checks the overlay text as JSON while it is edited. **Check overlay** shows each setting the overlay changes with its current and resulting value, or the errors. **Apply overlay** is enabled only after a passing check of the current text against the current configuration, and its confirmation lists the changes.
+
 **Cold restart** (`POST /api/config/cold-restart`) runs the `cold_restart` hook with the current fleet configuration file.
 
 **Restore baseline** (`POST /api/config/restore`) runs the `restore` hook and records the baseline as the current configuration. It records the hook run as a separate `baseline.restore` action.
 
-After each of these operations, the service polls the router's `GET /ready` every second until it returns HTTP 200 or `router.timeout_s` passes. After a successful `router_restart` hook, the overlay governs the session even if readiness then fails.
+After each of these operations, the service polls the router's `GET /ready` every second until it returns HTTP 200 or `router.timeout_s` passes. After a successful `router_restart` hook, the overlay governs the session even if readiness then fails. The console asks for confirmation in the page before applying an overlay, a cold restart, a baseline restore and ending a session.
 
 | Status | Meaning                                                                                                     |
 | ------ | ----------------------------------------------------------------------------------------------------------- |
@@ -403,7 +429,7 @@ Every API route needs the token. A request without a valid token receives HTTP 4
 
 A successful action returns its run-record entry. A refused or failed action returns `{"detail": "<reason>", "action": <entry>}`. A malformed request body is refused with HTTP 422 and a `detail` alone, and no action is recorded. An unexpected service error returns HTTP 500 and records the action as failed.
 
-The **Action log** section lists the active session's actions from its run record, newest first, with each result available under **view**. **Responses in this tab** lists the HTTP status and reason of each request made from this browser tab, including refusals recorded outside a session.
+Each control shows its progress while its request runs, then its outcome, with the refusal or error detail, beside it. The **Activity** section lists the active session's actions from its run record, newest first, with their start time, target, run time and outcome, and each result under **Details**. **Requests from this tab** lists the HTTP status and reason of each request made from this browser tab, including refusals recorded outside a session.
 
 ## Run record
 

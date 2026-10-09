@@ -122,7 +122,7 @@ def console_document(config: ControlConfig) -> dict[str, Any]:
             "dashboard_url": f"{console.grafana_url}/d/{console.dashboard_uid}/",
             "panels": [{"id": panel, "url": panel_url(console, panel)} for panel in console.panels],
         }
-    return {"grafana": grafana, "load": config.load is not None}
+    return {"grafana": grafana, "load": config.load is not None, "hooks": sorted(config.hooks)}
 
 
 def console_routes(config: ControlConfig, token: str = "") -> APIRouter:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import tempfile
@@ -26,7 +27,7 @@ from tools.fleet_control.config import (
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.engines import EngineActions, engine_routes
+from tools.fleet_control.engines import EngineActions, baseline_engines, engine_routes
 from tools.fleet_control.service import ActionError, ControlService
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -361,8 +362,6 @@ class RefusalTests(EngineCase):
         self.assertEqual(
             (entry["action"], entry["outcome"], entry["session"]), ("engine.stop", "refused", None)
         )
-        response = await self.client.get("/api/engines")
-        self.assertEqual(response.status_code, 409)
         self.assertEqual(self.router.requests, [])
 
     async def test_an_engine_outside_the_baseline_is_refused(self) -> None:
@@ -412,6 +411,21 @@ class FleetStateTests(EngineCase):
         response = await self.client.get("/api/engines")
         self.assertEqual(response.status_code, 502)
         self.assertIn("router state unavailable", response.json()["detail"])
+
+    async def test_outside_a_session_the_engines_come_from_the_configured_fleet(self) -> None:
+        response = await self.client.get("/api/engines")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(sorted(response.json()["engines"]), sorted(self.router.roles))
+        self.assertEqual(self.router.requests, [("GET", "/narwhal/state", None)])
+        self.assertFalse((self.runs / "actions.jsonl").exists())
+
+    async def test_outside_a_session_an_unreadable_fleet_file_is_reported(self) -> None:
+        broken = self.runs.parent / "broken.json"
+        broken.write_text("{")
+        self.service.config = dataclasses.replace(self.service.config, fleet=broken)
+        response = await self.client.get("/api/engines")
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("baseline fleet configuration is unreadable", response.json()["detail"])
 
     async def test_an_unreadable_state_is_recorded_and_the_hook_still_runs(self) -> None:
         await self.start_session()
@@ -530,7 +544,7 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_baseline_engine_the_router_lacks_is_reported_unknown(self) -> None:
         assert self.service.session is not None
-        state = await self.actions.fleet_state(self.service.session)
+        state = await self.actions.fleet_state(list(baseline_engines(self.service.session)))
         self.assertEqual(state["e2"]["known"], False)
         self.assertIsNone(state["e2"]["lifecycle"])
         self.assertEqual(state["e3"]["role"], "decode")

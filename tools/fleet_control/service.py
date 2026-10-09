@@ -65,6 +65,7 @@ class ControlService:
         self._env = env
         self._now = now
         self._exclusive: str | None = None
+        self._exclusive_since: str | None = None
         self._job_count = 0
         # Router journal positions where the session and each load job began.
         self._session_mark: Mark | None = None
@@ -96,11 +97,13 @@ class ControlService:
             raise error
         if exclusive:
             self._exclusive = name
+            self._exclusive_since = self.stamp()
         try:
             return await self._perform(name, params, operation, needs_session)
         finally:
             if exclusive:
                 self._exclusive = None
+                self._exclusive_since = None
 
     async def _perform(
         self, name: str, params: Mapping[str, Any], operation: Operation, needs_session: bool
@@ -272,6 +275,7 @@ class ControlService:
             "session": None if self.session is None else self.session.id,
             "job": None if job is None else job.document(),
             "in_progress": self._exclusive,
+            "in_progress_since": self._exclusive_since,
         }
 
     async def close(self) -> None:

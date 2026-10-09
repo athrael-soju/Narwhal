@@ -345,6 +345,40 @@ class OverlayTests(OverlayCase):
         self.assertEqual(self.sources(), ["baseline"])
         self.assertEqual(self.actions()[1:], [("config.overlay", "refused")] * len(cases))
 
+    async def test_a_check_reports_the_merged_document_without_applying_it(self) -> None:
+        session = await self.start_session()
+        response = await self.client.post(
+            "/api/config/overlay/check", json={"serving": {"max_connections": 64}}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        check = response.json()
+        self.assertEqual(check["errors"], [])
+        self.assertEqual(check["document"]["serving"]["max_connections"], 64)
+        assert self.service.session is not None
+        current = self.service.session.configurations[-1]
+        self.assertEqual(check["base_digest"], current["digest"])
+        self.assertEqual(check["digest"], canonical_digest(check["document"]))
+        self.assertEqual(len(self.service.session.configurations), 1)
+        self.assertEqual(self.actions(), [("session.start", "ok")])
+        self.assertEqual(self.captured(), [])
+        self.assertEqual(list((session / "overlays").iterdir()), [])
+
+    async def test_a_check_reports_every_error(self) -> None:
+        await self.start_session()
+        response = await self.client.post(
+            "/api/config/overlay/check",
+            json={"serving": {"max_connections": "many"}, "engines": []},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("may not change 'engines'", " ".join(response.json()["errors"]))
+        self.assertIsNone(response.json()["digest"])
+        response = await self.client.post(
+            "/api/config/overlay/check", json={"serving": {"max_connections": "many"}}
+        )
+        self.assertTrue(any("max_connections" in error for error in response.json()["errors"]))
+        response = await self.client.post("/api/config/overlay/check", content=b"[1]")
+        self.assertEqual(response.status_code, 422)
+
     async def test_a_body_that_is_not_a_json_object_is_refused(self) -> None:
         await self.start_session()
         for content in (b"", b"[1]", b"{", b'{"serving": {"admission_margin": NaN}}'):
@@ -545,6 +579,7 @@ class ExclusiveOverlayTests(OverlayCase):
             if self.service.status()["in_progress"] == "config.overlay":
                 break
             await asyncio.sleep(0.01)
+        self.assertIsNotNone(self.service.status()["in_progress_since"])
         for path, body in (
             ("/api/jobs", {}),
             ("/api/config/overlay", {"serving": {"max_connections": 32}}),
@@ -560,6 +595,7 @@ class ExclusiveOverlayTests(OverlayCase):
         self.assertEqual((await applying).status_code, 200)
         self.assertEqual(self.runner.started, [])
         self.assertEqual(self.service.status()["in_progress"], None)
+        self.assertIsNone(self.service.status()["in_progress_since"])
         self.assertEqual(
             self.actions(),
             [

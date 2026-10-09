@@ -117,13 +117,13 @@ class FleetControlDashboardTests(unittest.TestCase):
         self.assertEqual(options["kind"], "text")
         content = options["spec"]["options"]["content"]
         self.assertEqual(options["spec"]["options"]["mode"], "html")
-        self.assertIn('src="http://127.0.0.1:18020/console"', content)
+        self.assertIn('src="http://127.0.0.1:18020/console?theme=dark"', content)
         self.assertIn(f'sandbox="{artifacts.CONSOLE_SANDBOX}"', content)
         self.assertIn('referrerpolicy="no-referrer"', content)
         self.assertNotIn("$", content)
         escaped = artifacts.fleet_control_dashboard(self.shipped, "http://h/a&b")
         frame = escaped["spec"]["elements"]["panel-console"]["spec"]["vizConfig"]["spec"]
-        self.assertIn('src="http://h/a&amp;b"', frame["options"]["content"])
+        self.assertIn('src="http://h/a&amp;b?theme=dark"', frame["options"]["content"])
 
     def test_console_url_defaults_to_the_tunnel_port_and_refuses_unsafe_values(self):
         self.assertEqual(artifacts.console_url({}), "http://127.0.0.1:18020/console")
