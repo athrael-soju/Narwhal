@@ -41,6 +41,7 @@ class GlobalScheduler:
         advisory: bool = False,
         on_floor_event: Callable[[dict], None] | None = None,
         on_control_event: Callable[[dict], None] | None = None,
+        on_availability_event: Callable[[dict], None] | None = None,
         outcome_bucket_s: float = 1.0,
         outcome_retained_s: float = 480.0,
         decode_concurrency: int = 0,
@@ -71,6 +72,7 @@ class GlobalScheduler:
             on_change=self.refresh_floor_state,
             on_eject=self._notify_eject,
             pinned=pinned,
+            on_event=on_availability_event,
         )
         self.prefill_floor = PrefillFloor(
             clock,
@@ -136,9 +138,17 @@ class GlobalScheduler:
         """Return the quarantine after expiring elapsed hold-outs."""
         return self.availability.quarantine_list()
 
-    def eject(self, iid: str) -> bool:
-        """Eject an endpoint after failed verification and update live floors."""
-        return self.availability.eject(iid)
+    def eject(self, iid: str, cause: str = "unspecified") -> bool:
+        """Eject an endpoint for `cause` and update live floors."""
+        return self.availability.eject(iid, cause)
+
+    def release_hold(self, iid: str, cause: str) -> bool:
+        """Return a held endpoint to placement, recording why its hold ended."""
+        return self.availability.release_hold(iid, cause)
+
+    def holds_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        """Report timed quarantines and inference holds separately."""
+        return self.availability.holds_snapshot()
 
     def drain(self, iid: str) -> None:
         """Remove a configured endpoint from new request placements."""
@@ -148,9 +158,9 @@ class GlobalScheduler:
         """Readmit an endpoint whose health and generation were validated."""
         self.availability.finish_drain(iid)
 
-    def record_answer(self, iid: str, evidence: str) -> None:
+    def record_answer(self, iid: str, evidence: str, *, via: str | None = None) -> None:
         """Clear only the breaker classes established by the answer evidence."""
-        self.availability.record_answer(iid, evidence)
+        self.availability.record_answer(iid, evidence, via=via)
 
     def breaker_snapshot(self) -> dict[str, Any]:
         """Report every breaker class and pending verification probe."""
@@ -445,7 +455,7 @@ class GlobalScheduler:
             if observed > 0.0 and expected > 0.0:
                 self.health.note(inst.iid, observed / expected)
         for verdict, iid in self.health.tick():
-            if verdict == "evict" and self.role_covered_without(iid) and self.eject(iid):
+            if verdict == "evict" and self.role_covered_without(iid) and self.eject(iid, "drift"):
                 self.health.evicted(iid)
                 log.warning(
                     "ejected %s after sustained drift",

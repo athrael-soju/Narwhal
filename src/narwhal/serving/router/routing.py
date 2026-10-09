@@ -144,6 +144,7 @@ class NarwhalRouter:
             advisory=cfg.advisory,
             on_floor_event=self.journal.write,
             on_control_event=self.journal.write,
+            on_availability_event=self.journal.write,
             # Four controller windows cover the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
@@ -292,6 +293,15 @@ class NarwhalRouter:
         """Wake every queued request to recheck its hold, as when a hold begins."""
         self.admission_queue.wake_all()
         self.dispatcher.wake_all()
+
+    def _holds(self) -> dict[str, list[dict[str, Any]]]:
+        """Return current holds by kind, with each inference hold's recorded producers."""
+        holds = self.scheduler.holds_snapshot()
+        for row in holds["inference"]:
+            row["recorded_producers"] = sorted(
+                peer for peer in self.verifier.sources.get(row["iid"], {""}) if peer
+            )
+        return holds
 
     @property
     def monitoring_degraded(self) -> str:
@@ -535,8 +545,13 @@ class NarwhalRouter:
             "peer_release": self.peer_release.snapshot(),
             "draining": sorted(self.scheduler.draining),
             "quarantined": self.scheduler.quarantine_list(),
-            # Engine failure streaks and active verification probes.
-            "breaker": self.scheduler.breaker_snapshot(),
+            # The same holds split into timed quarantines and inference holds.
+            "holds": self._holds(),
+            # Engine failure streaks, active verification probes and transition counts.
+            "breaker": {
+                **self.scheduler.breaker_snapshot(),
+                "probes": self.verifier.probe_counts(),
+            },
             # Prefix residency each sidecar reports; unknown engines are priced cold.
             "residency": self.residency.snapshot(),
             "probation": sorted(

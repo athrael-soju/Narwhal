@@ -53,8 +53,9 @@ The state document carries these top-level fields:
 | `draining`                | Engines excluded by a lifecycle action                                                    |
 | `probation`               | Engines on probation, which carry a placement penalty                                     |
 | `health`                  | Drift-window accounting for each engine                                                   |
-| `quarantined`             | Engines held out of placement for a time after a failure                                  |
-| `breaker`                 | Consecutive failure streaks and probe state for each engine                               |
+| `quarantined`             | Engines under a timed quarantine or an inference hold                                     |
+| `holds`                   | The engines in `quarantined`, split into timed quarantines and inference holds            |
+| `breaker`                 | Failure streaks, probe state, and ejection, hold, probe and readmission counts            |
 | `residency`               | Each engine's prefix-residency synchronization with its attestation sidecar               |
 | `decode_floor`            | Decode floor state and restoration count                                                  |
 | `attainment`              | SLO outcome buckets for diagnostics                                                       |
@@ -129,6 +130,40 @@ A confirmed ejection resets the engine's `health` counts to zero.
 `breaker.failures` holds each engine's consecutive failure streaks, keyed by failure class: `connection`, `timeout`, `overload`, `inference_status`, `kv_handoff`, `stream`, and `liveness` for missed health sweeps.
 
 `breaker.verifying` lists each engine with a health or inference probe in flight, as its `iid` and the probe `kind`.
+
+The remaining `breaker` fields count transitions since process start. Each is a list of rows with an `iid`, the fields below, and a `count`:
+
+| Field          | Row fields                    | Counts                                                                |
+| -------------- | ----------------------------- | --------------------------------------------------------------------- |
+| `ejections`    | `cause`                       | Ejections, by [ejection cause](../telemetry/04-Failures.md#ejections-holds-and-readmissions) |
+| `hold_starts`  | `kind`                        | Holds started, by [hold kind](../telemetry/04-Failures.md#hold-kinds) |
+| `hold_ends`    | `kind`, `cause`               | Holds ended, by hold kind and hold-end cause                          |
+| `probes`       | `kind`, `outcome`             | Verification probes, by [outcome](../telemetry/04-Failures.md#verification-probe-outcomes) |
+| `readmissions` | `evidence`                    | Returns of an ejected engine to placement, by recovery evidence       |
+
+A new router process starts these counts at zero.
+
+### `holds`
+
+`holds` splits the engines in `quarantined` by [hold kind](../telemetry/04-Failures.md#hold-kinds). An engine appears under one kind at a time.
+
+`holds.timed` lists engines under a timed quarantine from `recovery.failure_quarantine_s`:
+
+| Field         | Meaning                                       |
+| ------------- | --------------------------------------------- |
+| `iid`         | Engine                                        |
+| `held_s`      | Seconds since the hold started                |
+| `remaining_s` | Seconds until the quarantine deadline         |
+
+`holds.inference` lists engines held until an inference probe passes:
+
+| Field                | Meaning                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `iid`                | Engine                                                                                               |
+| `held_s`             | Seconds since the hold started                                                                       |
+| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when the probe runs standalone             |
+
+The probe tries a recorded producer only while it is live, and otherwise [another live producer or a standalone probe](../telemetry/04-Failures.md#inference-probe-producers).
 
 ### `peer_release`
 

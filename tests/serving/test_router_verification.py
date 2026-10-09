@@ -261,9 +261,15 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_or_missing_transfer_paths_keep_verification_pending(self):
         """Recovery waits for checks of newly added producers."""
         self.router.verifier.sources["e3"] = {"unknown"}
-        with patch.object(self.router.engines, "probe_inference", new=AsyncMock()) as probe:
+        with patch.object(
+            self.router.engines,
+            "probe_inference",
+            new=AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg())),
+        ) as probe:
             await self.router.verifier.verify_inference("e3", self.cfg.engines[1].url)
-            probe.assert_not_awaited()
+        # An unconfigured producer gives way to a live one.
+        self.assertEqual(probe.call_args.kwargs["prefill_url"], self.cfg.engines[0].url)
+        self.assertNotIn("e3", self.router.verifier.sources)
         self.router.verifier.sources["e3"] = {""}
 
         async def changed(*args, **kwargs):
