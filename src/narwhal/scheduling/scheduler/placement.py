@@ -326,25 +326,26 @@ class GlobalScheduler:
         phase_load = self.prefill_load if role is Role.PREFILL else self.decode_load
         return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
 
+    def decode_exclusion(self, request: Request, exclude: Collection[str] = ()) -> set[str]:
+        """Return the request's producer when another engine can take its decode leg.
+
+        A decode leg on its own producer reuses that engine's prefix cache and never pulls
+        the KV handoff, so the producer holds the blocks until its lease expires. The
+        producer takes the decode leg only when the decode pool holds no other engine.
+        """
+        producer = request.prefill_instance
+        if request.phase is not Phase.DECODE or producer is None:
+            return set()
+        pool = self.role_pool(Role.DECODE, self.live_instances(exclude=set(exclude)))
+        return {producer} if any(inst.iid != producer for inst in pool) else set()
+
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
         """Place one phase without changing roles, excluding failed endpoints."""
-        exclude = exclude or set()
+        exclude = set(exclude or ())
+        exclude |= self.decode_exclusion(request, exclude)
         instances = self.live_instances(exclude=exclude)
         if not instances:
             raise RuntimeError("no schedulable instances")
-
-        # A prefill engine since flipped to decode keeps the request without a KV transfer.
-        if (
-            request.phase is Phase.DECODE
-            and request.prefill_instance
-            and request.prefill_instance not in exclude
-        ):
-            prior = next(
-                (i for i in instances if i.iid == request.prefill_instance),
-                None,
-            )
-            if prior is not None and prior.role is Role.DECODE:
-                return prior
 
         # Profiles model sequential prefill and batched decode.
         want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE

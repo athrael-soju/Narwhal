@@ -42,6 +42,7 @@ from ..runtime.standby import (
 from .completion import completion_body_error
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
+from .records import monitoring_degraded_reason, not_ready_response
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
@@ -299,7 +300,7 @@ def create_app(
             "holder": router.lease_holder,
             "reason": router.failover_blocked
             or router.lifecycle_blocked
-            or _monitoring_degraded_reason(router)
+            or monitoring_degraded_reason(router)
             or ("shadowing" if router.standby else "")
             or ("lease expired" if not controls_fleet(router) else "")
             or (
@@ -429,7 +430,7 @@ def create_app(
     @app.post("/v1/completions", summary="Completions, body passed to the engine unchanged")
     async def completions(request: HTTPRequest) -> Response:
         if not ready(router):
-            return _not_ready_refusal(router, request.scope.get(LIFECYCLE))
+            return not_ready_response(router, request.scope.get(LIFECYCLE))
         body = await _completion_body(router, request)
         if not isinstance(body, dict):
             return body
@@ -438,7 +439,7 @@ def create_app(
     @app.post("/v1/chat/completions", summary="Chat, body passed to the engine unchanged")
     async def chat_completions(request: HTTPRequest) -> Response:
         if not ready(router):
-            return _not_ready_refusal(router, request.scope.get(LIFECYCLE))
+            return not_ready_response(router, request.scope.get(LIFECYCLE))
         body = await _completion_body(router, request)
         if not isinstance(body, dict):
             return body
@@ -495,48 +496,6 @@ def _invalid_refusal(
                 "code": None,
             }
         },
-    )
-
-
-def _monitoring_degraded_reason(router: NarwhalRouter) -> str:
-    """Render the degraded streak's first failure as `stage class`, endpoint-free."""
-    degraded = router.monitoring_degraded
-    if not degraded:
-        return ""
-    klass, _, stage = degraded.partition(":")
-    return f"monitoring degraded: {stage} {klass}"
-
-
-def _not_ready_refusal(router: NarwhalRouter, state: RequestLifecycle | None) -> Response:
-    """Record and return a retryable refusal while control or backends are unavailable."""
-    backend_unavailable = (
-        control_ready(router)
-        and not router.lifecycle_blocked
-        and not router.scheduler.live_instances()
-    )
-    reason = (
-        router.failover_blocked
-        or router.lifecycle_blocked
-        or _monitoring_degraded_reason(router)
-        or ("engine identity validation pending" if not router.lifecycle.identities_ready else "")
-        or ("no available engines" if backend_unavailable else "")
-        or "standby: the primary router is serving"
-    )
-    code = "backend_unavailable" if backend_unavailable else "standby"
-    if state is not None:
-        state.finish(
-            "rejected",
-            error=f"router not ready: {reason}",
-            status=503,
-            reason="not_ready",
-            error_type=code,
-            error_code=code,
-            extra={"readiness_reason": reason},
-        )
-    return JSONResponse(
-        content={"error": {"message": reason, "type": code, "code": code}},
-        status_code=503,
-        headers={"retry-after": "1"},
     )
 
 

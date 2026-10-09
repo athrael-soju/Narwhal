@@ -19,10 +19,11 @@ The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_ma
 | Requests counted against the [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`; message `router in-flight limit reached`                                                                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
 | Router event-loop lag reaches a quarter of `slo.ttft_s`                                                                      | `429` | `server_overloaded_error`                            | `1`                                                |
 | Median token-counting and prefix-hashing time of at least 8 requests in the last 2 seconds reaches a quarter of `slo.ttft_s` | `429` | `server_overloaded_error`                            | `1`                                                |
-| Admission wait expires before response headers                                                                               | `504` | `queue_expired`                                      |                                                    |
-| The KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, with no attempts left | `504` | `handoff_expired` | |
+| The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s`      | `504` | `queue_expired`                                      |                                                    |
+| A prefill-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches the remaining `serving.queue_timeout_s` | `504` | `expired`                                     |                                                    |
+| The KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | |
 | Original request deadline expires before response headers                                                                    | `504` | `request_expired` or `expired`                       |                                                    |
-| Projected TTFT exceeds the budget for a prompt that fits alone                                                               | `429` | `server_overloaded_error`                            | Budget overrun in seconds, rounded up, minimum `1` |
+| Projected TTFT exceeds the budget for a prompt that fits alone, at prefill placement or during an admission-seat or prefill-seat wait | `429` | `server_overloaded_error`                            | Placement price minus the budget in seconds, excluding the time the request has waited, rounded up, minimum `1` |
 | Prompt alone exceeds the TTFT budget                                                                                         | `429` | `server_overloaded_error`                            |                                                    |
 | Zero prefill engines are live and the decode target holds resident decode work                                               | `429` | `server_overloaded_error`                            | `1`                                                |
 | The projected TTFT plus the projected [decode slot wait](../configuration/02-Serving-and-Role-Control.md#decode-admission-check) exceeds the budget | `429` | `server_overloaded_error`                            | `1`                                                |
@@ -30,8 +31,12 @@ The time to first token (TTFT) budget is `slo.ttft_s * (1 + serving.admission_ma
 | Decode load pushes the request past `slo.tpot_s` on every live decode engine                                                 | `429` | `server_overloaded_error`                            | `1`                                                |
 | Zero live engines can take the request's prefill or decode leg                                                                                      | `503` | `backend_unavailable` or `no_schedulable_engines`    | `1`                                                |
 | Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring       | `503` | `standby`                                            | `1`                                                |
+| A whole-wave hold begins while the request waits for a seat or before its decode dispatch | `503` | `standby` | `1` |
+| Degraded engine monitoring begins while the request waits for an admission or prefill seat | `503` | `standby` | `1` |
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
+
+[Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes each wait's bound, the pricing of waiting requests, and the holds that end a wait.
 
 `/ready` reports the reason for each `503` refusal.
 

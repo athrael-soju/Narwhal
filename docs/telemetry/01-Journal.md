@@ -93,7 +93,7 @@ These conditions set a field to `0` or null:
 | Cancelled before output | `status` is null. |
 | The client error body has no `code` | `error_code` is null. |
 | The request never reached a stage | That stage's `queue_waits` entry is null. |
-| The request ended before prefill placement | `admission_price` is null. |
+| The request ended before the router priced its prefill placement | `admission_price` is null. |
 
 The `prefill` and `decode` seat waits apply with `serving.queue_capacity` above `0`.
 
@@ -145,11 +145,11 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41
 | `refused` | `tpot` | Decode load pushes the request past `slo.tpot_s` on every live decode engine. |
 | `rejected` | `inflight_limit` | Requests counted against the router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`. |
 | `rejected` | `saturated` | Router event-loop lag or request-sizing time reaches a quarter of `slo.ttft_s`. |
-| `rejected` | `not_ready` | The router is not ready to serve; `readiness_reason` gives the cause. |
+| `rejected` | `not_ready` | The router is not ready to serve, or a [hold](../configuration/02-Serving-and-Role-Control.md#queue-waits) ends a waiting or prefilled request; `readiness_reason` gives the cause. |
 | `expired` | `deadline` | The original request deadline, `serving.request_timeout_s`, expires. |
-| `expired` | `queue_timeout` | The admission wait reaches `serving.queue_timeout_s` before the original deadline. |
+| `expired` | `queue_timeout` | The admission-seat and prefill-seat waits reach `serving.queue_timeout_s` before the original deadline. |
 | `expired` | `handoff` | The KV handoff reaches the producer's [handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch. |
-| `failed` | `no_engine` | Zero live engines can take the prefill or decode leg, router control is fenced, or a whole-wave hold blocks placement. |
+| `failed` | `no_engine` | Zero live engines can take the prefill or decode leg. |
 | `failed` | `engine_unreachable` | The connection to the engine fails or times out. |
 | `failed` | `engine_connection` | An established engine connection fails or breaks the HTTP protocol. |
 | `failed` | `engine_timeout` | The engine returns HTTP `504`, or a prefill, first-token, or between-token timeout expires. |
@@ -186,12 +186,12 @@ An attempt starts at prefill placement and dispatches with its prefill leg. A fa
 
 #### Admission price
 
-The router prices each attempt's prefill placement in both [admission modes](../configuration/02-Serving-and-Role-Control.md#41-global-admission). `predictive` mode refuses the request when `price_s` exceeds the TTFT budget, and `open` mode records the price without enforcing it.
+The router prices each attempt's prefill placement in both [admission modes](../configuration/02-Serving-and-Role-Control.md#41-global-admission). `predictive` mode refuses the request when `price_s` exceeds the TTFT budget, and `open` mode records the price without enforcing it. In `predictive` mode, the router also prices a first attempt on the cheapest live prefill engine while it [waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) for an admission or prefill seat. The row keeps the latest price.
 
 | Field | Meaning |
 | --- | --- |
 | `attempt` | Attempt the router priced. |
-| `backlog_s` | Resident prefill work and any probation penalty on the placed prefill engine. |
+| `backlog_s` | Resident prefill work and any probation penalty on the priced prefill engine. |
 | `own_prefill_s` | The request's own prefill on that engine, priced with its cache evidence. |
 | `elapsed_s` | Seconds from arrival to pricing. |
 | `price_s` | Projected TTFT: `backlog_s + own_prefill_s + elapsed_s`. |

@@ -33,7 +33,7 @@ A completion request passes through these stages:
 6. Tokens stream to the client.
 7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.
 
-When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue under its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal.
+When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) gives each wait's bound and response.
 
 A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-phase-concurrency-and-retries) reruns prefill and decode with a fresh KV handoff.
 
