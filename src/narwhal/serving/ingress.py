@@ -6,13 +6,13 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .lifecycle import RequestLifecycle
-from .outcomes import INFLIGHT_LIMIT_MESSAGE
+from .outcomes import INFLIGHT_LIMIT_MESSAGE, error_response
 from .records import overloaded_response
 from .response import RequestStreamResponse
 from .saturation import saturated
@@ -105,14 +105,10 @@ class ServingIngress:
                 raise
             # A zero timeout cancels the write as soon as it blocks.
             async with asyncio.timeout(0):
-                await JSONResponse(
-                    {
-                        "error": {
-                            "type": "request_expired",
-                            "message": "original request deadline expired",
-                        }
-                    },
-                    status_code=504,
+                await error_response(
+                    504,
+                    "request_expired",
+                    "original request deadline expired",
                     headers={"x-request-id": state.rid},
                 )(scope, receive, send)
         except ClientDisconnect:

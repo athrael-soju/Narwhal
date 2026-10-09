@@ -44,6 +44,7 @@ from ..outcomes import (
     OUTCOME_REASONS,
     RequestExpired,
     RouterHeld,
+    error_response,
     failure_reason,
 )
 from ..records import not_ready_response, overloaded_response, refuse_request
@@ -413,10 +414,7 @@ class NarwhalRouter:
                 reason=failure_reason(exc, deadline_passed=self._clock() >= state.deadline),
                 error_type="queue_expired",
             )
-            response = JSONResponse(
-                status_code=504,
-                content={"error": {"message": "queue deadline expired", "type": "queue_expired"}},
-            )
+            response = error_response(504, "queue_expired", "queue deadline expired")
         except asyncio.CancelledError:
             state.finish("cancelled")
             raise

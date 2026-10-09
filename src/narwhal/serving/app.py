@@ -42,6 +42,7 @@ from ..runtime.standby import (
 from .completion import completion_body_error
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
+from .outcomes import error_response
 from .records import monitoring_degraded_reason, not_ready_response
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
@@ -463,15 +464,7 @@ async def _completion_body(
                 status=413,
                 error_type="request_too_large",
             )
-        return JSONResponse(
-            status_code=413,
-            content={
-                "error": {
-                    "message": "request body exceeds max_request_bytes",
-                    "type": "request_too_large",
-                }
-            },
-        )
+        return error_response(413, "request_too_large", "request body exceeds max_request_bytes")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _invalid_refusal(state, "the request body is not valid JSON", None)
     problem = completion_body_error(raw)
@@ -486,17 +479,7 @@ def _invalid_refusal(
     """Record and return the stable malformed-request 400."""
     if state is not None:
         state.finish("invalid", error=message, status=400, error_type="invalid_request_error")
-    return JSONResponse(
-        status_code=400,
-        content={
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "param": param,
-                "code": None,
-            }
-        },
-    )
+    return error_response(400, "invalid_request_error", message, param=param, code=None)
 
 
 def _lifecycle_error(router: NarwhalRouter, status_code: int, message: str) -> Response:

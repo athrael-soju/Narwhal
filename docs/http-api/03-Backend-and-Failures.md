@@ -80,15 +80,28 @@ from narwhal.engines.connector import PrefillResult
 
 ## Engine failure handling
 
-A timeout-shaped engine fault maps to HTTP `504`, and every other engine fault maps to HTTP `502`.
+A timeout-shaped engine fault maps to HTTP `504`, and every other engine fault maps to HTTP `502`. A timeout-shaped fault is an engine HTTP `408` or `504` status, or a connect, connection-pool, prefill, first-token, between-token, or exact-count timeout.
 
-Prefill failures, non-streaming decode failures, and streaming decode failures before the first output return that HTTP error status. A streaming decode failure after the first output ends the HTTP `200` stream with a terminal server-sent event (SSE):
+Exact-count failures, prefill failures, non-streaming decode failures, and streaming decode failures before the first output return that HTTP error status when the request does not [retry](#retries). The error `type` and `code` both name the request phase in which the fault ended the request:
 
-```text
-data: {"error": ...}
-```
+| Condition | HTTP | Error `type` | Error `code` |
+| --- | :---: | --- | --- |
+| The last [exact input count](#input-sizing) fails, or a count fails non-transiently, with a timeout-shaped fault | `504` | `admission` | `admission` |
+| The last exact input count fails, or a count fails non-transiently, with any other fault | `502` | `admission` | `admission` |
+| The prefill leg ends with a timeout-shaped fault and the request does not retry | `504` | `prefill` | `prefill` |
+| The prefill leg ends with any other fault and the request does not retry | `502` | `prefill` | `prefill` |
+| The decode leg ends with a timeout-shaped fault before output starts and the request does not retry | `504` | `decode` | `decode` |
+| The decode leg ends with any other fault before output starts and the request does not retry, or a non-streaming response fails assembly or exceeds `serving.max_response_bytes` | `502` | `decode` | `decode` |
 
 The client error body carries a generic message, such as `Upstream request failed`. The engine failure detail goes to the `error` field of the [terminal request record](../telemetry/01-Journal.md#terminal-request-records).
+
+A streaming decode failure after the first output ends the HTTP `200` stream with a terminal server-sent event (SSE). Its error `type` is the request phase, `decode`, and its `code` is the terminal state, `failed` or `expired`:
+
+```text
+data: {"error": {"message": "Upstream request failed", "type": "decode", "code": "failed"}}
+```
+
+An unexpected router error returns HTTP `500` with a plain-text body and no error `type`. The journal records terminal `failed` with reason `internal`.
 
 ### Input sizing
 

@@ -1,8 +1,11 @@
-"""Bounded reason labels for request outcomes and failed attempts."""
+"""Bounded reason labels, client error types and error responses for request outcomes."""
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
+from fastapi.responses import JSONResponse
 
 from ..engines.client import EngineError
 from ..engines.connector import HandoffExpired
@@ -53,6 +56,48 @@ OUTCOME_REASONS = {
     "expired": EXPIRED_REASONS,
     "refused": REFUSED_CAUSES,
 }
+# Request phases whose name is the error type of an engine fault before output starts.
+FAULT_PHASES = ("admission", "prefill", "decode")
+# Every HTTP status and error `type` a completion route answers before output starts.
+# The HTTP API error tables list exactly these pairs.
+ERROR_RESPONSES = frozenset(
+    {
+        (400, "invalid_request_error"),
+        (404, "invalid_request_error"),
+        (413, "request_too_large"),
+        (429, "server_overloaded_error"),
+        (503, "standby"),
+        (503, "backend_unavailable"),
+        (503, "no_schedulable_engines"),
+        (504, "queue_expired"),
+        (504, "request_expired"),
+        (504, "expired"),
+        (504, "handoff_expired"),
+        *((status, phase) for status in (502, 504) for phase in FAULT_PHASES),
+    }
+)
+
+
+def error_response(
+    status: int,
+    error_type: str,
+    message: str,
+    *,
+    headers: dict[str, str] | None = None,
+    **fields: Any,
+) -> JSONResponse:
+    """Return a completion route's error body for a registered status and error type.
+
+    `fields` adds body fields such as `code` and `param`. An unregistered pair raises
+    ValueError, so the request ends as an internal router error.
+    """
+    if (status, error_type) not in ERROR_RESPONSES:
+        raise ValueError(f"unregistered error response: HTTP {status} {error_type}")
+    return JSONResponse(
+        status_code=status,
+        headers=headers,
+        content={"error": {"message": message, "type": error_type, **fields}},
+    )
 
 
 def failure_reason(exc: BaseException, *, deadline_passed: bool) -> str:

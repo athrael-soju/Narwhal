@@ -12,6 +12,7 @@ from ..runtime.standby import control_ready
 from ..types import Request
 from .admission import PlacementRefused
 from .lifecycle import RequestLifecycle
+from .outcomes import error_response
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
@@ -35,11 +36,7 @@ def overloaded_response(state: RequestLifecycle, message: str, *, reason: str) -
     state.finish(
         "rejected", error=message, status=429, reason=reason, error_type="server_overloaded_error"
     )
-    return JSONResponse(
-        status_code=429,
-        headers={"retry-after": "1"},
-        content={"error": {"message": message, "type": "server_overloaded_error"}},
-    )
+    return error_response(429, "server_overloaded_error", message, headers={"retry-after": "1"})
 
 
 def monitoring_degraded_reason(router: NarwhalRouter) -> str:
@@ -84,11 +81,7 @@ def not_ready_response(
             error_code=code,
             extra={"readiness_reason": reason},
         )
-    return JSONResponse(
-        content={"error": {"message": reason, "type": code, "code": code}},
-        status_code=503,
-        headers={"retry-after": "1"},
-    )
+    return error_response(503, code, reason, headers={"retry-after": "1"}, code=code)
 
 
 def ttft_refusal_cause(router: NarwhalRouter, req: Request, priced_s: float) -> str:
@@ -175,8 +168,4 @@ def refuse_request(state: RequestLifecycle, exc: PlacementRefused) -> JSONRespon
         extra={"refused_cause": "decode" if cause in DECODE_CHECKS else cause},
     )
     state.outcome["public_error"] = message
-    return JSONResponse(
-        status_code=429,
-        headers=headers,
-        content={"error": {"message": message, "type": "server_overloaded_error"}},
-    )
+    return error_response(429, "server_overloaded_error", message, headers=headers)
