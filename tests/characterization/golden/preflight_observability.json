@@ -1,0 +1,17 @@
+{
+  "dashboard_series": [
+    "vllm:generation_tokens_total",
+    "vllm:kv_cache_usage_perc",
+    "vllm:nixl_num_kv_expired_reqs_total",
+    "vllm:num_requests_running",
+    "vllm:num_requests_waiting",
+    "vllm:prefix_cache_hits_total",
+    "vllm:prefix_cache_queries_total",
+    "vllm:prompt_tokens_by_source_total",
+    "vllm:prompt_tokens_total"
+  ],
+  "lease_metrics": [
+    "narwhal_kv_lease_seconds{iid=\"e0\"} 30",
+    "narwhal_handoff_bound_seconds{iid=\"e0\"} 25.0"
+  ]
+}

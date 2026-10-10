@@ -1,0 +1,129 @@
+{
+  "empty": {
+    "body": {
+      "block_size": null,
+      "epoch": "<epoch>",
+      "groups": [],
+      "known": true,
+      "process_start_time_seconds": 100.0,
+      "reason": "no cache events published",
+      "sequence": -1
+    },
+    "status": 200
+  },
+  "events after -1": {
+    "body": {
+      "block_size": 4,
+      "changes": [
+        {
+          "cleared": false,
+          "groups": {
+            "0": {
+              "kind": "full_attention",
+              "removed": [],
+              "sliding_window": null,
+              "stored": [
+                "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+                "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+              ]
+            }
+          },
+          "sequence": 0
+        },
+        {
+          "cleared": false,
+          "groups": {
+            "0": {
+              "kind": "full_attention",
+              "removed": [
+                "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+              ],
+              "sliding_window": null,
+              "stored": []
+            }
+          },
+          "sequence": 1
+        }
+      ],
+      "epoch": "<epoch>",
+      "reason": "complete event history",
+      "sequence": 1
+    },
+    "status": 200
+  },
+  "events after 0": {
+    "body": {
+      "block_size": 4,
+      "changes": [
+        {
+          "cleared": false,
+          "groups": {
+            "0": {
+              "kind": "full_attention",
+              "removed": [
+                "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+              ],
+              "sliding_window": null,
+              "stored": []
+            }
+          },
+          "sequence": 1
+        }
+      ],
+      "epoch": "<epoch>",
+      "reason": "complete event history",
+      "sequence": 1
+    },
+    "status": 200
+  },
+  "events after 1": {
+    "body": {
+      "block_size": 4,
+      "changes": [],
+      "epoch": "<epoch>",
+      "reason": "complete event history",
+      "sequence": 1
+    },
+    "status": 200
+  },
+  "events after 5": {
+    "body": {
+      "detail": "resynchronise from the residency snapshot"
+    },
+    "status": 410
+  },
+  "no feed events": {
+    "body": {
+      "detail": "engine publishes no cache events"
+    },
+    "status": 404
+  },
+  "no feed snapshot": {
+    "body": {
+      "detail": "engine publishes no cache events"
+    },
+    "status": 404
+  },
+  "snapshot": {
+    "body": {
+      "block_size": 4,
+      "epoch": "<epoch>",
+      "groups": [
+        {
+          "group": 0,
+          "identities": [
+            "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf"
+          ],
+          "kind": "full_attention",
+          "sliding_window": null,
+          "unnamed": 0
+        }
+      ],
+      "known": true,
+      "process_start_time_seconds": 100.0,
+      "reason": "complete event history",
+      "sequence": 1
+    },
+    "status": 200
+  }
+}

@@ -1,0 +1,374 @@
+{
+  "engine_launch": {
+    "engines": {
+      "engine-1": {
+        "accelerator": "fixture-gpu",
+        "accelerator_devices": [],
+        "gpu_ids": [
+          "GPU-fixture"
+        ],
+        "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
+        "network_mode": "host",
+        "runtime": {
+          "block_size": 128,
+          "environment": {
+            "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+            "VLLM_USE_FLASHINFER_SAMPLER": "0",
+            "VLLM_USE_V2_MODEL_RUNNER": "0"
+          },
+          "expected_packages": {
+            "nixl": "1.4.1",
+            "nixl-cu13": "1.4.1",
+            "torch": "2.13.0",
+            "transformers": "5.17.0",
+            "vllm": "0.30.0",
+            "vllm-gguf-plugin": "0.0.5"
+          },
+          "extra_args": [
+            "--tokenizer",
+            "<root>/model",
+            "--hf-config-path",
+            "<root>/model",
+            "--load-format",
+            "gguf",
+            "--language-model-only",
+            "--max-model-len",
+            "4096",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--max-num-seqs",
+            "4",
+            "--enforce-eager"
+          ],
+          "kv_cache_dtype": "auto",
+          "model_dtype": "bfloat16"
+        },
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "sources": {
+          "allocation": "live NVIDIA GPU UUID and VRAM discovery",
+          "devices": "native CUDA runtime",
+          "transfer": "lo"
+        },
+        "tensor_parallel_size": 1,
+        "transfer": {
+          "devices": [],
+          "gpu_tls": "cuda_copy",
+          "net_devices": "lo",
+          "transport": "ucx_tcp"
+        }
+      },
+      "engine-2": {
+        "accelerator": "fixture-gpu",
+        "accelerator_devices": [],
+        "gpu_ids": [
+          "GPU-fixture"
+        ],
+        "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
+        "network_mode": "host",
+        "runtime": {
+          "block_size": 128,
+          "environment": {
+            "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+            "VLLM_USE_FLASHINFER_SAMPLER": "0",
+            "VLLM_USE_V2_MODEL_RUNNER": "0"
+          },
+          "expected_packages": {
+            "nixl": "1.4.1",
+            "nixl-cu13": "1.4.1",
+            "torch": "2.13.0",
+            "transformers": "5.17.0",
+            "vllm": "0.30.0",
+            "vllm-gguf-plugin": "0.0.5"
+          },
+          "extra_args": [
+            "--tokenizer",
+            "<root>/model",
+            "--hf-config-path",
+            "<root>/model",
+            "--load-format",
+            "gguf",
+            "--language-model-only",
+            "--max-model-len",
+            "4096",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--max-num-seqs",
+            "4",
+            "--enforce-eager"
+          ],
+          "kv_cache_dtype": "auto",
+          "model_dtype": "bfloat16"
+        },
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "sources": {
+          "allocation": "live NVIDIA GPU UUID and VRAM discovery",
+          "devices": "native CUDA runtime",
+          "transfer": "lo"
+        },
+        "tensor_parallel_size": 1,
+        "transfer": {
+          "devices": [],
+          "gpu_tls": "cuda_copy",
+          "net_devices": "lo",
+          "transport": "ucx_tcp"
+        }
+      },
+      "engine-3": {
+        "accelerator": "fixture-gpu",
+        "accelerator_devices": [],
+        "gpu_ids": [
+          "GPU-fixture"
+        ],
+        "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
+        "network_mode": "host",
+        "runtime": {
+          "block_size": 128,
+          "environment": {
+            "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+            "VLLM_USE_FLASHINFER_SAMPLER": "0",
+            "VLLM_USE_V2_MODEL_RUNNER": "0"
+          },
+          "expected_packages": {
+            "nixl": "1.4.1",
+            "nixl-cu13": "1.4.1",
+            "torch": "2.13.0",
+            "transformers": "5.17.0",
+            "vllm": "0.30.0",
+            "vllm-gguf-plugin": "0.0.5"
+          },
+          "extra_args": [
+            "--tokenizer",
+            "<root>/model",
+            "--hf-config-path",
+            "<root>/model",
+            "--load-format",
+            "gguf",
+            "--language-model-only",
+            "--max-model-len",
+            "4096",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--max-num-seqs",
+            "4",
+            "--enforce-eager"
+          ],
+          "kv_cache_dtype": "auto",
+          "model_dtype": "bfloat16"
+        },
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "sources": {
+          "allocation": "live NVIDIA GPU UUID and VRAM discovery",
+          "devices": "native CUDA runtime",
+          "transfer": "lo"
+        },
+        "tensor_parallel_size": 1,
+        "transfer": {
+          "devices": [],
+          "gpu_tls": "cuda_copy",
+          "net_devices": "lo",
+          "transport": "ucx_tcp"
+        }
+      },
+      "engine-4": {
+        "accelerator": "fixture-gpu",
+        "accelerator_devices": [],
+        "gpu_ids": [
+          "GPU-fixture"
+        ],
+        "gpu_visibility_env": "CUDA_VISIBLE_DEVICES",
+        "network_mode": "host",
+        "runtime": {
+          "block_size": 128,
+          "environment": {
+            "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
+            "VLLM_USE_FLASHINFER_SAMPLER": "0",
+            "VLLM_USE_V2_MODEL_RUNNER": "0"
+          },
+          "expected_packages": {
+            "nixl": "1.4.1",
+            "nixl-cu13": "1.4.1",
+            "torch": "2.13.0",
+            "transformers": "5.17.0",
+            "vllm": "0.30.0",
+            "vllm-gguf-plugin": "0.0.5"
+          },
+          "extra_args": [
+            "--tokenizer",
+            "<root>/model",
+            "--hf-config-path",
+            "<root>/model",
+            "--load-format",
+            "gguf",
+            "--language-model-only",
+            "--max-model-len",
+            "4096",
+            "--gpu-memory-utilization",
+            "0.1",
+            "--max-num-seqs",
+            "4",
+            "--enforce-eager"
+          ],
+          "kv_cache_dtype": "auto",
+          "model_dtype": "bfloat16"
+        },
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "sources": {
+          "allocation": "live NVIDIA GPU UUID and VRAM discovery",
+          "devices": "native CUDA runtime",
+          "transfer": "lo"
+        },
+        "tensor_parallel_size": 1,
+        "transfer": {
+          "devices": [],
+          "gpu_tls": "cuda_copy",
+          "net_devices": "lo",
+          "transport": "ucx_tcp"
+        }
+      }
+    },
+    "schema": "narwhal.engine-launch",
+    "schema_version": 1
+  },
+  "fleet": {
+    "controller": {
+      "advisory": false,
+      "flip_history": 1000,
+      "min_decode": 1,
+      "min_prefill": 1,
+      "monitor_failure_limit": 5,
+      "monitor_interval_s": 0.1,
+      "reactive": {
+        "confirmations": 2,
+        "decode_correction_alpha": 0.2,
+        "decode_correction_max": 2.0,
+        "decode_correction_min": 0.5,
+        "decode_correction_min_samples": 8,
+        "demand_floor": 0.2,
+        "demand_rise_tolerance": 0.25,
+        "evidence_max_span_s": 30.0,
+        "evidence_min_arrivals": 10,
+        "evidence_span_s": 15.0,
+        "min_arrivals": 10,
+        "movement_margin": 0.05,
+        "step_s": 0.25,
+        "utilization": 0.8,
+        "window_s": 30.0
+      },
+      "thresholds": {
+        "cooldown_s": 10.0,
+        "dwell_s": 0.0,
+        "expand": 1.0,
+        "flip_resident_guard": 0,
+        "panic_ratio": 0.0,
+        "shrink": 0.5,
+        "sustained_intervals": 3
+      }
+    },
+    "engine": {
+      "first_token_timeout_s": 10.0
+    },
+    "engines": [
+      {
+        "attestation_url": "http://127.0.0.1:18201/v1/attestation",
+        "iid": "n1",
+        "role": "prefill",
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "url": "http://127.0.0.1:18101"
+      },
+      {
+        "attestation_url": "http://127.0.0.1:18202/v1/attestation",
+        "iid": "n2",
+        "role": "prefill",
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "url": "http://127.0.0.1:18102"
+      },
+      {
+        "attestation_url": "http://127.0.0.1:18203/v1/attestation",
+        "iid": "n3",
+        "role": "decode",
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "url": "http://127.0.0.1:18103"
+      },
+      {
+        "attestation_url": "http://127.0.0.1:18204/v1/attestation",
+        "iid": "n4",
+        "role": "decode",
+        "shared_device": {
+          "device_allowance": 0.5,
+          "gpu_memory_utilization": 0.1,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "url": "http://127.0.0.1:18104"
+      }
+    ],
+    "hardware": {
+      "accelerator": "fixture-gpu",
+      "accelerators_per_engine": 1,
+      "tensor_parallel": 1
+    },
+    "model": "fixture-model",
+    "profiles": {
+      "path": "<root>/instance/profiles.json"
+    },
+    "recovery": {
+      "state_path": "<root>/instance/router-state.json"
+    },
+    "schema": "narwhal.fleet",
+    "schema_version": 2,
+    "slo": {
+      "tpot_s": 0.125,
+      "ttft_s": 1.0
+    }
+  },
+  "runtime_checks": [
+    [
+      "<python>",
+      "-c",
+      [
+        "from vllm.config import KVTransferConfig",
+        "from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory",
+        "config = KVTransferConfig(",
+        "    kv_connector='NixlConnector', kv_role='kv_both',",
+        "    kv_connector_extra_config={'backends': ['UCX'], 'enforce_handshake_compat': True},",
+        ")",
+        "KVConnectorFactory.get_connector_class(config)"
+      ]
+    ]
+  ]
+}
