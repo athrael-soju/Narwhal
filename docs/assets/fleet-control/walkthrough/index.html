@@ -6,6 +6,11 @@
 <script src="./vendor/react.js"></script>
 <script src="./vendor/react-dom.js"></script>
 <script src="./support.js"></script>
+<style>
+html, body { min-height: 100%; background: #101a20; }
+body { display: grid; margin: 0; overflow: hidden; place-items: center; }
+#dc-root { overflow: hidden; }
+</style>
 </head>
 <body>
 <x-dc>
@@ -866,6 +871,29 @@ class Component extends DCLogic {
     };
   }
 }
+</script>
+<script>
+(() => {
+  const width = 1600;
+  const height = 956;
+
+  function fit() {
+    const root = document.getElementById("dc-root");
+    if (!root || !root.firstElementChild) {
+      requestAnimationFrame(fit);
+      return;
+    }
+    const scale = Math.min(1, window.innerWidth / width, window.innerHeight / height);
+    root.style.width = `${width * scale}px`;
+    root.style.height = `${height * scale}px`;
+    root.firstElementChild.style.transform = `scale(${scale})`;
+    root.firstElementChild.style.transformOrigin = "top left";
+  }
+
+  window.addEventListener("load", fit);
+  window.addEventListener("resize", fit);
+  fit();
+})();
 </script>
 </body>
 </html>
