@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -20,7 +20,7 @@ from ...deployment.launch_engine.plan import env_file_name, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
 from ...engines.host_process import container_start, native_start
 from .identity import ATTESTED_FIELDS, server_version
-from .plan import TRANSFER_PACKAGES, option
+from .plan import option, transfer_package
 from .runtime import API_KEY_ENV
 
 # /server_info fields that hold credentials.
@@ -190,7 +190,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "engine_version": server["version"],
         "image_digest": "" if native else checked["image_id"],
         "transfer_version": plan["expected_packages"][
-            TRANSFER_PACKAGES[transfer["transfer_backend"]]
+            cast(str, transfer_package(transfer["transfer_backend"], plan["expected_packages"]))
         ],
         "connector_version": 0,
         "model_architecture": dimensions["model_architecture"],

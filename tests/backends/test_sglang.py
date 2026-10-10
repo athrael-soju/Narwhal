@@ -158,9 +158,28 @@ class LaunchTests(unittest.TestCase):
                 ),
                 "runtime.role must be prefill or decode",
             ),
+            (runtime_record(extra_args=["--max-running-requests", "512"]), "from 1 to 256"),
+            (
+                runtime_record(
+                    extra_args=["--max-running-requests", "8", "--max-running-requests", "9"]
+                ),
+                "set once",
+            ),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 plan.validate_runtime(record)
+        # Images install CUDA builds of the transfer engine under suffixed names.
+        cuda_build = {"sglang": "0.5.21", "mooncake-transfer-engine-cuda13": "0.3.13"}
+        plan.validate_runtime(runtime_record(expected_packages=cuda_build))
+        self.assertEqual(
+            plan.transfer_package("mooncake", cuda_build), "mooncake-transfer-engine-cuda13"
+        )
+        self.assertIsNone(
+            plan.transfer_package("mooncake", {**cuda_build, "mooncake-transfer-engine": "0.3.9"})
+        )
+        self.assertIsNone(
+            plan.transfer_package("mooncake", {"mooncake-transfer-engine-extra": "1"})
+        )
         plan.validate_runtime(
             runtime_record(
                 connector="nixl",
@@ -218,6 +237,17 @@ class LaunchTests(unittest.TestCase):
             },
         )
         self.assertNotIn("/model", attestation.launch_args(args))
+
+    def test_a_launch_may_lower_the_request_cap(self):
+        record = {
+            "runtime": runtime_record(extra_args=["--max-running-requests", "64"]),
+            "tensor_parallel_size": 1,
+        }
+        plan.validate_runtime(record["runtime"])
+        args, _ = plan.serve_args(
+            record, model="/model", served_name="m", host="0.0.0.0", port=8000, kv_events=None
+        )
+        self.assertEqual(plan.option(args, "--max-running-requests"), "64")
 
     def test_the_wrapper_adds_the_bootstrap_port_and_key(self):
         command = runtime.server_command(
