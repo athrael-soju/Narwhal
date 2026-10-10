@@ -24,9 +24,10 @@ from narwhal.profiling import calibration
 from narwhal.profiling.probe.instance import profile_instance
 from narwhal.profiling.probe.pairing import PairedTransport, Pairing, origin
 from narwhal.profiling.probe.sweep import Sweep
+from narwhal.runtime.lifecycle.readmission import role_bound_pairs
 from narwhal.runtime.role_switch import place_pair
 from narwhal.serving.app import create_app
-from narwhal.types import Role
+from narwhal.types import Instance, Role
 from tests.fixtures import bind_identity_profiles, fleet
 from tools.measurement import simulated_engine as sim
 
@@ -206,6 +207,19 @@ class RoundTests(unittest.TestCase):
         for phase in phases:
             producers = {src for src, _ in phase}
             self.assertFalse(producers & {dst for _, dst in phase})
+
+
+class RoleBoundReadmissionPairTests(unittest.TestCase):
+    def test_the_peer_serves_the_other_role(self):
+        live = [
+            Instance("n1", "http://n1", Role.PREFILL),
+            Instance("n2", "http://n2", Role.PREFILL),
+            Instance("n5", "http://n5", Role.DECODE),
+        ]
+        # A prefill target hands KV to a decode peer, and a decode target takes it from one.
+        self.assertEqual(role_bound_pairs("n6", Role.PREFILL, live), [("n6", "n5")])
+        self.assertEqual(role_bound_pairs("n6", Role.DECODE, live), [("n1", "n6")])
+        self.assertEqual(role_bound_pairs("n6", Role.PREFILL, live[:2]), [])
 
 
 class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):

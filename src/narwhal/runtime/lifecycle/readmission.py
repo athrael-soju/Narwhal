@@ -12,11 +12,20 @@ from ...engines.connector import RendezvousConnector
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
 from ...profiling.generation import binding_digest, profile_generation_problems
-from ...types import Role
+from ...types import Instance, Role
 from .records import LifecycleError, ValidationOutcome
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
+
+
+def role_bound_pairs(target: str, role: Role, live: list[Instance]) -> list[tuple[str, str]]:
+    """Pair `target` with the first live engine serving the other role, prefill first."""
+    # Each engine serves only its live role, so the peer serves the other role.
+    peer = next((inst.iid for inst in live if inst.role is not role and inst.iid != target), None)
+    if peer is None:
+        return []
+    return [(target, peer)] if role is Role.PREFILL else [(peer, target)]
 
 
 def _single_pairs(target: EngineSpec, peers: list[EngineSpec]) -> list[tuple[str, str]]:
@@ -60,15 +69,20 @@ async def validate_readmission(
         participants = list(cfg.engines)
         pairs = validation_pairs(participants)
     else:
-        peers = [
-            by_id[instance.iid]
-            for instance in router.scheduler.live_instances(exclude=set(engines))
-        ]
-        try:
-            pairs = _single_pairs(targets[0], peers)
-        except LifecycleError as exc:
-            outcome.fail(targets[0].iid, str(exc))
-            return outcome
+        live = router.scheduler.live_instances(exclude=set(engines))
+        if router.scheduler.availability.roles_bound:
+            role = router.monitor.instances[targets[0].iid].role
+            pairs = role_bound_pairs(targets[0].iid, role, live)
+            if not pairs:
+                for iid in engines:
+                    outcome.fail(iid, "fabric validation requires a peer in the opposite role")
+                return outcome
+        else:
+            try:
+                pairs = _single_pairs(targets[0], [by_id[inst.iid] for inst in live])
+            except LifecycleError as exc:
+                outcome.fail(targets[0].iid, str(exc))
+                return outcome
         peer_ids = {iid for pair in pairs for iid in pair} - set(engines)
         participants = targets + [by_id[iid] for iid in sorted(peer_ids)]
 
@@ -234,6 +248,15 @@ async def validate_readmission(
                 "process identity changed during validation", reset=True
             )
         return not outcome.failures
+
+    for spec in targets:
+        # A replacement process starts in its launch role; the fabric check runs in the
+        # router's role for it.
+        role = router.monitor.instances[spec.iid].role
+        switched = await router.switch_role(spec.iid, role)
+        if switched is not None:
+            outcome.fail(spec.iid, f"role switch to {role.value} failed: {switched}")
+            return outcome
 
     body = {
         "model": cfg.model,

@@ -64,7 +64,7 @@ Stop the engine when the check passes.
 
 1. Restart the engine and its attestation sidecar through their configured process manager.
 2. Check that the engine's `/health` returns HTTP 200.
-3. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
+3. Check that the engine's version route (`/version` on vLLM, `/server_info` on SGLang), `/metrics`, and `/v1/models` describe the replacement process and model.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
 6. If the engine's [process generation](../Core-Concepts.md#terms) changed, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
@@ -89,8 +89,8 @@ Readmission runs these checks in order, each named by its `checks` entry:
     - `model`: `/v1/models` lists the configured model.
 2. The replacement engine passes two checks:
     - `new process identity`: its process start is newer than its recorded drain identity.
-    - `generation`: a direct completion probe returns a choice.
-3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`.
+    - `generation`: a direct completion probe returns a choice. An SGLang engine skips this check, and the fabric handoff in step 3 generates through it.
+3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router first switches the replacement engine to its router role, then pairs it with the first live engine in the other role.
 4. The replacement engine passes `final health`: its `/health` returns HTTP 200.
 5. The identities, attestation, and profile bindings of all participants match step 1.
 
