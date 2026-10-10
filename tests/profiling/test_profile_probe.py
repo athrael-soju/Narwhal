@@ -1050,3 +1050,10 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(VLLM_METRICS.prefix_cache_hits(metrics), 42)
         self.assertIsNone(VLLM_METRICS.prefix_cache_hits("vllm:num_requests_running 0\n"))
+
+
+class PoolSizeTests(unittest.TestCase):
+    def test_a_paired_cohort_gets_a_connection_for_each_leg(self):
+        sweep = Sweep(decode_concurrency=(1, 4, 16, 48))
+        self.assertEqual(fleet_probe._pool_size(sweep, 1, 8, paired=False), 56)
+        self.assertEqual(fleet_probe._pool_size(sweep, 1, 8, paired=True), 104)

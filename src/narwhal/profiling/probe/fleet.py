@@ -45,6 +45,12 @@ def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[E
     return list(lanes.values())
 
 
+def _pool_size(sweep: Sweep, lanes: int, engines: int, *, paired: bool) -> int:
+    # A paired request holds a connection for each leg until both finish.
+    legs = 2 if paired else 1
+    return max(sweep.decode_concurrency) * legs * lanes + engines
+
+
 def _peer(spec: EngineSpec, engines: list[EngineSpec]) -> EngineSpec:
     index = next(i for i, engine in enumerate(engines) if engine.iid == spec.iid)
     return engines[(index + 1) % len(engines)]
@@ -135,7 +141,7 @@ async def run(
     }
     # A paired engine borrows a peer for its other leg, so engines take turns.
     lanes = _profile_lanes(targets, colocated=colocated_workload is not None or paired)
-    connections = max((sweep or Sweep()).decode_concurrency) * len(lanes) + len(cfg.engines)
+    connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     pairing = (
         PairedTransport(httpx.AsyncHTTPTransport(limits=pool), kv, dialect)
