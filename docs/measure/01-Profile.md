@@ -63,7 +63,7 @@ The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
 | `n` | Prompt token count |
 | `s` | 1 for a prompt that ends inside a cache block past the first, otherwise 0 |
 
-The cache block size comes from `vllm:cache_config_info`.
+The cache block size comes from `vllm:cache_config_info` on vLLM and `sglang:page_size` on SGLang.
 
 The profiler sets `ttft_split` when all of these hold:
 
@@ -83,7 +83,7 @@ A decode cell is one combination of decode input length and concurrency.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live `max_model_len`.
 - When fewer than two decode input lengths fit, choose shorter inputs.
-- When a cold sweep fails on a rise in `vllm:prefix_cache_hits_total`, rerun the sweep with the engine reserved for profiling.
+- When a cold sweep fails on a rise in the prefix-cache hit counter, rerun the sweep with the engine reserved for profiling.
 
 ### Warm prefill with a cached prefix
 
@@ -120,14 +120,14 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports `vllm:prefix_cache_hits_total`.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
 
 - The engine fails a warm sweep condition.
 - A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words.
-- `vllm:prefix_cache_hits_total` becomes unreadable during the warm sweep.
+- The prefix-cache hit counter becomes unreadable during the warm sweep.
 - A warm case reuses zero cached tokens.
 - The measured warm cases cover fewer than two prefix lengths, two suffix lengths, or five cases.
 - The held-out error exceeds 20%.
@@ -166,7 +166,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
     - `cv_mape`, `suffix_on_cold_curve_mape`, `full_prompt_cold_mape`, and `cold_control_curve_mape`
     - `reason` for an engine that keeps cold pricing
 - `prefix_cache_hit_tokens`: prefix-cache hits per engine cold sweep
-    - `null` when `vllm:prefix_cache_hits_total` is absent from engine metrics or decreases
+    - `null` when the prefix-cache hit counter is absent from engine metrics or decreases
 - the attestation response or process identity per fit
 
 If the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and the fit error. If a later engine fails, the sidecar keeps the data from the engines that completed.
@@ -175,7 +175,7 @@ With `--overwrite`, `narwhal-profile` writes a new output pair for the selected 
 
 ### KV capacity source
 
-The KV capacity source is the physical KV constraint when vLLM `cache_config_info` reports `kv_cache_size_tokens`, and the TPOT-derived limit when it omits `kv_cache_size_tokens`.
+The KV capacity source is the physical KV constraint when vLLM `cache_config_info` reports `kv_cache_size_tokens`, and the TPOT-derived limit when it omits `kv_cache_size_tokens`. On SGLang, the physical constraint is the smallest `sglang:max_total_num_tokens`.
 
 ## Validating the profile before using it
 

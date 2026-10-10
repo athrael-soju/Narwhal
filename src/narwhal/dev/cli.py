@@ -93,7 +93,8 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--model",
                 type=Path,
-                help="local GGUF matching the template checksum (default: pinned HF cache file)",
+                help="local GGUF file or model directory matching the template checksums "
+                "(default: pinned HF cache snapshot)",
             )
             action.add_argument(
                 "--model-dir",

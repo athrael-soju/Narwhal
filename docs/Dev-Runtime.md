@@ -1,5 +1,5 @@
 ---
-description: Narwhal dev runs several vLLM engines with prefill and decode role swaps on one NVIDIA CUDA GPU under Ubuntu or WSL2.
+description: Narwhal dev runs several vLLM or SGLang engines with prefill and decode role swaps on one NVIDIA CUDA GPU under Ubuntu or WSL2.
 ---
 
 # Narwhal dev
@@ -117,6 +117,42 @@ curl http://127.0.0.1:18000/metrics
 The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to Prometheus and Grafana on a separate host.
 
 `--port-base` on `narwhal dev init` selects a different port layout, and `--instance` on any command targets another instance.
+
+## Running SGLang engines
+
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP, and the router switches their roles.
+
+1. Install Narwhal and the pinned packages in a fresh virtual environment:
+
+    ```bash
+    python3.12 -m venv .venv-sglang
+    source .venv-sglang/bin/activate
+    python -m pip install .
+    python -m pip install 'sglang==0.5.21' 'mooncake-transfer-engine==0.3.13' \
+      'torch==2.13.0' 'transformers==5.12.1'
+    ```
+
+2. Download the checkpoint into the Hugging Face cache:
+
+    ```bash
+    hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17
+    ```
+
+3. Export the template and start an instance from it:
+
+    ```bash
+    mkdir -p runs
+    python - <<'PYTHON' > runs/small-cuda-sglang-template.json
+    from importlib.resources import files
+    print(files('narwhal.dev').joinpath('small-cuda-sglang-v1.json').read_text())
+    PYTHON
+    narwhal dev init --template runs/small-cuda-sglang-template.json \
+      --instance runs/dev-sglang --interface "$interface"
+    narwhal dev up --instance runs/dev-sglang
+    narwhal dev verify --instance runs/dev-sglang
+    ```
+
+The template's `allocation.gpu_memory_utilization` sets each engine's `--mem-fraction-static`. SGLang applies the fraction to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first. `up` profiles the engines in pairs.
 
 ## Inspecting and stopping the instance
 

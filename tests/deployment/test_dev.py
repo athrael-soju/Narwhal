@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends.sglang import dev as sglang_dev
 from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
 from narwhal.deployment import stages
@@ -148,6 +149,68 @@ class DevTests(unittest.TestCase):
         fleet = lifecycle.read(self.root / "fleet.json")
         self.assertEqual([engine["role"] for engine in fleet["engines"]], ["prefill", "decode"])
         self.assertEqual(fleet["hardware"]["accelerator"], "NVIDIA Test GPU")
+
+    def sglang_spec(self):
+        spec = template._read_template("small-cuda-sglang-v1.json")
+        (self.model / "model.safetensors").write_bytes(b"weights")
+        spec["model"].update(
+            files_sha256={
+                "config.json": hashlib.sha256(b"{}").hexdigest(),
+                "model.safetensors": hashlib.sha256(b"weights").hexdigest(),
+            },
+            tokenizer_sha256={},
+        )
+        return spec
+
+    def initialize_sglang(self, spec):
+        with (
+            patch.object(
+                template,
+                "_gpu_rows",
+                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
+            ),
+            patch.object(template, "gpu_memory", return_value={"total_mib": 8192, "used_mib": 0}),
+            patch.object(template, "_check_packages"),
+            patch.object(sglang_dev, "check_imports"),
+            patch.object(template, "_address", return_value="127.0.0.1"),
+            patch.object(template, "_check_free_ports"),
+        ):
+            return template.materialize(
+                self.root,
+                model_dir=self.model,
+                model_path=self.model,
+                fabric_interface="lo",
+                template=spec,
+            )
+
+    def test_sglang_template_writes_an_sglang_fleet_with_paired_profiles(self):
+        spec = self.sglang_spec()
+        self.initialize_sglang(spec)
+        fleet = FleetConfig.load(self.root / "fleet.json")
+        self.assertEqual((fleet.backend, fleet.connector), ("sglang", "mooncake"))
+        launch = lifecycle.read(self.root / "engine-launch.json")
+        runtime = launch["engines"]["engine-1"]["runtime"]
+        self.assertEqual(runtime["backend"], "sglang")
+        self.assertIn("--mem-fraction-static", runtime["extra_args"])
+        self.assertEqual(lifecycle.instance(self.root)["model_path"], str(self.model))
+        run = self.root / "run-profiles"
+        run.mkdir()
+        (run / "profiles-1p1d.json").write_text("{}")
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
+        args = command.call_args.args[2]
+        self.assertNotIn("--colocated", args)
+        self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
+
+    def test_sglang_template_rejects_a_changed_checkpoint(self):
+        spec = self.sglang_spec()
+        (self.model / "model.safetensors").write_bytes(b"other weights")
+        with self.assertRaisesRegex(ValueError, "model file model.safetensors differs"):
+            self.initialize_sglang(spec)
+        self.initialize_sglang(self.sglang_spec())
+        (self.model / "model.safetensors").write_bytes(b"other weights")
+        with self.assertRaisesRegex(ValueError, "model file model.safetensors changed"):
+            lifecycle.up(self.root)
 
     def test_measured_reference_requires_its_gpu_product(self):
         with (
@@ -484,7 +547,7 @@ class DevTests(unittest.TestCase):
     def test_model_replacement_after_init_rejects_up(self):
         self.initialize()
         self.gguf.write_bytes(b"replacement model")
-        with self.assertRaisesRegex(ValueError, "GGUF model changed"):
+        with self.assertRaisesRegex(ValueError, "model file synthetic.gguf changed"):
             lifecycle.up(self.root)
         self.assertFalse((self.root / "lifecycle.json").exists())
 

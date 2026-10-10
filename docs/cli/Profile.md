@@ -18,6 +18,8 @@ When the fleet configuration sets `engine_contract`, a live sweep binds each fit
 
 A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
 
+On an SGLang fleet, a live sweep measures engines one after another, each with the next engine in the fleet as its peer. For each leg it switches the engine and its peer to prefill and decode. It requires `engine.connector` `mooncake` and at least two engines, and rejects `--colocated`. The engine evidence records the peer in `peer`.
+
 Every mode rejects symlink destinations.
 
 ## Selection, refitting, and output
