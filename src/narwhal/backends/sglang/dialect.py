@@ -11,6 +11,8 @@ from .connector import BOOTSTRAP_FIELDS
 class SglangDialect(EngineDialect):
     name = "sglang"
     cache_reset_path = "/flush_cache"
+    # /tokenize reports the tokenizer's limit, not the --context-length the engine serves.
+    context_limit_path = "/v1/models"
     prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
     # The launcher pins --stream-interval 1, so each streamed chunk carries one token.
     token_ids = True
@@ -56,6 +58,13 @@ class SglangDialect(EngineDialect):
             return int(payload["count"])
         except (KeyError, TypeError, ValueError):
             return None
+
+    def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
+        entries = payload.get("data")
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict) and entry.get("id") == model:
+                return super().context_limit(entry, model)
+        return None
 
     def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
         tokens = payload.get("tokens")

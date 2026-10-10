@@ -92,11 +92,33 @@ async def engine_context_limit(
     dialect: EngineDialect,
     timeout_s: float = 30.0,
 ) -> int:
-    body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)
-    limit = body.get("max_model_len")
-    if type(limit) is not int or limit < 1:
-        raise RuntimeError(f"tokenize probe returned no valid max_model_len on {url}")
+    path = dialect.context_limit_path
+    if path is None:
+        body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)
+        source = "tokenize probe"
+    else:
+        body = await _get_json(client, f"{url}{path}", timeout_s)
+        source = f"{path} probe"
+    limit = dialect.context_limit(body, model)
+    if limit is None:
+        raise RuntimeError(f"{source} returned no valid max_model_len for {model} on {url}")
     return limit
+
+
+async def _get_json(client: httpx.AsyncClient, url: str, timeout_s: float) -> dict:
+    try:
+        r = await client.get(url, timeout=timeout_s)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"context limit probe failed on {url}: {exc}") from exc
+    if r.status_code != 200:
+        raise RuntimeError(f"context limit probe failed on {url} ({r.status_code}): {r.text[:200]}")
+    try:
+        body = r.json()
+    except ValueError as exc:
+        raise RuntimeError(f"context limit probe returned no JSON on {url}") from exc
+    if not isinstance(body, dict):
+        raise RuntimeError(f"context limit probe returned an invalid response on {url}")
+    return body
 
 
 async def make_prompt(
