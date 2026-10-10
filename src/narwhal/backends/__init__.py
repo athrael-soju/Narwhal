@@ -1,5 +1,3 @@
-"""Engine backends registered through the `narwhal.backends` entry-point group."""
-
 from __future__ import annotations
 
 import functools
@@ -23,8 +21,6 @@ GROUP = "narwhal.backends"
 
 @dataclass(frozen=True)
 class EngineBackend:
-    """One backend's implementation of each engine interface; `role_switch` is optional."""
-
     name: str
     dialect: EngineDialect
     connectors: Mapping[str, KvHandoff]
@@ -36,7 +32,6 @@ class EngineBackend:
     role_switch: RoleSwitcher | None = None
 
     def connector(self, name: str) -> KvHandoff:
-        """Return the named KV connector, or raise ValueError when this backend lacks it."""
         try:
             return self.connectors[name]
         except KeyError:
@@ -52,13 +47,11 @@ def _entry_points() -> dict[str, EntryPoint]:
 
 
 def names() -> list[str]:
-    """Return the registered backend names."""
     return sorted(_entry_points())
 
 
 @functools.cache
 def load(name: str) -> EngineBackend:
-    """Build the registered backend named by the fleet config."""
     point = _entry_points().get(name)
     if point is None:
         known = ", ".join(names()) or "none; reinstall the package to register them"

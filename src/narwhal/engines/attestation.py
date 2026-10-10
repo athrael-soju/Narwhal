@@ -49,8 +49,6 @@ class EngineIdentity:
 
 
 class EngineIdentityReader(ABC):
-    """Read a backend's process identity and its attested launch limits."""
-
     @abstractmethod
     async def read(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
@@ -210,7 +208,6 @@ async def fetch_engine_identity(
 async def read_identity(
     client: httpx.AsyncClient, engine_base: str, headers: Mapping[str, str] | None = None
 ) -> EngineIdentity:
-    """Read vLLM's /version and the process start time in its /metrics."""
     base = engine_base.rstrip("/")
     version_response = await client.get(f"{base}/version", headers=headers)
     version_response.raise_for_status()

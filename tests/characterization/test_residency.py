@@ -1,5 +1,3 @@
-"""Pin vLLM cache-event decoding, the residency feed, the sidecar routes and prefix matching."""
-
 import tempfile
 import threading
 import time
@@ -87,8 +85,6 @@ def wait_for(condition, timeout=5.0):
 
 
 class Publisher:
-    """vLLM's ZeroMQ publisher: PUB frames [topic, seq, batch] and a ROUTER replay buffer."""
-
     def __init__(self, directory, *, replay=True):
         self.endpoint = f"ipc://{directory}/events.sock"
         self.replay_endpoint = f"ipc://{directory}/replay.sock" if replay else None
@@ -138,10 +134,7 @@ class Publisher:
 
 
 class CacheEventDecodingTests(unittest.TestCase):
-    """vLLM's msgpack batches decode into stored, removed and cleared events."""
-
     def test_event_fields_decode_from_vllm_batches(self):
-        """Every vLLM event field Narwhal reads keeps its decoded value."""
         events = decode_batch(
             batch(
                 stored([b"h1", b"h2"], range(8), extra_keys=[["salt"], None]),
@@ -165,7 +158,6 @@ class CacheEventDecodingTests(unittest.TestCase):
         assert_golden(self, "residency_decoded_events", plain(events))
 
     def test_malformed_batches_are_rejected(self):
-        """Payloads outside vLLM's batch layout raise ValueError with these messages."""
         cases = {
             "not msgpack": b"\xc1",
             "map batch": msgpack.packb({"events": []}),
@@ -191,13 +183,10 @@ class CacheEventDecodingTests(unittest.TestCase):
 
 
 class ResidencyIndexTests(unittest.TestCase):
-    """The residency index applies vLLM batches and serves its snapshot and changes."""
-
     def apply(self, index, sequence, *events):
         index.apply(sequence, decode_batch(batch(*events)))
 
     def test_hybrid_groups_salt_adapter_and_media(self):
-        """Group kinds, equal hashes across groups, salt, LoRA and media shape the snapshot."""
         index = ResidencyIndex(MODEL, TOKENIZER)
         prompt = tuple(range(12))
         steps = {}
@@ -238,7 +227,6 @@ class ResidencyIndexTests(unittest.TestCase):
         assert_golden(self, "residency_index_snapshots", steps)
 
     def test_history_states(self):
-        """Empty, late, gapped, unreadable, unknown and lost histories report these states."""
         prompt = tuple(range(4))
         cases = {
             "empty": [],
@@ -269,10 +257,7 @@ class ResidencyIndexTests(unittest.TestCase):
 
 
 class PrefixMatchTests(unittest.TestCase):
-    """Prefix hits exclude the prompt's final token, which vLLM always computes."""
-
     def test_group_kind_rules(self):
-        """Full, window and boundary groups each limit the reusable leading blocks."""
         prompt = [bytes([i]) for i in range(6)]
         full = set(prompt)
         cases = {
@@ -297,8 +282,6 @@ class PrefixMatchTests(unittest.TestCase):
 
 
 class SidecarTests(unittest.IsolatedAsyncioTestCase):
-    """The sidecar serves the index and the router follows it from the attestation URL."""
-
     def setUp(self):
         contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "test"))
@@ -337,7 +320,6 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
         return {"status": response.status_code, "body": body}
 
     async def test_residency_routes(self):
-        """GET /v1/residency and /v1/residency/events answer with these documents."""
         client = self.sidecar(self.index)
         documents = {}
         self.index.mark_empty()
@@ -357,7 +339,6 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "residency_sidecar_routes", documents)
 
     async def test_router_view_and_final_token(self):
-        """The router derives the sidecar base from the attestation URL and matches prompts."""
         client = self.sidecar(self.index)
         prompt = tuple(range(16))
         self.index.apply(0, decode_batch(batch(stored([1, 2, 3, 4], prompt))))
@@ -392,8 +373,6 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResidencyFeedTests(unittest.TestCase):
-    """The feed reads vLLM's PUB frames and replays history over the DEALER socket."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -407,7 +386,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.addCleanup(feed.stop)
 
     def test_replay_and_live_frames(self):
-        """Replay requests carry an 8-byte start; live and missed batches rebuild the index."""
         publisher = Publisher(self.directory)
         self.addCleanup(publisher.close)
         prompt = tuple(range(8))
@@ -426,7 +404,6 @@ class ResidencyFeedTests(unittest.TestCase):
         assert_golden(self, "residency_feed_replay", states)
 
     def test_feed_failure_states(self):
-        """An idle engine, a missing replay socket and a short frame give these states."""
         states = {}
         idle = Publisher(self.folder("idle"))
         self.addCleanup(idle.close)

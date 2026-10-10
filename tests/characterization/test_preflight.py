@@ -1,5 +1,3 @@
-"""Golden records of preflight, peer release and observability behaviour against vLLM."""
-
 import asyncio
 import io
 import json
@@ -33,8 +31,6 @@ SECONDS = re.compile(r"[0-9]+\.[0-9]+s\b")
 
 
 class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
-    """Preflight gates read vLLM identity, metrics and handoff fields."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -43,7 +39,6 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         self.engine = FakeVllm(ENGINES, self.cfg.engine_contract)
 
     async def test_preflight_requests_report_and_evidence(self):
-        """A passing full-mesh preflight sends these requests and writes this evidence."""
         digest = binding_digest(self.engine.attestation())
         store = ProfileStore(self.cfg.profiles_path, load=False)
         for spec in self.cfg.engines:
@@ -91,7 +86,6 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_mixed_versions_fail_before_transfer(self):
-        """Without a contract the gate compares live vLLM versions across engines."""
         self.cfg.engine_contract = None
         versions = {"e0": "1.0.0", "e3": "1.0.1"}
 
@@ -121,8 +115,6 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
-    """Peer release, listener checks and keep-alive follow vLLM NIXL timing."""
-
     def router(self):
         cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
         cfg.engine_contract = None
@@ -141,7 +133,6 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(folder.name)
 
     async def test_peer_release_rounds(self):
-        """Rounds follow the NIXL engine TTL; missed consumers retry after one heartbeat."""
         router = self.router()
         now = [1000.0]
         router.peer_release = PeerRelease(lambda: now[0])
@@ -174,7 +165,6 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_engine_bind_check(self):
-        """The engine bind check refuses a listening port and accepts a free one."""
         outcomes = {}
         for name, nixl in (("plain", False), ("nixl", True)):
             with socket.socket() as probe:
@@ -200,7 +190,6 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         return "ok"
 
     async def test_keep_alive_expiry(self):
-        """Data legs reuse an idle connection only while it is younger than vLLM's keep-alive."""
         engine = FakeVllm(ENGINES)
         wire = EngineWire(engine)
         client = EngineClient(dial=wire.dial)
@@ -223,7 +212,6 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "preflight_keep_alive", connections)
 
     async def test_lease_metrics_and_dashboard_series(self):
-        """The router exports the attested NIXL lease; the dashboard queries vLLM series."""
         router = self.router()
         transfer = {
             "kv_connector": "NixlConnector",

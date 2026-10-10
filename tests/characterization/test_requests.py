@@ -1,5 +1,3 @@
-"""Pin the vLLM request, KV handoff and stream wire behaviour served through the router."""
-
 import json
 import re
 import tempfile
@@ -36,8 +34,6 @@ def lease_attestation(seconds):
 
 
 class RouterWireTests(unittest.IsolatedAsyncioTestCase):
-    """Requests pass through the real app to fake prefill and decode engines."""
-
     async def asyncSetUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -132,7 +128,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.client.aclose)
 
     def record(self, response):
-        """Return the engine calls and client response with the random request ID replaced."""
         replacements = {}
         for call in self.calls:
             match = REQUEST_ID.match(call["x-request-id"] or "")
@@ -155,7 +150,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         return response
 
     async def test_chat_non_streaming_cross_engine(self):
-        """A chat request tokenizes, prefills on one engine and decodes on the other."""
         response = await self.serve(
             "/v1/chat/completions",
             {
@@ -172,7 +166,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_chat_non_streaming", *self.record(response))
 
     async def test_completions_streaming_cross_engine(self):
-        """A streamed completion strips internal token fields from the client stream."""
         response = await self.serve(
             "/v1/completions",
             {
@@ -188,7 +181,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_completions_streaming", *self.record(response))
 
     async def test_completions_streaming_exposes_requested_token_ids(self):
-        """A client that asks for token IDs receives the engine's token fields."""
         response = await self.serve(
             "/v1/completions",
             {"prompt": [1, 2, 3], "max_tokens": 4, "stream": True, "return_token_ids": True},
@@ -197,7 +189,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_completions_token_ids", *self.record(response))
 
     async def test_client_kv_transfer_params_never_reach_an_engine(self):
-        """A client-supplied top-level kv_transfer_params is replaced on each leg."""
         response = await self.serve(
             "/v1/completions",
             {
@@ -209,7 +200,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_client_kv_transfer_params", *self.record(response))
 
     async def test_reserved_vllm_xargs_are_rejected(self):
-        """Each reserved vllm_xargs key is refused before any engine call."""
         record = {}
         for key in ("kv_cache_report_mode", "kv_transfer_params", "ec_transfer_params"):
             response = await self.serve(
@@ -221,7 +211,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_reserved_vllm_xargs", record)
 
     async def test_prefill_descriptors_and_decode_continuations(self):
-        """Producer descriptors bind to decode legs on another engine and on the producer."""
         engines = self.router.engines
         body = {"model": "stub", "prompt": "hello", "max_tokens": 4, "stream": False}
         headers = {"x-request-id": "fixture-a1-prefill"}
@@ -270,7 +259,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "requests_prefill_descriptors", record)
 
     async def test_handoff_bound_from_attested_lease(self):
-        """The handoff bound is the attested KV lease minus one renewal interval."""
         record = {}
         for seconds in (6, 7, 30, 60):
             self.router.attested("p", lease_attestation(seconds))

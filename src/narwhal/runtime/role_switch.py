@@ -1,5 +1,3 @@
-"""Apply a scheduled role change to an engine."""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -12,8 +10,6 @@ from ..types import Role
 
 
 class RoleSwitcher(ABC):
-    """Change an engine's role with its weights resident."""
-
     requires_idle: ClassVar[bool]
 
     @abstractmethod
@@ -23,13 +19,10 @@ class RoleSwitcher(ABC):
         base: str,
         role: Role,
         peer: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Switch the engine to `role`; `peer` is the state of an engine already serving it."""
+    ) -> None: ...
 
 
 class RouterRoleSwitch(RoleSwitcher):
-    """For engines that serve both roles, placement alone changes the role."""
-
     requires_idle = False
 
     async def switch(
@@ -38,5 +31,4 @@ class RouterRoleSwitch(RoleSwitcher):
         base: str,
         role: Role,
         peer: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Leave the engine unchanged."""
+    ) -> None: ...

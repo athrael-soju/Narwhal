@@ -1,5 +1,3 @@
-"""The registry builds each backend from its entry point with every interface implemented."""
-
 import asyncio
 import json
 import sys
@@ -29,7 +27,6 @@ import check_backend_boundary  # noqa: E402
 
 class RegistryTests(unittest.TestCase):
     def test_every_registered_backend_implements_each_interface(self):
-        """Each field of a registered backend is an instance of its interface."""
         self.assertIn("vllm", names())
         for name in names():
             backend = load(name)
@@ -49,14 +46,12 @@ class RegistryTests(unittest.TestCase):
                     self.assertIsInstance(backend.role_switch, RoleSwitcher)
 
     def test_unknown_backend_and_connector_are_refused(self):
-        """Lookups name the registered choices."""
         with self.assertRaisesRegex(ValueError, "unknown engine backend 'nope'.*vllm"):
             load("nope")
         with self.assertRaisesRegex(ValueError, "no connector 'nope'.*nixl"):
             load("vllm").connector("nope")
 
     def test_fleet_config_selects_and_validates_the_backend(self):
-        """engine.backend defaults to vllm; its connector and dialect must belong to it."""
         fleet = json.loads((ROOT / "tests/data/fleet.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "fleet.json"
@@ -79,13 +74,11 @@ class VllmBackendTests(unittest.TestCase):
         self.backend = load("vllm")
 
     def test_handoff_bound_leaves_one_renewal_interval(self):
-        """The NIXL bound matches the router's lease arithmetic."""
         nixl = self.backend.connector("nixl")
         for lease in (6, 7, 30, 60):
             self.assertEqual(nixl.handoff_bound(lease), lease - renewal_interval(lease))
 
     def test_transfer_totals_sum_ranks(self):
-        """NIXL transfer counters sum across label sets, and are None when absent."""
         text = (
             'vllm:nixl_xfer_time_seconds_count{rank="0"} 2\n'
             'vllm:nixl_xfer_time_seconds_sum{rank="0"} 0.5\n'
@@ -96,7 +89,6 @@ class VllmBackendTests(unittest.TestCase):
         self.assertIsNone(self.backend.metrics.transfer_totals("other 1\n"))
 
     def test_role_change_needs_no_engine_request(self):
-        """vLLM engines serve both roles, so a role change sends nothing."""
 
         def refuse(request):
             raise AssertionError(request.url)
@@ -111,7 +103,6 @@ class VllmBackendTests(unittest.TestCase):
 
 class BoundaryTests(unittest.TestCase):
     def test_coupling_is_found_in_code_and_imports_but_not_comments(self):
-        """Engine names in code or a backend import count; a comment does not."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "module.py"
             for source, expected in (
@@ -126,5 +117,4 @@ class BoundaryTests(unittest.TestCase):
                     self.assertEqual(check_backend_boundary.coupled(path), expected)
 
     def test_repository_respects_the_boundary(self):
-        """Only listed modules hold engine-specific code, and every listed one still does."""
         self.assertEqual(check_backend_boundary.main(), 0)

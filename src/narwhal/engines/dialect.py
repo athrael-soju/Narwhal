@@ -28,12 +28,10 @@ class EngineDialect(ABC):
     reserved_fields: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
-    def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
-        """Return the headers and body fields that name one engine request."""
+    def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
 
     @abstractmethod
-    def token_id_fields(self) -> dict[str, Any]:
-        """Return the decode fields that stream every token ID."""
+    def token_id_fields(self) -> dict[str, Any]: ...
 
     @abstractmethod
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
@@ -84,11 +82,9 @@ class VllmDialect(EngineDialect):
     )
 
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
-        """Name the request in X-Request-Id."""
         return {"x-request-id": rid}, {}
 
     def token_id_fields(self) -> dict[str, Any]:
-        """Stream one token ID per chunk."""
         return {"return_token_ids": True, "stream_interval": 1}
 
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,3 @@
-"""Engine-neutral readings from an engine's metrics text."""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -8,23 +6,17 @@ from typing import ClassVar
 
 
 class EngineMetrics(ABC):
-    """Read a backend's Prometheus metrics."""
-
     # Dashboard quantity -> backend series.
     dashboard_series: ClassVar[Mapping[str, str]] = {}
 
     @abstractmethod
-    def kv_capacity(self, metrics: str) -> int | None:
-        """Return the KV capacity in tokens."""
+    def kv_capacity(self, metrics: str) -> int | None: ...
 
     @abstractmethod
-    def cache_block_tokens(self, metrics: str) -> int | None:
-        """Return the tokens per cache block when all ranks agree."""
+    def cache_block_tokens(self, metrics: str) -> int | None: ...
 
     @abstractmethod
-    def prefix_cache_hits(self, metrics: str) -> int | None:
-        """Return the cumulative prompt tokens served from the prefix cache."""
+    def prefix_cache_hits(self, metrics: str) -> int | None: ...
 
     @abstractmethod
-    def transfer_totals(self, metrics: str) -> tuple[float, float] | None:
-        """Return the cumulative KV transfer count and seconds."""
+    def transfer_totals(self, metrics: str) -> tuple[float, float] | None: ...

@@ -42,8 +42,6 @@ class PrefillResult:
 
 
 class KvHandoff(ABC):
-    """One KV transport's handoff between a prefill leg and a decode leg."""
-
     name: str
 
     @abstractmethod
@@ -52,8 +50,6 @@ class KvHandoff(ABC):
 
 
 class KvConnector(KvHandoff):
-    """Prefill returns a descriptor that the decode leg carries."""
-
     # Same-engine decode must remove this client-supplied field.
     param_key: str = "kv_transfer_params"
 
@@ -101,8 +97,6 @@ class KvConnector(KvHandoff):
 
 
 class RendezvousConnector(KvHandoff):
-    """Both legs carry one router-issued rendezvous and run concurrently."""
-
     # The engine never times out a decode leg whose prefill is lost.
     decode_wait_s: ClassVar[float]
 
@@ -126,7 +120,6 @@ class NixlConnector(KvConnector):
     renewal_divisor: ClassVar[int] = 6
 
     def handoff_bound(self, lease_s: int) -> float:
-        """Leave one lease renewal interval for decode to start consuming."""
         return float(lease_s - lease_s // self.renewal_divisor)
 
     def prefill_params(self) -> dict[str, Any]:

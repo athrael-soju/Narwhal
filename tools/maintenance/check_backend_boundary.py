@@ -1,10 +1,3 @@
-"""Keep engine-specific code inside src/narwhal/backends/.
-
-Outside that package, a module may not import a backend package or name an engine-specific
-identifier, unless backend_boundary.txt lists it. Listed modules that are clean fail too, so
-the list only shrinks.
-"""
-
 from __future__ import annotations
 
 import io
@@ -21,7 +14,6 @@ BACKEND_IMPORT = re.compile(r"^\s*(?:from|import)\s+(?:narwhal|\.+)\.?backends\.
 
 
 def coupled(path: Path) -> bool:
-    """Return True when `path` imports a backend package or names an engine term in code."""
     text = path.read_text()
     if BACKEND_IMPORT.search(text):
         return True

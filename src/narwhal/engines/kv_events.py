@@ -186,8 +186,6 @@ def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> lis
 
 
 class KvEventDecoder(ABC):
-    """Decode a backend's published KV cache events."""
-
     # The engine always computes a prompt's final token, so a cached prefix never covers it.
     recomputes_final_token: ClassVar[bool] = True
 

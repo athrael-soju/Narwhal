@@ -1,5 +1,3 @@
-"""Golden records of the vLLM requests and metrics that profiling and calibration depend on."""
-
 import asyncio
 import io
 import json
@@ -42,7 +40,6 @@ E3 = "http://engine-3.invalid:8000"
 
 
 def distinct(requests):
-    """Keep the first of each request shape, in order, ignoring which fresh salt it carries."""
     seen = []
     for request in requests:
         shape = json.loads(re.sub(r" #[0-9]+>", ">", json.dumps(request)))
@@ -52,8 +49,6 @@ def distinct(requests):
 
 
 class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
-    """Profiling reads vLLM metrics and sends vLLM request fields."""
-
     def setUp(self):
         self.engine = FakeVllm(ENGINES)
         self.dialect = lookup("vllm")
@@ -67,7 +62,6 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         return client
 
     async def test_engine_metrics_and_context_limit(self):
-        """KV capacity, block size, prefix hits and context limit come from vLLM's routes."""
         client = self.client()
         self.engine.prefix_hits["e0"] = 48
         read = {
@@ -109,7 +103,6 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_probe_requests(self):
-        """Cold, decode, warm and neighbour probes send these vLLM requests."""
         client = self.client()
         probes = {}
         await probe_prefill(client, E0, "test-model", (32, 48), 2, self.dialect)
@@ -152,7 +145,6 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_calibration_requests_and_document(self):
-        """First-token calibration hands off through vLLM's prefill and decode legs."""
         cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
         cfg.engines = [cfg.engines[0], cfg.engines[3]]
         cfg.first_token_timeout_s = 0.01

@@ -1,5 +1,3 @@
-"""Pin the vLLM launch plans, runtime checks, start commands and attestation contract."""
-
 import contextlib
 import hashlib
 import io
@@ -54,7 +52,6 @@ SOURCE_DIGESTS = {
 
 
 def placeholders(root: Path, plan: dict | None = None) -> dict[str, str]:
-    """Map per-run paths, names and identities to stable placeholders."""
     values = {
         str(launch_plan.KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}"): "<kv-events-root>",
         str(root.resolve()): "<root>",
@@ -67,7 +64,6 @@ def placeholders(root: Path, plan: dict | None = None) -> dict[str, str]:
 
 
 def redacted(value):
-    """Replace source-file digests with a placeholder, keeping the field."""
     if isinstance(value, dict):
         return {
             key: "<sha256>" if key in SOURCE_DIGESTS and value[key] else redacted(item)
@@ -83,7 +79,6 @@ def env_lines(path: Path) -> list[str]:
 
 
 def runtime_output(plan: dict, ucx: str | None = "1.22.0") -> str:
-    """Return the runtime check output a vLLM image prints for `plan`."""
     return (
         json.dumps(plan["expected_packages"])
         + "\nNARWHAL_TOKENIZER_READY=1\n"
@@ -95,7 +90,6 @@ def runtime_output(plan: dict, ucx: str | None = "1.22.0") -> str:
 
 
 def docker_calls(mock: Mock) -> list[dict]:
-    """Return each Docker command with any inline script split into lines."""
     calls = []
     for call in mock.call_args_list:
         command = list(call.args[0])
@@ -107,7 +101,6 @@ def docker_calls(mock: Mock) -> list[dict]:
 
 
 def prepared(root: Path, *, backend: str = "container", record_changes=None) -> tuple[Path, dict]:
-    """Prepare a launch directory from the shared synthetic launch record."""
     record, env = launcher_inputs(root)
     if record_changes is not None:
         record_changes(record)
@@ -123,7 +116,6 @@ def prepared(root: Path, *, backend: str = "container", record_changes=None) -> 
 
 
 def checked_container(root: Path) -> tuple[Path, dict, dict]:
-    """Prepare and image-check a container launch; return its Docker calls and output."""
     run, plan = prepared(root)
     image = json.dumps([{"Id": plan["image"]}])
     with (
@@ -142,7 +134,6 @@ def shared_native(record: dict) -> None:
 
 class LaunchPlanTests(unittest.TestCase):
     def test_container_plan(self):
-        """A container plan pins the vLLM module, flags, connector, events and environment."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             run, plan = prepared(root)
@@ -154,7 +145,6 @@ class LaunchPlanTests(unittest.TestCase):
             assert_golden(self, "launch_container_plan", record, placeholders(root, plan))
 
     def test_native_plan(self):
-        """A native plan runs the same vLLM module from this interpreter without an image."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             run, plan = prepared(root, backend="native")
@@ -162,7 +152,6 @@ class LaunchPlanTests(unittest.TestCase):
             assert_golden(self, "launch_native_plan", record, placeholders(root, plan))
 
     def test_cuda_ipc_peer_plan(self):
-        """Colocated CUDA IPC peers with the UCX IPC cache off add the NIXL engine TTL."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
 
@@ -181,7 +170,6 @@ class LaunchPlanTests(unittest.TestCase):
             assert_golden(self, "launch_cuda_ipc_plan", record, placeholders(root, plan))
 
     def test_runtime_rules(self):
-        """The launcher accepts only pinned vLLM and NIXL runtimes and its known options."""
         cases = {
             "missing_vllm_pin": lambda r, e: r["runtime"]["expected_packages"].pop("vllm"),
             "missing_nixl_pin": lambda r, e: r["runtime"]["expected_packages"].pop("nixl"),
@@ -280,7 +268,6 @@ class LaunchPlanTests(unittest.TestCase):
 
 class RuntimeCheckAndStartTests(unittest.TestCase):
     def test_container_check_and_start(self):
-        """The image check runs the vLLM import script, then start creates the container."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             run, plan, checked = checked_container(root)
@@ -297,7 +284,6 @@ class RuntimeCheckAndStartTests(unittest.TestCase):
             assert_golden(self, "launch_container_check_start", record, placeholders(root, plan))
 
     def test_native_check(self):
-        """The native runtime check runs the same script with the engine environment."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             run, plan = prepared(root, backend="native")
@@ -321,7 +307,6 @@ class RuntimeCheckAndStartTests(unittest.TestCase):
             assert_golden(self, "launch_native_check", record, placeholders(root, plan))
 
     def test_native_shared_start(self):
-        """A native start records the vLLM arguments and live vLLM identity it launched."""
         with (
             tempfile.TemporaryDirectory() as folder,
             patch.dict(os.environ, {"VLLM_API_KEY": "inherited-key"}),
@@ -374,7 +359,6 @@ class RuntimeCheckAndStartTests(unittest.TestCase):
 
 class AttestationContractTests(unittest.TestCase):
     def test_container_engine_document(self):
-        """A checked, running vLLM container derives its contract from plan and captures."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             run, plan, _ = checked_container(root)
@@ -518,7 +502,6 @@ class DevTemplateTests(unittest.TestCase):
         return output, checks
 
     def test_dev_templates(self):
-        """Each installed template launches vLLM engines with GGUF arguments and a NIXL check."""
         for name, spec in (
             ("reference", template.reference()),
             ("default", template.default_template()),

@@ -1,5 +1,3 @@
-"""vLLM's Prometheus metrics."""
-
 from __future__ import annotations
 
 import re
@@ -15,8 +13,6 @@ _TRANSFER = re.compile(
 
 
 class VllmMetrics(EngineMetrics):
-    """Read vLLM's cache info, prefix-cache and NIXL transfer series."""
-
     dashboard_series: ClassVar[Mapping[str, str]] = {
         "running": "vllm:num_requests_running",
         "waiting": "vllm:num_requests_waiting",
@@ -30,19 +26,15 @@ class VllmMetrics(EngineMetrics):
     }
 
     def kv_capacity(self, metrics: str) -> int | None:
-        """Read `kv_cache_size_tokens`, the smallest across ranks."""
         return engine.parse_kv_capacity(metrics)
 
     def cache_block_tokens(self, metrics: str) -> int | None:
-        """Read `vllm:cache_config_info` block_size."""
         return engine.parse_cache_block_tokens(metrics)
 
     def prefix_cache_hits(self, metrics: str) -> int | None:
-        """Sum `vllm:prefix_cache_hits_total`."""
         return engine.parse_prefix_cache_hits(metrics)
 
     def transfer_totals(self, metrics: str) -> tuple[float, float] | None:
-        """Sum `vllm:nixl_xfer_time_seconds` count and seconds."""
         totals = {"count": 0.0, "sum": 0.0}
         matches = _TRANSFER.findall(metrics)
         for name, value in matches:

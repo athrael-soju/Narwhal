@@ -94,6 +94,11 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S", "D101"
 "tests/*.py" = ["D", "E731", "S"]
 # Preserve the existing deployment scripts' lint baseline during packaging.
 "src/narwhal/deployment/*.py" = ["D101", "D103", "S"]
+# Engine backend interfaces and implementations carry no docstrings.
+"src/narwhal/backends/**/*.py" = ["D101", "D102", "D103"]
+"src/narwhal/deployment/launch_engine/backend.py" = ["D101", "D102"]
+"src/narwhal/engines/{attestation,connector,dialect,kv_events,metrics}.py" = ["D101", "D102", "D103"]
+"src/narwhal/runtime/{fabric,role_switch}.py" = ["D101", "D102"]
 
 [tool.mypy]
 python_version = "3.11"
