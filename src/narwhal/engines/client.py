@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeGuard
 from uuid import uuid4
 
@@ -118,6 +120,33 @@ class ProbeLeg:
 class InferenceProbe:
     prefill: ProbeLeg
     decode: ProbeLeg
+
+
+@dataclass
+class PairedHandoff:
+    connector: str
+    result: PrefillResult | None = None
+    rendezvous: dict[str, Any] | None = None
+    decode_wait_s: float | None = None
+    prefill_seconds: float | None = None
+    # A rendezvous prefill leg runs while its decode leg streams.
+    prefill: asyncio.Task[None] | None = field(default=None, repr=False)
+
+    @property
+    def descriptor_json(self) -> str:
+        if self.result is not None:
+            return self.result.descriptor_json
+        return json.dumps(self.rendezvous or {}, sort_keys=True)
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return self.result.parameters() if self.result is not None else dict(self.rendezvous or {})
+
+
+def _prefill_failure(task: asyncio.Task[None]) -> BaseException | None:
+    if not task.done() or task.cancelled():
+        return None
+    return task.exception()
 
 
 def _status_class(status: int) -> str:
@@ -320,6 +349,80 @@ class EngineClient:
                 200,
                 f"{NO_HANDOFF_DETAIL}: invalid {self.kv.name} descriptor: {exc}",
             ) from exc
+
+    async def start_handoff(
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        producer: Mapping[str, Any] | None = None,
+    ) -> PairedHandoff:
+        started = time.monotonic()
+        if isinstance(self.kv, RendezvousConnector):
+            rendezvous = self.kv.rendezvous(producer or {})
+            handoff = PairedHandoff(
+                self.kv.name, rendezvous=rendezvous, decode_wait_s=self.kv.decode_wait_s
+            )
+
+            async def run() -> None:
+                await self.rendezvous_prefill(url, endpoint, body, headers, rendezvous)
+                handoff.prefill_seconds = time.monotonic() - started
+
+            handoff.prefill = asyncio.create_task(run())
+            return handoff
+        result = await self.prefill(url, endpoint, body, headers)
+        return PairedHandoff(
+            self.kv.name, result=result, prefill_seconds=time.monotonic() - started
+        )
+
+    async def decode_handoff(
+        self,
+        handoff: PairedHandoff,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        first_token_timeout_s: float | None = None,
+    ) -> AsyncGenerator[list[SseEvent], None]:
+        task = handoff.prefill
+        if task is None:
+            async for batch in self.decode(
+                url,
+                endpoint,
+                body,
+                headers,
+                handoff.result,
+                first_token_timeout_s=first_token_timeout_s,
+            ):
+                yield batch
+            return
+        limit = min(first_token_timeout_s or math.inf, handoff.decode_wait_s or math.inf)
+        finished = False
+        try:
+            async for batch in self.decode(
+                url,
+                endpoint,
+                body,
+                headers,
+                None,
+                first_token_timeout_s=None if math.isinf(limit) else limit,
+                rendezvous=handoff.rendezvous,
+            ):
+                yield batch
+            finished = True
+        except EngineError as exc:
+            # A decode leg without its prefill only times out; the prefill error is the cause.
+            failure = _prefill_failure(task)
+            if failure is not None:
+                raise failure from exc
+            raise
+        finally:
+            if not finished and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await task
 
     async def rendezvous_prefill(
         self,

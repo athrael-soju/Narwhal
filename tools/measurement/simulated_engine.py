@@ -157,7 +157,7 @@ class VllmWire:
             return Reply(200, body=compact({"version": SIMULATED_VERSION}))
         return None
 
-    def identity_metrics(self, engine: SimulatedEngine) -> str:
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
         return (
             "# HELP process_start_time_seconds Start time of the process since unix epoch in "
             "seconds.\n"
@@ -167,6 +167,9 @@ class VllmWire:
 
     def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
         return headers.get("x-request-id")
+
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        return None
 
     def decode_error(self, payload: dict[str, Any]) -> Reply | None:
         params = payload.get("kv_transfer_params")
@@ -225,13 +228,14 @@ class SglangWire:
             )
         return None
 
-    def identity_metrics(self, engine: SimulatedEngine) -> str:
-        # The engine's startup phases stand in for a process start time.
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
+        stage = 'stage="decode_transferred"'
         return (
-            "# HELP sglang:startup_time_seconds Engine startup duration by phase in seconds.\n"
-            "# TYPE sglang:startup_time_seconds gauge\n"
-            f'sglang:startup_time_seconds{{phase="load_weight"}} '
-            f"{engine.process_start_time_seconds!r}\n"
+            f"sglang:max_total_num_tokens {MAX_MODEL_LEN}\n"
+            "sglang:page_size 1\n"
+            'sglang:cached_tokens_total{cache_source="device"} 0\n'
+            f"sglang:per_stage_req_latency_seconds_count{{{stage}}} {engine.transfers}\n"
+            f"sglang:per_stage_req_latency_seconds_sum{{{stage}}} {engine.transfer_seconds!r}\n"
         )
 
     def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
@@ -245,10 +249,55 @@ class SglangWire:
             )
         return None
 
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        if engine.rooms is None:
+            return None
+        room = payload.get("bootstrap_room")
+        if type(room) is not int:
+            return error(
+                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
+            )
+        if engine.role == "prefill" and payload.get("stream"):
+            return error(400, "a prefill instance returns no stream", "BadRequestError")
+        started = time.monotonic()
+        if not await engine.rooms.meet(room, bounded=engine.role == "prefill"):
+            return error(500, f"Prefill bootstrap failed for room {room}", "InternalServerError")
+        if engine.role == "decode":
+            engine.transfers += 1
+            engine.transfer_seconds += max(time.monotonic() - started, 1e-6)
+        return None
+
     def prefill_fields(
         self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
     ) -> dict[str, Any]:
         return {}
+
+
+class Rooms:
+    """Pair SGLang prefill and decode legs by bootstrap room across in-process engines."""
+
+    def __init__(self, bootstrap_timeout_s: float = 30.0) -> None:
+        self.bootstrap_timeout_s = bootstrap_timeout_s
+        self.waiting: dict[int, asyncio.Future[None]] = {}
+
+    async def meet(self, room: int, *, bounded: bool) -> bool:
+        peer = self.waiting.pop(room, None)
+        if peer is not None:
+            if not peer.done():
+                peer.set_result(None)
+            return True
+        arrived = asyncio.get_running_loop().create_future()
+        self.waiting[room] = arrived
+        try:
+            # Prefill gives up on an absent decode leg; decode waits for its prefill.
+            async with asyncio.timeout(self.bootstrap_timeout_s if bounded else None):
+                await arrived
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            if self.waiting.get(room) is arrived:
+                del self.waiting[room]
 
 
 # One wire protocol per engine backend name.
@@ -266,9 +315,14 @@ class SimulatedEngine:
         frames_per_write: int = 1,
         prefill_s: float = 0.005,
         backend: str = "vllm",
+        rooms: Rooms | None = None,
     ) -> None:
         self.iid = iid
         self.wire = PROTOCOLS[backend]
+        # Shared rooms make engines serve only their live role and pair the two legs.
+        self.rooms = rooms
+        self.transfers = 0
+        self.transfer_seconds = 0.0
         self.token_interval_s = token_interval_s
         self.frames_per_write = frames_per_write
         self.prefill_s = prefill_s
@@ -321,6 +375,9 @@ class SimulatedEngine:
                     }
                 ),
             )
+        refused = await self.wire.admit(self, payload)
+        if refused is not None:
+            return refused
         rid = self.wire.request_id(headers, payload) or uuid.uuid4().hex
         if payload.get("stream"):
             return self.decode(rid, payload)
@@ -378,7 +435,7 @@ class SimulatedEngine:
 
     def metrics(self) -> bytes:
         return (
-            self.wire.identity_metrics(self)
+            self.wire.engine_metrics(self)
             + f"# HELP {LATE_TICKS_METRIC} Pacing ticks that started one tick period or more "
             "after their scheduled time.\n"
             f"# TYPE {LATE_TICKS_METRIC} counter\n"

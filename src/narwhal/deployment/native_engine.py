@@ -14,6 +14,7 @@ from urllib.request import urlopen
 import httpx
 
 from narwhal.engines.attestation import fetch_engine_identity
+from narwhal.engines.host_process import process_clock
 from narwhal.runtime.listeners import check_http_bind
 
 from . import stages
@@ -277,7 +278,10 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 headers = {"Authorization": f"Bearer {key}"} if key else None
                 live = asyncio.run(
                     fetch_engine_identity(
-                        plan["endpoint"], headers=headers, reader=backend.identity
+                        plan["endpoint"],
+                        headers=headers,
+                        reader=backend.identity,
+                        process=process_clock(pid=int(identity["pid"])),
                     )
                 )
                 if live.version != _checked_plan(run, plan)[engine.checked_version_field]:

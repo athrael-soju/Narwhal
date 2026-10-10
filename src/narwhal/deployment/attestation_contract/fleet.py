@@ -30,6 +30,7 @@ def finalize_fleet(path: Path) -> EngineContract:
                     timeout_s=fleet.health_timeout_s,
                     headers=headers,
                     reader=reader,
+                    attestation_url=engine.attestation_url,
                 )
             )
             response = client.get(engine.attestation_url)
@@ -42,10 +43,8 @@ def finalize_fleet(path: Path) -> EngineContract:
             failures = verify_attestation(payload, contract, identity)
             if failures:
                 raise ValueError(f"{engine.iid}: " + "; ".join(failures))
-            if contract.missing():
-                raise ValueError(
-                    f"{engine.iid}: incomplete contract: " + ", ".join(contract.missing())
-                )
+            if missing := contract.missing(reader.contract_fields):
+                raise ValueError(f"{engine.iid}: incomplete contract: " + ", ".join(missing))
             contracts.append(contract)
     if not contracts or any(
         contract.fields() != contracts[0].fields() for contract in contracts[1:]

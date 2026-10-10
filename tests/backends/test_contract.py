@@ -9,7 +9,7 @@ import httpx
 
 from narwhal.backends import EngineBackend, load, names
 from narwhal.deployment.launch_engine.backend import EngineLauncher
-from narwhal.engines.attestation import EngineIdentity
+from narwhal.engines.attestation import EngineIdentity, fetch_engine_identity
 from narwhal.engines.client import EngineClient, ProbeLeg
 from narwhal.engines.connector import KvConnector, PrefillResult, RendezvousConnector
 from narwhal.engines.stream import sse_token_bearing
@@ -94,8 +94,12 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
 
     async def test_identity_reads_the_live_engine(self):
         engine = await self.engine()
-        async with httpx.AsyncClient() as client:
-            identity = await self.backend.identity.read(client, engine.url)
+        # A backend whose engine publishes no process start reads it from its host.
+        identity = await fetch_engine_identity(
+            engine.url,
+            reader=self.backend.identity,
+            process=lambda: engine.process_start_time_seconds,
+        )
         self.assertEqual(
             identity, EngineIdentity(sim.SIMULATED_VERSION, engine.process_start_time_seconds)
         )

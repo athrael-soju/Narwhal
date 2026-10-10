@@ -52,7 +52,12 @@ async def read_generation(
     reader: EngineIdentityReader | None = None,
 ) -> GenerationEvidence:
     identity = await fetch_engine_identity(
-        spec.url, timeout_s=timeout_s, headers=headers, transport=transport, reader=reader
+        spec.url,
+        timeout_s=timeout_s,
+        headers=headers,
+        transport=transport,
+        reader=reader,
+        attestation_url=spec.attestation_url,
     )
     if contract is None:
         return identity_generation(identity)

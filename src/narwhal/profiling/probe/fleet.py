@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -12,7 +13,10 @@ import httpx
 from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
+from ...engines.attestation import attested_launches
+from ...engines.connector import RendezvousConnector
 from ...provenance import stamp
+from ...runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from ...types import Role
 from ..generation import read_generation
 from ..model import decode_evidence_problems
@@ -21,6 +25,7 @@ from ..tasks import cancel_tasks
 from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
+from .pairing import PairedTransport, Pairing, origin
 from .sweep import Sweep, bounded_sweep, load_sequence_limits
 
 
@@ -38,6 +43,31 @@ def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[E
     for spec in targets:
         lanes.setdefault(device_key(spec), []).append(spec)
     return list(lanes.values())
+
+
+def _peer(spec: EngineSpec, engines: list[EngineSpec]) -> EngineSpec:
+    index = next(i for i, engine in enumerate(engines) if engine.iid == spec.iid)
+    return engines[(index + 1) % len(engines)]
+
+
+def _pair_roles(
+    cfg: FleetConfig,
+    pairing: PairedTransport,
+    switcher: RoleSwitcher,
+    spec: EngineSpec,
+    peer: EngineSpec,
+    launches: dict[str, dict],
+) -> Callable[[Role], Awaitable[None]]:
+    async def serve_as(role: Role) -> None:
+        own, other = (spec.url, launches.get(spec.iid)), (peer.url, launches.get(peer.iid))
+        producer, consumer = (own, other) if role is Role.PREFILL else (other, own)
+        async with httpx.AsyncClient(
+            timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+        ) as control:
+            await place_pair(switcher, control, producer, consumer)
+        pairing.pairs[origin(spec.url)] = Pairing(role, origin(peer.url), producer[1] or {})
+
+    return serve_as
 
 
 async def run(
@@ -79,8 +109,21 @@ async def run(
     )
 
     print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
-    dialect = load_backend(cfg.backend).dialect
-    metrics = load_backend(cfg.backend).metrics
+    backend = load_backend(cfg.backend)
+    dialect = backend.dialect
+    metrics = backend.metrics
+    kv = backend.connector(cfg.connector)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    paired = isinstance(kv, RendezvousConnector)
+    if paired and switcher is None:
+        raise ValueError(
+            f"profiling measures both roles of each engine, and engine.connector "
+            f"{cfg.connector} keeps {backend.label} engine roles fixed"
+        )
+    if paired and colocated_workload is not None:
+        raise ValueError(f"--colocated profiling needs a {backend.label} engine to serve alone")
+    if paired and len(cfg.engines) < 2:
+        raise ValueError(f"profiling a {backend.label} engine needs a peer engine")
     evidence_rows: dict[str, object] = {}
     measurement_record = {
         "method_version": 2,
@@ -90,15 +133,30 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    lanes = _profile_lanes(targets, colocated=colocated_workload is not None)
+    # A paired engine borrows a peer for its other leg, so engines take turns.
+    lanes = _profile_lanes(targets, colocated=colocated_workload is not None or paired)
     connections = max((sweep or Sweep()).decode_concurrency) * len(lanes) + len(cfg.engines)
+    pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
+    pairing = (
+        PairedTransport(httpx.AsyncHTTPTransport(limits=pool), kv, dialect)
+        if isinstance(kv, RendezvousConnector)
+        else None
+    )
+    launches = (
+        await attested_launches(
+            cfg.engines, timeout_s=observation_timeout_s or cfg.health_timeout_s
+        )
+        if pairing is not None
+        else {}
+    )
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(
             observation_timeout_s or 300.0,
             connect=min(10.0, observation_timeout_s or 300.0),
         ),
-        limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
+        limits=pool,
         headers=cfg.engine_headers(),
+        transport=pairing,
     ) as client:
 
         async def profile_engine(spec: EngineSpec) -> None:
@@ -167,6 +225,11 @@ async def run(
                     reader=load_backend(cfg.backend).identity,
                 )
                 engine_evidence["generation_evidence"] = generation.document
+                roles = None
+                if pairing is not None and switcher is not None:
+                    peer = _peer(spec, cfg.engines)
+                    engine_evidence["peer"] = peer.iid
+                    roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches)
                 profile = await profile_instance(
                     client,
                     spec.iid,
@@ -179,6 +242,7 @@ async def run(
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
                     observation_timeout_s=observation_timeout_s,
+                    roles=roles,
                 )
                 if neighbour_load is not None:
                     measured = await neighbour_load.stop()

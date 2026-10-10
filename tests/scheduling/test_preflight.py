@@ -32,7 +32,7 @@ from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
-from tests.fixtures import calibration_document, fleet, profile
+from tests.fixtures import HandoffClient, calibration_document, fleet, profile
 from tests.wire import engine_transports, vllm_engine
 
 UNCALIBRATED = (
@@ -576,7 +576,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             endpoint="/v1/completions",
             request_id="p",
         )
-        client = SimpleNamespace(
+        client = HandoffClient(
             prefill=AsyncMock(
                 side_effect=[result, EngineError("prefill", "http://e", 500, "failed")]
             )
@@ -611,7 +611,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             decoded.append(body)
             yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
 
-        client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
+        client = HandoffClient(prefill=AsyncMock(return_value=result), decode=output)
         pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
         with patch.object(transfer, "validation_pairs", return_value=pair):
             report = Report()
@@ -647,7 +647,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         async def output(*args, **kwargs):
             yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
 
-        client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=output)
+        client = HandoffClient(prefill=AsyncMock(return_value=result), decode=output)
 
         def snapshot(iid, *, start=100.0, transfers=0.0):
             return {
@@ -796,7 +796,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 raise EngineError("decode", self.cfg.engines[1].url, 503, failure_detail)
                 yield []
 
-            client = SimpleNamespace(prefill=AsyncMock(return_value=result), decode=failed)
+            client = HandoffClient(prefill=AsyncMock(return_value=result), decode=failed)
             with (
                 patch.object(transfer, "validation_pairs", return_value=[(src, dst)]),
                 patch.object(transfer, "pair_snapshot", new=AsyncMock(return_value={"iid": src})),
@@ -930,7 +930,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     endpoint="/v1/completions",
                     request_id="request",
                 )
-                client = SimpleNamespace(
+                client = HandoffClient(
                     prefill=AsyncMock(return_value=result), decode=output, aclose=AsyncMock()
                 )
                 report = Report()

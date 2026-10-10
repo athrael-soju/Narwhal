@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 
 from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
+from ...types import Role
 from ..fitting import (
     CACHED_FIT_MIN_CASES,
     cached_fit_possible,
@@ -69,11 +71,17 @@ async def profile_instance(
     evidence: dict[str, object] | None = None,
     max_model_len: int | None = None,
     observation_timeout_s: float | None = None,
+    roles: Callable[[Role], Awaitable[None]] | None = None,
 ) -> Profile:
+    async def serve_as(role: Role) -> None:
+        if roles is not None:
+            await roles(role)
+
     s = sweep or Sweep()
     print(f"  {iid}")
     hits_before = await prefix_cache_hits(client, url, metrics, observation_timeout_s or 30.0)
     block_tokens = await cache_block_tokens(client, url, metrics, observation_timeout_s or 30.0)
+    await serve_as(Role.PREFILL)
     prefill = await probe_prefill(
         client,
         url,
@@ -101,6 +109,7 @@ async def profile_instance(
             prefill_block_tokens=block_tokens,
         )
     decode_intervals: list[dict[str, object]] = []
+    await serve_as(Role.DECODE)
     decode = await probe_decode(
         client,
         url,
@@ -132,6 +141,7 @@ async def profile_instance(
             f"two prefix lengths, two suffix lengths and {CACHED_FIT_MIN_CASES} cases"
         )
     else:
+        await serve_as(Role.PREFILL)
         cached, reason = await probe_cached_prefill(
             client,
             url,

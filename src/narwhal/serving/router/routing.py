@@ -24,6 +24,7 @@ from ...runtime.lifecycle.manager import LifecycleManager
 from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
+from ...runtime.role_switch import engine_side
 from ...runtime.standby import ready as router_ready
 from ...scheduling.controller import ReactiveController
 from ...scheduling.health import DriftTracker
@@ -190,7 +191,7 @@ class NarwhalRouter:
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
         switcher = self.backend.role_switcher(cfg.connector)
         # A router-side switch lets any engine serve either leg; otherwise each serves its role.
-        self.role_switch = switcher if switcher is not None and switcher.requires_idle else None
+        self.role_switch = engine_side(switcher)
         self.role_switches: set[asyncio.Task[None]] = set()
         self.scheduler.availability.roles_bound = switcher is None or switcher.requires_idle
         if switcher is None:

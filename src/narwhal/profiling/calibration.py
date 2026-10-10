@@ -16,11 +16,13 @@ import httpx
 
 from ..backends import load as load_backend
 from ..config import FleetConfig
-from ..engines.client import EngineClient, EngineError, first_output_timeout
-from ..engines.connector import PrefillResult
+from ..engines.attestation import attested_launches
+from ..engines.client import EngineClient, EngineError, PairedHandoff, first_output_timeout
+from ..engines.connector import RendezvousConnector
 from ..engines.dialect import EngineDialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
+from ..runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from .generation import read_generation
 from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
@@ -91,6 +93,21 @@ def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list
     for pair in pairs:
         rounds.setdefault(colour[pair], []).append(pair)
     return [rounds[index] for index in sorted(rounds)]
+
+
+def exclusive_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[Pair]]:
+    # Engines that switch roles serve one leg per round, so no slot repeats in a round.
+    rounds: list[tuple[set[str], list[Pair]]] = []
+    for pair in pairs:
+        used = {slots[pair[0]], slots[pair[1]]}
+        for taken, members in rounds:
+            if not taken & used:
+                taken.update(used)
+                members.append(pair)
+                break
+        else:
+            rounds.append((used, [pair]))
+    return [members for _, members in rounds]
 
 
 def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
@@ -356,7 +373,7 @@ class _Attempt:
     phase: str = "sizing"
     elapsed: float = 0.0
     body: dict[str, Any] = field(default_factory=dict)
-    handoff: PrefillResult | None = None
+    handoff: PairedHandoff | None = None
 
     def fail(self, exc: Exception, deadline: asyncio.Timeout) -> None:
         expired = first_output_timeout(exc) and exc.status == 504
@@ -385,7 +402,11 @@ class _Lockstep:
         dialect: EngineDialect,
         observation_timeout_s: float,
         context_limits: dict[str, int],
+        launches: Mapping[str, Mapping[str, Any]] | None = None,
+        switcher: RoleSwitcher | None = None,
     ) -> None:
+        self.launches = launches or {}
+        self.switcher = switcher
         self.cfg = cfg
         self.client = client
         self.sizing = sizing
@@ -412,6 +433,17 @@ class _Lockstep:
             }
             self.rows[(src, dst, target, index)] = row
             attempts.append(_Attempt(src, dst, target, output_tokens, context_limit, row))
+        if self.switcher is not None:
+            async with httpx.AsyncClient(
+                timeout=self.cfg.health_timeout_s, headers=self.cfg.engine_headers()
+            ) as control:
+                for src, dst in pairs:
+                    await place_pair(
+                        self.switcher,
+                        control,
+                        (self.urls[src], self.launches.get(src)),
+                        (self.urls[dst], self.launches.get(dst)),
+                    )
         prefilled = await _together([self._prefill(attempt) for attempt in attempts])
         await _together(
             [
@@ -451,11 +483,15 @@ class _Lockstep:
                     **self.dialect.decode_probe_extras(attempt.output_tokens),
                 }
                 attempt.phase = "prefill"
-                started = time.monotonic()
-                attempt.handoff = await self.client.prefill(
-                    self.urls[attempt.src], "/v1/completions", attempt.body, {}
+                attempt.handoff = await self.client.start_handoff(
+                    self.urls[attempt.src],
+                    "/v1/completions",
+                    attempt.body,
+                    {},
+                    producer=self.launches.get(attempt.src),
                 )
-                attempt.row["prefill_seconds"] = time.monotonic() - started
+                if attempt.handoff.prefill_seconds is not None:
+                    attempt.row["prefill_seconds"] = attempt.handoff.prefill_seconds
         except _ATTEMPT_ERRORS as exc:
             attempt.fail(exc, deadline)
             return False
@@ -464,17 +500,20 @@ class _Lockstep:
 
     async def _decode(self, attempt: _Attempt) -> None:
         attempt.phase = "decode"
+        handoff = attempt.handoff
+        if handoff is None:
+            return
         deadline = asyncio.timeout(self.cfg.request_timeout_s - attempt.elapsed)
         try:
             async with deadline:
                 began = time.monotonic()
                 first: float | None = None
-                async for batch in self.client.decode(
+                async for batch in self.client.decode_handoff(
+                    handoff,
                     self.urls[attempt.dst],
                     "/v1/completions",
                     attempt.body,
                     {},
-                    attempt.handoff,
                     first_token_timeout_s=self.observation_timeout_s,
                 ):
                     if first is None and any(
@@ -484,6 +523,8 @@ class _Lockstep:
                         attempt.row["first_token_seconds"] = first
                 if first is None:
                     raise ValueError("decode completed without a generated token")
+                if "prefill_seconds" not in attempt.row:
+                    attempt.row["prefill_seconds"] = handoff.prefill_seconds
                 attempt.row.update(status="completed", first_token_seconds=first)
         except _ATTEMPT_ERRORS as exc:
             attempt.fail(exc, deadline)
@@ -513,7 +554,12 @@ async def calibrate(
     pairs = validation_pairs(cfg.engines, mesh=True)
     if not pairs:
         raise ValueError("first-token calibration requires a role-permitted engine pair")
-    rounds = calibration_rounds(pairs, {spec.iid: device_key(spec) for spec in cfg.engines})
+    backend = load_backend(cfg.backend)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    slots = {spec.iid: device_key(spec) for spec in cfg.engines}
+    rounds = (
+        calibration_rounds(pairs, slots) if switcher is None else exclusive_rounds(pairs, slots)
+    )
     groups = [
         (src, dst, target)
         for source in sorted({src for src, _ in pairs})
@@ -572,8 +618,20 @@ async def calibrate(
                             f"exceed live context limit {context_limit}"
                         )
                 context_limits[iid] = context_limit
+            launches = (
+                await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
+                if switcher is not None or isinstance(client.kv, RendezvousConnector)
+                else {}
+            )
             lockstep = _Lockstep(
-                cfg, client, sizing, dialect, observation_timeout_s, context_limits
+                cfg,
+                client,
+                sizing,
+                dialect,
+                observation_timeout_s,
+                context_limits,
+                launches,
+                switcher,
             )
             print(
                 f"calibration groups: {len(groups)}; concurrent rounds per input length: "

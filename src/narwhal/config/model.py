@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,8 @@ class EngineContract:
     kv_role: str = ""
     transfer_mode: str = ""
     speculative_config: str = ""
-    enforce_handshake_compat: bool = True
+    # None when the backend has no handshake compatibility check.
+    enforce_handshake_compat: bool | None = True
 
     def fields(self) -> dict[str, str | int | bool | None]:
         return {
@@ -90,7 +92,7 @@ class EngineContract:
     def fingerprint(self) -> str:
         return canonical_digest(self.fields())[7:23]
 
-    def missing(self) -> list[str]:
+    def missing(self, attested: Collection[str] | None = None) -> list[str]:
         optional = {
             "transfer_version",
             "connector_version",
@@ -111,9 +113,12 @@ class EngineContract:
         return sorted(
             key
             for key in optional
-            if fields[key] is None
-            or fields[key] == ""
-            or (not isinstance(fields[key], bool) and fields[key] == 0)
+            if (attested is None or key in attested)
+            and (
+                fields[key] is None
+                or fields[key] == ""
+                or (not isinstance(fields[key], bool) and fields[key] == 0)
+            )
         )
 
 
@@ -265,6 +270,17 @@ class FleetConfig:
             return
         self.connector = self.connector or backend.default_connector
         self.dialect = self.dialect or backend.dialect.name
+
+    def attested_fields(self) -> frozenset[str] | None:
+        try:
+            return load_backend(self.backend).identity.contract_fields
+        except ValueError:
+            return None
+
+    def contract_missing(self) -> list[str] | None:
+        if self.engine_contract is None:
+            return None
+        return self.engine_contract.missing(self.attested_fields())
 
     @staticmethod
     def load(path: str | Path) -> FleetConfig:

@@ -216,6 +216,13 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             backend.connector(config.connector)
         except ValueError as exc:
             problems.append(str(exc))
+        if backend.role_switcher(config.connector) is None and not all(
+            spec.pin for spec in config.engines
+        ):
+            problems.append(
+                f"engine.connector {config.connector!r} keeps {backend.label} engine roles "
+                "fixed; set pin on every engine"
+            )
         if config.dialect != backend.dialect.name:
             problems.append(
                 f"backend {backend.name!r} has no dialect {config.dialect!r}: "
@@ -256,7 +263,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
     if config.engine_restart_policy not in ("individual", "whole_wave"):
         problems.append("recovery.engine_restart_policy must be 'individual' or 'whole_wave'")
     if config.engine_restart_policy == "whole_wave":
-        if config.engine_contract is None or config.engine_contract.missing():
+        if config.engine_contract is None or config.contract_missing():
             problems.append(
                 "recovery.engine_restart_policy whole_wave requires a complete engine_contract"
             )
@@ -270,10 +277,20 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             problems.append("engine_contract.engine_version is required")
         if not contract.connector:
             problems.append("engine_contract.connector is required")
-        if not contract.enforce_handshake_compat:
+        attested = config.attested_fields()
+        if (
+            attested is None or "enforce_handshake_compat" in attested
+        ) and contract.enforce_handshake_compat is not True:
             problems.append(
                 "engine_contract.enforce_handshake_compat must stay true; "
                 "disabling the connector's compatibility check permits silent corruption"
+            )
+        if attested is not None:
+            problems.extend(
+                f"engine_contract.{name} is not attested by backend {config.backend!r}; "
+                "leave it unset"
+                for name, value in contract.fields().items()
+                if name not in attested and value not in (None, "", 0)
             )
         if contract.image_digest and not re.fullmatch(
             r"sha256:[0-9a-f]{64}", contract.image_digest

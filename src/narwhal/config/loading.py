@@ -188,10 +188,14 @@ def load(path: str | Path) -> FleetConfig:
         except ValueError as exc:
             problems.append(str(exc))
         _check_unknown(problems, "engine_contract", contract_raw, _ENGINE_CONTRACT_KEYS)
-        handshake = _read_bool(
-            problems,
-            "engine_contract.enforce_handshake_compat",
-            contract_raw.get("enforce_handshake_compat", True),
+        attested = _attested_fields(engine_raw)
+        # A backend without a handshake check leaves the field null.
+        checks_handshake = attested is None or "enforce_handshake_compat" in attested
+        handshake_raw = contract_raw.get("enforce_handshake_compat", checks_handshake or None)
+        handshake = (
+            None
+            if handshake_raw is None and not checks_handshake
+            else _read_bool(problems, "engine_contract.enforce_handshake_compat", handshake_raw)
         )
         for name in ("cross_layers_blocks", "hybrid_kv_cache_manager"):
             value = contract_raw.get(name)
@@ -647,6 +651,14 @@ _ENGINE_CONTRACT_KEYS = {
 
 
 _HARDWARE_KEYS = {"accelerator", "accelerators_per_engine", "tensor_parallel"}
+
+
+def _attested_fields(engine_raw: dict[str, Any]) -> frozenset[str] | None:
+    try:
+        backend = load_backend(str(engine_raw.get("backend", DEFAULT_BACKEND)))
+        return backend.identity.contract_fields
+    except ValueError:
+        return None
 
 
 def _contract_connector(engine_raw: dict[str, Any]) -> str:

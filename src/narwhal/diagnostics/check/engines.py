@@ -9,12 +9,16 @@ import httpx
 
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...engines.attestation import attested_launches, fetch_engine_identity, verify_attestation
 from ...engines.client import EngineClient, EngineError
+from ...engines.connector import RendezvousConnector
 from ...engines.validation import can_consume, can_produce
 from ...profiling.calibration import verify_calibration
 from ...profiling.probe.engine import engine_context_limit, make_prompt
+from ...profiling.probe.pairing import PairedTransport, Pairing, origin
 from ...profiling.store import ProfileStore
+from ...runtime.role_switch import engine_side, place_pair
+from ...types import Role
 from .report import Report
 
 PROBE_PROMPT = "benchmark " * 64
@@ -117,7 +121,7 @@ async def gate_contract(
         rep.skip(f"no engine_contract declared; checking live {label} versions only")
     else:
         rep.ok(f"declared engine contract {declared.fingerprint()}")
-        missing = declared.missing()
+        missing = declared.missing(backend.identity.contract_fields)
         if missing:
             rep.skip(f"contract {declared.fingerprint()} undeclared: {', '.join(missing)}")
 
@@ -130,11 +134,7 @@ async def gate_contract(
                 continue
             try:
                 if declared is None:
-                    response = await client.get(f"{spec.url}/version", headers=cfg.engine_headers())
-                    response.raise_for_status()
-                    version = response.json()["version"]
-                    if not isinstance(version, str) or not version.strip():
-                        raise ValueError("version is empty")
+                    version = await backend.identity.version(client, spec.url, cfg.engine_headers())
                     identity = None
                 else:
                     identity = await fetch_engine_identity(
@@ -143,11 +143,12 @@ async def gate_contract(
                         transport=transport,
                         headers=cfg.engine_headers(),
                         reader=backend.identity,
+                        attestation_url=spec.attestation_url,
                     )
                     version = identity.version
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                route = "/version and /metrics" if declared is not None else "/version"
-                message = f"{spec.iid} {route} unreadable: {type(exc).__name__}"
+                subject = "identity" if declared is not None else "version"
+                message = f"{spec.iid} {label} {subject} unreadable: {type(exc).__name__}"
                 if declared is not None:
                     rep.fail(message)
                     unsafe.add(spec.iid)
@@ -229,6 +230,21 @@ async def gate_model(
 PACE_PROMPT = "benchmark " * 4096
 
 
+def _pace_peer(
+    spec: EngineSpec, engines: list[EngineSpec], live: set[str], *, fixed_roles: bool
+) -> EngineSpec | None:
+    if fixed_roles and not can_produce(spec):
+        return None
+    peers = [
+        peer
+        for peer in engines
+        if peer.iid != spec.iid
+        and peer.iid in live
+        and (not fixed_roles or (peer.pin and peer.role is Role.DECODE))
+    ]
+    return peers[0] if peers else None
+
+
 async def gate_pace(
     cfg: FleetConfig,
     live: set[str],
@@ -239,7 +255,23 @@ async def gate_pace(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
     print("pace")
-    dialect = load_backend(cfg.backend).dialect
+    backend = load_backend(cfg.backend)
+    dialect = backend.dialect
+    kv = backend.connector(cfg.connector)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    # A rendezvous engine prefills only beside a decode peer.
+    pairing = (
+        PairedTransport(transport or httpx.AsyncHTTPTransport(), kv, dialect)
+        if isinstance(kv, RendezvousConnector)
+        else None
+    )
+    launches = (
+        await attested_launches(
+            [spec for spec in cfg.engines if spec.iid in live], timeout_s=cfg.health_timeout_s
+        )
+        if pairing is not None
+        else {}
+    )
     base_body = {
         "model": cfg.model,
         "prompt": PACE_PROMPT,
@@ -251,12 +283,29 @@ async def gate_pace(
     lens: dict[str, int] = {}
     failed_probes: set[str] = set()
     async with httpx.AsyncClient(
-        timeout=cfg.prefill_timeout_s, transport=transport, headers=cfg.engine_headers()
+        timeout=cfg.prefill_timeout_s,
+        transport=pairing or transport,
+        headers=cfg.engine_headers(),
     ) as c:
         for spec in cfg.engines:
             if spec.iid not in live:
                 rep.skip(f"{spec.iid} pace: unreachable")
                 continue
+            if pairing is not None:
+                peer = _pace_peer(spec, cfg.engines, live, fixed_roles=switcher is None)
+                if peer is None:
+                    rep.skip(f"{spec.iid} pace: no live {backend.label} decode peer")
+                    continue
+                if switcher is not None:
+                    await place_pair(
+                        switcher,
+                        c,
+                        (spec.url, launches.get(spec.iid)),
+                        (peer.url, launches.get(peer.iid)),
+                    )
+                pairing.pairs[origin(spec.url)] = Pairing(
+                    Role.PREFILL, origin(peer.url), launches.get(spec.iid, {})
+                )
             body = base_body.copy()
             best = None
             for _ in range(repeats):
