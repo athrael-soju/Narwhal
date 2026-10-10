@@ -1,0 +1,323 @@
+{
+  "document": {
+    "attempts": [
+      {
+        "actual_input_tokens": 32,
+        "attempt": 1,
+        "consumer": "e3",
+        "first_token_seconds": "<seconds>",
+        "prefill_seconds": "<seconds>",
+        "producer": "e0",
+        "requested_output_tokens": 4,
+        "round": null,
+        "status": "completed",
+        "target_input_tokens": 32
+      },
+      {
+        "actual_input_tokens": 32,
+        "attempt": 1,
+        "consumer": "e0",
+        "first_token_seconds": "<seconds>",
+        "prefill_seconds": "<seconds>",
+        "producer": "e3",
+        "requested_output_tokens": 4,
+        "round": null,
+        "status": "completed",
+        "target_input_tokens": 32
+      }
+    ],
+    "candidate_deadline_s": "<seconds>",
+    "captured_at_unix": "<seconds>",
+    "changed_generations": [],
+    "configured_deadline_s": 0.01,
+    "contract_fingerprint": "8e52b260e524dd97",
+    "duration_s": "<seconds>",
+    "engine_urls": {
+      "e0": "http://engine-0.invalid:8000",
+      "e3": "http://engine-3.invalid:8000"
+    },
+    "generation_errors": [],
+    "generations": {
+      "e0": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+      "e3": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91"
+    },
+    "groups": [
+      {
+        "actual_input_tokens_max": 32,
+        "actual_input_tokens_min": 32,
+        "candidate_deadline_s": "<seconds>",
+        "completed": 1,
+        "consumer": "e3",
+        "failed": 0,
+        "maximum_seconds": "<seconds>",
+        "p99_seconds": "<seconds>",
+        "producer": "e0",
+        "target_input_tokens": 32
+      },
+      {
+        "actual_input_tokens_max": 32,
+        "actual_input_tokens_min": 32,
+        "candidate_deadline_s": "<seconds>",
+        "completed": 1,
+        "consumer": "e0",
+        "failed": 0,
+        "maximum_seconds": "<seconds>",
+        "p99_seconds": "<seconds>",
+        "producer": "e3",
+        "target_input_tokens": 32
+      }
+    ],
+    "input_tokens": [
+      32
+    ],
+    "model": "test-model",
+    "observation_timeout_s": 1.0,
+    "process_starts": {
+      "e0": 100.0,
+      "e3": 100.0
+    },
+    "samples_per_group": 1,
+    "schema": "narwhal.first-token-calibration",
+    "schema_version": 1,
+    "status": "incomplete"
+  },
+  "exit_code": 1,
+  "requests": [
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<1 words sha256:4a0e799d8a0aa3c2>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<1 words sha256:4a0e799d8a0aa3c2>"
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<uuid 32 words sha256:a610b894b6f5cb95>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            [
+              0,
+              1
+            ]
+          ],
+          "remote_engine_id": "e0-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5600,
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "min_tokens": 4,
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<uuid 32 words sha256:a610b894b6f5cb95>"
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>"
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            [
+              0,
+              1
+            ]
+          ],
+          "remote_engine_id": "e3-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5601,
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "min_tokens": 4,
+        "model": "test-model",
+        "prompt": "<uuid 31 words sha256:55d145f650131472>",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    }
+  ]
+}

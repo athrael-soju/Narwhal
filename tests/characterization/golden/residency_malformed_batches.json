@@ -1,0 +1,14 @@
+{
+  "boolean tokens": "stored-block token IDs must be integers",
+  "event not a map": "cache event must be a map",
+  "float tokens": "stored-block token IDs must be integers",
+  "list LoRA name": "LoRA name must be a string",
+  "map batch": "event batch must be [timestamp, events, ...]",
+  "map extra keys": "extra keys must be a list",
+  "map parent": "parent block hash must be bytes or an integer",
+  "not msgpack": "malformed cache event batch",
+  "removed without hashes": "malformed cache event batch: 'block_hashes'",
+  "short batch": "event batch must be [timestamp, events, ...]",
+  "stored without fields": "malformed cache event batch: 'token_ids'",
+  "string hashes": "block hashes must be a list of bytes or integers"
+}

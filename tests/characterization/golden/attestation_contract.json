@@ -1,0 +1,133 @@
+{
+  "minimal_contract": {
+    "attention_backend": "",
+    "connector": "NixlConnector",
+    "cross_layers_blocks": null,
+    "enforce_handshake_compat": true,
+    "head_size": 0,
+    "hidden_layers": 0,
+    "hybrid_kv_cache_manager": null,
+    "image_digest": "",
+    "kv_cache_dtype": "",
+    "kv_heads": 0,
+    "kv_role": "",
+    "model_architecture": "",
+    "model_dtype": "",
+    "nixl_connector_version": 0,
+    "nixl_version": "",
+    "speculative_config": "",
+    "transfer_mode": "",
+    "vllm_version": "1.0.0"
+  },
+  "serialized": {
+    "engine": {
+      "chars_per_token": 3.8,
+      "connect_timeout_s": 10.0,
+      "connector": "nixl",
+      "control_connections": 12,
+      "decode_read_timeout_s": 10.0,
+      "dialect": "vllm",
+      "engine_api_key_env": "",
+      "first_token_calibration_path": "",
+      "first_token_timeout_s": 2.5,
+      "health_timeout_s": 5.0,
+      "pool_timeout_s": 5.0,
+      "tokenize": true,
+      "tokenize_timeout_s": 2.0
+    },
+    "engine_contract": {
+      "attention_backend": "TEST",
+      "connector": "NixlConnector",
+      "cross_layers_blocks": false,
+      "enforce_handshake_compat": true,
+      "head_size": 1,
+      "hidden_layers": 1,
+      "hybrid_kv_cache_manager": false,
+      "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "kv_cache_dtype": "auto",
+      "kv_heads": 1,
+      "kv_role": "kv_both",
+      "model_architecture": "TestForCausalLM",
+      "model_dtype": "float32",
+      "nixl_connector_version": 1,
+      "nixl_version": "test",
+      "speculative_config": "disabled",
+      "transfer_mode": "pull",
+      "vllm_version": "1.0.0"
+    },
+    "schema": "narwhal.fleet",
+    "schema_version": 2
+  },
+  "validation": {
+    "empty_connector": {
+      "error": "<tmp>/fleet.json: engine_contract.connector is required"
+    },
+    "handshake_disabled": {
+      "error": "<tmp>/fleet.json: engine_contract.enforce_handshake_compat must stay true; disabling vLLM's NIXL compatibility hash permits silent corruption"
+    },
+    "missing_vllm_version": {
+      "error": "<tmp>/fleet.json: engine_contract.vllm_version is required"
+    },
+    "other_connector": {
+      "accepted": {
+        "attention_backend": "TEST",
+        "connector": "OtherConnector",
+        "cross_layers_blocks": false,
+        "enforce_handshake_compat": true,
+        "head_size": 1,
+        "hidden_layers": 1,
+        "hybrid_kv_cache_manager": false,
+        "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "kv_cache_dtype": "auto",
+        "kv_heads": 1,
+        "kv_role": "kv_both",
+        "model_architecture": "TestForCausalLM",
+        "model_dtype": "float32",
+        "nixl_connector_version": 1,
+        "nixl_version": "test",
+        "speculative_config": "disabled",
+        "transfer_mode": "pull",
+        "vllm_version": "1.0.0"
+      },
+      "engine": [
+        "nixl",
+        "vllm"
+      ]
+    },
+    "producer_kv_role": {
+      "accepted": {
+        "attention_backend": "TEST",
+        "connector": "NixlConnector",
+        "cross_layers_blocks": false,
+        "enforce_handshake_compat": true,
+        "head_size": 1,
+        "hidden_layers": 1,
+        "hybrid_kv_cache_manager": false,
+        "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "kv_cache_dtype": "auto",
+        "kv_heads": 1,
+        "kv_role": "kv_producer",
+        "model_architecture": "TestForCausalLM",
+        "model_dtype": "float32",
+        "nixl_connector_version": 1,
+        "nixl_version": "test",
+        "speculative_config": "disabled",
+        "transfer_mode": "pull",
+        "vllm_version": "1.0.0"
+      },
+      "engine": [
+        "nixl",
+        "vllm"
+      ]
+    },
+    "unknown_contract_field": {
+      "error": "<tmp>/fleet.json: unknown engine_contract key 'engine_version' (a typo falls back to the default silently)"
+    },
+    "unknown_engine_connector": {
+      "error": "<tmp>/fleet.json: unknown connector 'unknown': known ones are nixl"
+    },
+    "unknown_engine_dialect": {
+      "error": "<tmp>/fleet.json: unknown dialect 'unknown': known ones are vllm"
+    }
+  }
+}

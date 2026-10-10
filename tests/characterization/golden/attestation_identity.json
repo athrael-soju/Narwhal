@@ -1,0 +1,168 @@
+{
+  "attested": {
+    "digest": "sha256:1b516a728b2cb1ba7e74fe7d5ad43e19548ae9a3b6bbb000c3e6af302a165770",
+    "document": {
+      "attestation_digest": "sha256:669daf60cb25b90519593f08d15bb1375a5cff26b7850626734b6aa0f53d9afa",
+      "contract": {
+        "attention_backend": "TEST",
+        "connector": "NixlConnector",
+        "cross_layers_blocks": false,
+        "enforce_handshake_compat": true,
+        "head_size": 1,
+        "hidden_layers": 1,
+        "hybrid_kv_cache_manager": false,
+        "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "kv_cache_dtype": "auto",
+        "kv_heads": 1,
+        "kv_role": "kv_both",
+        "model_architecture": "TestForCausalLM",
+        "model_dtype": "float32",
+        "nixl_connector_version": 1,
+        "nixl_version": "test",
+        "speculative_config": "disabled",
+        "transfer_mode": "pull",
+        "vllm_version": "1.0.0"
+      },
+      "engine": {
+        "process_start_time_seconds": 100.0,
+        "vllm_version": "1.0.0"
+      },
+      "launch": {
+        "args": [
+          "--max-num-seqs",
+          "64",
+          "--kv-transfer-config",
+          "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_connector_extra_config\": {\"kv_lease_duration\": 30}}"
+        ]
+      },
+      "launch_digest": "sha256:1b516a728b2cb1ba7e74fe7d5ad43e19548ae9a3b6bbb000c3e6af302a165770",
+      "schema": "narwhal.attestation",
+      "schema_version": 1,
+      "sources": {
+        "attention_backend": "fixture-launch",
+        "connector": "fixture-launch",
+        "cross_layers_blocks": "fixture-launch",
+        "enforce_handshake_compat": "fixture-launch",
+        "head_size": "fixture-launch",
+        "hidden_layers": "fixture-launch",
+        "hybrid_kv_cache_manager": "fixture-launch",
+        "image_digest": "fixture-launch",
+        "kv_cache_dtype": "fixture-launch",
+        "kv_heads": "fixture-launch",
+        "kv_role": "fixture-launch",
+        "model_architecture": "fixture-launch",
+        "model_dtype": "fixture-launch",
+        "nixl_connector_version": "fixture-launch",
+        "nixl_version": "fixture-launch",
+        "speculative_config": "fixture-launch",
+        "transfer_mode": "fixture-launch",
+        "vllm_version": "fixture-launch"
+      }
+    },
+    "process_digest": "sha256:669daf60cb25b90519593f08d15bb1375a5cff26b7850626734b6aa0f53d9afa",
+    "process_start_time_seconds": 100.0,
+    "requests": [
+      {
+        "headers": {
+          "authorization": "Bearer fixture-key"
+        },
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8000/version"
+      },
+      {
+        "headers": {
+          "authorization": "Bearer fixture-key"
+        },
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8000/metrics"
+      },
+      {
+        "headers": {},
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8010/v1/attestation"
+      }
+    ]
+  },
+  "capture": [
+    {
+      "e0": 100.0,
+      "e3": 200.0
+    },
+    {}
+  ],
+  "capture_requests": [
+    {
+      "headers": {
+        "authorization": "Bearer fixture-key"
+      },
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {
+        "authorization": "Bearer fixture-key"
+      },
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {
+        "authorization": "Bearer fixture-key"
+      },
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-1:8000/version"
+    },
+    {
+      "headers": {
+        "authorization": "Bearer fixture-key"
+      },
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-1:8000/metrics"
+    }
+  ],
+  "contract_free": {
+    "digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "document": {
+      "engine": {
+        "process_start_time_seconds": 100.0,
+        "vllm_version": "1.0.0"
+      }
+    },
+    "process_digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "process_start_time_seconds": 100.0,
+    "requests": [
+      {
+        "headers": {
+          "authorization": "Bearer fixture-key"
+        },
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8000/version"
+      },
+      {
+        "headers": {
+          "authorization": "Bearer fixture-key"
+        },
+        "json": null,
+        "method": "GET",
+        "url": "http://stub-0:8000/metrics"
+      }
+    ]
+  },
+  "identity_generation": {
+    "digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "document": {
+      "engine": {
+        "process_start_time_seconds": 100.0,
+        "vllm_version": "1.0.0"
+      }
+    }
+  }
+}
