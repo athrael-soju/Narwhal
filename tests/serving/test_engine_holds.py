@@ -75,7 +75,7 @@ class HeldEngineTests(unittest.IsolatedAsyncioTestCase):
         """Patch the inference probe to answer by producer URL; None is the standalone probe."""
         by_url = {url: iid for iid, url in self.urls.items()}
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             return verdicts.get(by_url.get(prefill_url), PASSED)
 
         return patch.object(router.engines, "probe_inference", side_effect=probe)

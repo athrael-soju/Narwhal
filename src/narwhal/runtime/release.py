@@ -131,7 +131,10 @@ async def release_round(
             return "no producer"
         producer = others[(index + shift) % len(others)]
         result = await router.engines.probe_inference(
-            url, prefill_url=producer.url, deadline_s=deadline
+            url,
+            prefill_url=producer.url,
+            deadline_s=deadline,
+            producer=router.launches.get(producer.iid),
         )
         if result is None:
             return "no model"

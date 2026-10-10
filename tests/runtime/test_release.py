@@ -99,7 +99,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.urls = {spec.url: spec.iid for spec in cfg.engines}
         self.calls: list[tuple[str, str]] = []
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             self.calls.append((self.urls[prefill_url], self.urls[url]))
             return InferenceProbe(prefill=ProbeLeg(), decode=ProbeLeg())
 
@@ -127,7 +127,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e3", producers)
 
     async def test_failed_producer_and_lone_consumer_are_reported(self):
-        async def failing(url, *, prefill_url=None, deadline_s=None):
+        async def failing(url, *, prefill_url=None, deadline_s=None, producer=None):
             return InferenceProbe(prefill=ProbeLeg(failed="connection"), decode=ProbeLeg())
 
         self.router.engines.probe_inference = AsyncMock(side_effect=failing)
@@ -160,7 +160,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
     async def test_missed_consumers_retry_before_the_next_round(self):
         missed = {"e1", "e3"}
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             consumer = self.urls[url]
             self.calls.append((self.urls[prefill_url], consumer))
             if consumer in missed:
@@ -196,7 +196,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.peer_release.tasks, set())
 
     async def test_a_retry_runs_once_through_the_next_producer(self):
-        async def failing(url, *, prefill_url=None, deadline_s=None):
+        async def failing(url, *, prefill_url=None, deadline_s=None, producer=None):
             self.calls.append((self.urls[prefill_url], self.urls[url]))
             return InferenceProbe(prefill=ProbeLeg(failed="connection"), decode=ProbeLeg())
 

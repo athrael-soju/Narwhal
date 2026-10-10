@@ -140,7 +140,7 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         missed = {"e1"}
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             consumer = urls[url]
             calls.append([urls[prefill_url], consumer])
             if consumer in missed:
