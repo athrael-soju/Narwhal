@@ -82,7 +82,15 @@ class LiveRecordsTests(unittest.TestCase):
         self.assertEqual(result["goodput"], {"good_requests": 1, "requests_per_s": 0.25})
         (point,) = result["series"]["points"]
         self.assertEqual((point["t"], point["errors"]), (5, 1))
-        self.assertEqual(point["requests_per_s"], 0.4)
+        # The job's 4 s fill part of the 5 s bucket.
+        self.assertEqual(point["requests_per_s"], 0.5)
+
+    def test_the_last_bucket_rate_uses_the_time_elapsed_in_it(self) -> None:
+        self.append("".join(record(t, t + 1) for t in range(0, 7)))
+        self.records.refresh()
+        first, last = self.records.results({})["series"]["points"]
+        self.assertEqual(first["requests_per_s"], 4 / 5)
+        self.assertEqual(last["requests_per_s"], 3 / 2)
 
     def test_refresh_reads_only_complete_new_lines(self) -> None:
         line = record(0, 1)

@@ -201,7 +201,8 @@ class Overlays:
                 effect["hook"] = await self._run(hook, session, baseline["fleet"], effect)
                 session.apply_configuration(self.service.stamp(), "baseline", baseline["document"])
                 effect["readiness"] = await self._ready(effect)
-            for iid, change in changes["engines"].items():
+            undo = [(iid, change) for iid, each in changes["engines"].items() for change in each]
+            for iid, change in undo:
                 steps.append(await self._undo(iid, UNDO[change], effect))
             return effect
 
@@ -213,6 +214,8 @@ class Overlays:
         if action == "readmit":
             async with self.engines._client() as client:
                 state = await self.engines.engine_state(client, iid)
+            if "error" in state:
+                raise ActionError(f"readmit {iid} failed: {state['error']}", result=effect)
             lifecycle = state.get("lifecycle") or {}
             if not state.get("draining") and lifecycle.get("state") not in READMITTABLE:
                 return {"engine": iid, "action": action, "seq": None}

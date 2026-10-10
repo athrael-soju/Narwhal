@@ -37,10 +37,10 @@ The **?** beside each panel title describes the panel.
 
 With `console.auto_connect` set to `true`, the service embeds the token in the console page, and the page connects when it loads.
 
-!!! warning
-    Any process that can reach the service's port can then read the token from the page. That includes every user and process on the router host and every local process on a workstation with the tunnel open. Enable `auto_connect` only on single-user machines.
+The service embeds the token when the request's `Host` header names `127.0.0.1`, `localhost`, `::1` or a name in `console.trusted_hosts`. At any other address, the page asks for the token.
 
-The service embeds the token for `127.0.0.1`, `localhost`, `::1` and the names in `console.trusted_hosts`. At any other address, the page asks for the token.
+!!! warning
+    Anyone who can load the page at one of those names can read the token. That includes every user and process on the router host, every local process on a workstation with the tunnel open, and every machine that can reach a trusted name. Enable `auto_connect` only on single-user machines, and list in `trusted_hosts` only names that other people's machines cannot reach.
 
 To connect from other machines, add the host names their browsers use:
 
@@ -51,5 +51,7 @@ To connect from other machines, add the host names their browsers use:
   "trusted_hosts": ["ops-host", "ops-host.example.ts.net"]
 }
 ```
+
+A reverse proxy in front of the service must pass the browser's `Host` header through, as nginx does with `proxy_set_header Host $host;`. A proxy that sends its upstream address instead makes every request look local, and every client receives the token.
 
 After the service restarts with a new token, reload the page.

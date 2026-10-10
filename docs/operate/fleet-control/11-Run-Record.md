@@ -35,7 +35,7 @@ runs/fleet-control/
 | `schema_version` | `1`                                                                                      |
 | `session`        | Session ID                                                                               |
 | `started_at`     | Session start, ISO 8601 UTC                                                              |
-| `ended_at`       | Time the session closed after its restore and journal extract, or `null`                 |
+| `ended_at`       | Time the session closed after its journal extract, or `null`                             |
 | `baseline`       | `source`, the baseline file the service read, and `copy`, `baseline.json`                |
 | `configuration`  | The configuration that currently governs the session, the last entry of `configurations` |
 | `configurations` | Every applied configuration in order                                                     |
@@ -80,7 +80,7 @@ The `result` depends on the action:
 | `config.cold_restart`                                          | `fleet`, `digest`, `hook`, `readiness`                                                     |
 | `config.restore`                                               | `changes`, `steps`, and `hook` and `readiness` when the configuration changed              |
 
-`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, each engine the session left `paused`, `stopped` or `drained`. Each `steps` entry names the `engine`, the `action` that undid its change and that action's `seq`, or `null` when the engine was already in service.
+`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, the changes each engine still carries: `paused` or `stopped`, then `drained`. Each `steps` entry names the `engine`, the `action` that undid one change and that action's `seq`, or `null` when the engine was already in service.
 
 A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, and `tail`, the last 4096 bytes of output.
 

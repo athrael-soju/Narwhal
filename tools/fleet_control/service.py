@@ -20,38 +20,50 @@ from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
 
-# Engine state each action leaves.
-ENGINE_CHANGES: dict[str, str | None] = {
-    "pause": "paused",
-    "stop": "stopped",
-    "drain": "drained",
-    "resume": None,
-    "start": None,
-    "readmit": None,
+# Engine change each action leaves, by axis: process or router lifecycle.
+ENGINE_CHANGES: dict[str, tuple[str, str | None]] = {
+    "pause": ("process", "paused"),
+    "stop": ("process", "stopped"),
+    "resume": ("process", None),
+    "start": ("process", None),
+    "drain": ("lifecycle", "drained"),
+    "readmit": ("lifecycle", None),
 }
 UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
 # Actions that clear the engine changes.
 CLEARING_ACTIONS = frozenset({"config.cold_restart"})
+RESTORE_ACTION = "config.restore"
 
 
 def session_changes(session: Session) -> dict[str, Any]:
-    """Return the configuration and engine changes the session leaves in place."""
-    engines: dict[str, str] = {}
+    """Return the configuration and engine changes the session leaves in place, in undo order."""
+    axes: dict[str, dict[str, str]] = {}
     for action in session.actions:
+        if action.name == RESTORE_ACTION:
+            # A restore step with no seq found the engine already in service.
+            for step in (action.result or {}).get("steps", []):
+                if step.get("seq") is None:
+                    axes.get(str(step.get("engine")), {}).pop("lifecycle", None)
+            continue
         if action.outcome != "ok":
             continue
         if action.name in CLEARING_ACTIONS:
-            engines.clear()
+            axes.clear()
             continue
         verb = action.name.removeprefix("engine.")
         if verb == action.name or verb not in ENGINE_CHANGES:
             continue
         iid = str(action.params.get("engine"))
-        change = ENGINE_CHANGES[verb]
+        axis, change = ENGINE_CHANGES[verb]
         if change is None:
-            engines.pop(iid, None)
+            axes.get(iid, {}).pop(axis, None)
         else:
-            engines[iid] = change
+            axes.setdefault(iid, {})[axis] = change
+    engines = {
+        iid: [changes[axis] for axis in ("process", "lifecycle") if axis in changes]
+        for iid, changes in axes.items()
+        if changes
+    }
     baseline = session.configurations[0]["digest"]
     return {
         "configuration": session.configurations[-1]["digest"] != baseline,

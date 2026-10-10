@@ -630,7 +630,7 @@ dialog ul:empty { display: none; }
     <div id="strip-actions" class="cell" hidden>
       <div class="deadline">
         <label for="drain-deadline" class="k">Drain deadline</label>
-        <span><input id="drain-deadline" type="number" min="0" step="any" placeholder="default"><span class="unit">s</span></span>
+        <span><input id="drain-deadline" type="number" min="1" step="any" placeholder="default"><span class="unit">s</span></span>
       </div>
       <button id="session-start" class="btn btn-primary" type="button">Start session</button>
       <button id="session-end" class="btn btn-danger" type="button" hidden>End session</button>
@@ -913,6 +913,7 @@ const state = {
   checking: false,
   keys: {},
   busy: {},
+  refreshAgain: false,
   timers: [],
 };
 const rows = new Map();
@@ -1168,7 +1169,11 @@ function setControl(button, reason) {
 
 // Polling.
 async function refresh(force) {
-  if (state.busy.health) return;
+  if (state.busy.health) {
+    // Run a forced refresh once the poll in flight finishes.
+    if (force) state.refreshAgain = true;
+    return;
+  }
   state.busy.health = true;
   try {
     const reply = await call("health", {});
@@ -1189,6 +1194,10 @@ async function refresh(force) {
   } finally {
     state.busy.health = false;
     render();
+    if (state.refreshAgain) {
+      state.refreshAgain = false;
+      refreshAll(true);
+    }
   }
 }
 
@@ -1504,7 +1513,7 @@ function changeList() {
   const changes = state.record && state.record.changes;
   if (!changes) return [];
   const list = changes.configuration ? ["configuration differs from the baseline"] : [];
-  for (const [iid, change] of Object.entries(changes.engines || {})) list.push(iid + " " + change);
+  for (const [iid, change] of Object.entries(changes.engines || {})) list.push(iid + " " + [].concat(change).join(" and "));
   return list;
 }
 
@@ -1877,7 +1886,9 @@ function drainDeadline() {
 async function engineAction(iid, action) {
   const body = {};
   const deadline = drainDeadline();
-  if (action === "drain" && deadline !== "") body.deadline_s = Number(deadline);
+  // Zero, negative or unreadable deadlines leave the router's default.
+  const seconds = Number(deadline);
+  if (action === "drain" && deadline !== "" && Number.isFinite(seconds) && seconds > 0) body.deadline_s = seconds;
   const effects = {
     pause: "Runs the engine_pause hook for " + iid + ". The router ejects an engine that stops answering, so it leaves service until it resumes.",
     stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering. "

@@ -278,7 +278,10 @@ class RestoreEngineTests(EngineCase):
         changes = (await self.client.get("/api/session")).json()["changes"]
         self.assertEqual(
             changes,
-            {"configuration": False, "engines": {"e1": "stopped", "e2": "paused", "e3": "drained"}},
+            {
+                "configuration": False,
+                "engines": {"e1": ["stopped"], "e2": ["paused"], "e3": ["drained"]},
+            },
         )
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
@@ -295,6 +298,48 @@ class RestoreEngineTests(EngineCase):
         )
         self.assertFalse(self.router.out("e1") or self.router.out("e2") or self.router.out("e3"))
         self.assertNotIn("/ready", [path for _, path, _ in self.router.requests])
+
+    async def test_restore_undoes_a_pause_and_a_drain_on_one_engine(self) -> None:
+        await self.start_session()
+        for path in ("/api/engines/e3/drain", "/api/engines/e3/pause"):
+            response = await self.client.post(path)
+            self.assertEqual(response.status_code, 200, response.text)
+        changes = (await self.client.get("/api/session")).json()["changes"]
+        self.assertEqual(changes["engines"], {"e3": ["paused", "drained"]})
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        steps = response.json()["result"]["steps"]
+        self.assertEqual(
+            [(step["engine"], step["action"]) for step in steps],
+            [("e3", "resume"), ("e3", "readmit")],
+        )
+        self.assertFalse(self.router.out("e3"))
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {})
+
+    async def test_restore_clears_a_drain_the_router_already_ended(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e3/drain")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.router.records["e3"] = "active"
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        (step,) = response.json()["result"]["steps"]
+        self.assertEqual((step["engine"], step["action"], step["seq"]), ("e3", "readmit", None))
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {})
+
+    async def test_restore_fails_when_it_cannot_read_a_drained_engine(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e3/drain")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.router.state_down = True
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("readmit e3 failed: router state unavailable", response.text)
+        self.router.state_down = False
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {"e3": ["drained"]})
 
 
 # This start hook exits 0 and leaves the engine stopped, as when the process fails to come up.

@@ -17,7 +17,7 @@ The service validates the whole file at startup and reports every problem in one
 | `token_env`      | `NARWHAL_CONTROL_TOKEN`  | Environment variable that holds the bearer token                                                    |
 | `runs_dir`       | `runs/fleet-control`     | Directory for the action log and session run records                                                |
 | `fleet`          | `NARWHAL_FLEET` when set | Baseline fleet configuration file. Required when `NARWHAL_FLEET` is unset                           |
-| `hooks`          | none; required           | Hook commands by name. Must include `restore`                                                       |
+| `hooks`          | none; required           | Hook commands by name                                                                               |
 | `router`         | see [Router](#router)    | The router whose state, lifecycle and readiness routes the service calls                            |
 | `prometheus_url` | absent                   | Prometheus base URL, `http` or `https`, that the service asks for firing alerts                     |
 | `load`           | absent                   | AIPerf settings and the workload library. Without it, load-job routes refuse requests or are absent |

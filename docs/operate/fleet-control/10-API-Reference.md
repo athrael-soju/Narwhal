@@ -109,16 +109,16 @@ When a job finishes or stops, the service copies the job's [journal extract](11-
 | `POST /api/config/cold-restart`  | Runs the `cold_restart` hook                       |
 | `POST /api/config/restore`       | Undoes the session's changes                       |
 
-| Status | Meaning                                                                                                    |
-| ------ | ---------------------------------------------------------------------------------------------------------- |
-| 200    | The hook succeeded and the router answered `GET /ready` with HTTP 200                                      |
-| 409    | No session is active, or an exclusive action is in progress                                                |
-| 422    | Overlay only: the body is not a JSON object, changes nothing, changes another section, or fails the loader |
-| 501    | The `router_restart` or `cold_restart` hook is not configured                                              |
-| 502    | The hook failed to start, exited non-zero or timed out                                                     |
-| 504    | The router was not ready within `router.timeout_s`                                                         |
+| Status | Meaning                                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| 200    | The action finished. When it restarted the router, the router answered `GET /ready` with HTTP 200                             |
+| 409    | No session is active, or an exclusive action is in progress                                                                   |
+| 422    | Overlay only: the body is not a JSON object, changes nothing, changes another section, or fails the loader                    |
+| 501    | A hook the action needs is not configured                                                                                     |
+| 502    | A hook failed to start, exited non-zero or timed out, or a restore could not read or change an engine's router state          |
+| 504    | The router was not ready within `router.timeout_s`, or an engine that restore started or resumed did not return to service    |
 
-The check returns HTTP 200 with:
+The check runs no hook. It returns HTTP 409 when no session is active, HTTP 422 when the body is not a JSON object, and otherwise HTTP 200 with:
 
 - `errors`
 - `base_digest`, for the current configuration

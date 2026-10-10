@@ -10,6 +10,7 @@ import signal
 import stat
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from tools.fleet_control.config import (
     RouterEndpoint,
     load_config,
 )
+from tools.fleet_control.live import LiveRecords, live_routes
 from tools.fleet_control.service import ControlService
 from tools.fleet_control.workloads import (
     KINDS,
@@ -86,7 +88,13 @@ SUMMARY: dict[str, Any] = {
 
 def aiperf_record(rid: str, phase: str = "profiling", error: dict[str, Any] | None = None) -> str:
     row = {
-        "metadata": {"x_request_id": rid, "benchmark_phase": phase, "was_cancelled": False},
+        "metadata": {
+            "x_request_id": rid,
+            "benchmark_phase": phase,
+            "was_cancelled": False,
+            "request_start_ns": 0,
+            "request_end_ns": 1_000_000_000,
+        },
         "metrics": {"request_latency": {"value": 1.0, "unit": "ms"}},
         "error": error,
     }
@@ -547,7 +555,9 @@ class RunnerCase(unittest.IsolatedAsyncioTestCase):
         self.service = ControlService(config, runner=runner_for(config, self.env), env=self.env)
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(
-                app=create_app(self.service, TOKEN, [workload_routes(load)])
+                app=create_app(
+                    self.service, TOKEN, [workload_routes(load), live_routes(self.service, {})]
+                )
             ),
             base_url="http://control",
             headers={"authorization": f"Bearer {TOKEN}"},
@@ -694,6 +704,43 @@ class CompletedJobTests(RunnerCase):
                 },
             ],
         )
+
+
+class LiveRouteTests(RunnerCase):
+    async def test_live_results_need_a_job(self) -> None:
+        await self.start_session()
+        response = await self.client.get("/api/jobs/current/live")
+        self.assertEqual(response.status_code, 404, response.text)
+
+    async def test_overlapping_polls_count_each_request_once(self) -> None:
+        await self.start_session()
+        await self.start_job(workload="chat-512-256", rate=2, duration_s=30)
+        await self.finished_job()
+        running = 0
+        overlaps = 0
+        refresh = LiveRecords.refresh
+
+        # Hold each refresh long enough for the other polls to arrive.
+        def slow_refresh(records: LiveRecords) -> None:
+            nonlocal running, overlaps
+            running += 1
+            overlaps = max(overlaps, running)
+            time.sleep(0.05)
+            refresh(records)
+            running -= 1
+
+        with mock.patch.object(LiveRecords, "refresh", slow_refresh):
+            replies = await asyncio.gather(
+                *(self.client.get("/api/jobs/current/live") for _ in range(4))
+            )
+        self.assertEqual(overlaps, 1)
+        for reply in replies:
+            self.assertEqual(reply.status_code, 200, reply.text)
+            body = reply.json()
+            self.assertEqual((body["job"], body["state"]), ("job-001", "succeeded"))
+            requests = body["requests"]
+            self.assertEqual((requests["total"], requests["completed"]), (100, 97))
+            self.assertEqual(requests["warmup"], 1)
 
 
 class SlowJobTests(RunnerCase):

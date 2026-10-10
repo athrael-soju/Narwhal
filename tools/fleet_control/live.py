@@ -192,9 +192,11 @@ def _series(samples: list[Sample], start: int, elapsed_s: float) -> dict[str, An
     points = []
     for index, members in enumerate(buckets):
         done = [s for s in members if s.outcome == COMPLETED]
+        # The last bucket covers only the time elapsed so far.
+        width = min(bucket, elapsed_s - index * bucket) if index == count - 1 else bucket
         point: dict[str, Any] = {
             "t": (index + 1) * bucket,
-            "requests_per_s": len(done) / bucket,
+            "requests_per_s": len(done) / width if width > 0 else 0.0,
             "errors": len(members) - len(done),
         }
         for name in ("ttft", "itl"):
@@ -208,6 +210,8 @@ def live_routes(service: ControlService, slo: Mapping[str, float]) -> APIRouter:
     """Return the route that reports the current load job's results from its records so far."""
     routes = APIRouter(prefix=API)
     followed: dict[str, LiveRecords] = {}
+    # Overlapping polls refresh one at a time.
+    reading = asyncio.Lock()
 
     @routes.get("/jobs/current/live")
     async def live() -> JSONResponse:
@@ -220,7 +224,9 @@ def live_routes(service: ControlService, slo: Mapping[str, float]) -> APIRouter:
         if records is None:
             followed.clear()
             records = followed[key] = LiveRecords(job.directory / ARTIFACTS / RECORDS)
-        await asyncio.to_thread(records.refresh)
-        return JSONResponse({"job": job.id, "state": job.state, **records.results(slo)})
+        async with reading:
+            await asyncio.to_thread(records.refresh)
+            results = records.results(slo)
+        return JSONResponse({"job": job.id, "state": job.state, **results})
 
     return routes

@@ -57,7 +57,7 @@ Each row has a main button for the engine's current state and a **…** menu wit
 
 **Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. While they wait, the engine's state reads `starting` or `resuming` with the seconds waited. The action fails if the engine stays ejected for the whole wait, the router blocks its readmission, or the engine needs fresh profiles. [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected) lists the fixes.
 
-The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline** from the session strip, or the router's default of 300 seconds when that field is empty. During a drain, a bar under the engine's resident requests shows the drained fraction.
+The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline** from the session strip, or the router's default of 300 seconds when that field is empty or 0. During a drain, a bar under the engine's resident requests shows the drained fraction.
 
 ## When an action is disabled
 
