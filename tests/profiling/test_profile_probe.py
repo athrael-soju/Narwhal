@@ -564,8 +564,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 evidence=evidence,
                 max_model_len=4096,
             )
-        self.assertEqual(calls, [64] * 4 + [192] * 4)
-        self.assertEqual(evidence[0]["tokens"], 192)
+        # One unmeasured warmup stream precedes the sweep.
+        self.assertEqual(calls, [64] + [64] * 4 + [192] * 4)
+        self.assertEqual([row["tokens"] for row in evidence], [192])
         calls.clear()
         with (
             patch.object(decode_probe, "make_prompt", AsyncMock(return_value=("p", 100))),
@@ -582,7 +583,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 tokens=64,
                 max_model_len=250,
             )
-        self.assertEqual(calls, [64] * 4)
+        self.assertEqual(calls, [64] + [64] * 4)
 
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
 

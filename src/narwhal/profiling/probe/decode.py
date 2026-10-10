@@ -172,6 +172,7 @@ async def probe_decode(
     observation_timeout_s: float | None = None,
 ) -> list[tuple[float, float, float]]:
     samples: list[tuple[float, float, float]] = []
+    warmed = False
     for target in input_lens:
         prompt, input_len = await make_prompt(
             client,
@@ -187,6 +188,10 @@ async def probe_decode(
                 f"decode input {input_len} plus {tokens} output tokens exceeds {url} "
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
+        if not warmed:
+            # An engine's first decode can include kernel compilation; it stays out of the fit.
+            await _decode_cohort(client, url, model, prompt, input_len, 1, tokens, dialect)
+            warmed = True
         for c in concurrency:
             replicates: list[tuple[float, float, float]] = []
             for repeat in range(repeats):
