@@ -50,7 +50,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                 self.assertEqual(root.stat().st_mode & 0o777, 0o700)
                 self.assertEqual(
                     json.loads((root / "prometheus/targets/engines.json").read_text()),
-                    [{"targets": ["192.0.2.1:8002"], "labels": {"iid": "e1"}}],
+                    [{"targets": ["192.0.2.1:8002"], "labels": {"iid": "e1", "backend": "vllm"}}],
                 )
                 for relative, target in artifacts.FILES.items():
                     self.assertEqual((root / target).read_bytes(), (source / relative).read_bytes())

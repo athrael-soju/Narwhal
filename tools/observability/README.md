@@ -94,4 +94,4 @@ Alert rules in `tools/observability/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
-- Target relabelling keeps the `job` and `iid` labels for engine reachability and scoped alert rows.
+- Target relabelling keeps the `job`, `iid` and `backend` labels for engine reachability, scoped alert rows and the engine table's **Backend** column.

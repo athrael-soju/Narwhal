@@ -107,7 +107,10 @@ def write_contract(
     _write_json(targets_dir / "router.json", [{"targets": [contract.router]}])
     _write_json(
         targets_dir / "engines.json",
-        [{"targets": [authority], "labels": {"iid": iid}} for iid, authority in contract.engines],
+        [
+            {"targets": [authority], "labels": {"iid": iid, "backend": contract.backend}}
+            for iid, authority in contract.engines
+        ],
     )
 
 
