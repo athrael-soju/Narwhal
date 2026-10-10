@@ -6,7 +6,6 @@ from typing import ClassVar
 
 
 class EngineMetrics(ABC):
-    # Dashboard quantity -> backend series.
     dashboard_series: ClassVar[Mapping[str, str]] = {}
 
     @abstractmethod

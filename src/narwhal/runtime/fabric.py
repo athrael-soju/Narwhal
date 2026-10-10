@@ -5,7 +5,6 @@ from typing import ClassVar
 
 
 class FabricLifecycle(ABC):
-    # Seconds after an engine leaves placement at which peers get a release round.
     release_after_s: ClassVar[tuple[float, ...]] = ()
     release_retry_s: ClassVar[float] = 0.0
 

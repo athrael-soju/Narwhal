@@ -58,7 +58,7 @@ These targets run the checks:
 | `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
 | `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                               |
 | `make publication`         | Scans the Git index for private files and private key material                                                               |
-| `make boundary`            | Checks that engine-specific code stays in `src/narwhal/backends/`                                                            |
+| `make boundary`            | Fails when code outside `src/narwhal/backends/` is engine-specific and not in `tools/maintenance/backend_boundary.txt`      |
 | `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                              |
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                    |
 | `make test`                | Runs the unit suite                                                                                                          |
@@ -179,7 +179,7 @@ Each area of the Python package lives in one package or module:
 
 Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
 
-Each package defines the engine-neutral interface for the operations it owns, and `backends/<name>/` implements them for one engine. Code outside `backends/` reaches a backend through `narwhal.backends.load`. `make boundary` fails when a module outside `backends/` imports a backend package or names an engine-specific identifier, unless `tools/maintenance/backend_boundary.txt` lists it.
+Each package defines the interfaces for the operations it owns, and `backends/<name>/` implements them for one engine. Other code reaches a backend through `narwhal.backends.load`.
 
 `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle/` handles engine drains and replacement.
 
