@@ -1,5 +1,3 @@
-"""Assemble and write the engine attestation document from checked evidence."""
-
 from __future__ import annotations
 
 import os
@@ -7,8 +5,9 @@ import re
 import uuid
 from pathlib import Path
 
+from ...backends.vllm.identity import parse_process_start
 from ...config import EngineContract
-from ...engines.attestation import AttestationDocument, parse_process_start
+from ...engines.attestation import AttestationDocument
 from ..launch_engine.runtime import digest
 from .evidence import (
     checked_plan,
@@ -133,10 +132,10 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     if not isinstance(nixl_version, str) or not nixl_version:
         raise ValueError("Checked image lacks a pinned NIXL package")
     contract = {
-        "vllm_version": version,
+        "engine_version": version,
         "image_digest": "" if native else checked["image_id"],
-        "nixl_version": nixl_version,
-        "nixl_connector_version": nixl["nixl_connector_version"],
+        "transfer_version": nixl_version,
+        "connector_version": nixl["nixl_connector_version"],
         "model_architecture": architecture,
         "model_dtype": option(plan["args"], "--dtype"),
         **dimensions["contract"],
@@ -162,10 +161,10 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     if declared.missing():
         raise ValueError("Derived engine contract is incomplete: " + ", ".join(declared.missing()))
     evidence = {
-        "vllm_version": run / "version.json",
+        "engine_version": run / "version.json",
         "image_digest": run / "checked.json",
-        "nixl_version": run / "launch.json",
-        "nixl_connector_version": run / "nixl-connector-version.json",
+        "transfer_version": run / "launch.json",
+        "connector_version": run / "nixl-connector-version.json",
         "model_architecture": dimension_source,
         "model_dtype": run / "launch.json",
         "kv_heads": dimension_source,
@@ -210,7 +209,6 @@ _PER_LAUNCH_VALUES = frozenset(("--host", "--port", "--served-model-name", "--kv
 
 
 def launch_args(args: list[str]) -> list[str]:
-    """Return engine arguments with the values of per-launch flags removed."""
     kept: list[str] = []
     skip = False
     for arg in args:

@@ -1,5 +1,3 @@
-"""Verify native shutdown cannot signal a reused or unrelated PID."""
-
 import json
 import os
 import socket
@@ -176,7 +174,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                     )
                 )
             readings = iter((1000, 6100, 6100, 11200))
-            live = SimpleNamespace(vllm_version="0.29.0", process_start_time_seconds=1234.5)
+            live = SimpleNamespace(version="0.29.0", process_start_time_seconds=1234.5)
             with (
                 patch(
                     "narwhal.deployment.native_engine.validate_shared_runs", return_value=selected
@@ -313,7 +311,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                     "narwhal.deployment.native_engine.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=SimpleNamespace(
-                        vllm_version="0.29.0", process_start_time_seconds=1234.5
+                        version="0.29.0", process_start_time_seconds=1234.5
                     ),
                 ),
                 patch("narwhal.deployment.native_engine._group_members", return_value={102: 20}),

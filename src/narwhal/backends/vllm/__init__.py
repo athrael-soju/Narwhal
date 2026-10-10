@@ -1,18 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar
-
-import httpx
+from typing import TYPE_CHECKING, ClassVar
 
 from ...engines import kv_events
-from ...engines.attestation import (
-    EngineIdentity,
-    EngineIdentityReader,
-    attested_kv_lease,
-    attested_sequence_limit,
-    read_identity,
-)
 from ...engines.connector import NixlConnector
 from ...engines.dialect import VllmDialect
 from ...engines.kv_events import CacheEvent, KvEventDecoder
@@ -20,23 +10,11 @@ from ...runtime import listeners, release
 from ...runtime.fabric import FabricLifecycle
 from ...runtime.role_switch import RouterRoleSwitch
 from .. import EngineBackend
+from .identity import VllmIdentity
 from .metrics import VllmMetrics
 
 if TYPE_CHECKING:
     from ...deployment.launch_engine.backend import EngineLauncher
-
-
-class VllmIdentity(EngineIdentityReader):
-    async def read(
-        self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
-    ) -> EngineIdentity:
-        return await read_identity(client, base, headers)
-
-    def sequence_limit(self, attestation: Any) -> int | None:
-        return attested_sequence_limit(attestation)
-
-    def kv_lease(self, attestation: Any) -> int | None:
-        return attested_kv_lease(attestation)
 
 
 class VllmKvEvents(KvEventDecoder):

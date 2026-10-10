@@ -28,7 +28,6 @@ src/narwhal/engines/dialect.py
 src/narwhal/engines/kv_events.py
 src/narwhal/engines/residency.py
 src/narwhal/engines/residency_feed.py
-src/narwhal/profiling/generation.py
 src/narwhal/profiling/probe/decode.py
 src/narwhal/profiling/probe/engine.py
 src/narwhal/profiling/probe/instance.py

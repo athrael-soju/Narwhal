@@ -1,5 +1,3 @@
-"""Check the router's residency view against a live sidecar application."""
-
 import unittest
 
 import httpx
@@ -20,12 +18,10 @@ def stored(hashes, tokens, *, parent=None, group=0, kind="full_attention"):
 
 
 class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
-    """The router follows ordered changes and falls back to a fresh snapshot."""
-
     def setUp(self):
         contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "test"))
-        self.identity = EngineIdentity(contract.vllm_version, 100.0)
+        self.identity = EngineIdentity(contract.engine_version, 100.0)
         self.namespace = CacheNamespace("model", contract.fingerprint())
         self.start = 100.0
         self.index = ResidencyIndex("model", contract.fingerprint())
@@ -35,7 +31,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
 
     def engine(self, request):
         if request.url.path == "/version":
-            return httpx.Response(200, json={"version": self.identity.vllm_version})
+            return httpx.Response(200, json={"version": self.identity.version})
         return httpx.Response(200, text=f"process_start_time_seconds {self.start}\n")
 
     def sidecar(self, index):
@@ -78,7 +74,6 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.resyncs, 1)
 
     async def test_a_router_following_an_empty_engine_matches_its_sidecar(self):
-        """Net batch changes and the block size reach a router that started with no blocks."""
         self.index.mark_empty()
         await self.subscriptions.refresh(self.client)
         view = self.subscriptions.view("e1")
@@ -172,8 +167,6 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ResidencyMatchTests(unittest.TestCase):
-    """Prompt identities match known views that report a block size."""
-
     def test_match_covers_every_view_or_the_named_engines(self):
         contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         namespace = CacheNamespace("model", contract.fingerprint())

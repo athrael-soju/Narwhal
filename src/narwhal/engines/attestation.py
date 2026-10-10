@@ -1,5 +1,3 @@
-"""Serve and verify engine contract evidence for one vLLM process."""
-
 from __future__ import annotations
 
 import argparse
@@ -20,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 
 from ..cli_support import add_version_argument
 from ..config import EngineContract
+from ..config.model import LEGACY_CONTRACT_FIELDS, current_contract_names
 from ..contracts import (
     ATTESTATION,
     ContractVersionError,
@@ -35,16 +34,11 @@ RESIDENCY_PATH = "/v1/residency"
 # Socket names inside the launch plan's cache-event directory; the launcher uses the same.
 EVENTS_SOCKET = "events.sock"
 REPLAY_SOCKET = "replay.sock"
-_PROCESS_START = re.compile(
-    r"^process_start_time_seconds(?:\{[^}]*\})?\s+([0-9.eE+-]+)(?:\s|$)", re.MULTILINE
-)
 
 
 @dataclass(frozen=True)
 class EngineIdentity:
-    """Values read directly from one running vLLM process."""
-
-    vllm_version: str
+    version: str
     process_start_time_seconds: float
 
 
@@ -52,29 +46,23 @@ class EngineIdentityReader(ABC):
     @abstractmethod
     async def read(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
-    ) -> EngineIdentity:
-        """Read the version and process generation from a running engine."""
+    ) -> EngineIdentity: ...
 
     @abstractmethod
-    def sequence_limit(self, attestation: Any) -> int | None:
-        """Return the concurrent-sequence cap in an attestation's launch, if set."""
+    def sequence_limit(self, attestation: Any) -> int | None: ...
 
     @abstractmethod
-    def kv_lease(self, attestation: Any) -> int | None:
-        """Return the producer's KV lease in seconds, if set."""
+    def kv_lease(self, attestation: Any) -> int | None: ...
 
 
 @dataclass(frozen=True)
 class AttestationDocument:
-    """Contract values and where the engine launcher obtained each value."""
-
     contract: EngineContract
     sources: dict[str, str]
     launch: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> AttestationDocument:
-        """Read a strict attestation document."""
         raw = json.loads(Path(path).read_text())
         if not isinstance(raw, dict):
             raise ValueError("attestation document must be an object")
@@ -96,9 +84,9 @@ class AttestationDocument:
 
 
 def _read_contract(raw: Any) -> EngineContract:
-    """Build an EngineContract without coercing ambiguous JSON values."""
     if not isinstance(raw, dict):
         raise ValueError("attestation contract must be an object")
+    raw = current_contract_names(raw)
     defaults = EngineContract().fields()
     unknown = sorted(set(raw) - set(defaults))
     if unknown:
@@ -109,7 +97,7 @@ def _read_contract(raw: Any) -> EngineContract:
         "hybrid_kv_cache_manager",
         "enforce_handshake_compat",
     }
-    int_fields = {"nixl_connector_version", "kv_heads", "head_size", "hidden_layers"}
+    int_fields = {"connector_version", "kv_heads", "head_size", "hidden_layers"}
     for name in bool_fields:
         value = raw.get(name, defaults[name])
         if name == "enforce_handshake_compat":
@@ -128,10 +116,10 @@ def _read_contract(raw: Any) -> EngineContract:
 
     values = defaults | raw
     contract = EngineContract(
-        vllm_version=cast(str, values["vllm_version"]),
+        engine_version=cast(str, values["engine_version"]),
         image_digest=cast(str, values["image_digest"]),
-        nixl_version=cast(str, values["nixl_version"]),
-        nixl_connector_version=cast(int, values["nixl_connector_version"]),
+        transfer_version=cast(str, values["transfer_version"]),
+        connector_version=cast(int, values["connector_version"]),
         model_architecture=cast(str, values["model_architecture"]),
         model_dtype=cast(str, values["model_dtype"]),
         kv_heads=cast(int, values["kv_heads"]),
@@ -147,8 +135,8 @@ def _read_contract(raw: Any) -> EngineContract:
         speculative_config=cast(str, values["speculative_config"]),
         enforce_handshake_compat=cast(bool, values["enforce_handshake_compat"]),
     )
-    if not contract.vllm_version:
-        raise ValueError("contract.vllm_version is required")
+    if not contract.engine_version:
+        raise ValueError("contract.engine_version is required")
     if not contract.connector:
         raise ValueError("contract.connector is required")
     if not contract.enforce_handshake_compat:
@@ -159,11 +147,11 @@ def _read_contract(raw: Any) -> EngineContract:
 
 
 def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
-    """Validate the evidence source named for each populated contract field."""
     if not isinstance(raw, dict) or not all(
         isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
     ):
         raise ValueError("attestation sources must map field names to nonempty strings")
+    raw = {LEGACY_CONTRACT_FIELDS.get(k, k): v for k, v in raw.items()}
     unknown_sources = sorted(set(raw) - set(contract.fields()))
     if unknown_sources:
         raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
@@ -174,23 +162,11 @@ def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
 
 
 def _populated_fields(contract: EngineContract) -> set[str]:
-    """Return fields for which the sidecar must name an evidence source."""
     return {
         name
         for name, value in contract.fields().items()
         if isinstance(value, bool) or (value is not None and value != "" and value != 0)
     }
-
-
-def parse_process_start(metrics: str) -> float:
-    """Read the process start marker exported by the engine's metrics route."""
-    match = _PROCESS_START.search(metrics)
-    if match is None:
-        raise ValueError("/metrics has no process_start_time_seconds")
-    value = float(match.group(1))
-    if not math.isfinite(value) or value <= 0:
-        raise ValueError("process_start_time_seconds must be positive and finite")
-    return value
 
 
 async def fetch_engine_identity(
@@ -199,38 +175,27 @@ async def fetch_engine_identity(
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
     headers: dict[str, str] | None = None,
+    reader: EngineIdentityReader | None = None,
 ) -> EngineIdentity:
-    """Read the version and process start directly from a running engine."""
+    if reader is None:
+        from ..backends import DEFAULT_BACKEND, load
+
+        reader = load(DEFAULT_BACKEND).identity
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport, headers=headers) as client:
-        return await read_identity(client, engine_base)
-
-
-async def read_identity(
-    client: httpx.AsyncClient, engine_base: str, headers: Mapping[str, str] | None = None
-) -> EngineIdentity:
-    base = engine_base.rstrip("/")
-    version_response = await client.get(f"{base}/version", headers=headers)
-    version_response.raise_for_status()
-    version = version_response.json().get("version")
-    if not isinstance(version, str) or not version.strip():
-        raise ValueError("/version returned no version")
-    metrics_response = await client.get(f"{base}/metrics", headers=headers)
-    metrics_response.raise_for_status()
-    return EngineIdentity(version.strip(), parse_process_start(metrics_response.text))
+        return await reader.read(client, engine_base)
 
 
 def make_attestation(
     document: AttestationDocument,
     identity: EngineIdentity,
 ) -> dict[str, Any]:
-    """Build the response with a checksum over every returned field."""
     payload: dict[str, Any] = versioned(
         ATTESTATION,
         {
             "contract": document.contract.fields(),
             "sources": dict(sorted(document.sources.items())),
             "engine": {
-                "vllm_version": identity.vllm_version,
+                "version": identity.version,
                 "process_start_time_seconds": identity.process_start_time_seconds,
             },
         },
@@ -242,55 +207,7 @@ def make_attestation(
     return payload
 
 
-def _launch_arg(payload: Any, name: str) -> str | None:
-    """Return the value of the first `name` argument in an attestation's launch arguments."""
-    launch = payload.get("launch") if isinstance(payload, dict) else None
-    args = launch.get("args") if isinstance(launch, dict) else None
-    if not isinstance(args, list):
-        return None
-    for index, arg in enumerate(args):
-        if not isinstance(arg, str):
-            continue
-        flag, equals, value = arg.partition("=")
-        if flag != name:
-            continue
-        if not equals:
-            value = args[index + 1] if index + 1 < len(args) else ""
-        return value if isinstance(value, str) else None
-    return None
-
-
-def attested_sequence_limit(payload: Any) -> int | None:
-    """Return the `--max-num-seqs` value in an attestation's launch arguments, if set."""
-    value = _launch_arg(payload, "--max-num-seqs")
-    if value is not None and value.isdigit() and int(value) > 0:
-        return int(value)
-    return None
-
-
-def attested_kv_lease(payload: Any) -> int | None:
-    """Return `kv_lease_duration` from the NIXL connector configuration an attestation records.
-
-    The value is the seconds a producer holds a finished prefill's KV blocks for its consumer.
-    """
-    value = _launch_arg(payload, "--kv-transfer-config")
-    if value is None:
-        return None
-    try:
-        config = json.loads(value)
-    except ValueError:
-        return None
-    if not isinstance(config, dict):
-        return None
-    extra = config.get("kv_connector_extra_config")
-    lease = extra.get("kv_lease_duration") if isinstance(extra, dict) else None
-    if config.get("kv_connector") != "NixlConnector" or type(lease) is not int or lease < 1:
-        return None
-    return lease
-
-
 def launch_digest(contract: dict[str, Any], launch: dict[str, Any]) -> str:
-    """Digest the contract and launch evidence that fix an engine's timing."""
     return canonical_digest({"contract": contract, "launch": launch})
 
 
@@ -299,7 +216,6 @@ def verify_attestation(
     declared: EngineContract,
     live: EngineIdentity,
 ) -> list[str]:
-    """List missing or mismatched attestation evidence for the live engine."""
     if not isinstance(payload, dict):
         return ["response is not an object"]
     failures: list[str] = []
@@ -348,10 +264,10 @@ def verify_attestation(
     if not isinstance(engine, dict):
         failures.append("engine identity is not an object")
         return failures
-    if engine.get("vllm_version") != live.vllm_version:
+    version = engine.get("version", engine.get("vllm_version"))
+    if version != live.version:
         failures.append(
-            f"engine vLLM version is {engine.get('vllm_version')!r}, "
-            f"live /version returned {live.vllm_version!r}"
+            f"engine vLLM version is {version!r}, live /version returned {live.version!r}"
         )
     process_start = engine.get("process_start_time_seconds")
     if not isinstance(process_start, int | float) or isinstance(process_start, bool):
@@ -384,10 +300,6 @@ def build_app(
     transport: httpx.AsyncBaseTransport | None = None,
     residency: ResidencyIndex | None = None,
 ) -> FastAPI:
-    """Build a sidecar that stops attesting after its engine process changes.
-
-    The residency routes serve `residency`, or answer 404 when it is None.
-    """
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
     epoch = uuid4().hex
@@ -454,7 +366,6 @@ def build_app(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Start one engine attestation sidecar."""
     parser = argparse.ArgumentParser(description=__doc__)
     add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
@@ -486,10 +397,10 @@ def main(argv: list[str] | None = None) -> int:
         return failure("narwhal-attest", f"load document {args.document}", exc, 2)
     try:
         identity = asyncio.run(fetch_engine_identity(args.engine_base, timeout_s=args.timeout_s))
-        if identity.vllm_version != document.contract.vllm_version:
+        if identity.version != document.contract.engine_version:
             raise ValueError(
-                f"engine runs vLLM {identity.vllm_version}, "
-                f"document expects {document.contract.vllm_version}"
+                f"engine runs vLLM {identity.version}, "
+                f"document expects {document.contract.engine_version}"
             )
     except (OSError, ValueError, httpx.HTTPError) as exc:
         return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)

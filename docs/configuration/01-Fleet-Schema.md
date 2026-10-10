@@ -133,10 +133,10 @@ The optional `hardware` block needs all three fields when present.
 
 | Field                      | Default           | Requirement                                                                                    |
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `vllm_version`             | required          | The exact string each engine returns from `/version`.                                          |
+| `engine_version`           | required          | The exact string each engine returns from `/version`.                                          |
 | `image_digest`             | `""`              | The immutable `sha256:<64 hex>` container digest from engine-side attestation.                 |
-| `nixl_version`             | `""`              | The NIXL package version installed in the image.                                               |
-| `nixl_connector_version`   | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
+| `transfer_version`         | `""`              | The NIXL package version installed in the image.                                               |
+| `connector_version`        | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
 | `model_architecture`       | `""`              | The model implementation name.                                                                 |
 | `model_dtype`              | `""`              | The dtype the model runs in.                                                                   |
 | `kv_heads`                 | `0`               | Positive value of `ModelConfig.get_total_num_kv_heads()` for the whole model.                  |
@@ -152,11 +152,21 @@ The optional `hardware` block needs all three fields when present.
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
 
+Earlier releases named three of these fields differently. The loader and `narwhal-attest` still read the earlier names, in the fleet file, the attestation document and its `sources`:
+
+| Earlier name             | Current name        |
+| ------------------------ | ------------------- |
+| `vllm_version`           | `engine_version`    |
+| `nixl_version`           | `transfer_version`  |
+| `nixl_connector_version` | `connector_version` |
+
+A section that sets both names of one field fails to load. The rename changes the contract fingerprint and the profile generation digests, so after upgrading follow [Upgrading across the contract field rename](../operate/04-Upgrade-and-Validate.md#104-upgrading-across-the-contract-field-rename).
+
 Capture every contract value from the deployed engine in [Gate E: Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Values to check against the live engine:
 
-- `nixl_connector_version`
+- `connector_version`
 - the resolved `head_size` dimensions
 - `cross_layers_blocks`
 - the resolved `transfer_mode` class and mode
@@ -198,7 +208,7 @@ Sidecar identity values, read at startup:
 - the engine's `/version`
 - the `process_start_time_seconds` metric from the engine's `/metrics`
 
-When `/version` at startup differs from `vllm_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
+When `/version` at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
 
 Each sidecar response carries:
 

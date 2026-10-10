@@ -1,5 +1,3 @@
-"""Check fleet parsing, cross-field limits and credential references."""
-
 import copy
 import io
 import json
@@ -13,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from narwhal.config import FleetConfig
+from narwhal.config.model import LEGACY_CONTRACT_FIELDS
 from narwhal.config.serialization import document
 from narwhal.diagnostics.check import cli as check_cli
 from narwhal.serving.policy import ServingPolicy
@@ -20,8 +19,6 @@ from tests.fixtures import ROOT
 
 
 class ConfigTests(unittest.TestCase):
-    """Each invalid field is checked against a valid fleet configuration."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -29,12 +26,10 @@ class ConfigTests(unittest.TestCase):
         self.raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
 
     def load(self, raw):
-        """Write one candidate config through the public loader."""
         self.path.write_text(json.dumps(raw))
         return FleetConfig.load(self.path)
 
     def changed(self, path, value):
-        """Return a copied fleet document with one nested value replaced."""
         raw = copy.deepcopy(self.raw)
         target = raw
         for key in path[:-1]:
@@ -43,7 +38,6 @@ class ConfigTests(unittest.TestCase):
         return raw
 
     def test_save_load_preserves_effective_configuration(self):
-        """Serialization preserves policies, optional fields and credential references."""
         for source in ("tests/data/fleet.json", "config/fleet.example.json"):
             with self.subTest(source=source):
                 cfg = FleetConfig.load(ROOT / source)
@@ -55,7 +49,6 @@ class ConfigTests(unittest.TestCase):
                 self.assertGreater(restored.control_connections, 0)
 
     def test_packaged_example_matches_the_canonical_document(self):
-        """The package resource retains the canonical bytes across archive builds."""
         packaged = ROOT / "src/narwhal/fleet.example.json"
         canonical = ROOT / "config/fleet.example.json"
         if (ROOT / ".git").exists() and not (ROOT / "PKG-INFO").exists():
@@ -64,7 +57,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(packaged.read_bytes(), canonical.read_bytes())
 
     def test_endpoint_environment_references_resolve_before_serialization(self):
-        """Serving and saved fleet documents receive resolved URLs, including IPv6."""
         raw = self.changed(("engines", 0, "url"), "${TEST_ENGINE_URL}")
         raw["engines"][0]["attestation_url"] = "${TEST_ATTESTATION_URL}"
         with patch.dict(
@@ -84,7 +76,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(FleetConfig.load(self.path), cfg)
 
     def test_endpoint_environment_errors_are_aggregated(self):
-        """Missing and blank endpoint variables identify every affected field."""
         raw = self.changed(("engines", 0, "url"), "${TEST_ENGINE_URL}")
         raw["engines"][0]["attestation_url"] = "${TEST_ATTESTATION_URL}"
         for env in ({}, {"TEST_ENGINE_URL": "", "TEST_ATTESTATION_URL": "  "}):
@@ -105,7 +96,6 @@ class ConfigTests(unittest.TestCase):
                 self.assertIn(expected, message)
 
     def test_endpoint_references_reject_shell_expressions_and_nested_references(self):
-        """Only a whole-value variable name is expanded, without shell evaluation."""
         for value in ("http://${TEST_HOST}:8000", "${TEST_URL:-http://fallback:8000}", "${}"):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "whole-value"):
                 self.load(self.changed(("engines", 0, "url"), value))
@@ -116,7 +106,6 @@ class ConfigTests(unittest.TestCase):
             self.load(self.changed(("engines", 0, "url"), "${TEST_URL}"))
 
     def test_environment_expansion_is_limited_to_endpoint_fields(self):
-        """Model identifiers and credential variable names retain their literal values."""
         raw = self.changed(("model",), "${TEST_MODEL}")
         raw["engine"]["engine_api_key_env"] = "TEST_ENGINE_KEY"
         with patch.dict(os.environ, {"TEST_MODEL": "expanded", "TEST_ENGINE_KEY": "secret"}):
@@ -125,7 +114,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.engine_api_key_env, "TEST_ENGINE_KEY")
 
     def test_missing_required_and_unknown_fields_are_aggregated(self):
-        """The parser reports independent top-level mistakes together."""
         raw = {**self.raw, "surprise": 1}
         del raw["model"]
         del raw["slo"]
@@ -135,7 +123,6 @@ class ConfigTests(unittest.TestCase):
             self.assertIn(field, str(caught.exception))
 
     def test_exact_json_types_and_finite_numbers(self):
-        """Boolean coercion and nonfinite values are rejected at the input boundary."""
         for path, value in (
             (("model",), 1),
             (("controller", "advisory"), 1),
@@ -156,13 +143,12 @@ class ConfigTests(unittest.TestCase):
             (("engines", 0, "url"), 1),
             (("engines", 0, "role"), 1),
             (("engines", 0, "attestation_url"), 1),
-            (("engine_contract", "vllm_version"), 1),
+            (("engine_contract", "engine_version"), 1),
         ):
             with self.subTest(path=path, value=value), self.assertRaises(ValueError):
                 self.load(self.changed(path, value))
 
     def test_nested_unknown_fields_and_invalid_engine_rows(self):
-        """Nested sections and engine rows keep strict field contracts."""
         for path in (
             ("controller",),
             ("controller", "thresholds"),
@@ -187,7 +173,6 @@ class ConfigTests(unittest.TestCase):
                 self.load({**self.raw, "engines": [engine]})
 
     def test_positive_limits_reject_zero(self):
-        """Each time budget and required count rejects its zero boundary."""
         cfg = self.load(self.raw)
         fields = (
             "monitor_interval_s",
@@ -225,13 +210,11 @@ class ConfigTests(unittest.TestCase):
                 replace(cfg, **{field: 0}).validate()
 
     def test_decode_read_timeout_zero_disables(self):
-        """decode_read_timeout_s accepts zero as its disabled bound."""
         self.load(self.changed(("engine", "decode_read_timeout_s"), 0))
         cfg = self.load(self.raw)
         replace(cfg, decode_read_timeout_s=0.0).validate()
 
     def test_cross_field_constraints_name_the_conflict(self):
-        """Derived windows, role floors and health cadence have explicit constraints."""
         cfg = self.load(self.raw)
         for changes, message in (
             ({"reactive_evidence_span_s": 121}, "evidence_span_s"),
@@ -253,7 +236,6 @@ class ConfigTests(unittest.TestCase):
                 replace(cfg, **changes).validate()
 
     def test_engine_credentials_resolve_at_use_and_select_auth_posture(self):
-        """Fleet JSON stores the credential's environment variable name and omits its value."""
         cfg = self.load(self.raw)
         cfg.engine_api_key_env = "NARWHAL_TEST_ENGINE_KEY"
         with patch.dict("os.environ", {"NARWHAL_TEST_ENGINE_KEY": "synthetic-key"}):
@@ -264,7 +246,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.engine_auth_mode(), "boundary")
 
     def test_optional_limits_reject_negative_values(self):
-        """Disabled limits accept zero while negative values identify the invalid setting."""
         cfg = self.load(self.raw)
         for name in (
             "control_connections",
@@ -285,7 +266,6 @@ class ConfigTests(unittest.TestCase):
                 replace(cfg, thresholds=replace(cfg.thresholds, **{name: -1})).validate()
 
     def test_policy_boundaries_preserve_hysteresis_and_evidence(self):
-        """Invalid thresholds and correction settings fail before controller construction."""
         cfg = self.load(self.raw)
         for changes, message in (
             ({"thresholds": replace(cfg.thresholds, panic_ratio=0.5)}, "panic_ratio"),
@@ -306,7 +286,6 @@ class ConfigTests(unittest.TestCase):
                 replace(cfg, **changes).validate()
 
     def test_role_floors_require_positive_integers_and_allow_one_engine(self):
-        """Single-engine configurations accept min_prefill=1 and min_decode=1."""
         cfg = self.load(self.raw)
         for field in ("min_prefill", "min_decode"):
             for value in (True, "1", 0):
@@ -317,15 +296,24 @@ class ConfigTests(unittest.TestCase):
                     replace(cfg, **{field: value}).validate()
         replace(cfg, engines=cfg.engines[:1], min_prefill=1, min_decode=1).validate()
 
+    def test_engine_contract_reads_legacy_field_names(self):
+        raw = copy.deepcopy(self.raw)
+        contract = raw["engine_contract"]
+        for old, new in LEGACY_CONTRACT_FIELDS.items():
+            contract[old] = contract.pop(new)
+        self.assertEqual(self.load(raw).engine_contract, self.load(self.raw).engine_contract)
+        contract["engine_version"] = contract["vllm_version"]
+        with self.assertRaisesRegex(ValueError, "both vllm_version and engine_version"):
+            self.load(raw)
+
     def test_engine_and_hardware_contracts_reject_unsafe_bindings(self):
-        """Handshake, digest, architecture and TP constraints identify each invalid field."""
         cfg = self.load(self.raw)
         for name, value in (
-            ("vllm_version", ""),
+            ("engine_version", ""),
             ("connector", ""),
             ("enforce_handshake_compat", False),
             ("image_digest", "latest"),
-            ("nixl_connector_version", -1),
+            ("connector_version", -1),
             ("kv_heads", -1),
             ("head_size", -1),
             ("hidden_layers", -1),
@@ -353,7 +341,6 @@ class ConfigTests(unittest.TestCase):
                 self.load(raw)
 
     def test_profile_validation_requires_usable_limits(self):
-        """Profile error policy requires explicit usable limits."""
         cfg = self.load(self.raw)
         for name in ("max_decode_fit_mape", "max_decode_cv_mape"):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
@@ -368,13 +355,11 @@ class ConfigTests(unittest.TestCase):
             ).validate()
 
     def test_serving_retries_a_failed_attempt_once_by_default(self):
-        """A fleet file without serving limits allows two attempts and keeps the queue off."""
         serving = self.load(self.raw).serving
         self.assertEqual((serving.max_attempts, serving.queue_capacity), (2, 0))
         self.assertEqual(serving.retry_policy().max_attempts, 2)
 
     def test_serving_policy_rejects_mistyped_and_contradictory_limits(self):
-        """Queue and retry policies require bounded resources and a valid handoff age."""
         policy = ServingPolicy()
         for changes, message in (
             ({"queue_capacity": True}, "queue_capacity"),
@@ -401,7 +386,6 @@ class ConfigTests(unittest.TestCase):
             replace(self.load(self.raw), serving=replace(policy, max_attempts=4)).validate()
 
     def test_check_cli_uses_native_fleet_config(self):
-        """Preflight loads the native fleet document and rejects retired source selectors."""
         with patch.object(check_cli, "run", new=AsyncMock(return_value=0)) as run:
             self.assertEqual(check_cli.main(["--fleet", str(ROOT / "tests/data/fleet.json")]), 0)
         self.assertEqual(run.await_args.args[0].model, "test-model")

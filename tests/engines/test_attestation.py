@@ -1,5 +1,3 @@
-"""Check process-bound attestations and sidecar health responses."""
-
 import copy
 import json
 import tempfile
@@ -9,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from narwhal.backends.vllm.identity import parse_process_start
 from narwhal.config import FleetConfig
 from narwhal.contracts import ATTESTATION, versioned
 from narwhal.engines.attestation import (
@@ -19,7 +18,6 @@ from narwhal.engines.attestation import (
     fetch_engine_identity,
     launch_digest,
     make_attestation,
-    parse_process_start,
     verify_attestation,
 )
 from narwhal.engines.kv_events import StoredBlocks
@@ -28,17 +26,14 @@ from tests.fixtures import ROOT
 
 
 class AttestationTests(unittest.IsolatedAsyncioTestCase):
-    """Local HTTP responses distinguish process restart from declaration mismatch."""
-
     def setUp(self):
         self.contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         self.document = AttestationDocument(
             self.contract, dict.fromkeys(self.contract.fields(), "test-launch")
         )
-        self.identity = EngineIdentity(self.contract.vllm_version, 100.0)
+        self.identity = EngineIdentity(self.contract.engine_version, 100.0)
 
     def test_signed_document_matches_exact_live_identity(self):
-        """A valid attestation verifies against its declared contract and live process."""
         payload = make_attestation(self.document, self.identity)
         self.assertEqual(verify_attestation(payload, self.contract, self.identity), [])
         changed = replace(self.identity, process_start_time_seconds=101)
@@ -54,7 +49,6 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_launch_evidence_is_signed_and_verified(self):
-        """A launch digest covers the contract and launch; tampering fails verification."""
         launched = replace(self.document, launch={"args": ["--max-num-seqs", "64"]})
         payload = make_attestation(launched, self.identity)
         self.assertEqual(
@@ -84,7 +78,6 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verify_attestation(legacy, self.contract, self.identity), [])
 
     def test_tampering_and_response_shapes_report_failures(self):
-        """Checksum and structural errors remain visible to preflight."""
         payload = make_attestation(self.document, self.identity)
         for candidate, message in (
             (None, "not an object"),
@@ -96,7 +89,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             (
                 {
                     **payload,
-                    "engine": {"vllm_version": "other", "process_start_time_seconds": True},
+                    "engine": {"version": "other", "process_start_time_seconds": True},
                 },
                 "not a number",
             ),
@@ -110,7 +103,6 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_process_start_parser_handles_labels_and_invalid_values(self):
-        """Process identity requires a positive finite metric sample."""
         self.assertEqual(parse_process_start('process_start_time_seconds{job="e"} 1.25e2\n'), 125)
         for value in (
             "",
@@ -122,7 +114,6 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 parse_process_start(value)
 
     def test_document_loader_validates_sources_and_exact_contract_types(self):
-        """Attestation fields require source values of the expected JSON type."""
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "attestation.json"
             body = versioned(
@@ -135,7 +126,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 ("sources", "unknown", "source"),
                 ("contract", "head_size", True),
                 ("contract", "cross_layers_blocks", 1),
-                ("contract", "vllm_version", 1),
+                ("contract", "engine_version", 1),
                 ("contract", "enforce_handshake_compat", False),
                 ("contract", "image_digest", "latest"),
             ):
@@ -145,15 +136,29 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(section=section, field=field), self.assertRaises(ValueError):
                     AttestationDocument.load(path)
 
+    def test_document_loader_reads_legacy_contract_names(self):
+        legacy = {
+            "vllm_version": "engine_version",
+            "nixl_version": "transfer_version",
+            "nixl_connector_version": "connector_version",
+        }
+        renamed = {old: new for new, old in legacy.items()}
+        contract = {renamed.get(k, k): v for k, v in self.contract.fields().items()}
+        sources = {renamed.get(k, k): v for k, v in self.document.sources.items()}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "attestation.json"
+            path.write_text(
+                json.dumps(versioned(ATTESTATION, {"contract": contract, "sources": sources}))
+            )
+            self.assertEqual(AttestationDocument.load(path), self.document)
+
     def test_shipped_attestation_example_is_complete(self):
-        """The tracked sidecar input supplies every production contract field."""
         document = AttestationDocument.load(ROOT / "config/engine-attestation.example.json")
 
         self.assertEqual(document.contract.missing(), [])
         self.assertEqual(set(document.sources), set(document.contract.fields()))
 
     async def test_sidecar_refuses_changed_or_unreachable_process(self):
-        """A sidecar serves attestation only while its bound process remains live."""
         start = 100
         failed = False
 
@@ -161,7 +166,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             if failed:
                 return httpx.Response(503)
             if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.vllm_version})
+                return httpx.Response(200, json={"version": self.identity.version})
             return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
 
         transport = httpx.MockTransport(handle)
@@ -180,12 +185,11 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get("/health")).status_code, 503)
 
     async def test_sidecar_serves_residency_only_with_an_event_feed(self):
-        """Residency routes follow the bound process and send stale subscribers to the snapshot."""
         start = 100
 
         def handle(request):
             if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.vllm_version})
+                return httpx.Response(200, json={"version": self.identity.version})
             return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
 
         transport = httpx.MockTransport(handle)
@@ -221,11 +225,10 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get("/v1/residency")).status_code, 503)
 
     async def test_residency_events_report_the_state_of_their_changes(self):
-        """A loss after the change read leaves the events body describing those changes."""
 
         def handle(request):
             if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.vllm_version})
+                return httpx.Response(200, json={"version": self.identity.version})
             return httpx.Response(200, text="process_start_time_seconds 100\n")
 
         index = ResidencyIndex("model", self.document.contract.fingerprint())

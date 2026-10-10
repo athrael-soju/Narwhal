@@ -1,5 +1,3 @@
-"""Run checked vLLM plans as owned Linux processes on a shared GPU."""
-
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +23,6 @@ from .launch_engine.start import READY_SECONDS, gpu_memory, validate_shared_runs
 
 
 def process_identity(pid: int) -> dict[str, int | str]:
-    """Bind a PID to its Linux boot and kernel start tick to reject PID reuse."""
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     stat = Path(f"/proc/{pid}/stat").read_text()
     fields = stat.rsplit(")", 1)[1].split()
@@ -47,7 +44,6 @@ def _process_stat(pid: int) -> tuple[str, int, int, int]:
 
 
 def _group_members(identity: dict) -> dict[int, int]:
-    """Find live group members; an absent leader leaves their ownership unresolved."""
     if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != identity["boot_id"]:
         return {}
     leader = identity["pid"]
@@ -211,7 +207,6 @@ def _terminate(identity: dict, grace_seconds: float = 10.0) -> None:
 
 
 def stop(run: Path) -> None:
-    """Stop only the process group recorded for this native launch directory."""
     identity = json.loads((run / "native-process.json").read_text())
     _terminate(identity)
     remove_kv_events_directory(json.loads((run / "launch.json").read_text()))
@@ -222,7 +217,6 @@ def stop(run: Path) -> None:
 
 
 def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
-    """Launch checked engines sequentially against live shared GPU headroom."""
     if ready_seconds < 1:
         raise ValueError("ready_seconds must be positive")
     selected = validate_shared_runs(runs, backend="native")
@@ -278,14 +272,14 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 key = _environment(run).get("VLLM_API_KEY", "")
                 headers = {"Authorization": f"Bearer {key}"} if key else None
                 live = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
-                if live.vllm_version != _checked_plan(run, plan)["vllm_api_version"]:
+                if live.version != _checked_plan(run, plan)["vllm_api_version"]:
                     raise ValueError("live vLLM version differs from the checked native runtime")
                 after = gpu_memory(gpu_uuid)
                 aggregate_delta = after["used_mib"] - baseline_used
                 record.update(
                     status="running",
                     process=identity,
-                    vllm_version=live.vllm_version,
+                    vllm_version=live.version,
                     process_start_time_seconds=live.process_start_time_seconds,
                     model_revision=plan["model_revision"],
                     gpu_after=after,

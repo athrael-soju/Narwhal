@@ -1,7 +1,7 @@
 {
   "evidence": {
     "captured_at_unix": "<seconds>",
-    "contract_fingerprint": "8e52b260e524dd97",
+    "contract_fingerprint": "f5e095959e161d2d",
     "expected_pairs": [
       [
         "e0",
@@ -20,34 +20,34 @@
         "connector": "nixl",
         "consumer": "e3",
         "consumer_after": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e3",
           "nixl_transfer_count": 1.0,
           "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "consumer_before": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e3",
           "nixl_transfer_count": 0.0,
           "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "decode_seconds": "<seconds>",
         "descriptor_sha256": "db9dd50839f3c7fe440a789702dedcd8487159dd2914e6a8b2f1af41f54a1906",
@@ -58,34 +58,34 @@
         "prefill_seconds": "<seconds>",
         "producer": "e0",
         "producer_after": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e0",
           "nixl_transfer_count": 0.0,
           "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "producer_before": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e0",
           "nixl_transfer_count": 0.0,
           "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "remote_engine_id": "e0-engine",
         "remote_host": "127.0.0.1",
@@ -98,34 +98,34 @@
         "connector": "nixl",
         "consumer": "e0",
         "consumer_after": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e0",
           "nixl_transfer_count": 1.0,
           "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "consumer_before": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e0",
           "nixl_transfer_count": 0.0,
           "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "decode_seconds": "<seconds>",
         "descriptor_sha256": "90885f2f6bd4e4ba25398a0c900a3bd29e0fb9336e207a444e066d6381f5eb27",
@@ -136,34 +136,34 @@
         "prefill_seconds": "<seconds>",
         "producer": "e3",
         "producer_after": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e3",
           "nixl_transfer_count": 1.0,
           "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "producer_before": {
-          "attestation_digest": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
           "cache_layout_sources": {
             "cross_layers_blocks": "fixture",
             "hybrid_kv_cache_manager": "fixture"
           },
           "connector_source": "fixture",
-          "contract_fingerprint": "8e52b260e524dd97",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
           "iid": "e3",
           "nixl_transfer_count": 1.0,
           "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture",
-          "vllm_version": "1.0.0"
+          "transfer_mode_source": "fixture"
         },
         "remote_engine_id": "e3-engine",
         "remote_host": "127.0.0.1",
@@ -190,16 +190,16 @@
     "calibration",
     "  WARN  first-token deadline has no calibration evidence; run narwhal-check --calibrate-first-token and set engine.first_token_calibration_path",
     "contract",
-    "  ok    declared engine contract 8e52b260e524dd97",
+    "  ok    declared engine contract f5e095959e161d2d",
     "  ok    e0 vLLM 1.0.0",
-    "  ok    e0 contract 8e52b260e524dd97 attested for process 100.000000",
+    "  ok    e0 contract f5e095959e161d2d attested for process 100.000000",
     "  ok    e3 vLLM 1.0.0",
-    "  ok    e3 contract 8e52b260e524dd97 attested for process 100.000000",
+    "  ok    e3 contract f5e095959e161d2d attested for process 100.000000",
     "profile",
     "  ok    e0 ttft=0.00e+00n^2+1.00e-03n+0.0100 tpot=1.00e-03q+1.00e-06b+0.0010 decode_fit_mape=0.0100 decode_cv_mape=0.0200 within the 0.05/0.13 limits",
     "  ok    e3 ttft=0.00e+00n^2+1.00e-03n+0.0100 tpot=1.00e-03q+1.00e-06b+0.0010 decode_fit_mape=0.0100 decode_cv_mape=0.0200 within the 0.05/0.13 limits",
-    "  ok    e0 profile generation sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
-    "  ok    e3 profile generation sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
+    "  ok    e0 profile generation sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+    "  ok    e3 profile generation sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
     "model",
     "  ok    e0 serves test-model",
     "  ok    e3 serves test-model",

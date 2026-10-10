@@ -2,8 +2,10 @@
   "contract": {
     "attention_backend": "FLASH_ATTN",
     "connector": "NixlConnector",
+    "connector_version": 9,
     "cross_layers_blocks": false,
     "enforce_handshake_compat": true,
+    "engine_version": "0.29.0",
     "head_size": 64,
     "hidden_layers": 4,
     "hybrid_kv_cache_manager": false,
@@ -13,11 +15,9 @@
     "kv_role": "kv_both",
     "model_architecture": "FixtureForCausalLM",
     "model_dtype": "bfloat16",
-    "nixl_connector_version": 9,
-    "nixl_version": "1.0.0",
     "speculative_config": "disabled",
     "transfer_mode": "pull",
-    "vllm_version": "0.29.0"
+    "transfer_version": "1.0.0"
   },
   "launch": {
     "args": [
@@ -61,8 +61,10 @@
   "sources": {
     "attention_backend": "<root>/launch/startup.log sha256:<digest>",
     "connector": "<root>/launch/launch.json sha256:<digest>",
+    "connector_version": "<root>/launch/nixl-connector-version.json sha256:<digest>",
     "cross_layers_blocks": "<root>/launch/cache-registration.json sha256:<digest>",
     "enforce_handshake_compat": "<root>/launch/handshake-policy.json sha256:<digest>",
+    "engine_version": "<root>/launch/version.json sha256:<digest>",
     "head_size": "<root>/launch/model-dimensions.json sha256:<digest>",
     "hidden_layers": "<root>/launch/model-dimensions.json sha256:<digest>",
     "hybrid_kv_cache_manager": "<root>/launch/cache-layout.json sha256:<digest>",
@@ -72,10 +74,8 @@
     "kv_role": "<root>/launch/launch.json sha256:<digest>",
     "model_architecture": "<root>/launch/model-dimensions.json sha256:<digest>",
     "model_dtype": "<root>/launch/launch.json sha256:<digest>",
-    "nixl_connector_version": "<root>/launch/nixl-connector-version.json sha256:<digest>",
-    "nixl_version": "<root>/launch/launch.json sha256:<digest>",
     "speculative_config": "<root>/launch/launch.json sha256:<digest>",
     "transfer_mode": "<root>/launch/transfer-mode.json sha256:<digest>",
-    "vllm_version": "<root>/launch/version.json sha256:<digest>"
+    "transfer_version": "<root>/launch/launch.json sha256:<digest>"
   }
 }

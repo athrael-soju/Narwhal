@@ -75,7 +75,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = Path(folder.name)
         self.cfg = fleet(self.tmp)
         self.contract = self.cfg.engine_contract
-        self.version = self.contract.vllm_version
+        self.version = self.contract.engine_version
         self.document = AttestationDocument(
             self.contract, dict.fromkeys(self.contract.fields(), "fixture-launch"), launch=LAUNCH
         )
@@ -154,10 +154,10 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             "process_restarted": verify_attestation(payload, self.contract, self.identity(101.0)),
         }
         for name, value in (
-            ("vllm_version", "0.0.1"),
+            ("engine_version", "0.0.1"),
             ("connector", "OtherConnector"),
             ("kv_role", "kv_consumer"),
-            ("nixl_version", "other"),
+            ("transfer_version", "other"),
         ):
             failures[f"declared_{name}_differs"] = verify_attestation(
                 payload, replace(self.contract, **{name: value}), self.identity()
@@ -335,15 +335,15 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
                 return None, str(exc)
 
         minimal = copy.deepcopy(raw)
-        minimal["engine_contract"] = {"vllm_version": "1.0.0"}
+        minimal["engine_contract"] = {"engine_version": "1.0.0"}
         records = {"minimal_contract": load(minimal)[0].engine_contract.fields()}
         cases = {
-            "missing_vllm_version": ("engine_contract", "vllm_version", None),
+            "missing_engine_version": ("engine_contract", "engine_version", None),
             "empty_connector": ("engine_contract", "connector", ""),
             "other_connector": ("engine_contract", "connector", "OtherConnector"),
             "producer_kv_role": ("engine_contract", "kv_role", "kv_producer"),
             "handshake_disabled": ("engine_contract", "enforce_handshake_compat", False),
-            "unknown_contract_field": ("engine_contract", "engine_version", "1.0.0"),
+            "unknown_contract_field": ("engine_contract", "version", "1.0.0"),
             "unknown_engine_connector": ("engine", "connector", "unknown"),
             "unknown_engine_dialect": ("engine", "dialect", "unknown"),
         }

@@ -1,13 +1,15 @@
 {
   "attested": {
-    "digest": "sha256:1b516a728b2cb1ba7e74fe7d5ad43e19548ae9a3b6bbb000c3e6af302a165770",
+    "digest": "sha256:fcb13a78440b26eefb5a694175a3d0d872a270f96c229abb1c9584b5b21b5c14",
     "document": {
-      "attestation_digest": "sha256:669daf60cb25b90519593f08d15bb1375a5cff26b7850626734b6aa0f53d9afa",
+      "attestation_digest": "sha256:ccab354b1094de49efb8edf1a74bcef766f8c8a823e3051bc786f31274ae38c4",
       "contract": {
         "attention_backend": "TEST",
         "connector": "NixlConnector",
+        "connector_version": 1,
         "cross_layers_blocks": false,
         "enforce_handshake_compat": true,
+        "engine_version": "1.0.0",
         "head_size": 1,
         "hidden_layers": 1,
         "hybrid_kv_cache_manager": false,
@@ -17,15 +19,13 @@
         "kv_role": "kv_both",
         "model_architecture": "TestForCausalLM",
         "model_dtype": "float32",
-        "nixl_connector_version": 1,
-        "nixl_version": "test",
         "speculative_config": "disabled",
         "transfer_mode": "pull",
-        "vllm_version": "1.0.0"
+        "transfer_version": "test"
       },
       "engine": {
         "process_start_time_seconds": 100.0,
-        "vllm_version": "1.0.0"
+        "version": "1.0.0"
       },
       "launch": {
         "args": [
@@ -35,14 +35,16 @@
           "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_connector_extra_config\": {\"kv_lease_duration\": 30}}"
         ]
       },
-      "launch_digest": "sha256:1b516a728b2cb1ba7e74fe7d5ad43e19548ae9a3b6bbb000c3e6af302a165770",
+      "launch_digest": "sha256:fcb13a78440b26eefb5a694175a3d0d872a270f96c229abb1c9584b5b21b5c14",
       "schema": "narwhal.attestation",
       "schema_version": 1,
       "sources": {
         "attention_backend": "fixture-launch",
         "connector": "fixture-launch",
+        "connector_version": "fixture-launch",
         "cross_layers_blocks": "fixture-launch",
         "enforce_handshake_compat": "fixture-launch",
+        "engine_version": "fixture-launch",
         "head_size": "fixture-launch",
         "hidden_layers": "fixture-launch",
         "hybrid_kv_cache_manager": "fixture-launch",
@@ -52,14 +54,12 @@
         "kv_role": "fixture-launch",
         "model_architecture": "fixture-launch",
         "model_dtype": "fixture-launch",
-        "nixl_connector_version": "fixture-launch",
-        "nixl_version": "fixture-launch",
         "speculative_config": "fixture-launch",
         "transfer_mode": "fixture-launch",
-        "vllm_version": "fixture-launch"
+        "transfer_version": "fixture-launch"
       }
     },
-    "process_digest": "sha256:669daf60cb25b90519593f08d15bb1375a5cff26b7850626734b6aa0f53d9afa",
+    "process_digest": "sha256:ccab354b1094de49efb8edf1a74bcef766f8c8a823e3051bc786f31274ae38c4",
     "process_start_time_seconds": 100.0,
     "requests": [
       {
@@ -128,14 +128,14 @@
     }
   ],
   "contract_free": {
-    "digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "digest": "sha256:26153b704203d9783c7a77a26af84c4bae5eb95898ed7c1f836063059847af41",
     "document": {
       "engine": {
         "process_start_time_seconds": 100.0,
-        "vllm_version": "1.0.0"
+        "version": "1.0.0"
       }
     },
-    "process_digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "process_digest": "sha256:26153b704203d9783c7a77a26af84c4bae5eb95898ed7c1f836063059847af41",
     "process_start_time_seconds": 100.0,
     "requests": [
       {
@@ -157,11 +157,11 @@
     ]
   },
   "identity_generation": {
-    "digest": "sha256:550618d2a3c87f95e1203c3260a9d9f730f2f9f65103dd36b429a876014f70c2",
+    "digest": "sha256:26153b704203d9783c7a77a26af84c4bae5eb95898ed7c1f836063059847af41",
     "document": {
       "engine": {
         "process_start_time_seconds": 100.0,
-        "vllm_version": "1.0.0"
+        "version": "1.0.0"
       }
     }
   }

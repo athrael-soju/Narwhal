@@ -320,7 +320,7 @@ class RuntimeCheckAndStartTests(unittest.TestCase):
                 invoke.return_value = subprocess.CompletedProcess([], 0, runtime_output(plan), "")
                 check(run, plan)
             readings = iter((1000, 6100))
-            live = SimpleNamespace(vllm_version="0.29.0", process_start_time_seconds=1234.5)
+            live = SimpleNamespace(version="0.29.0", process_start_time_seconds=1234.5)
             prefix = "narwhal.deployment.native_engine."
             with (
                 patch(prefix + "validate_shared_runs", return_value=[(run, load(run))]),

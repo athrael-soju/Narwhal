@@ -37,14 +37,14 @@
     "declared_connector_differs": [
       "contract.connector is 'NixlConnector', expected 'OtherConnector'"
     ],
+    "declared_engine_version_differs": [
+      "contract.engine_version is '1.0.0', expected '0.0.1'"
+    ],
     "declared_kv_role_differs": [
       "contract.kv_role is 'kv_both', expected 'kv_consumer'"
     ],
-    "declared_nixl_version_differs": [
-      "contract.nixl_version is 'test', expected 'other'"
-    ],
-    "declared_vllm_version_differs": [
-      "contract.vllm_version is '1.0.0', expected '0.0.1'"
+    "declared_transfer_version_differs": [
+      "contract.transfer_version is 'test', expected 'other'"
     ],
     "live_version_differs": [
       "engine vLLM version is '1.0.0', live /version returned '0.0.1'"

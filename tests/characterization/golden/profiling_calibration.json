@@ -30,7 +30,7 @@
     "captured_at_unix": "<seconds>",
     "changed_generations": [],
     "configured_deadline_s": 0.01,
-    "contract_fingerprint": "8e52b260e524dd97",
+    "contract_fingerprint": "f5e095959e161d2d",
     "duration_s": "<seconds>",
     "engine_urls": {
       "e0": "http://engine-0.invalid:8000",
@@ -38,8 +38,8 @@
     },
     "generation_errors": [],
     "generations": {
-      "e0": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91",
-      "e3": "sha256:dc2d879ed19e39a1ac516557874948da06ba889b3ea1a99aaf712a3863a6ba91"
+      "e0": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+      "e3": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920"
     },
     "groups": [
       {

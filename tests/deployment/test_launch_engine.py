@@ -1,5 +1,3 @@
-"""Exercise complete serving plans and launch guards with synthetic inputs and Docker mocks."""
-
 import contextlib
 import hashlib
 import importlib
@@ -14,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
+from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine.captures import handshake_policy
@@ -33,7 +32,6 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
-from narwhal.engines.attestation import attested_kv_lease
 from tests.deployment.fixtures import (
     cache_settings_line,
     cuda_engine,
@@ -219,7 +217,9 @@ class EngineLauncherTests(unittest.TestCase):
                 extra = transfer_config["kv_connector_extra_config"]
                 self.assertEqual(extra["kv_lease_duration"], lease or 30)
                 # The attested launch arguments record the lease the router reads.
-                self.assertEqual(attested_kv_lease({"launch": {"args": plan["args"]}}), lease or 30)
+                self.assertEqual(
+                    VllmIdentity().kv_lease({"launch": {"args": plan["args"]}}), lease or 30
+                )
         for lease in (5, 0, 30.0, "30", True):
             spec = runtime()
             spec["kv_lease_s"] = lease

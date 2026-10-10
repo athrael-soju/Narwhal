@@ -1,11 +1,10 @@
-"""Fleet configuration values, defaults, and public construction API."""
-
 from __future__ import annotations
 
 import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..contracts import canonical_digest
 from ..scheduling.control import SLO, Thresholds
@@ -15,8 +14,6 @@ from ..types import Role
 
 @dataclass
 class EngineSpec:
-    """Engine address and opening scheduler role."""
-
     iid: str
     url: str
     role: Role = Role.DECODE
@@ -29,25 +26,36 @@ class EngineSpec:
 
 @dataclass(frozen=True)
 class SharedDeviceAllocation:
-    """Physical GPU and memory allocation for a colocated engine."""
-
     group: str
     gpu_uuid: str
     device_allowance: float
     gpu_memory_utilization: float
 
 
+# Contract field names written before engine backends were pluggable.
+LEGACY_CONTRACT_FIELDS = {
+    "vllm_version": "engine_version",
+    "nixl_version": "transfer_version",
+    "nixl_connector_version": "connector_version",
+}
+
+
+def current_contract_names(raw: dict[str, Any]) -> dict[str, Any]:
+    out = dict(raw)
+    for old, new in LEGACY_CONTRACT_FIELDS.items():
+        if old in out:
+            if new in out:
+                raise ValueError(f"engine contract sets both {old} and {new}")
+            out[new] = out.pop(old)
+    return out
+
+
 @dataclass(frozen=True)
 class EngineContract:
-    """Declared engine fields that must agree across a NIXL fleet.
-
-    Attestation binds runtime fields to the engine's current process start.
-    """
-
-    vllm_version: str = ""
+    engine_version: str = ""
     image_digest: str = ""
-    nixl_version: str = ""
-    nixl_connector_version: int = 0
+    transfer_version: str = ""
+    connector_version: int = 0
     model_architecture: str = ""
     model_dtype: str = ""
     kv_heads: int = 0
@@ -64,12 +72,11 @@ class EngineContract:
     enforce_handshake_compat: bool = True
 
     def fields(self) -> dict[str, str | int | bool | None]:
-        """Return the stable representation hashed by preflight."""
         return {
-            "vllm_version": self.vllm_version,
+            "engine_version": self.engine_version,
             "image_digest": self.image_digest,
-            "nixl_version": self.nixl_version,
-            "nixl_connector_version": self.nixl_connector_version,
+            "transfer_version": self.transfer_version,
+            "connector_version": self.connector_version,
             "model_architecture": self.model_architecture,
             "model_dtype": self.model_dtype,
             "kv_heads": self.kv_heads,
@@ -87,14 +94,12 @@ class EngineContract:
         }
 
     def fingerprint(self) -> str:
-        """Return a short digest of the complete declared representation."""
         return canonical_digest(self.fields())[7:23]
 
     def missing(self) -> list[str]:
-        """List undeclared compatibility fields in the engine contract."""
         optional = {
-            "nixl_version",
-            "nixl_connector_version",
+            "transfer_version",
+            "connector_version",
             "model_architecture",
             "model_dtype",
             "kv_heads",
@@ -120,14 +125,11 @@ class EngineContract:
 
 @dataclass(frozen=True)
 class HardwareSpec:
-    """Site-neutral hardware identity for one fleet shape."""
-
     accelerator: str
     accelerators_per_engine: int
     tensor_parallel: int
 
     def fields(self) -> dict[str, str | int]:
-        """Return the stable public representation."""
         return {
             "accelerator": self.accelerator,
             "accelerators_per_engine": self.accelerators_per_engine,
@@ -137,8 +139,6 @@ class HardwareSpec:
 
 @dataclass(frozen=True)
 class ProfileValidationPolicy:
-    """Decode-profile error limits enforced by fleet preflight."""
-
     # In-sample MAPE limit; must not exceed the controller's movement margin.
     max_decode_fit_mape: float = 0.05
     # Leave-one-cell-out cross-validation MAPE limit.
@@ -153,8 +153,6 @@ class ProfileValidationPolicy:
 
 @dataclass
 class FleetConfig:
-    """Validated inputs for serving and controller construction."""
-
     model: str
     engines: list[EngineSpec]
     slo: SLO
@@ -269,29 +267,24 @@ class FleetConfig:
 
     @staticmethod
     def load(path: str | Path) -> FleetConfig:
-        """Load a fleet config and report all detectable schema errors."""
         from .loading import load
 
         return load(path)
 
     def resolved_control_connections(self) -> int:
-        """Control-pool budget: the explicit value, or the fleet-size derivation."""
         if self.control_connections > 0:
             return self.control_connections
         return max(4, 2 * len(self.engines))
 
     def probe_deadline_s(self) -> float:
-        """Inference-probe deadline: the longer of the first-token and health budgets."""
         return max(self.first_token_timeout_s or 0.0, self.health_timeout_s)
 
     def engine_auth_mode(self) -> str:
-        """Return "engine-credential" when `engine_api_key_env` is set, else "boundary"."""
         if self.engine_api_key_env:
             return "engine-credential"
         return "boundary"
 
     def resolve_engine_key(self) -> str | None:
-        """Return the engine credential from the environment, or None when unconfigured."""
         if not self.engine_api_key_env:
             return None
         key = os.environ.get(self.engine_api_key_env)
@@ -302,25 +295,21 @@ class FleetConfig:
         return key
 
     def engine_headers(self) -> dict[str, str]:
-        """Build authentication headers for engine endpoints, excluding sidecars."""
         key = self.resolve_engine_key()
         return {"authorization": f"Bearer {key}"} if key is not None else {}
 
     def validate(self, source: str = "config") -> None:
-        """Validate cross-field constraints and report all failures together."""
         from .validation import validate
 
         validate(self, source)
 
     def save(self, path: str | Path) -> None:
-        """Write the replayable JSON configuration."""
         from .serialization import save
 
         save(self, path)
 
     @staticmethod
     def from_env() -> FleetConfig:
-        """Load the config named by `NARWHAL_FLEET`."""
         path = os.environ.get("NARWHAL_FLEET")
         if not path:
             raise RuntimeError("set NARWHAL_FLEET to a fleet config file")
