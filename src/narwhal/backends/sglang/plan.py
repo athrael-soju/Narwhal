@@ -30,6 +30,7 @@ VALUE_OPTIONS = {
     "--load-format",
     "--disaggregation-ib-device",
     "--mamba-ssm-dtype",
+    "--max-mamba-cache-size",
     "--max-running-requests",
 }
 FLAG_OPTIONS = {
