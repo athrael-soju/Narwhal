@@ -1,5 +1,3 @@
-"""Check residency tracking against vLLM-shaped cache events and ZeroMQ sockets."""
-
 import random
 import tempfile
 import threading
@@ -11,14 +9,14 @@ from pathlib import Path
 import msgpack
 import zmq
 
-from narwhal.engines.kv_events import (
-    CacheCleared,
-    RemovedBlocks,
-    decode_batch,
-)
+from narwhal.backends import load
+from narwhal.engines.kv_events import CacheCleared, RemovedBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
 from narwhal.engines.residency_feed import ResidencyFeed
+
+VLLM_EVENTS = load("vllm").kv_events
+decode_batch = VLLM_EVENTS.decode_batch
 
 MODEL, TOKENIZER = "model", "contract"
 
@@ -57,8 +55,6 @@ def wait_for(condition, timeout=5.0):
 
 
 class FakePublisher:
-    """Publish numbered batches and serve replay requests like vLLM's ZeroMQ publisher."""
-
     def __init__(self, directory, *, buffer=100, replay=True, replay_gap_s=0.0, replay_limit=None):
         self.replay_gap_s = replay_gap_s
         # Emulate a ROUTER that drops a long replay's tail and its end marker.
@@ -119,7 +115,6 @@ class FakePublisher:
 
 class DecodeTests(unittest.TestCase):
     def test_batch_decodes_vllm_event_maps(self):
-        """Stored, removed and cleared events keep the fields residency needs."""
         events = decode_batch(
             batch(
                 stored([b"h1"], range(4), extra_keys=[["salt"]]),
@@ -150,7 +145,6 @@ class ResidencyIndexTests(unittest.TestCase):
         index.apply(sequence, decode_batch(batch(*events)))
 
     def test_complete_history_names_blocks_and_hybrid_prefixes(self):
-        """Attention holds every block; Mamba holds the boundary state it reported."""
         index = ResidencyIndex(MODEL, TOKENIZER)
         prompt = tuple(range(12))
         self.apply(
@@ -190,7 +184,6 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertTrue(index.changes_after(1).changes[0]["cleared"])
 
     def test_changes_report_net_presence_per_batch_with_duplicate_copies(self):
-        """vLLM can hold one hash twice; a batch's change lists only net transitions."""
         index = ResidencyIndex(MODEL, TOKENIZER)
         prompt = tuple(range(12))
         names = identities(tuple(range(16)))
@@ -241,7 +234,6 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertIn("subscription failed", index.snapshot()["reason"])
 
     def test_missing_history_stays_unknown_until_a_cache_reset(self):
-        """Late starts, gaps and unreadable batches serve no blocks."""
         prompt = tuple(range(4))
         cases = {
             "late": [(3, batch(stored([1], prompt)))],
@@ -270,7 +262,6 @@ class ResidencyIndexTests(unittest.TestCase):
                 self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
 
     def test_sliding_window_groups_need_only_the_trailing_window(self):
-        """vLLM reuses a sliding-window prefix when blocks cover the window before its end."""
         prompt = tuple(range(24))
         names = identities(prompt)
         index = ResidencyIndex(MODEL, TOKENIZER)
@@ -299,7 +290,6 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertEqual(windowless.cached_prefix_blocks(names), 0)
 
     def test_duplicate_and_out_of_order_batches_change_nothing(self):
-        """A replayed or late batch whose sequence was already applied is ignored."""
         prompt = tuple(range(8))
         index = ResidencyIndex(MODEL, TOKENIZER)
         self.apply(index, 0, stored([1, 2], prompt))
@@ -356,7 +346,12 @@ class ResidencyFeedTests(unittest.TestCase):
 
     def run_feed(self, publisher, index):
         feed = ResidencyFeed(
-            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=1, poll_s=0.02
+            index,
+            publisher.endpoint,
+            publisher.replay_endpoint,
+            replay_timeout_s=1,
+            poll_s=0.02,
+            decoder=VLLM_EVENTS,
         )
         feed.start()
         self.addCleanup(feed.stop)
@@ -383,7 +378,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
 
     def test_a_long_replay_completes_while_batches_keep_arriving(self):
-        """The replay timeout bounds silence between batches, not the whole history."""
         publisher = FakePublisher(self.directory, replay_gap_s=0.3)
         self.addCleanup(publisher.close)
         for _ in range(6):
@@ -394,7 +388,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
 
     def test_a_live_gap_serves_nothing_until_its_replay_catches_up(self):
-        """A batch missed on the live socket leaves the index unknown during its replay."""
         publisher = FakePublisher(self.directory, replay_gap_s=0.3)
         self.addCleanup(publisher.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
@@ -414,7 +407,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: index.sequence == 3 and index.snapshot()["known"]))
 
     def test_a_batch_before_the_first_live_read_replays_the_missed_history(self):
-        """Batches published after an empty replay and before the first live read are recovered."""
         publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
 
@@ -431,7 +423,13 @@ class ResidencyFeedTests(unittest.TestCase):
                 return result
 
         index = ResidencyIndex(MODEL, TOKENIZER)
-        feed = Racing(index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.5)
+        feed = Racing(
+            index,
+            publisher.endpoint,
+            publisher.replay_endpoint,
+            replay_timeout_s=0.5,
+            decoder=VLLM_EVENTS,
+        )
         feed.start()
         self.addCleanup(feed.stop)
         self.assertTrue(wait_for(lambda: index.sequence == 1))
@@ -439,14 +437,18 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertEqual(index.cached_prefix_blocks(identities(tuple(range(1, 9)))), 2)
 
     def test_residency_stays_unknown_until_replay_rounds_reach_the_stream(self):
-        """Between replay rounds the stale index serves nothing."""
         publisher = FakePublisher(self.directory, replay_limit=2, replay_gap_s=0.1)
         self.addCleanup(publisher.close)
         for _ in range(8):
             publisher.publish(batch())
         index = ResidencyIndex(MODEL, TOKENIZER)
         feed = ResidencyFeed(
-            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.3, poll_s=0.02
+            index,
+            publisher.endpoint,
+            publisher.replay_endpoint,
+            replay_timeout_s=0.3,
+            poll_s=0.02,
+            decoder=VLLM_EVENTS,
         )
         feed.start()
         self.addCleanup(feed.stop)
@@ -460,7 +462,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertEqual(index.sequence, 7)
 
     def test_truncated_replays_continue_from_the_first_missing_batch(self):
-        """A replay that loses its tail and end marker resumes until the history is complete."""
         publisher = FakePublisher(self.directory, replay_limit=4)
         self.addCleanup(publisher.close)
         prompt = tuple(range(4))
@@ -469,7 +470,12 @@ class ResidencyFeedTests(unittest.TestCase):
             publisher.publish(batch())
         index = ResidencyIndex(MODEL, TOKENIZER)
         feed = ResidencyFeed(
-            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=0.3, poll_s=0.02
+            index,
+            publisher.endpoint,
+            publisher.replay_endpoint,
+            replay_timeout_s=0.3,
+            poll_s=0.02,
+            decoder=VLLM_EVENTS,
         )
         feed.start()
         self.addCleanup(feed.stop)
@@ -491,7 +497,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: publisher.publish(cleared) or index.known))
 
     def test_malformed_messages_leave_residency_unknown(self):
-        """A feed that cannot read its socket stops serving a stale known state."""
         publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
@@ -552,7 +557,6 @@ class CachedPrefixBlockWindowTests(unittest.TestCase):
             )
 
     def test_group_mixes_match_a_block_by_block_scan(self):
-        """Every mix of group kinds, windows and holes matches a block-by-block scan."""
         rng = random.Random(11)
         kinds = ("full_attention", "mla_attention", None, "sliding_window", "mamba", "chunked")
         for _ in range(3000):
@@ -572,7 +576,6 @@ class CachedPrefixBlockWindowTests(unittest.TestCase):
 
 
 def scanned_prefix_blocks(groups, identities, block_size):
-    """Scan every block for every group rule, as vLLM checks a prefix hit."""
     full_kinds = {None, "full_attention", "mla_attention", "sink_full_attention"}
     window_kinds = {"sliding_window", "sliding_window_mla"}
     if not groups or any(

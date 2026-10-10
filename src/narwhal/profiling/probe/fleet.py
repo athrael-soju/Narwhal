@@ -1,5 +1,3 @@
-"""Profile the selected engines of a fleet into its profile store."""
-
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from ... import command_results as results
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import lookup as lookup_dialect
 from ...provenance import stamp
@@ -26,17 +25,14 @@ from .neighbours import ColocatedWorkload, NeighbourLoad
 from .sweep import Sweep, bounded_sweep, load_sequence_limits
 
 
-class _Unhealthy(Exception):
-    """An engine failed its health gate before profiling."""
+class _Unhealthy(Exception): ...
 
 
 def device_key(spec: EngineSpec) -> str:
-    """Return the engine's shared-device group, or `engine:<iid>` for a dedicated device."""
     return spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
 
 
 def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
-    """Group engines that share a device, or all engines under neighbour load, into one lane."""
     if colocated:
         return [list(targets)]
     lanes: dict[str, list[EngineSpec]] = {}
@@ -55,7 +51,6 @@ async def run(
     colocated_workload: ColocatedWorkload | None = None,
     observation_timeout_s: float | None = None,
 ) -> int:
-    """Profile selected healthy engines and write the store."""
     if observation_timeout_s is not None and (
         not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
     ):
@@ -86,6 +81,7 @@ async def run(
 
     print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
     dialect = lookup_dialect(cfg.dialect)
+    metrics = load_backend(cfg.backend).metrics
     evidence_rows: dict[str, object] = {}
     measurement_record = {
         "method_version": 2,
@@ -179,6 +175,7 @@ async def run(
                     engine_sweep,
                     dialect,
                     cfg.chars_per_token,
+                    metrics=metrics,
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
                     observation_timeout_s=observation_timeout_s,

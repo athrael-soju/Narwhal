@@ -1,33 +1,32 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
-from ...engines import kv_events
 from ...engines.connector import NixlConnector
 from ...engines.dialect import VllmDialect
-from ...engines.kv_events import CacheEvent, KvEventDecoder
-from ...runtime import listeners, release
+from ...runtime import listeners
 from ...runtime.fabric import FabricLifecycle
 from ...runtime.role_switch import RouterRoleSwitch
 from .. import EngineBackend
 from .identity import VllmIdentity
+from .kv_events import VllmKvEvents
 from .metrics import VllmMetrics
 
 if TYPE_CHECKING:
     from ...deployment.launch_engine.backend import EngineLauncher
 
 
-class VllmKvEvents(KvEventDecoder):
-    def decode_batch(self, payload: bytes) -> list[CacheEvent | None]:
-        return kv_events.decode_batch(payload)
-
-
 class VllmFabric(FabricLifecycle):
-    release_after_s: ClassVar[tuple[float, ...]] = release.RELEASE_AFTER_S
-    release_retry_s: ClassVar[float] = release.RETRY_AFTER_S
+    # The first round follows the launcher's 60 s engine_ttl; the last follows vLLM's 3600 s
+    # default. A NIXL consumer keeps a producer's KV mapped until a consume request finds that
+    # producer idle past its engine_ttl.
+    release_after_s = (65.0, 125.0, 245.0, 485.0, 965.0, 1925.0, 3845.0)
+    # vLLM sends lease heartbeats at most every 5 s.
+    release_retry_s = 5.0
 
     def check_engine_bind(self, host: str, port: int, *, fabric: bool = False) -> None:
-        listeners.check_engine_bind(host, port, nixl=fabric)
+        # NIXL's ZeroMQ listener enables IPv6 dual-stack.
+        listeners.check_engine_bind(host, port, dual_stack=fabric)
 
 
 def _launcher() -> EngineLauncher:

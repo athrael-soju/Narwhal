@@ -7,6 +7,8 @@ from typing import ClassVar
 
 class EngineMetrics(ABC):
     dashboard_series: ClassVar[Mapping[str, str]] = {}
+    # Histogram whose _count and _sum transfer_totals reads.
+    transfer_series: ClassVar[str | None] = None
 
     @abstractmethod
     def kv_capacity(self, metrics: str) -> int | None: ...

@@ -1,5 +1,3 @@
-"""Warm prefill probe and cached prefill fit."""
-
 from __future__ import annotations
 
 import math
@@ -12,6 +10,7 @@ from typing import Any
 import httpx
 
 from ...engines.dialect import EngineDialect
+from ...engines.metrics import EngineMetrics
 from ..fitting import fit_cached_prefill, relative_error
 from ..model import Profile
 from .engine import completion_body, count_tokens, make_prompt, prefix_cache_hits
@@ -27,7 +26,6 @@ async def _complete(
     body: dict[str, Any],
     timeout_s: float | None,
 ) -> tuple[int, float]:
-    """Send one forced one-token completion and return its prompt tokens and latency."""
     start = time.monotonic()
     r = await client.post(f"{url}/v1/completions", json=body, timeout=timeout_s or 300.0)
     elapsed = time.monotonic() - start
@@ -60,14 +58,11 @@ async def probe_cached_prefill(
     sweep: Sweep,
     dialect: EngineDialect,
     *,
+    metrics: EngineMetrics,
     observation_timeout_s: float | None = None,
     max_model_len: int | None = None,
     block_tokens: int | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Measure warm prefill and a cold control for each (prefix, suffix) case.
-
-    Returns the samples and the reason the sweep stopped early, or None.
-    """
     timeout = observation_timeout_s or 30.0
     exact = dialect.tokenize_path is not None
     samples: list[dict[str, Any]] = []
@@ -105,14 +100,14 @@ async def probe_cached_prefill(
                     completion_body(model, primer, 1, dialect, salt),
                     observation_timeout_s,
                 )
-                before = await prefix_cache_hits(client, url, timeout)
+                before = await prefix_cache_hits(client, url, metrics, timeout)
                 tokens, elapsed = await _complete(
                     client,
                     url,
                     completion_body(model, full, 1, dialect, salt),
                     observation_timeout_s,
                 )
-                after = await prefix_cache_hits(client, url, timeout)
+                after = await prefix_cache_hits(client, url, metrics, timeout)
                 if before is None or after is None:
                     return samples, "the prefix-cache hit counter became unreadable"
                 cold_before = after
@@ -122,7 +117,7 @@ async def probe_cached_prefill(
                     completion_body(model, full, 1, dialect, dialect.cold_probe_extras()),
                     observation_timeout_s,
                 )
-                cold_after = await prefix_cache_hits(client, url, timeout)
+                cold_after = await prefix_cache_hits(client, url, metrics, timeout)
                 cached = after - before
                 if cached <= 0:
                     return (
@@ -168,7 +163,6 @@ async def probe_cached_prefill(
 def apply_cached_fit(
     profile: Profile, samples: list[dict[str, Any]]
 ) -> tuple[Profile, dict[str, Any]]:
-    """Fit warm prefill from retained samples; raise ValueError on a rejected fit."""
     cases: dict[tuple[Any, Any], dict[str, list[float]]] = {}
     for sample in samples:
         case = cases.setdefault(

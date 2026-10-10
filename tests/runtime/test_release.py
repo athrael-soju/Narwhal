@@ -1,5 +1,3 @@
-"""Check peer release rounds after an engine ejection or drain."""
-
 import asyncio
 import os
 import runpy
@@ -9,13 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.engines.client import InferenceProbe, ProbeLeg
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.monitoring import monitor_once
 from narwhal.runtime.release import (
-    RELEASE_AFTER_S,
-    RETRY_AFTER_S,
     PeerRelease,
     release_peers,
     release_round,
@@ -24,10 +21,12 @@ from narwhal.runtime.release import (
 from narwhal.serving.app import create_app
 from tests.fixtures import ROOT, profile
 
+FABRIC = load_backend("vllm").fabric
+RELEASE_AFTER_S = FABRIC.release_after_s
+RETRY_AFTER_S = FABRIC.release_retry_s
+
 
 class PeerReleaseScheduleTests(unittest.TestCase):
-    """Rounds follow the ejection and stop with readmission."""
-
     def test_rounds_follow_ejection_until_readmission(self):
         now = [100.0]
         release = PeerRelease(lambda: now[0])
@@ -81,8 +80,6 @@ class PeerReleaseScheduleTests(unittest.TestCase):
 
 
 class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
-    """Each live consumer receives one transfer probe from another producer."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

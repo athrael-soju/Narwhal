@@ -9,9 +9,9 @@ import httpx
 import msgpack
 import zmq
 
+from narwhal.backends import load
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, build_app
-from narwhal.engines.kv_events import decode_batch
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
 from narwhal.engines.residency_feed import ResidencyFeed
@@ -19,6 +19,9 @@ from narwhal.runtime.residency import ResidencySubscriptions
 from narwhal.serving.router.sizing import _hash_prompt
 from tests.characterization.golden import assert_golden
 from tests.fixtures import ROOT
+
+VLLM_EVENTS = load("vllm").kv_events
+decode_batch = VLLM_EVENTS.decode_batch
 
 MODEL, TOKENIZER = "model", "contract"
 SIDECAR = "http://sidecar:8010"
@@ -380,7 +383,12 @@ class ResidencyFeedTests(unittest.TestCase):
 
     def run_feed(self, publisher, index):
         feed = ResidencyFeed(
-            index, publisher.endpoint, publisher.replay_endpoint, replay_timeout_s=1, poll_s=0.02
+            index,
+            publisher.endpoint,
+            publisher.replay_endpoint,
+            replay_timeout_s=1,
+            poll_s=0.02,
+            decoder=VLLM_EVENTS,
         )
         feed.start()
         self.addCleanup(feed.stop)

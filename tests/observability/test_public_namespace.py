@@ -1,5 +1,3 @@
-"""Check the release's HTTP and telemetry names against shipped consumers."""
-
 import json
 import math
 import re
@@ -9,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.runtime.lifecycle.records import DrainRecord
@@ -51,12 +50,10 @@ DASHBOARD_PALETTE = {
 
 
 def dashboard():
-    """Return the shipped Grafana dashboard."""
     return json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
 
 
 def panel_queries(element):
-    """Return the query expressions of a dashboard element."""
     return [
         query["spec"]["query"]["spec"]["expr"]
         for query in element["spec"]["data"]["spec"]["queries"]
@@ -64,7 +61,6 @@ def panel_queries(element):
 
 
 def titled(title):
-    """Return the dashboard panel with this title and its grid position."""
     spec = dashboard()["spec"]
     [name] = [name for name, item in spec["elements"].items() if item["spec"]["title"] == title]
     [grid] = [
@@ -76,7 +72,6 @@ def titled(title):
 
 
 def legend_queries(panel):
-    """Map each query's legend to its expression."""
     return {
         query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
         for query in panel["data"]["spec"]["queries"]
@@ -84,7 +79,6 @@ def legend_queries(panel):
 
 
 def override_colors(panel):
-    """Map each override matcher to the fixed colour it sets."""
     return {
         override["matcher"]["options"]: prop["value"]["fixedColor"]
         for override in panel["vizConfig"]["spec"]["fieldConfig"]["overrides"]
@@ -94,7 +88,6 @@ def override_colors(panel):
 
 
 def alert_rules():
-    """Return each shipped alert rule's expression, duration and severity."""
     text = (ROOT / "tools/observability/prometheus-alerts.yml").read_text()
     rules = {}
     for block in re.split(r"\n\s*- alert: ", text)[1:]:
@@ -176,7 +169,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
 
     async def test_flip_counters_start_at_zero_for_every_caller(self):
-        """Role-change counters export zero before the first flip."""
         response = await self.client.get("/metrics")
         for by, to in (
             ("reactive", "prefill"),
@@ -187,7 +179,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f'narwhal_flips_total{{to="{to}",by="{by}"}} 0', response.text)
 
     async def test_lifecycle_state_metric_reports_each_engine(self):
-        """Each engine exports its current lifecycle state, including a blocked recovery."""
         self.router.lifecycle.records["p"] = DrainRecord(
             iid="p", state="blocked", requested_at=0.0, deadline_at=0.0, restart_required=False
         )
@@ -196,7 +187,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('narwhal_engine_lifecycle_state{iid="d",state="active"} 1', response.text)
 
     async def test_quarantine_metric_reports_each_held_engine(self):
-        """Each engine under a live quarantine or inference-probe hold exports 1."""
         self.router.scheduler.quarantined["p"] = math.inf
         self.router.scheduler.quarantined["d"] = self.router._clock() - 1.0
         response = await self.client.get("/metrics")
@@ -344,7 +334,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(name, response.text)
 
     async def test_dashboard_and_alert_queries_name_exported_metrics(self):
-        """Every Narwhal metric the dashboard or alerts query is a family on `/metrics`."""
         response = await self.client.get("/metrics")
         exported = set()
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", response.text, re.M):
@@ -357,15 +346,15 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         ]
         queried = {name for expr in expressions for name in re.findall(r"\bnarwhal_\w+", expr)}
         self.assertLessEqual(queried, exported)
-        # Engine panels read only the vLLM series the observability README lists.
+        # The backend's dashboard mapping is the single source for the engine series.
+        series = set(load_backend("vllm").metrics.dashboard_series.values())
         readme = (ROOT / "tools/observability/README.md").read_text()
         engine = {name for expr in expressions for name in re.findall(r"vllm:\w+", expr)}
-        self.assertTrue(engine)
-        for name in engine:
+        self.assertEqual(engine, series)
+        for name in series:
             self.assertIn(f"`{name}`", readme)
 
     def test_dashboard_charts_admission_queues_and_retries(self):
-        """Queue depth by stage, in-flight against its limit, and retry quota panels."""
         scope = '{job="narwhal-router",instance=~"$router"}'
         expected = {
             "Queue depth": {
@@ -436,7 +425,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(waiting_grid["y"], pressure_grid["y"] + pressure_grid["height"])
 
     def test_dashboard_attributes_drops_and_failed_attempts_by_reason(self):
-        """Reason panels sit under Request outcomes and keep each outcome's colour."""
         outcomes, outcome_grid = titled("Request outcomes")
         outcome_colors = override_colors(outcomes)
         dropped, dropped_grid = titled("Dropped requests by reason")
@@ -479,7 +467,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([grid["x"] for grid in row], [0, 8, 16])
 
     def test_dashboard_shows_expired_kv_per_producer_engine(self):
-        """The vLLM expired-KV counter is charted per engine in the expired colour."""
         panel, _ = titled("Expired KV by producer")
         self.assertEqual(
             legend_queries(panel),
@@ -499,7 +486,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
-        """Each share alert divides by offered requests and fires above 1% for 5 minutes."""
         rules = alert_rules()
         for name, numerator in (
             ("NarwhalRejectedRising", "sum without (reason) (rate(narwhal_rejected_total[5m]))"),
@@ -558,7 +544,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("narwhal_retry_attempts_total", " ".join(panel_queries(elements["panel-12"])))
 
     def test_dashboard_plots_event_loop_busy_share_and_lag(self):
-        """The router event-loop panel plots busy share and deadline lag of the selected router."""
         [panel] = [
             element["spec"]
             for element in dashboard()["spec"]["elements"].values()
@@ -574,7 +559,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"narwhal_event_loop_lag_seconds{scope}", queries[1]["expr"])
 
     def test_engine_views_mark_held_and_unreachable_engines(self):
-        """The engine table ranks each engine's state and the role history marks held periods."""
         elements = dashboard()["spec"]["elements"]
         table = elements["panel-7"]["spec"]
         for query in table["data"]["spec"]["queries"]:
@@ -664,7 +648,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("label_replace(4 * max by(iid) (narwhal_engine_quarantined{", expr)
 
     def test_headline_row_reports_requests_and_latency_against_the_slo(self):
-        """The first row holds one-row Requests and Latency tables beside the Router block."""
         spec = dashboard()["spec"]
         elements = spec["elements"]
         row = sorted(
@@ -769,7 +752,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_prompt_token_rates_exclude_kv_transfer(self):
-        """Prompt token rates count tokens each engine prefilled itself."""
         elements = dashboard()["spec"]["elements"]
         throughput = next(
             query["spec"]["query"]["spec"]["expr"]
@@ -791,7 +773,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('role="prefill"', prefill)
 
     def test_alert_history_timeline_and_outcome_markers(self):
-        """Fleet events keeps firing history, and Request outcomes marks alert periods."""
         spec = dashboard()["spec"]
         events = spec["elements"]["panel-37"]["spec"]
         self.assertEqual(events["vizConfig"]["kind"], "state-timeline")
@@ -831,7 +812,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("unless", expr)
 
     def test_request_outcomes_plot_every_terminal_counter_from_zero(self):
-        """Each terminal counter has its own unstacked series beside offered."""
         panel = dashboard()["spec"]["elements"]["panel-11"]["spec"]
         expressions = {
             query["spec"]["query"]["spec"]["legendFormat"]: query["spec"]["query"]["spec"]["expr"]
@@ -872,7 +852,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_dashboard_colors_come_from_the_palette(self):
-        """Every panel colour is a documented palette entry, and every named series has one."""
         spec = dashboard()["spec"]
         allowed = set(DASHBOARD_PALETTE.values()) | {"text", "transparent"}
 

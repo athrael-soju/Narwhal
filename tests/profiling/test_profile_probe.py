@@ -1,5 +1,3 @@
-"""Check profiling measurements, token counts and output-file protection."""
-
 import asyncio
 import io
 import json
@@ -13,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.engines.dialect import VllmDialect
 from narwhal.profiling.generation import GenerationEvidence
@@ -24,12 +23,7 @@ from narwhal.profiling.probe import instance as instance_probe
 from narwhal.profiling.probe import neighbours as neighbours_probe
 from narwhal.profiling.probe import prefill as prefill_probe
 from narwhal.profiling.probe.decode import probe_decode
-from narwhal.profiling.probe.engine import (
-    engine_context_limit,
-    make_prompt,
-    parse_kv_capacity,
-    parse_prefix_cache_hits,
-)
+from narwhal.profiling.probe.engine import engine_context_limit, make_prompt
 from narwhal.profiling.probe.instance import profile_instance
 from narwhal.profiling.probe.neighbours import ColocatedWorkload, NeighbourLoad
 from narwhal.profiling.probe.offline import merge_profiles, refit_saved_prefill
@@ -40,10 +34,10 @@ from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
 
+VLLM_METRICS = load_backend("vllm").metrics
+
 
 class MeasuredStream(httpx.AsyncByteStream):
-    """Advance the probe clock at each delivered SSE event."""
-
     def __init__(self, frames):
         self.frames = frames
         self.now = 0
@@ -58,15 +52,11 @@ class MeasuredStream(httpx.AsyncByteStream):
 
 
 def token(index, *, finish=None):
-    """Build one exact-token decode event."""
     return {"choices": [{"text": "x", "token_ids": [index], "finish_reason": finish}]}
 
 
 class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
-    """HTTP fixtures exercise measurement validation with controlled token arrivals."""
-
     async def test_colocated_sizing_uses_observation_timeout(self):
-        """The override reaches both prompt fitting and neighbour limit discovery."""
         timeouts = []
 
         async def answer(request):
@@ -91,7 +81,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(timeout.values()), {75.0})
 
     async def test_colocated_load_records_completed_peer_traffic(self):
-        """A mix label is backed by requests to both neighbouring engine roles."""
         calls = []
 
         async def answer(request):
@@ -135,7 +124,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(measured["peers"][iid]["error"])
 
     async def test_colocated_load_requires_completions_from_each_same_role_peer(self):
-        """Every decoder contributes completed requests during the measurement window."""
         good_completed = asyncio.Event()
 
         async def answer(request):
@@ -173,7 +161,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(task.done() for task in load.tasks))
 
     async def test_colocated_load_retains_a_peer_task_exception(self):
-        """A malformed response fails qualification after earlier peer completions."""
         fail = False
         failed = asyncio.Event()
 
@@ -211,7 +198,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("AttributeError", measured["peers"]["d2"]["error"])
 
     async def test_merge_keeps_both_measured_role_mixes(self):
-        """Separate profiling runs retain distinct rows for one engine."""
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             sources = [root / "one.json", root / "two.json"]
@@ -269,7 +255,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 merge_profiles(sources, root / "again.json", {"e0"})
 
     async def test_prompt_uses_the_engine_count_after_resizing(self):
-        """Prompt resizing records the measured count used as the fit axis."""
         counts = iter((20, 9))
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(
@@ -281,7 +266,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(text), 50)
 
     async def test_bounded_prompt_fits_context_with_fixed_prefix_token_cost(self):
-        """A random prefix's token cost defeats a single character-ratio resize."""
         prefix = "0123456789abcdef0123456789abcdef "
         observed_counts = []
 
@@ -326,7 +310,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(calls, 16)
 
     async def test_tokenize_failures_abort_measurement(self):
-        """Unavailable or invalid exact counts prevent fitting against an estimated axis."""
         for response in (
             httpx.Response(503),
             httpx.Response(200, text="{"),
@@ -340,7 +323,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     await make_prompt(client, "http://e", "stub", 10)
 
     async def test_prefill_requires_matching_usage_and_length_finish(self):
-        """Prefill samples require matching prompt usage and a length finish after one token."""
         good = {
             "usage": {"prompt_tokens": 4, "completion_tokens": 1},
             "choices": [{"finish_reason": "length"}],
@@ -373,7 +355,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                             await probe_prefill(client, "http://e", "stub", lens=(4,))
 
     async def test_live_context_bounds_prefill_before_completion(self):
-        """Live tokenizer limits select a safe sweep and reject an oversized exact count."""
         sent = []
 
         def respond(request):
@@ -457,7 +438,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             bounded_sweep(Sweep(), 16384, 1)
 
     async def measure(self, frames, *, cohort=1, tokens=3):
-        """Run one real decode probe and expose its final resident counters."""
         stream = MeasuredStream(frames)
         state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": cohort}
         samples = []
@@ -474,13 +454,11 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         return samples
 
     async def test_decode_samples_exact_gaps_and_complete_cohorts(self):
-        """Each token interval records the active request and token counts for a full cohort."""
         frames = [token(0), token(1), token(2, finish="length"), "[DONE]"]
         self.assertEqual(await self.measure(frames), [(1.0, 12.0, 0.25), (1.0, 13.0, 0.25)])
         self.assertEqual(await self.measure(frames, cohort=2), [])
 
     async def test_bundled_terminal_tokens_keep_counts_without_false_intervals(self):
-        """A bundled final event preserves completion while its timing is discarded."""
         frames = [
             token(0),
             token(1),
@@ -490,7 +468,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.measure(frames, tokens=4), [(1.0, 12.0, 0.25)])
 
     async def test_invalid_token_identity_aborts_the_profile(self):
-        """Profiling rejects unidentified output and releases the active cohort counters."""
         for choice in invalid_token_choices():
             with (
                 self.subTest(choice=choice),
@@ -499,7 +476,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 await self.measure([token(0), {"choices": [choice]}, "[DONE]"])
 
     async def test_decode_errors_release_resident_counters(self):
-        """Every malformed, short or failed stream releases its resident contribution."""
         for frames, message in (
             ([token(0)], "incomplete"),
             ([token(0), "{bad"], "malformed SSE"),
@@ -516,7 +492,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             await self.measure([token(0), httpx.ReadError("lost")])
 
     async def test_decode_sweep_requires_enough_complete_cohort_intervals(self):
-        """A completed short stream still needs two intervals per cohort member."""
         frames = [token(0), token(1, finish="length"), "[DONE]"]
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(
@@ -532,7 +507,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_overlapping_tokens_cover_the_admission_lag(self):
-        """A cohort that never overlapped retries with the lag tokens plus the configured count."""
         lagged = {"cohort": 4, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
         self.assertEqual(decode_probe._overlapping_tokens(lagged, 64, None), 64 + 128)
         self.assertIsNone(decode_probe._overlapping_tokens(lagged, 64, 150))
@@ -541,7 +515,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(decode_probe._overlapping_tokens({"cohort": 4}, 64, None))
 
     async def test_decode_sweep_retries_a_lagged_cohort_with_overlapping_tokens(self):
-        """Early members that finish before the last one joins get one sized retry."""
         calls: list[int] = []
 
         async def lagged(client, url, model, prompt, input_len, state, observed, tokens, dialect):
@@ -588,7 +561,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [64] * 4)
 
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
-        """Catch-up tokens cannot make an interrupted decoder appear faster."""
 
         async def burst(client, url, model, prompt, input_len, state, observed, tokens, dialect):
             observed.extend(
@@ -605,14 +577,15 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(samples[0][2], 0.03)
 
     async def test_profile_fits_axes_and_retains_raw_evidence(self):
-        """Profile construction carries measured bounds and fit errors into the store row."""
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
         decode = [
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
         ]
         evidence = {}
         with patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]):
-            row = await profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+            row = await profile_instance(
+                None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+            )
         self.assertEqual(evidence["prefix_cache_hit_tokens"], 0)
         self.assertEqual((row.decode_min_requests, row.decode_max_requests), (1, 16))
         self.assertEqual((row.decode_min_kv_tokens, row.decode_max_kv_tokens), (100, 10000))
@@ -624,7 +597,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["decode"], decode)
 
     async def test_cold_profile_rejects_prefix_cache_hits_and_records_missing_counter(self):
-        """Cached prefill cannot enter a cold profile; an absent counter stays unknown."""
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
         decode = [
             (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
@@ -641,16 +613,19 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             ):
                 if message:
                     with self.assertRaisesRegex(RuntimeError, message):
-                        await profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+                        await profile_instance(
+                            None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+                        )
                     self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
                     # Cached prefill fails before the decode sweep runs.
                     instance_probe.probe_decode.assert_not_awaited()
                 else:
-                    await profile_instance(None, "e", "http://e", "stub", evidence=evidence)
+                    await profile_instance(
+                        None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+                    )
                     self.assertIsNone(evidence["prefix_cache_hit_tokens"])
 
     async def test_cold_probes_salt_every_request(self):
-        """Repeated probes of one prompt cannot share a cached prefix."""
         bodies = []
 
         def answer(request):
@@ -707,7 +682,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({body["prompt"] for body in bodies}, {"prompt"})
 
     async def test_run_protects_existing_and_symlink_outputs(self):
-        """Profiling rejects existing output files and symlinks before contacting engines."""
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             with self.assertRaises(FileExistsError):
@@ -718,7 +692,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 await fleet_probe.run(cfg, None, overwrite=True)
 
     async def test_run_writes_profile_and_measurement_sidecar(self):
-        """A profiling run writes the selected engine's profile and measurement sidecar."""
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "new.json"
@@ -768,7 +741,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 16300)
 
     async def test_run_rejects_decode_fit_outside_policy(self):
-        """An unstable colocated fit leaves raw evidence but no usable profile."""
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "unstable.json"
@@ -799,7 +771,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("profile rejected", saved["engines"]["e0"]["error"])
 
     def test_profile_lanes_serialize_shared_devices_and_neighbour_load(self):
-        """Engines on their own devices get one lane each; shared devices share a lane."""
         with tempfile.TemporaryDirectory() as folder:
             engines = fleet(Path(folder)).engines
         shared = SharedDeviceAllocation("gpu-0", "uuid", 0.5, 0.1)
@@ -816,7 +787,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_run_profiles_engines_on_separate_devices_concurrently(self):
-        """Every lane measures at once; the store receives each engine's profile."""
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "parallel.json"
@@ -850,7 +820,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), len(cfg.engines))
 
     async def test_run_retains_per_peer_evidence_when_a_neighbour_stalls(self):
-        """Rejected role-mix measurements retain each neighbour's traffic and error."""
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "colocated.json"
@@ -1028,22 +997,20 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 refit_saved_prefill(legacy, root / "legacy-refit.json", {"e0", "e3"})
 
     def test_kv_capacity_uses_the_smallest_reported_rank(self):
-        """The physical bound follows the smallest rank capacity."""
         self.assertEqual(
-            parse_kv_capacity(
+            VLLM_METRICS.kv_capacity(
                 'x{kv_cache_size_tokens="1000"} 1\nx{kv_cache_size_tokens="900.0"} 1'
             ),
             900,
         )
-        self.assertIsNone(parse_kv_capacity(""))
+        self.assertIsNone(VLLM_METRICS.kv_capacity(""))
 
     def test_prefix_cache_hits_sum_engine_counters(self):
-        """Hit tokens sum across engine label sets and ignore creation timestamps."""
         metrics = (
             'vllm:prefix_cache_hits_total{engine="0",model_name="m"} 12.0\n'
             'vllm:prefix_cache_hits_created{engine="0",model_name="m"} 1.7e9\n'
             'vllm:prefix_cache_hits_total{engine="1",model_name="m"} 30.0\n'
             'vllm:prefix_cache_queries_total{engine="0",model_name="m"} 99.0\n'
         )
-        self.assertEqual(parse_prefix_cache_hits(metrics), 42)
-        self.assertIsNone(parse_prefix_cache_hits("vllm:num_requests_running 0\n"))
+        self.assertEqual(VLLM_METRICS.prefix_cache_hits(metrics), 42)
+        self.assertIsNone(VLLM_METRICS.prefix_cache_hits("vllm:num_requests_running 0\n"))
