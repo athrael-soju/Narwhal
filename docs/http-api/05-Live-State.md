@@ -263,7 +263,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `mean_input_len`            | Mean sized input length that sets prefill seats, `null` before a request is sized in the window          |
 | `engines.<iid>.prefill`     | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit           |
 | `engines.<iid>.decode`      | Decode seats, `0` for no limit                                                                          |
-| `engines.<iid>.sequence_limit` | `--max-num-seqs` from the engine's verified attestation, `null` when the launch arguments omit it    |
+| `engines.<iid>.sequence_limit` | vLLM `--max-num-seqs` or SGLang `--max-running-requests` from the engine's verified attestation, `null` when the launch arguments omit it |
 
 `handoff` fields, one entry per engine:
 
