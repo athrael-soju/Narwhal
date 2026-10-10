@@ -52,7 +52,7 @@ def sglang_observation(address="10.0.0.1"):
     observed.update(
         packages={
             "sglang": "0.5.0+test",
-            "mooncake-transfer-engine": "0.3.0",
+            "mooncake-transfer-engine-cuda13": "0.3.0",
             "nixl": "1.0.0",
             "torch": "2.12.0",
         },
