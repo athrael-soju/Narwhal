@@ -72,11 +72,9 @@ class DocumentationContractTests(unittest.TestCase):
                 except ValueError:
                     continue
                 source = fleet
-                if section == "## 2. Minimal fleet definition" and field in engine:
+                if section == "## Minimal fleet definition" and field in engine:
                     source = engine
-                elif (
-                    section == "## 3. Engine shape and compatibility contract" and field in contract
-                ):
+                elif section == "## Engine shape and compatibility contract" and field in contract:
                     source = contract
                 with self.subTest(page=page.name, section=section, field=field):
                     actual = source

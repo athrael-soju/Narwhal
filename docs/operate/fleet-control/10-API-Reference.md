@@ -1,5 +1,5 @@
 ---
-description: Routes, request fields, status codes and response bodies of the fleet control service API, and the metrics behind its dashboard annotations.
+description: Routes, request fields, status codes, response bodies, and dashboard metrics for the fleet control service API.
 ---
 
 # API reference

@@ -71,17 +71,7 @@ Narwhal is an adaptive, disaggregated inference framework that automatically hot
 
 ## How engines change roles
 
-The role controller scores the current role split and each adjacent split, one engine move away. It projects each split from measured engine profiles, offered demand, and resident work. A split's score is its worst projected service-level objective (SLO) ratio across time to first token (TTFT), time per output token (TPOT), and decode queueing.
-
-Projections use measured window demand. A decode-to-prefill candidate takes its decode demand from the larger of the short- and long-horizon estimates.
-
-The controller moves to an adjacent split that improves the score by at least the configured margin. A decode-to-prefill move also needs stable decode demand and a closed arrival-evidence window. The window closes after `controller.reactive.evidence_span_s` with the minimum number of arrivals, or after `controller.reactive.evidence_max_span_s` under sparse traffic. A prefill-to-decode move with prefill load at or below `controller.thresholds.shrink` can proceed while the window is open.
-
-When demand over the confirmation span shifts after a settled run, the controller moves one engine. The settled run is `controller.reactive.evidence_span_s`, or one confirmation span shorter when the shift reverses the controller's recent moves. The controller keeps moving engines in that direction on confirmation-span demand while the shift lasts: after its first move for a reversing shift, and after `controller.reactive.evidence_span_s` for any other shift. Under steady demand, the score chooses between adjacent splits once the arrival-evidence window has closed.
-
-Every move passes guards for pinned engines, role floors, cooldown, dwell time, the resident-stream cap on decode donors, and engine lifecycle holds. While a role is below its configured floor, floor repair moves one engine per monitor pass.
-
-New requests follow the revised split, and resident requests finish on their assigned engines.
+The role controller scores the current role split and each adjacent split, one engine move away. It uses measured engine profiles, offered demand, and resident work, and moves one engine only when the worst projected SLO ratio improves and every role, lifecycle, and resident-work guard passes. New requests follow the revised split; resident requests finish on their assigned engines.
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/concepts/02-Role-Control/"><img src="https://img.shields.io/badge/docs-Role%20control%20and%20capacity%20floors-0f766e" alt="Role control and capacity floors documentation"></a>
@@ -107,18 +97,7 @@ narwhal --help
 
 The wheel installs these commands:
 
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Dev/"><img src="https://img.shields.io/badge/cli-narwhal-0f766e" alt="narwhal"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Engine/"><img src="https://img.shields.io/badge/cli-narwhal--engine-0f766e" alt="narwhal-engine"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Serve/"><img src="https://img.shields.io/badge/cli-narwhal--serve-0f766e" alt="narwhal-serve"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Attest/"><img src="https://img.shields.io/badge/cli-narwhal--attest-0f766e" alt="narwhal-attest"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Profile/"><img src="https://img.shields.io/badge/cli-narwhal--profile-0f766e" alt="narwhal-profile"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Check/"><img src="https://img.shields.io/badge/cli-narwhal--check-0f766e" alt="narwhal-check"></a>
-</p>
-
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Install-from-PyPI/"><img src="https://img.shields.io/badge/docs-Installing%20from%20PyPI-0f766e" alt="Installing from PyPI documentation"></a>
-</p>
+`narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. See [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) and the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/) for their options.
 
 ## Trying it on one GPU
 
@@ -141,32 +120,11 @@ The installed template starts two engines on an NVIDIA GPU with 8 GB of VRAM or 
 
 ## Bringing up a fleet
 
-Run these gates in order from a management workstation:
-
-1. Freeze inputs and discover the deployment in [Gate A](https://athrael-soju.github.io/Narwhal/deploy/01-Discover/).
-2. Package and install the approved revision in [Gate B](https://athrael-soju.github.io/Narwhal/deploy/02-Install/).
-3. Validate and start every engine in [Gate C](https://athrael-soju.github.io/Narwhal/deploy/03-Validate-Engines/).
-4. Qualify the transfer fabric in [Gate D](https://athrael-soju.github.io/Narwhal/deploy/04-Qualify-Fabric/).
-5. Attest the live engines in [Gate E](https://athrael-soju.github.io/Narwhal/deploy/05-Attest/).
-6. Profile the engines and run preflight in [Gate F](https://athrael-soju.github.io/Narwhal/deploy/06-Profile-and-Preflight/).
-7. Start the router and validate capacity through an SSH tunnel in [Gate G](https://athrael-soju.github.io/Narwhal/deploy/07-Serve-and-Measure/).
-
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Deploy/"><img src="https://img.shields.io/badge/docs-Deploying%20a%20fleet-0f766e" alt="Deploying a fleet documentation"></a>
-</p>
+Run the deployment gates in [Deploying a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation.
 
 ## Documentation
 
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Core-Concepts/"><img src="https://img.shields.io/badge/docs-Architecture-0f766e" alt="Architecture documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Configuration/"><img src="https://img.shields.io/badge/docs-Configuration-0f766e" alt="Configuration documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/CLI-Reference/"><img src="https://img.shields.io/badge/docs-CLI-0f766e" alt="CLI documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/HTTP-API/"><img src="https://img.shields.io/badge/docs-HTTP%20API-0f766e" alt="HTTP API documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Measure/"><img src="https://img.shields.io/badge/docs-Measurement-0f766e" alt="Measurement documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Observability/"><img src="https://img.shields.io/badge/docs-Observability-0f766e" alt="Observability documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operations-0f766e" alt="Operations documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Troubleshoot/"><img src="https://img.shields.io/badge/docs-Troubleshooting-0f766e" alt="Troubleshooting documentation"></a>
-</p>
+The [MkDocs site](https://athrael-soju.github.io/Narwhal/) routes installation, deployment, operation, measurement, and reference tasks.
 
 ## Contributing
 

@@ -72,13 +72,13 @@ nav:
       - Recovery and qualification: dev/Recovery-and-Qualification.md
   - Deploying a fleet:
       - Overview: Deploy.md
-      - A. Discovering the fleet: deploy/01-Discover.md
-      - B. Installing Narwhal: deploy/02-Install.md
-      - C. Validating and starting engines: deploy/03-Validate-Engines.md
-      - D. Qualifying the fabric: deploy/04-Qualify-Fabric.md
-      - E. Attesting live engines: deploy/05-Attest.md
-      - F. Profiling and running preflight: deploy/06-Profile-and-Preflight.md
-      - G. Serving and measuring: deploy/07-Serve-and-Measure.md
+      - Discovering the deployment: deploy/01-Discover.md
+      - Installing the approved revision: deploy/02-Install.md
+      - Validating and starting engines: deploy/03-Validate-Engines.md
+      - Qualifying the transfer fabric: deploy/04-Qualify-Fabric.md
+      - Attesting live engines: deploy/05-Attest.md
+      - Profiling and preflight: deploy/06-Profile-and-Preflight.md
+      - Serving and measuring: deploy/07-Serve-and-Measure.md
   - Deployment operations:
       - Measuring a fleet:
           - Overview: Measure.md

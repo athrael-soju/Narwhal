@@ -4,7 +4,7 @@ description: Set production TTFT and TPOT SLOs and freeze the Narwhal deployment
 
 # Targets and deployment freeze
 
-## 5. Setting production SLOs
+## Setting production SLOs
 
 `slo.ttft_s` sets the time to first token (TTFT) target, and `slo.tpot_s` sets the time per output token (TPOT) target.
 
@@ -22,7 +22,7 @@ The `narwhal-check` `slo` gate passes each engine when `slo.tpot_s` is at or abo
 
 The `narwhal-check` [pace gate](../deploy/06-Profile-and-Preflight.md#pace-gate) compares each engine's prefill pace with the fleet median, its saved profile, or both.
 
-## 6. Freezing the deployment under test
+## Freezing the deployment under test
 
 1. Assign a deployment identifier before the load test.
 2. Attach the exact artifacts to it:
@@ -53,5 +53,5 @@ Before the next rate, wait for:
 
 Stop the sweep at the first of:
 
-- a run that misses the [trial's attainment target](03-Load-Trial.md#7-running-the-synthetic-deployment-trial)
+- a run that misses the [trial's attainment target](03-Load-Trial.md#running-the-synthetic-deployment-trial)
 - a tested rate at the intended operating ceiling

@@ -4,7 +4,7 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 # Fabric, CLI, and configuration operations
 
-## 17. Fabric workload qualification
+## Fabric workload qualification
 
 `deploy_hosts.py prepare` copies a snapshot of the fabric helper, `tools/deployment/fabric_budget.py`, for every engine host. The prepared manifest and `NARWHAL_FABRIC_BUDGET_SHA256` hold the snapshot's SHA-256.
 
@@ -12,7 +12,7 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 If the helper changes, start a new preparation directory.
 
-### 17.1 Calculating the workload budget
+### Calculating the workload budget
 
 [Cache-equivalence grouping](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) groups engine roles by:
 
@@ -46,7 +46,7 @@ To compute the budget:
       --out "$FABRIC_RUN/budget.json"
     ```
 
-3. Compare each directed host edge with its group budget using the [link evidence](#174-link-evidence).
+3. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
 
 `calculate` accepts these options:
 
@@ -64,7 +64,7 @@ To compute the budget:
 
 Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--bytes-per-token`.
 
-### 17.2 Retained budget evidence
+### Retained budget evidence
 
 Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engine host.
 
@@ -83,13 +83,13 @@ Each matching source role's private comparison budget holds the representative's
 
 The captured layout holds per-layer page bytes for each TP rank, the token block size, and extra blocks for state and boundary allowance. It also holds the image identity, package versions, application revision and launch-plan hash.
 
-### 17.3 Uniform-cache options
+### Uniform-cache options
 
 Deployments use `--runtime-layout` for every model.
 
 Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
 
-### 17.4 Link evidence
+### Link evidence
 
 For `ucx_tcp`, the measured rate is the aggregate received bitrate that the iperf3 receiver reports, and `record-edge` takes the iperf3 JSON as `--sample`. For `ucx_rdma`, the measured rate is the average Gbit/s from the retained perftest report, and `record-edge` takes that rate as `--gbps` with the report as `--sample`.
 
@@ -111,9 +111,8 @@ These `fabric_budget.py` commands compare a link sample with a budget:
 | `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                   |
 | `reuse-edge`  | Writes a new private comparison of the retained sample against a corrected budget, for a matching link fingerprint. |
 
----
 
-## 18. CLI precedence
+## CLI precedence
 
 `narwhal-serve` options take precedence over fleet fields.
 
@@ -129,24 +128,21 @@ Options that default to a fleet field:
 
 To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
----
 
-## 19. Request journal
+## Request journal
 
-`narwhal-serve` writes request timing records to [`journal.jsonl`](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#11-profile-validation). `--journal PATH` writes them to `PATH`.
+`narwhal-serve` writes request timing records to [`journal.jsonl`](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) beside [`profiles.path`](03-Recovery-and-Validation.md#profile-validation). `--journal PATH` writes them to `PATH`.
 
----
 
-## 20. Configuration provenance and publication
+## Configuration provenance and publication
 
 - Keep the exact fleet configuration beside every scored run.
 - Replace the engine URLs in that configuration before publishing an artifact.
 - Keep live fleet files in a Git-ignored path, such as `runs/` or `config/fleet.json`.
 - Keep real host allocations, credentials, runtime evidence and launch records in Git-ignored private paths.
 
----
 
-## 21. Operational sequence
+## Operational sequence
 
 For a new or changed deployment:
 

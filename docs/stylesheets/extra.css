@@ -271,7 +271,8 @@
 }
 
 /* overrides/hooks/panel_rows.py sets each item's flex-grow (plain rows) or
-   flex-basis (stats rows) from image pixel widths. */
+   flex-basis (stats rows) from image pixel widths, and caps each item at its
+   image's pixel width. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;
@@ -288,6 +289,49 @@
   width: auto;
   max-width: 100%;
   margin: 0 auto;
+}
+
+.md-typeset .narwhal-walkthrough-trigger {
+  display: block;
+  cursor: zoom-in;
+}
+
+.narwhal-walkthrough-dialog {
+  width: min(1600px, 94vw, 147.28vh);
+  aspect-ratio: 1600 / 956;
+  box-sizing: border-box;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+}
+
+.narwhal-walkthrough-dialog::backdrop {
+  background: rgb(10 17 21 / 92%);
+}
+
+.narwhal-walkthrough-dialog iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #101a20;
+}
+
+.narwhal-walkthrough-close {
+  position: absolute;
+  z-index: 1;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
 }
 
 [data-md-color-scheme="default"] .md-typeset .narwhal-panel-row img[src$="#only-dark"],

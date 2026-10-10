@@ -122,7 +122,7 @@ The `prefill` and `decode` seat waits apply with `serving.queue_capacity` above 
 
 #### Refusal causes
 
-The [global admission policy](../configuration/02-Serving-and-Role-Control.md#41-global-admission) sets the time to first token (TTFT) budget.
+The [global admission policy](../configuration/02-Serving-and-Role-Control.md#global-admission) sets the time to first token (TTFT) budget.
 
 | `refused_cause` | Condition |
 | --- | --- |
@@ -186,7 +186,7 @@ An attempt starts at prefill placement and dispatches with its prefill leg. A fa
 
 #### Admission price
 
-The router prices each attempt's prefill placement in both [admission modes](../configuration/02-Serving-and-Role-Control.md#41-global-admission). `predictive` mode refuses the request when `price_s` exceeds the TTFT budget, and `open` mode records the price without enforcing it. In `predictive` mode, the router also prices a first attempt on the cheapest live prefill engine while it [waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) for an admission or prefill seat. A price taken during an admission-seat wait precedes sizing, so its `own_prefill_s` is a cold prefill of the estimated input length, without cache evidence. The row keeps the latest price.
+The router prices each attempt's prefill placement in both [admission modes](../configuration/02-Serving-and-Role-Control.md#global-admission). `predictive` mode refuses the request when `price_s` exceeds the TTFT budget, and `open` mode records the price without enforcing it. In `predictive` mode, the router also prices a first attempt on the cheapest live prefill engine while it [waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) for an admission or prefill seat. A price taken during an admission-seat wait precedes sizing, so its `own_prefill_s` is a cold prefill of the estimated input length, without cache evidence. The row keeps the latest price.
 
 | Field | Meaning |
 | --- | --- |
@@ -208,7 +208,7 @@ For a crossed request whose first byte follows prefill, `first_byte_s - ttft_s` 
 
 ## Attainment accounting
 
-Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
+Score every [scheduled client offer](../measure/04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal) after the unscored warmup, sent or unsent, against the client's TTFT and time per output token (TPOT) limits.
 
 An offer passes when the client received a completed response within the applicable limits.
 

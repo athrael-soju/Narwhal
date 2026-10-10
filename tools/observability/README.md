@@ -36,7 +36,7 @@ The headline **Requests** and **Latency** tables sum `increase()` over the displ
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 
-[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#reading-live-state-from-prometheus) defines the metric groups and lifecycle.
+[Telemetry and artifact reference](../../docs/telemetry/03-Metrics-and-Control.md#prometheus-metrics) defines the metric groups and lifecycle.
 
 ## Dashboard maintenance
 

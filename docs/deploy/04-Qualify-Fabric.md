@@ -2,7 +2,7 @@
 description: Measure UCX TCP and RDMA bandwidth on each directed host edge of a Narwhal fleet against its KV cache budget.
 ---
 
-# Gate D: Proving the transfer fabric against the serving cache
+# Qualify the transfer fabric
 
 Measure each directed host edge against its source cache group's budget while the fleet is idle.
 
@@ -270,7 +270,7 @@ The test measures one-way RDMA writes between host-memory buffers. On RDMA over 
 
 ## Completing the matrix and matching retained evidence
 
-This matrix qualifies KV handoffs between engine hosts. The [Gate F preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
+This matrix qualifies KV handoffs between engine hosts. [Preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
 
 For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
 
@@ -327,4 +327,4 @@ When `record-edge` or `reuse-edge` exits 1:
 2. Fix the cause.
 3. Resample the directed edge until `record-edge` exits 0.
 
-[![Next: Gate E: Attesting the live engines](https://img.shields.io/badge/next-Gate%20E%3A%20Attesting%20the%20live%20engines-0f766e)](05-Attest.md)
+[Attest live engines](05-Attest.md)

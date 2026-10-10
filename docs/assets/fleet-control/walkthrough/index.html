@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Controlling the fleet: walkthrough</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+<style>
+html, body { min-height: 100%; background: #101a20; }
+body { display: grid; margin: 0; overflow: hidden; place-items: center; }
+#dc-root { overflow: hidden; }
+</style>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Noto+Sans+Mono:wght@400;500;600;700&amp;family=Noto+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#167f83}a:hover{color:#0f6265}
+button{font:inherit;margin:0}
+.spin{animation:nwspin .8s linear infinite}
+@keyframes nwspin{to{transform:rotate(360deg)}}
+.scrub{-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;background:#3b545b;outline:none}
+.scrub::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#45d2d5;border:0}
+.scrub::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#45d2d5;border:0}
+</style>
+</helmet>
+<div style="width: 1600px; height: 956px; display: flex; flex-direction: column; background: #101a20; font-family: 'Noto Sans', sans-serif">
+
+<div style="position: relative; width: 1600px; height: 900px; overflow: hidden; background: #202124">
+
+<div style="position: absolute; left: 0; top: 0; width: 1600px; height: 80px; background: #202124">
+<div style="height: 40px; display: flex; align-items: flex-end; gap: 2px; padding: 0 10px">
+<div style="width: 280px; height: 34px; box-sizing: border-box; border-radius: 8px 8px 0 0; background: {{chrome.tab1Bg}}; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 13px; color: {{chrome.tab1Fg}}">
+<span style="width: 16px; height: 16px; border-radius: 4px; background: #ffffff; display: flex; align-items: center; justify-content: center; flex: none"><img src="./assets/b2333a63e88d1fb1fda7207988c72351.png" alt="" style="width: 14px; height: 11px; object-fit: contain"></span>
+<span>Fleet control · Narwhal</span>
+</div>
+<div style="width: 320px; height: 34px; box-sizing: border-box; border-radius: 8px 8px 0 0; background: {{chrome.tab2Bg}}; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 13px; color: {{chrome.tab2Fg}}">
+<span style="width: 14px; height: 14px; border-radius: 50%; background: #f46800; flex: none"></span>
+<span>Narwhal Orchestrator · Grafana</span>
+</div>
+</div>
+<div style="height: 40px; background: #35363a; display: flex; align-items: center; gap: 14px; padding: 0 16px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9aa0a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9aa0a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path><path d="M21 3v5h-5"></path></svg>
+<div style="flex: 1; height: 28px; border-radius: 14px; background: #202124; display: flex; align-items: center; padding: 0 16px; font-size: 13px; color: #e8eaed; font-family: 'Noto Sans', sans-serif">{{chrome.url}}</div>
+</div>
+</div>
+
+<div style="position: absolute; left: 0; top: 80px; width: 1600px; height: 820px; background: #f2f7f7; color: #30343b; opacity: {{consoleOp}}">
+
+<div style="position: absolute; left: 0; top: 0; width: 1600px; height: 52px; box-sizing: border-box; background: #191919; border-bottom: 3px solid #45d2d5; display: flex; align-items: center; justify-content: space-between; padding: 0 24px">
+<div style="display: flex; align-items: center; gap: 14px">
+<div style="width: 32px; height: 32px; border-radius: 7px; background: #ffffff; display: flex; align-items: center; justify-content: center"><img src="./assets/b2333a63e88d1fb1fda7207988c72351.png" alt="Narwhal logo" style="width: 28px; height: 22px; object-fit: contain"></div>
+<div style="display: flex; flex-direction: column; gap: 1px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.1em; color: #45d2d5">NARWHAL</span>
+<span style="font-size: 15px; font-weight: 700; color: #ffffff">Fleet control</span>
+</div>
+<div style="width: 1px; height: 26px; background: #3a3f45; margin: 0 6px"></div>
+<span style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #4cc26e"><span style="width: 7px; height: 7px; border-radius: 50%; background: #4cc26e"></span>Connected</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" aria-label="Switch theme" style="width: 30px; height: 30px; border-radius: 6px; border: 1px solid #4a4f55; background: transparent; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></button>
+<button type="button" style="height: 30px; padding: 0 12px; border-radius: 6px; border: 1px solid #4a4f55; background: transparent; color: #e6e6e6; font-size: 13px">Dashboard ↗</button>
+</div>
+</div>
+
+<div style="position: absolute; left: 0; top: 52px; width: 1600px; height: 76px; box-sizing: border-box; background: #ffffff; border-bottom: 1px solid #cfe3e4; display: grid; grid-template-columns: 150px 150px 460px 260px 190px 390px">
+<div style="box-sizing: border-box; padding: 12px 0 0 24px; border-right: 1px solid #dbe7e8; display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">ADMISSION</span>
+<span style="align-self: flex-start; display: flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 4px; background: #e3f4e8; color: #1a7f37; font-size: 13px; font-weight: 700"><span style="width: 7px; height: 7px; border-radius: 50%; background: #1a7f37"></span>Ready</span>
+</div>
+<div style="box-sizing: border-box; padding: 12px 0 0 20px; border-right: 1px solid #dbe7e8; display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">ALERTS</span>
+<span style="align-self: flex-start; padding: 3px 9px; border-radius: 4px; background: #eef2f2; color: #4a5358; font-size: 13px; font-weight: 600">none firing</span>
+</div>
+<div style="box-sizing: border-box; padding: 12px 0 0 20px; border-right: 1px solid #dbe7e8; display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">SESSION</span>
+<div style="display: flex; align-items: baseline; gap: 10px; font-size: 13px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-weight: 700; font-size: 14px; color: #30343b">{{strip.sessId}}</span>
+<span style="color: #5d666b">{{strip.sessMeta}}</span>
+<sc-if value="{{strip.sessLink}}" hint-placeholder-val="{{true}}"><a href="#" style="font-size: 13px">From session start ↗</a></sc-if>
+</div>
+</div>
+<div style="box-sizing: border-box; padding: 12px 0 0 20px; border-right: 1px solid #dbe7e8; display: flex; flex-direction: column; gap: 6px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">BENCHMARK</span>
+<div style="display: flex; align-items: baseline; gap: 8px; font-family: 'Noto Sans Mono', monospace; font-size: 13px">
+<span style="font-weight: 700">{{strip.benchJob}}</span>
+<span style="color: {{strip.benchStateColor}}">{{strip.benchState}}</span>
+<span style="color: #4a5358">{{strip.benchTime}}</span>
+</div>
+<sc-if value="{{strip.benchBar}}" hint-placeholder-val="{{true}}"><div style="width: 180px; height: 4px; border-radius: 2px; background: #cdeaea"><div style="height: 4px; border-radius: 2px; background: #167f83; width: {{strip.benchPct}}"></div></div></sc-if>
+</div>
+<div style="box-sizing: border-box; padding: 12px 0 0 20px; border-right: 1px solid #dbe7e8; display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">IN PROGRESS</span>
+<sc-if value="{{strip.progShow}}" hint-placeholder-val="{{false}}"><span style="align-self: flex-start; display: flex; align-items: center; gap: 7px; padding: 3px 9px; border-radius: 4px; background: #fff3d6; border: 1px solid #f0d59a; color: #8a6100; font-family: 'Noto Sans Mono', monospace; font-size: 13px"><span class="spin" style="width: 9px; height: 9px; box-sizing: border-box; border-radius: 50%; border: 2px solid #8a6100; border-right-color: transparent"></span>{{strip.progText}}</span></sc-if>
+<sc-if value="{{strip.progNone}}" hint-placeholder-val="{{true}}"><span style="font-size: 13px; color: #8a9396">none</span></sc-if>
+</div>
+<div style="position: relative; box-sizing: border-box; padding: 12px 0 0 20px; display: flex; flex-direction: column; gap: 8px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">DRAIN DEADLINE</span>
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 92px; height: 28px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; padding: 0 10px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #9aa5a8">default</span><span style="font-size: 13px; color: #5d666b">s</span></div>
+<button type="button" style="position: absolute; right: 24px; top: 20px; width: 136px; height: 36px; box-sizing: border-box; border-radius: 5px; border: 1px solid {{strip.btnBorder}}; background: {{strip.btnBg}}; color: {{strip.btnFg}}; font-size: 13px; font-weight: 600">{{strip.btnLabel}}</button>
+</div>
+</div>
+
+<div style="position: absolute; left: 24px; top: 148px; width: 960px; height: 549px; box-sizing: border-box; padding: 17px; background: #ffffff; border: 1px solid #a8dfe0; border-radius: 8px; display: flex; flex-direction: column; gap: 14px">
+<div style="height: 26px; display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="font-size: 18px; font-weight: 700; color: #30343b">Engines</span>
+<span style="width: 18px; height: 18px; border-radius: 50%; border: 1px solid #9fd8d9; background: #e8f6f6; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #30343b">?</span>
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 13px; color: #5d666b">8 · split {{c.split}}</span>
+</div>
+<div style="display: flex; align-items: center; gap: 16px; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #30343b">
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #2a9d8f"></span>prefill</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #2f67a0"></span>decode</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 9px; height: 9px; border-radius: 2px; background: #8f7fd1"></span>colocated</span>
+</div>
+</div>
+<div style="height: 32px; display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; align-items: center; gap: 8px">
+<sc-for list="{{c.chips}}" as="ch" hint-placeholder-count="3">
+<span style="height: 30px; box-sizing: border-box; padding: 0 11px; border-radius: 4px; border: 1px solid {{ch.border}}; background: {{ch.bg}}; display: flex; align-items: center; gap: 7px; font-size: 13px; color: {{ch.fg}}"><span style="width: {{ch.dotW}}; height: 7px; border-radius: 50%; background: {{ch.dot}}"></span>{{ch.label}}<span style="font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #5d666b">{{ch.count}}</span></span>
+</sc-for>
+</div>
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 170px; height: 30px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; padding: 0 10px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #9aa5a8">Find engine</span>
+<span style="width: 116px; height: 30px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #30343b">All roles<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30343b" stroke-width="3" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span>
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #5d666b; margin-left: 8px">1–8 of 8</span>
+</div>
+</div>
+<div style="border: 1px solid #c9e6e7; border-radius: 6px; overflow: hidden">
+<div style="display: grid; grid-template-columns: 90px 130px 180px 170px 214px 138px; height: 36px; align-items: center; background: #30343b; border-bottom: 3px solid #45d2d5; color: #ffffff; font-size: 11px; font-weight: 700; letter-spacing: 0.06em">
+<span style="padding-left: 16px">ENGINE ↑</span><span style="padding-left: 12px">ROLE</span><span style="padding-left: 12px">STATE</span><span style="padding-left: 12px">RESIDENT</span><span style="padding-left: 12px">LAST ACTION</span><span style="padding-right: 12px; text-align: right">ACTIONS</span>
+</div>
+<sc-for list="{{c.rows}}" as="r" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 90px 130px 180px 170px 214px 138px; height: 42px; box-sizing: border-box; align-items: center; background: {{r.bg}}; border-bottom: 1px solid #e3eeef; font-size: 13px">
+<span style="padding-left: 16px; font-family: 'Noto Sans Mono', monospace; font-weight: 700">{{r.id}}</span>
+<span style="padding-left: 12px; display: flex; align-items: center; gap: 8px; font-family: 'Noto Sans Mono', monospace"><span style="width: 9px; height: 9px; border-radius: 2px; background: {{r.roleColor}}"></span>{{r.role}}</span>
+<span style="padding-left: 12px; display: flex; align-items: center; gap: 8px; color: {{r.stateColor}}"><span style="width: 7px; height: 7px; border-radius: 50%; background: {{r.stateColor}}"></span>{{r.stateText}}</span>
+<span style="padding-left: 12px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace">{{r.resident}}</span><sc-if value="{{r.showBar}}" hint-placeholder-val="{{false}}"><span style="display: block; width: 96px; height: 4px; border-radius: 2px; background: #bde9ea"><span style="display: block; height: 4px; border-radius: 2px; background: #8a6100; width: {{r.barPct}}"></span></span></sc-if></span>
+<span style="padding-left: 12px; display: flex; align-items: center; gap: 7px; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #30343b"><sc-if value="{{r.spin}}" hint-placeholder-val="{{false}}"><span class="spin" style="width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 2px solid #8a6100; border-right-color: transparent"></span></sc-if>{{r.last}}</span>
+<span style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-right: 12px">
+<button type="button" style="width: 66px; height: 28px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{r.mainBorder}}; background: {{r.mainBg}}; color: {{r.mainFg}}; font-size: 12px">{{r.main}}</button>
+<button type="button" aria-label="More actions" style="width: 28px; height: 28px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{r.moreBorder}}; background: {{r.moreBg}}; color: #30343b; font-size: 14px; line-height: 1">⋯</button>
+</span>
+</div>
+</sc-for>
+</div>
+<div style="height: 40px; box-sizing: border-box; border-radius: 6px; background: #ebf7f7; display: flex; align-items: center; gap: 18px; padding: 0 14px; font-size: 13px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #6b7378">LAST ACTION</span>
+<sc-if value="{{c.last.show}}" hint-placeholder-val="{{true}}">
+<span style="font-family: 'Noto Sans Mono', monospace; font-weight: 600">{{c.last.label}}</span>
+<span style="font-family: 'Noto Sans Mono', monospace; color: #6b7378">{{c.last.time}}</span>
+<span style="color: #6b7378">state</span>
+<span>{{c.last.from}} → <span style="color: {{c.last.toC}}">{{c.last.to}}</span></span>
+<span style="color: #6b7378">resident</span>
+<span style="font-family: 'Noto Sans Mono', monospace">{{c.last.res}}</span>
+</sc-if>
+<sc-if value="{{c.last.none}}" hint-placeholder-val="{{false}}"><span style="color: #6b7378">No engine actions in this session yet</span></sc-if>
+</div>
+</div>
+
+<div style="position: absolute; left: 1008px; top: 148px; width: 568px; height: 549px; box-sizing: border-box; padding: 17px; background: #ffffff; border: 1px solid #a8dfe0; border-radius: 8px; display: flex; flex-direction: column; gap: 14px">
+<div style="height: 32px; display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; gap: 8px">
+<button type="button" style="width: 102px; height: 32px; box-sizing: border-box; border-radius: 5px; border: 1px solid {{tabs.b.border}}; background: {{tabs.b.bg}}; color: {{tabs.b.fg}}; font-size: 14px; font-weight: 700">Benchmark</button>
+<button type="button" style="width: 84px; height: 32px; box-sizing: border-box; border-radius: 5px; border: 1px solid {{tabs.r.border}}; background: {{tabs.r.bg}}; color: {{tabs.r.fg}}; font-size: 14px; font-weight: 700">Results</button>
+<button type="button" style="width: 90px; height: 32px; box-sizing: border-box; border-radius: 5px; border: 1px solid {{tabs.a.border}}; background: {{tabs.a.bg}}; color: {{tabs.a.fg}}; font-size: 14px; font-weight: 700">Activity</button>
+</div>
+<div style="display: flex; align-items: baseline; gap: 8px; font-family: 'Noto Sans Mono', monospace; font-size: 13px">
+<span style="color: #5d666b">{{rp.job}}</span>
+<span style="color: {{rp.statusColor}}">{{rp.status}}</span>
+<span>{{rp.time}}</span>
+</div>
+</div>
+
+<sc-if value="{{tabs.showB}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">WORKLOAD</span>
+<span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-family: 'Noto Sans Mono', monospace; font-size: 13px">Short chat<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30343b" stroke-width="3" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span>
+</div>
+<div style="display: grid; grid-template-columns: 160px 188px 160px; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">RATE (REQ/S)</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 13px">4</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">ARRIVAL</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-family: 'Noto Sans Mono', monospace; font-size: 13px">Random (default)<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#30343b" stroke-width="3" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">CONCURRENCY</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 13px">32</span></div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">RAMP-UP (S)</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 13px">10</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">DURATION (S)</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 13px">150</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">REQUESTS</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}"></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: #5d666b">WARM-UP</span><span style="height: 36px; box-sizing: border-box; border: 1px solid #b9dfe0; border-radius: 4px; background: {{bench.inputBg}}; padding: 0 12px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 13px">10</span></div>
+</div>
+<div style="height: 66px; box-sizing: border-box; border-radius: 4px; background: #ebf7f7; padding: 10px 12px; font-size: 13px; line-height: 1.45; color: #4a5358">Generated chat prompts of about 512 tokens with 256-token answers. Set a Rate, a Concurrency or both, and a Duration, a Requests limit or both.</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<button type="button" style="height: 40px; border-radius: 4px; border: 0; background: {{bench.startBg}}; color: #ffffff; font-size: 14px">Start job</button>
+<button type="button" style="height: 40px; box-sizing: border-box; border-radius: 4px; border: 1px solid {{bench.stopBorder}}; background: #ffffff; color: {{bench.stopFg}}; font-size: 14px">Stop job</button>
+</div>
+<span style="font-size: 13px; color: #5d666b">{{bench.note}}</span>
+</div>
+</sc-if>
+
+<sc-if value="{{tabs.showR}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: center; gap: 12px">
+<div style="flex: 1; height: 5px; border-radius: 3px; background: #cdeaea"><div style="height: 5px; border-radius: 3px; background: #167f83; width: {{res.pct}}"></div></div>
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #4a5358">{{res.status}}</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); height: 52px">
+<div style="border-left: 1px solid #cfe3e4; padding-left: 10px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: #5d666b">COMPLETED</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 22px">{{res.completed}}</span></div>
+<div style="border-left: 1px solid #cfe3e4; padding-left: 10px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: #5d666b">ERRORS</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 22px">0</span></div>
+<div style="border-left: 1px solid #cfe3e4; padding-left: 10px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: #5d666b">REQUESTS/S</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 22px">{{res.rps}}</span></div>
+<div style="border-left: 1px solid #cfe3e4; padding-left: 10px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: #5d666b">OUTPUT TOK/S</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 22px">{{res.tok}}</span></div>
+<div style="border-left: 1px solid #cfe3e4; padding-left: 10px; display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: #5d666b">WITHIN SLO</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 22px; color: #1a7f37">{{res.slo}}</span></div>
+</div>
+<div style="border: 1px solid #c9e6e7; border-radius: 6px; overflow: hidden; font-size: 13px">
+<div style="display: grid; grid-template-columns: 1fr 76px 76px 76px 76px; height: 32px; align-items: center; background: #30343b; border-bottom: 3px solid #45d2d5; color: #ffffff; font-size: 11px; font-weight: 700; letter-spacing: 0.06em"><span style="padding-left: 12px">LATENCY</span><span style="text-align: right; padding-right: 10px">P50</span><span style="text-align: right; padding-right: 10px">P95</span><span style="text-align: right; padding-right: 10px">P99</span><span style="text-align: right; padding-right: 10px">TARGET</span></div>
+<div style="display: grid; grid-template-columns: 1fr 76px 76px 76px 76px; height: 32px; align-items: center; border-bottom: 1px solid #e3eeef; font-family: 'Noto Sans Mono', monospace; font-size: 12px"><span style="padding-left: 12px; font-family: 'Noto Sans', sans-serif; font-size: 13px">Time to first token</span><span style="text-align: right; padding-right: 10px">{{res.t50}}</span><span style="text-align: right; padding-right: 10px; color: #1a7f37">{{res.t95}}</span><span style="text-align: right; padding-right: 10px">{{res.t99}}</span><span style="text-align: right; padding-right: 10px; color: #5d666b">2.1 s</span></div>
+<div style="display: grid; grid-template-columns: 1fr 76px 76px 76px 76px; height: 32px; align-items: center; border-bottom: 1px solid #e3eeef; background: #f6fafa; font-family: 'Noto Sans Mono', monospace; font-size: 12px"><span style="padding-left: 12px; font-family: 'Noto Sans', sans-serif; font-size: 13px">Inter-token latency</span><span style="text-align: right; padding-right: 10px">{{res.itl}}</span><span style="text-align: right; padding-right: 10px; color: #1a7f37">{{res.itl}}</span><span style="text-align: right; padding-right: 10px">{{res.itl}}</span><span style="text-align: right; padding-right: 10px; color: #5d666b">45 ms</span></div>
+<div style="display: grid; grid-template-columns: 1fr 76px 76px 76px 76px; height: 32px; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 12px"><span style="padding-left: 12px; font-family: 'Noto Sans', sans-serif; font-size: 13px">Request latency</span><span style="text-align: right; padding-right: 10px">{{res.r50}}</span><span style="text-align: right; padding-right: 10px">{{res.r95}}</span><span style="text-align: right; padding-right: 10px">{{res.r99}}</span><span style="text-align: right; padding-right: 10px; color: #5d666b">-</span></div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 12px"><span>Completed requests per second</span></div>
+<svg width="252" height="80" viewBox="0 0 252 80" aria-hidden="true" style="display: block; overflow: visible"><path d="{{res.compArea}}" fill="#e1f2f2" stroke="none"></path><path d="{{res.compPath}}" fill="none" stroke="#167f83" stroke-width="1.5" stroke-linejoin="round"></path><path d="M0,80H252" stroke="#cfe3e4" stroke-width="1"></path></svg>
+<div style="display: flex; justify-content: space-between; font-family: 'Noto Sans Mono', monospace; font-size: 10px; color: #6b7378"><span>0:00</span><span>{{res.elapsedLabel}}</span></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 12px"><span>Time to first token, p95</span><span style="font-family: 'Noto Sans Mono', monospace; font-size: 10px; color: #6b7378">target 2.1 s</span></div>
+<svg width="252" height="80" viewBox="0 0 252 80" aria-hidden="true" style="display: block; overflow: visible"><path d="M0,10H252" stroke="#d36b6b" stroke-width="1" stroke-dasharray="4 3"></path><path d="{{res.ttftArea}}" fill="#e1f2f2" stroke="none"></path><path d="{{res.ttftPath}}" fill="none" stroke="#167f83" stroke-width="1.5" stroke-linejoin="round"></path><path d="M0,80H252" stroke="#cfe3e4" stroke-width="1"></path></svg>
+<div style="display: flex; justify-content: space-between; font-family: 'Noto Sans Mono', monospace; font-size: 10px; color: #6b7378"><span>0:00</span><span>{{res.elapsedLabel}}</span></div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{tabs.showA}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; font-size: 13px"><span style="font-family: 'Noto Sans Mono', monospace; color: #5d666b">session 7e9ecb</span><a href="#">Download session log</a></div>
+<div style="border: 1px solid #c9e6e7; border-radius: 6px; overflow: hidden">
+<div style="display: grid; grid-template-columns: 34px 104px 112px 92px 82px 1fr; height: 32px; align-items: center; background: #30343b; border-bottom: 3px solid #45d2d5; color: #ffffff; font-size: 10px; font-weight: 700; letter-spacing: 0.06em"><span style="text-align: center">#</span><span style="padding-left: 10px">STARTED (UTC)</span><span style="padding-left: 10px">ACTION</span><span style="padding-left: 10px">TARGET</span><span style="text-align: right; padding-right: 10px">DURATION</span><span style="padding-left: 10px">OUTCOME</span></div>
+<sc-for list="{{acts}}" as="a" hint-placeholder-count="5">
+<div style="display: grid; grid-template-columns: 34px 104px 112px 92px 82px 1fr; height: 34px; align-items: center; border-bottom: 1px solid #e3eeef; font-family: 'Noto Sans Mono', monospace; font-size: 12px; background: {{a.bg}}"><span style="text-align: center; color: #6b7378">{{a.n}}</span><span style="padding-left: 10px">{{a.started}}</span><span style="padding-left: 10px">{{a.action}}</span><span style="padding-left: 10px">{{a.target}}</span><span style="text-align: right; padding-right: 10px">{{a.dur}}</span><span style="padding-left: 10px; display: flex; align-items: center; gap: 6px; font-family: 'Noto Sans', sans-serif; font-size: 13px; color: {{a.outC}}"><span style="width: 7px; height: 7px; border-radius: 50%; background: {{a.outC}}"></span>{{a.out}}</span></div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</div>
+
+<sc-if value="{{menu.show}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; left: 678px; top: {{menu.top}}px; width: 276px; box-sizing: border-box; padding: 8px 0; background: #ffffff; border: 1px solid #a8dfe0; border-radius: 6px; box-shadow: 0 8px 24px rgba(20,40,45,0.16)">
+<sc-for list="{{menu.items}}" as="m" hint-placeholder-count="5">
+<div style="height: {{m.h}}px; box-sizing: border-box; padding: 8px 14px; background: {{m.bg}}; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; color: {{m.fg}}">{{m.label}}</span><span style="font-size: 11px; line-height: 1.35; color: #7a8488">{{m.note}}</span></div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{dlg.show}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; inset: 0; background: rgba(25,32,36,0.32)"></div>
+<div style="position: absolute; left: 570px; top: 300px; width: 460px; height: 220px; box-sizing: border-box; padding: 22px 24px; background: #ffffff; border-radius: 8px; border-top: 3px solid #45d2d5; box-shadow: 0 16px 40px rgba(20,40,45,0.25); display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 18px; font-weight: 700">{{dlg.title}}</span>
+<span style="font-size: 14px; line-height: 1.5; color: #4a5358">{{dlg.body}}</span>
+<div style="position: absolute; right: 24px; bottom: 16px; display: flex; gap: 10px">
+<button type="button" style="width: 88px; height: 36px; box-sizing: border-box; border-radius: 4px; border: 1px solid #b9dfe0; background: #ffffff; color: #30343b; font-size: 13px">Cancel</button>
+<button type="button" style="width: 104px; height: 36px; border-radius: 4px; border: 0; background: {{dlg.bg}}; color: #ffffff; font-size: 13px; font-weight: 600">{{dlg.confirm}}</button>
+</div>
+</div>
+</sc-if>
+</div>
+
+<div style="position: absolute; left: 0; top: 80px; width: 1600px; height: 820px; background: #111217; color: #ccccdc; font-family: Inter, 'Noto Sans', sans-serif; opacity: {{grafOp}}; transform: translateX({{grafShift}}px)">
+
+<div style="position: absolute; left: 0; top: 0; width: 1600px; height: 44px; box-sizing: border-box; border-bottom: 1px solid #24262c; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 14px">
+<div style="display: flex; align-items: center; gap: 10px"><span style="color: #9fa7b3">Home</span><span style="color: #6e7380">›</span><span style="color: #9fa7b3">Dashboards</span><span style="color: #6e7380">›</span><span style="color: #e0e0ec; font-weight: 500">Narwhal Orchestrator</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9fa7b3" stroke-width="2" aria-hidden="true"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"></path></svg></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px">
+<span style="height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; gap: 6px; color: #ccccdc">Fleet control ↗</span>
+<span style="height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; gap: 6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ccccdc" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>Last 5 minutes</span>
+<span style="height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; font-family: 'Noto Sans Mono', monospace; font-size: 12px; color: #9fa7b3">{{g.clock}} UTC</span>
+<span style="height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center">5s</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 16px; top: 52px; width: 190px; height: 112px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px; padding: 6px 8px 8px">
+<div style="font-size: 14px; font-weight: 500; height: 24px">Router</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; height: 70px">
+<div style="background: #56a64b; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #ffffff"><span style="font-size: 11px">Admission</span><span style="font-size: 20px; font-weight: 500">Ready</span></div>
+<div style="background: #56a64b; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #ffffff"><span style="font-size: 11px">Alerts</span><span style="font-size: 20px; font-weight: 500">0</span></div>
+</div>
+</div>
+
+<div style="position: absolute; left: 214px; top: 52px; width: 910px; height: 112px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px; padding: 6px 8px 8px">
+<div style="font-size: 14px; font-weight: 500; height: 26px">Requests</div>
+<div style="display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); font-size: 13px">
+<span style="text-align: right; padding: 6px 8px; color: #ccccdc; border-bottom: 1px solid #2c2f36">Within SLO</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Offered</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Completed</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Cancelled</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Dropped</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Refused</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Rejected</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Failed</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">Expired</span>
+<span style="text-align: right; padding: 9px 8px; background: {{g.sloBg}}; color: #ffffff">{{g.slo}}</span><span style="text-align: right; padding: 9px 8px">{{g.offered}}</span><span style="text-align: right; padding: 9px 8px">{{g.completed}}</span><span style="text-align: right; padding: 9px 8px">0</span><span style="text-align: right; padding: 9px 8px; background: #56a64b; color: #ffffff">0%</span><span style="text-align: right; padding: 9px 8px">0</span><span style="text-align: right; padding: 9px 8px">0</span><span style="text-align: right; padding: 9px 8px">0</span><span style="text-align: right; padding: 9px 8px">0</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 1132px; top: 52px; width: 452px; height: 112px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px; padding: 6px 8px 8px">
+<div style="font-size: 14px; font-weight: 500; height: 26px">Latency</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 13px">
+<span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">TTFT p95 of SLO</span><span style="text-align: right; padding: 6px 8px; border-bottom: 1px solid #2c2f36">TPOT p95 of SLO</span>
+<span style="text-align: right; padding: 9px 8px; background: {{g.latBg}}; color: #ffffff">{{g.ttftPct}}</span><span style="text-align: right; padding: 9px 8px; background: {{g.latBg}}; color: #ffffff">{{g.tpotPct}}</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 16px; top: 172px; width: 784px; height: 260px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 8px; top: 6px; font-size: 14px; font-weight: 500">Request outcomes</div>
+<div style="position: absolute; left: 56px; top: 60px; width: 712px; height: 154px">
+<div style="position: absolute; left: 0; right: 0; top: 0; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 51px; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 103px; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 153px; border-top: 1px solid #2c2f36"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 89px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 267px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 445px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 623px; border-left: 1px solid #24262c"></div>
+<sc-if value="{{g.band.show}}" hint-placeholder-val="{{true}}"><div style="position: absolute; top: 0; height: 154px; left: {{g.band.left}}px; width: {{g.band.width}}px; box-sizing: border-box; background: rgba(87,148,242,0.12); border-left: 1px dashed #5794f2; border-right: 1px dashed #5794f2"><div style="position: absolute; left: 0; right: 0; bottom: -1px; height: 4px; background: #5794f2"></div><span style="position: absolute; left: 6px; bottom: 8px; font-size: 11px; color: #8ab8ff">job-001</span></div></sc-if>
+<svg width="712" height="154" viewBox="0 0 712 154" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible">
+<path d="{{g.offArea}}" fill="rgba(87,148,242,0.08)" stroke="none"></path>
+<path d="{{g.dropPath}}" fill="none" stroke="#ff9830" stroke-width="2"></path>
+<path d="{{g.offPath}}" fill="none" stroke="#5794f2" stroke-width="2" stroke-linejoin="round"></path>
+<path d="{{g.compPath}}" fill="none" stroke="#73bf69" stroke-width="2" stroke-linejoin="round"></path>
+</svg>
+<sc-for list="{{g.ann}}" as="an" hint-placeholder-count="2">
+<div style="position: absolute; top: 0; height: 154px; left: {{an.x1}}px; border-left: 1px dashed #b877d9"><svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true" style="position: absolute; left: -5px; bottom: -6px"><path d="M5,0L10,6H0Z" fill="#b877d9"></path></svg></div>
+<span style="position: absolute; left: {{an.x1}}px; top: {{an.labelTop}}px; transform: translateX(-50%); padding: 1px 6px; border-radius: 2px; background: {{an.labelBg}}; color: #111217; font-size: 11px; font-weight: 600; white-space: nowrap">{{an.label}}</span>
+</sc-for>
+</div>
+<span style="position: absolute; right: 744px; top: 53px; font-size: 11px; color: #9fa7b3; white-space: nowrap">6 req/s</span>
+<span style="position: absolute; right: 744px; top: 104px; font-size: 11px; color: #9fa7b3; white-space: nowrap">4 req/s</span>
+<span style="position: absolute; right: 744px; top: 155px; font-size: 11px; color: #9fa7b3; white-space: nowrap">2 req/s</span>
+<span style="position: absolute; right: 744px; top: 206px; font-size: 11px; color: #9fa7b3; white-space: nowrap">0 req/s</span>
+<span style="position: absolute; left: 117px; top: 220px; font-size: 11px; color: #9fa7b3">00:07:00</span>
+<span style="position: absolute; left: 295px; top: 220px; font-size: 11px; color: #9fa7b3">00:08:00</span>
+<span style="position: absolute; left: 473px; top: 220px; font-size: 11px; color: #9fa7b3">00:09:00</span>
+<span style="position: absolute; left: 651px; top: 220px; font-size: 11px; color: #9fa7b3">00:10:00</span>
+<div style="position: absolute; left: 10px; top: 236px; display: flex; gap: 16px; font-size: 12px; color: #ccccdc">
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: #5794f2"></span>offered</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: #73bf69"></span>completed</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: #ff9830"></span>dropped</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 808px; top: 172px; width: 776px; height: 260px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 8px; top: 6px; font-size: 14px; font-weight: 500">Token throughput</div>
+<div style="position: absolute; left: 56px; top: 40px; width: 704px; height: 174px">
+<div style="position: absolute; left: 0; right: 0; top: 0; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 58px; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 116px; border-top: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; right: 0; top: 173px; border-top: 1px solid #2c2f36"></div>
+<sc-if value="{{g.band.show}}" hint-placeholder-val="{{true}}"><div style="position: absolute; top: 0; height: 174px; left: {{g.band.left2}}px; width: {{g.band.width2}}px; box-sizing: border-box; background: rgba(87,148,242,0.12); border-left: 1px dashed #5794f2; border-right: 1px dashed #5794f2"><div style="position: absolute; left: 0; right: 0; bottom: -1px; height: 4px; background: #5794f2"></div></div></sc-if>
+<svg width="704" height="174" viewBox="0 0 704 174" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible">
+<path d="{{g.promptPath}}" fill="none" stroke="#fade2a" stroke-width="2" stroke-linejoin="round"></path>
+<path d="{{g.outPath}}" fill="none" stroke="#73bf69" stroke-width="2" stroke-linejoin="round"></path>
+</svg>
+<sc-for list="{{g.ann}}" as="an" hint-placeholder-count="2">
+<div style="position: absolute; top: 0; height: 174px; left: {{an.x2}}px; border-left: 1px dashed #b877d9"><svg width="10" height="6" viewBox="0 0 10 6" aria-hidden="true" style="position: absolute; left: -5px; bottom: -6px"><path d="M5,0L10,6H0Z" fill="#b877d9"></path></svg></div>
+</sc-for>
+</div>
+<span style="position: absolute; right: 728px; top: 33px; font-size: 11px; color: #9fa7b3; white-space: nowrap">3 K</span>
+<span style="position: absolute; right: 728px; top: 91px; font-size: 11px; color: #9fa7b3; white-space: nowrap">2 K</span>
+<span style="position: absolute; right: 728px; top: 149px; font-size: 11px; color: #9fa7b3; white-space: nowrap">1 K</span>
+<span style="position: absolute; right: 728px; top: 206px; font-size: 11px; color: #9fa7b3; white-space: nowrap">0</span>
+<span style="position: absolute; left: 116px; top: 220px; font-size: 11px; color: #9fa7b3">00:07:00</span>
+<span style="position: absolute; left: 292px; top: 220px; font-size: 11px; color: #9fa7b3">00:08:00</span>
+<span style="position: absolute; left: 468px; top: 220px; font-size: 11px; color: #9fa7b3">00:09:00</span>
+<span style="position: absolute; left: 644px; top: 220px; font-size: 11px; color: #9fa7b3">00:10:00</span>
+<div style="position: absolute; left: 10px; top: 236px; display: flex; gap: 16px; font-size: 12px; color: #ccccdc">
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: #fade2a"></span>prompt tokens/s</span>
+<span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: #73bf69"></span>output tokens/s</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 16px; top: 440px; width: 1568px; height: 316px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px; padding: 6px 8px 8px">
+<div style="font-size: 14px; font-weight: 500; height: 26px">Engines</div>
+<div style="display: grid; grid-template-columns: 80px 110px 130px repeat(4, minmax(0, 1fr)) 110px; height: 34px; align-items: center; font-size: 13px; color: #ccccdc; border-bottom: 1px solid #2c2f36">
+<span style="padding-left: 8px">Engine ↑</span><span style="text-align: right; padding-right: 8px; border-left: 1px solid #2c2f36">Role</span><span style="text-align: right; padding-right: 8px; border-left: 1px solid #2c2f36">State</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">Resident</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">vLLM running</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">KV cache</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">Prefix hits</span><span style="text-align: right; padding-right: 8px; border-left: 1px solid #2c2f36">Tokens/s</span>
+</div>
+<sc-for list="{{g.engines}}" as="e" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 80px 110px 130px repeat(4, minmax(0, 1fr)) 110px; height: 30px; align-items: stretch; font-size: 13px; border-bottom: 1px solid #22252b">
+<span style="padding-left: 8px; display: flex; align-items: center">{{e.id}}</span>
+<span style="background: {{e.roleBg}}; color: #ffffff; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">{{e.role}}</span>
+<span style="background: {{e.stateBg}}; color: {{e.stateFg}}; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">{{e.state}}</span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px"><span style="flex: 1; height: 18px; border-radius: 2px; background: #22252b; overflow: hidden"><span style="display: block; height: 18px; background: #44484f; border-right: 2px solid #9a9ca3; box-sizing: border-box; width: {{e.resW}}"></span></span><span style="width: 28px; text-align: right">{{e.res}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px"><span style="flex: 1; height: 18px; border-radius: 2px; background: #22252b; overflow: hidden"><span style="display: block; height: 18px; background: #44484f; border-right: 2px solid #9a9ca3; box-sizing: border-box; width: {{e.runW}}"></span></span><span style="width: 28px; text-align: right">{{e.run}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px"><span style="flex: 1; height: 18px; border-radius: 2px; background: #22252b; overflow: hidden"><span style="display: block; height: 18px; background: #56a64b; width: {{e.kvW}}"></span></span><span style="width: 44px; text-align: right">{{e.kv}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px"><span style="flex: 1; height: 18px; border-radius: 2px; background: #22252b; overflow: hidden; border-left: 2px solid #9a9ca3; box-sizing: border-box"></span><span style="width: 44px; text-align: right">0%</span></span>
+<span style="display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">{{e.tok}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="position: absolute; left: {{cur.rx}}px; top: {{cur.ry}}px; width: {{cur.rs}}px; height: {{cur.rs}}px; margin-left: {{cur.rm}}px; margin-top: {{cur.rm}}px; border-radius: 50%; background: rgba(69,210,213,0.35); border: 2px solid #167f83; box-sizing: border-box; opacity: {{cur.rop}}; pointer-events: none"></div>
+<svg width="22" height="26" viewBox="0 0 16 22" aria-hidden="true" style="position: absolute; left: {{cur.x}}px; top: {{cur.y}}px; opacity: {{cur.op}}; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35))"><path d="M1,1 L1,18 L5.5,13.8 L8.6,20.6 L11.6,19.3 L8.6,12.6 L14.4,12.6 Z" fill="#111111" stroke="#ffffff" stroke-width="1.3" stroke-linejoin="round"></path></svg>
+
+<sc-if value="{{cap.show}}" hint-placeholder-val="{{true}}">
+<div style="position: absolute; left: 0; right: 0; top: 842px; display: flex; justify-content: center; pointer-events: none">
+<div style="max-width: 1100px; padding: 12px 22px; border-radius: 10px; background: rgba(16,26,32,0.92); border: 1px solid #3b545b; display: flex; align-items: center; gap: 14px; color: #ffffff; font-size: 19px; font-weight: 500; box-shadow: 0 10px 30px rgba(0,0,0,0.3)"><span style="font-family: 'Noto Sans Mono', monospace; font-size: 13px; color: #45d2d5; letter-spacing: 0.06em">{{cap.step}}</span><span>{{cap.text}}</span></div>
+</div>
+</sc-if>
+
+<div style="position: absolute; inset: 0; background: #17242b; opacity: {{ov.titleBg}}; pointer-events: none; display: flex; align-items: center; justify-content: center">
+<div style="opacity: {{ov.titleText}}; display: flex; flex-direction: column; align-items: center; gap: 22px">
+<div style="width: 112px; height: 112px; border-radius: 24px; background: #ffffff; display: flex; align-items: center; justify-content: center"><img src="./assets/b2333a63e88d1fb1fda7207988c72351.png" alt="Narwhal logo" style="width: 94px; height: 75px; object-fit: contain"></div>
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 16px; letter-spacing: 0.16em; color: #45d2d5">NARWHAL · OPERATE</span>
+<span style="font-size: 64px; font-weight: 700; color: #dce7e8; letter-spacing: -0.01em">Controlling the fleet</span>
+<span style="font-size: 22px; color: #adbec1">Drive engines and load jobs from the console. Watch Grafana react.</span>
+</div>
+</div>
+
+<div style="position: absolute; inset: 0; background: #17242b; opacity: {{ov.outroBg}}; pointer-events: none; display: flex; align-items: center; justify-content: center">
+<div style="opacity: {{ov.outroText}}; display: flex; flex-direction: column; align-items: center; gap: 22px">
+<div style="width: 88px; height: 88px; border-radius: 20px; background: #ffffff; display: flex; align-items: center; justify-content: center"><img src="./assets/b2333a63e88d1fb1fda7207988c72351.png" alt="Narwhal logo" style="width: 74px; height: 59px; object-fit: contain"></div>
+<span style="font-size: 46px; font-weight: 700; color: #dce7e8; text-align: center; line-height: 1.2">Every action timed, logged<br>and marked on your charts.</span>
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 18px; color: #45d2d5">athrael-soju.github.io/Narwhal</span>
+</div>
+</div>
+</div>
+
+<sc-if value="{{ctl.show}}" hint-placeholder-val="{{true}}">
+<div style="height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: #101a20; border-top: 1px solid #22353d; color: #dce7e8">
+<button type="button" onClick="{{ctl.toggle}}" aria-label="{{ctl.playLabel}}" style="width: 40px; height: 40px; border-radius: 50%; border: 1px solid #3b545b; background: #1d2d35; color: #45d2d5; display: flex; align-items: center; justify-content: center; cursor: pointer">
+<sc-if value="{{ctl.playing}}" hint-placeholder-val="{{true}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="#45d2d5" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1"></rect><rect x="14" y="4" width="5" height="16" rx="1"></rect></svg></sc-if>
+<sc-if value="{{ctl.paused}}" hint-placeholder-val="{{false}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="#45d2d5" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg></sc-if>
+</button>
+<span style="width: 92px; font-family: 'Noto Sans Mono', monospace; font-size: 13px; color: #adbec1">{{ctl.time}}</span>
+<label for="nw-scrub" style="position: absolute; width: 1px; height: 1px; overflow: hidden">Timeline position</label>
+<input id="nw-scrub" class="scrub" type="range" min="0" max="69.9" step="0.1" value="{{ctl.t}}" onChange="{{ctl.scrub}}" style="flex: 1">
+<div style="display: flex; gap: 6px">
+<sc-for list="{{ctl.chapters}}" as="chp" hint-placeholder-count="6">
+<button type="button" onClick="{{chp.go}}" style="height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid {{chp.border}}; background: {{chp.bg}}; color: {{chp.fg}}; font-size: 12px; cursor: pointer">{{chp.label}}</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"autoplay":{"editor":"boolean","default":true},"showControls":{"editor":"boolean","default":true},"$preview":{"width":1600,"height":956}}'>
+const T_END = 70;
+const SCALE = 2.8;
+const E = {
+  sessionStart: 5.0, jobStart: 8.2, resultsTab: 9.8,
+  drainClick: 19.2, drainConfirm: 20.6, drainDone: 25.5, readmit: 28.8,
+  n2Menu: 33.7, pauseItem: 34.7, pauseConfirm: 35.8, resume: 41.6, resumeDone: 43.0,
+  n5Menu: 47.4, stopItem: 48.3, stopConfirm: 49.3, start: 55.0, startDone: 57.0,
+  activityTab: 63.4, endClick: 64.7, endConfirm: 65.8
+};
+const cs = (t) => (t - 5) * SCALE;
+const tOf = (c) => 5 + c / SCALE;
+const CS0 = cs(E.jobStart);
+const CS1 = CS0 + 150;
+const JOB_END_T = tOf(CS1);
+const W0 = -45;
+const WSPAN = 240;
+const GRAF = [[10.6, 17.5], [21.6, 27.6], [29.6, 32.6], [36.8, 40.6], [43.6, 46.4], [50.3, 54.0], [57.8, 62.4]];
+const IDS = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'];
+const ROLE = (id) => (['n1', 'n2', 'n3', 'n4'].indexOf(id) >= 0 ? 'prefill' : 'decode');
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ease = (p) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
+const pad2 = (n) => String(n).padStart(2, '0');
+const clock = (c) => { const s = Math.max(0, Math.floor(435 + c)); return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60)) + ':' + pad2(s % 60); };
+const mmss = (s) => Math.floor(s / 60) + ':' + pad2(Math.floor(s % 60));
+const pct = (v) => (clamp(v, 0, 1) * 100).toFixed(1) + '%';
+const fmtK = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + ' K' : String(Math.round(n)));
+const noise = (c) => 0.28 * Math.sin(c * 0.41) + 0.17 * Math.sin(c * 1.13 + 1) + 0.1 * Math.sin(c * 2.7);
+
+function engState(id, t) {
+  if (id === 'n7') { if (t < E.drainConfirm) return 'in service'; if (t < E.drainDone) return 'draining'; if (t < E.readmit) return 'drained'; return 'in service'; }
+  if (id === 'n2') { if (t < E.pauseConfirm) return 'in service'; if (t < E.resume) return 'paused'; if (t < E.resumeDone) return 'resuming'; return 'in service'; }
+  if (id === 'n5') { if (t < E.stopConfirm) return 'in service'; if (t < E.start) return 'stopped'; if (t < E.startDone) return 'starting'; return 'in service'; }
+  return 'in service';
+}
+const inSvc = (id, t) => engState(id, t) === 'in service';
+function offered(c) { if (c < CS0 || c > CS1) return 0; const r = clamp((c - CS0) / 10, 0, 1); return Math.max(0, r * (4 + noise(c))); }
+function capf(c) { const t = tOf(c); let f = 1; if (!inSvc('n2', t)) f *= 0.93; if (!inSvc('n5', t)) f *= 0.9; if (engState('n7', t) === 'draining') f *= 0.97; return f; }
+function completed(c) { return offered(c - 3) * capf(c); }
+function ttft95(c) {
+  if (completed(c) <= 0) return 0;
+  const t = tOf(c);
+  let v = 119 + 9 * Math.sin(c * 0.31) + 5 * Math.sin(c * 1.7);
+  if (!inSvc('n2', t)) v += 55;
+  if (!inSvc('n5', t)) v += 38;
+  if (c - CS0 < 13) v += 30 * clamp(1 - (c - CS0 - 3) / 10, 0, 1);
+  return v;
+}
+function cum(fn, a, b) { let s = 0; for (let c = a; c < b; c += 1) s += fn(c); return s; }
+function linePath(fn, c0, c1, step, X, Y) {
+  if (c1 <= c0) return 'M0,0';
+  let d = '';
+  for (let c = c0; c < c1; c += step) d += (d ? 'L' : 'M') + X(c).toFixed(1) + ',' + Y(fn(c)).toFixed(1);
+  return d + 'L' + X(c1).toFixed(1) + ',' + Y(fn(c1)).toFixed(1);
+}
+function areaPath(fn, c0, c1, step, X, Y, base) {
+  if (c1 <= c0) return 'M0,0Z';
+  return linePath(fn, c0, c1, step, X, Y) + 'L' + X(c1).toFixed(1) + ',' + base + 'L' + X(c0).toFixed(1) + ',' + base + 'Z';
+}
+function fleet(t) {
+  const c = cs(t);
+  const L = completed(c) / 4;
+  const dec = ['n5', 'n6', 'n7', 'n8'];
+  const pre = ['n1', 'n2', 'n3', 'n4'];
+  let pool = 27 * 4 * L;
+  let n7res = 0;
+  let drainP = 0;
+  if (engState('n7', t) === 'draining') {
+    drainP = clamp((t - E.drainConfirm) / (E.drainDone - E.drainConfirm), 0, 1);
+    const d0 = 27 * completed(cs(E.drainConfirm)) / 4;
+    n7res = Math.min(pool, d0 * (1 - drainP) * (1 - 0.35 * drainP));
+    pool -= n7res;
+  }
+  const actD = dec.filter((id) => inSvc(id, t));
+  const actP = pre.filter((id) => inSvc(id, t));
+  const out = { actD: actD.length, actP: actP.length, drainP };
+  IDS.forEach((id, i) => {
+    const s = engState(id, t);
+    const wob = 1 + 0.05 * Math.sin(c * 0.5 + i * 1.7);
+    let res = 0, run = 0, kv = 0, tok = 0;
+    if (ROLE(id) === 'decode') {
+      if (s === 'in service') res = actD.length ? (pool / actD.length) * wob : 0;
+      else if (s === 'draining') res = n7res;
+      run = Math.max(0, res - 2 - 1.5 * Math.sin(c * 0.7 + i));
+      kv = res * 0.22;
+      tok = s === 'in service' && actD.length ? (256 * 4 * L / actD.length) * wob : 0;
+    } else {
+      if (s === 'in service') { res = 2 * L * wob; run = 0.6 * L; kv = 0.35 * L * wob; tok = actP.length ? (512 * 4 * L / actP.length) * wob : 0; }
+    }
+    out[id] = { res: Math.round(res), run: Math.round(run), kv, tok, d: Math.round(res / 9) };
+  });
+  return out;
+}
+function lastAct(id, t, now) {
+  if (id === 'n7') {
+    if (t < E.drainConfirm) return null;
+    if (t < E.drainDone) return { spin: true, text: 'drain · ' + Math.floor(now - cs(E.drainConfirm)) + '/300 s' };
+    if (t < E.readmit) return { spin: false, text: 'drain · ok' };
+    return { spin: false, text: 'readmit · ok' };
+  }
+  if (id === 'n2') {
+    if (t < E.pauseConfirm) return null;
+    if (t < E.resume) return { spin: false, text: 'pause · ok' };
+    if (t < E.resumeDone) return { spin: true, text: 'resume · ' + Math.floor(now - cs(E.resume)) + ' s' };
+    return { spin: false, text: 'resume · ok' };
+  }
+  if (id === 'n5') {
+    if (t < E.stopConfirm) return null;
+    if (t < E.start) return { spin: false, text: 'stop · ok' };
+    if (t < E.startDone) return { spin: true, text: 'start · ' + Math.floor(now - cs(E.start)) + ' s' };
+    return { spin: false, text: 'start · ok' };
+  }
+  return null;
+}
+const STATE_COLOR = { 'in service': '#1a7f37', draining: '#8a6100', drained: '#8a6100', paused: '#5b6470', stopped: '#b42318', resuming: '#8a6100', starting: '#8a6100' };
+const GSTATE = {
+  'in service': ['Serving', '#56a64b', '#ffffff'], draining: ['Draining', '#ff9830', '#111217'], drained: ['Drained', '#ff780a', '#111217'],
+  paused: ['Unreachable', '#e02f44', '#ffffff'], stopped: ['Unreachable', '#e02f44', '#ffffff'], resuming: ['Probation', '#f2cc0c', '#111217'], starting: ['Probation', '#f2cc0c', '#111217']
+};
+const ENG_EVTS = [
+  { t: E.drainConfirm, label: 'drain n7', from: 'in service', to: 'draining', toC: '#8a6100', res: 'P0·D3 → P0·D2' },
+  { t: E.readmit, label: 'readmit n7', from: 'drained', to: 'in service', toC: '#1a7f37', res: 'P0·D0 → P0·D0' },
+  { t: E.pauseConfirm, label: 'pause n2', from: 'in service', to: 'paused', toC: '#5b6470', res: 'P0·D0 → P0·D0' },
+  { t: E.resume, label: 'resume n2', from: 'paused', to: 'in service', toC: '#1a7f37', res: 'P0·D0 → P0·D0' },
+  { t: E.stopConfirm, label: 'stop n5', from: 'in service', to: 'stopped', toC: '#b42318', res: 'P0·D3 → P0·D0' },
+  { t: E.start, label: 'start n5', from: 'stopped', to: 'in service', toC: '#1a7f37', res: 'P0·D0 → P0·D3' }
+];
+const ANN = [
+  { t: E.drainConfirm, label: 'drain n7', row: 0 }, { t: E.readmit, label: 'readmit n7', row: 1 },
+  { t: E.pauseConfirm, label: 'pause n2', row: 0 }, { t: E.resume, label: 'resume n2', row: 1 },
+  { t: E.stopConfirm, label: 'stop n5', row: 0 }, { t: E.start, label: 'start n5', row: 1 }
+];
+const ACT = [
+  { t: E.sessionStart, action: 'session start', target: '-', end: E.sessionStart },
+  { t: E.jobStart, action: 'job start', target: 'short-chat', end: E.jobStart },
+  { t: E.drainConfirm, action: 'drain', target: 'n7', end: E.drainDone },
+  { t: E.readmit, action: 'readmit', target: 'n7', end: E.readmit + 0.15 },
+  { t: E.pauseConfirm, action: 'pause', target: 'n2', end: E.pauseConfirm + 0.2 },
+  { t: E.resume, action: 'resume', target: 'n2', end: E.resumeDone },
+  { t: E.stopConfirm, action: 'stop', target: 'n5', end: E.stopConfirm + 0.25 },
+  { t: E.start, action: 'start', target: 'n5', end: E.startDone },
+  { t: E.endConfirm, action: 'session end', target: '-', end: E.endConfirm }
+];
+const DIALOGS = [
+  { a: E.drainClick + 0.15, b: E.drainConfirm + 0.1, title: 'Drain n7?', body: 'The router stops placing new requests on n7 and waits for its resident requests to finish. Deadline: the router default, 300 s.', confirm: 'Drain', bg: '#8a6100', click: E.drainConfirm },
+  { a: E.pauseItem + 0.15, b: E.pauseConfirm + 0.1, title: 'Pause n2?', body: 'Runs the engine_pause hook on n2. Resume follows a pause in this session.', confirm: 'Pause', bg: '#c62828', click: E.pauseConfirm },
+  { a: E.stopItem + 0.15, b: E.stopConfirm + 0.1, title: 'Stop n5?', body: 'Runs the engine_stop hook on n5. Start follows a stop or an ejection.', confirm: 'Stop', bg: '#c62828', click: E.stopConfirm },
+  { a: E.endClick + 0.15, b: E.endConfirm + 0.1, title: 'End session 7e9ecb?', body: 'Copies the journal extract and closes the session. The fleet keeps the session’s changes: none, every engine is in service.', confirm: 'End session', bg: '#c62828', click: E.endConfirm }
+];
+const MENUS = [
+  { a: E.n2Menu + 0.05, b: E.pauseItem + 0.15, id: 'n2', top: 374, hoverFrom: 34.4, hoverIdx: 0 },
+  { a: E.n5Menu + 0.05, b: E.stopItem + 0.15, id: 'n5', top: 500, hoverFrom: 48.0, hoverIdx: 2 }
+];
+const CUR = [
+  [3.0, 820, 520], [4.6, 1508, 170], [5.4, 1508, 170], [7.6, 1156, 610], [8.4, 1156, 610], [9.5, 1177, 262], [10.4, 1177, 262],
+  [17.5, 1177, 262], [18.8, 885, 644], [19.4, 885, 644], [20.2, 955, 566], [21.0, 955, 566],
+  [27.6, 955, 566], [28.4, 885, 644], [29.2, 885, 644],
+  [32.6, 885, 644], [33.4, 940, 434], [33.9, 940, 434], [34.4, 738, 479], [34.9, 738, 479], [35.5, 955, 566], [36.2, 955, 566],
+  [40.6, 955, 566], [41.3, 885, 434], [41.9, 885, 434],
+  [46.4, 885, 434], [47.1, 940, 560], [47.6, 940, 560], [48.0, 738, 687], [48.5, 738, 687], [49.0, 955, 566], [49.6, 955, 566],
+  [54.0, 955, 566], [54.7, 885, 560], [55.3, 885, 560],
+  [62.4, 885, 560], [63.1, 1273, 262], [63.6, 1273, 262], [64.4, 1508, 170], [64.9, 1508, 170], [65.5, 955, 566], [66.2, 955, 566]
+];
+const CLICKS = [E.sessionStart, E.jobStart, E.resultsTab, E.drainClick, E.drainConfirm, E.readmit, E.n2Menu, E.pauseItem, E.pauseConfirm, E.resume, E.n5Menu, E.stopItem, E.stopConfirm, E.start, E.activityTab, E.endClick, E.endConfirm];
+const PRESS = [
+  { t: E.drainClick, k: 'n7-main' }, { t: E.readmit, k: 'n7-main' }, { t: E.resume, k: 'n2-main' }, { t: E.start, k: 'n5-main' },
+  { t: E.n2Menu, k: 'n2-more' }, { t: E.n5Menu, k: 'n5-more' }, { t: E.sessionStart, k: 'session' }, { t: E.endClick, k: 'session' },
+  { t: E.jobStart, k: 'job' }, { t: E.resultsTab, k: 'tab-r' }, { t: E.activityTab, k: 'tab-a' }
+];
+const CAPS = [
+  [0, ''],
+  [3.0, 'Start a session, then launch a sample workload from the Benchmark panel'],
+  [10.6, 'Grafana shades job-001 as traffic ramps up across the fleet'],
+  [17.5, 'Drain n7: the router stops placing new requests on it'],
+  [21.6, 'The dashboard marks “drain n7” while its resident requests finish'],
+  [27.6, 'Readmit n7 once it has drained'],
+  [29.6, 'n7 is back in service and takes requests again'],
+  [32.6, 'Pause n2 from its action menu'],
+  [36.8, 'n2 drops out; the pause is marked on every chart'],
+  [40.6, 'Resume waits until the router returns n2 to service'],
+  [43.6, 'n2 is serving again'],
+  [46.4, 'Stop n5 runs the engine_stop hook'],
+  [50.3, 'The other decode engines pick up n5’s requests'],
+  [54.0, 'Start n5 and wait for the router to readmit it'],
+  [57.8, 'n5 rejoins the fleet as job-001 completes'],
+  [62.4, 'Every action lands in the session’s run record'],
+  [66.6, '']
+];
+const CHAPTERS = [['Intro', 0], ['Load job', 3.2], ['Drain', 17.5], ['Pause', 32.6], ['Stop', 46.4], ['Wrap-up', 62.4]];
+
+function curPos(t) {
+  if (t <= CUR[0][0]) return [CUR[0][1], CUR[0][2]];
+  for (let i = 1; i < CUR.length; i++) {
+    const a = CUR[i - 1], b = CUR[i];
+    if (t <= b[0]) { const p = ease(clamp((t - a[0]) / (b[0] - a[0]), 0, 1)); return [a[1] + (b[1] - a[1]) * p, a[2] + (b[2] - a[2]) * p]; }
+  }
+  const z = CUR[CUR.length - 1];
+  return [z[1], z[2]];
+}
+
+class Component extends DCLogic {
+  componentDidMount() {
+    this._t = (this.state && this.state.t) || 0;
+    this._last = null;
+    this._acc = 0;
+    const step = (ts) => {
+      if (this._dead) return;
+      if (this._last === null) this._last = ts;
+      const dt = Math.min(0.1, (ts - this._last) / 1000);
+      this._last = ts;
+      if (this.isPlaying()) {
+        this._t = (this._t + dt) % T_END;
+        this._acc += dt;
+        if (this._acc >= 1 / 30) { this._acc = 0; this.setState({ t: this._t }); }
+      }
+      this._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+  componentWillUnmount() { this._dead = true; if (this._raf) cancelAnimationFrame(this._raf); }
+  isPlaying() { const s = this.state || {}; return s.playing ?? (this.props.autoplay ?? true); }
+  seek(v) { this._t = clamp(v, 0, T_END - 0.01); this.setState({ t: this._t }); }
+
+  renderVals() {
+    const st = this.state || {};
+    const t = st.t ?? 0;
+    const playing = this.isPlaying();
+    const now = cs(t);
+
+    let g = 0;
+    GRAF.forEach((w) => { const v = clamp((t - w[0]) / 0.4, 0, 1) * (1 - clamp((t - w[1]) / 0.4, 0, 1)); if (v > g) g = v; });
+    const gE = ease(g);
+    const onGraf = g > 0.5;
+
+    const sessionActive = t >= E.sessionStart && t < E.endConfirm;
+    const sessionEnded = t >= E.endConfirm;
+    const jobStarted = t >= E.jobStart;
+    const jobRunning = jobStarted && t < JOB_END_T;
+    const jobDone = t >= JOB_END_T;
+    const elapsed = clamp(now - CS0, 0, 150);
+    const F = fleet(t);
+    const anyDraining = engState('n7', t) === 'draining';
+    const pressed = (k) => PRESS.some((p) => p.k === k && t >= p.t - 0.05 && t < p.t + 0.25);
+    const menuDef = MENUS.find((m) => t >= m.a && t < m.b) || null;
+    const dlgDef = DIALOGS.find((d) => t >= d.a && t < d.b) || null;
+
+    const rows = IDS.map((id, i) => {
+      const s = engState(id, t);
+      const role = ROLE(id);
+      let stateText = s;
+      if (s === 'resuming') stateText = 'resuming ' + Math.max(0, Math.floor(now - cs(E.resume))) + ' s';
+      if (s === 'starting') stateText = 'starting ' + Math.max(0, Math.floor(now - cs(E.start))) + ' s';
+      const la = lastAct(id, t, now);
+      let main = 'Drain', enabled = !anyDraining;
+      if (s === 'paused') { main = 'Resume'; enabled = true; }
+      else if (s === 'resuming') { main = 'Resume'; enabled = false; }
+      else if (s === 'stopped') { main = 'Start'; enabled = true; }
+      else if (s === 'starting') { main = 'Start'; enabled = false; }
+      else if (s === 'draining') { main = 'Readmit'; enabled = false; }
+      else if (s === 'drained') { main = 'Readmit'; enabled = true; }
+      if (!sessionActive) enabled = false;
+      const pr = pressed(id + '-main');
+      const moreOpen = (menuDef && menuDef.id === id) || pressed(id + '-more');
+      return {
+        id, role, roleColor: role === 'prefill' ? '#2a9d8f' : '#2f67a0',
+        stateText, stateColor: STATE_COLOR[s],
+        bg: s === 'in service' ? (i % 2 ? '#f6fafa' : '#ffffff') : '#fff7e8',
+        resident: role === 'prefill' ? 'P0·D0' : 'P0·D' + F[id].d,
+        showBar: s === 'draining', barPct: pct(F.drainP),
+        spin: !!(la && la.spin), last: la ? la.text : '–',
+        main, mainFg: enabled || pr ? '#167f83' : '#a9b6b7', mainBorder: enabled || pr ? '#9fd8d9' : '#e1eded', mainBg: pr ? '#cdeeee' : '#ffffff',
+        moreBg: moreOpen ? '#e3f5f5' : '#ffffff', moreBorder: moreOpen ? '#45a7a9' : '#9fd8d9'
+      };
+    });
+
+    const notSvc = IDS.filter((id) => !inSvc(id, t));
+    const chips = [{ label: 'All', count: 8, dot: 'transparent', dotW: '0px', bg: '#e8f6f6', border: '#45a7a9', fg: '#30343b' },
+      { label: 'Needs attention', count: notSvc.length, dot: '#c62828', dotW: '7px', bg: '#ffffff', border: '#a8dfe0', fg: '#c62828' }];
+    if (notSvc.length) {
+      const s0 = engState(notSvc[0], t).split(' ')[0];
+      chips.push({ label: s0.charAt(0).toUpperCase() + s0.slice(1), count: notSvc.length, dot: STATE_COLOR[engState(notSvc[0], t)], dotW: '7px', bg: '#ffffff', border: '#a8dfe0', fg: STATE_COLOR[engState(notSvc[0], t)] });
+    }
+    chips.push({ label: 'In service', count: 8 - notSvc.length, dot: '#1a7f37', dotW: '7px', bg: '#ffffff', border: '#a8dfe0', fg: '#1a7f37' });
+
+    const done = ENG_EVTS.filter((e) => t >= e.t);
+    const le = done.length ? done[done.length - 1] : null;
+    const last = le ? { show: true, none: false, label: le.label, time: clock(cs(le.t)), from: le.from, to: le.to, toC: le.toC, res: le.res } : { show: false, none: true, label: '', time: '', from: '', to: '', toC: '#30343b', res: '' };
+
+    let prog = null;
+    if (engState('n7', t) === 'draining') prog = 'drain n7';
+    else if (engState('n2', t) === 'resuming') prog = 'resume n2';
+    else if (engState('n5', t) === 'starting') prog = 'start n5';
+    const sp = pressed('session');
+    const strip = {
+      sessId: sessionActive || sessionEnded ? '7e9ecb' : 'No session',
+      sessMeta: sessionActive ? 'started 00:07:15 UTC' : sessionEnded ? 'ended ' + clock(cs(E.endConfirm)) + ' UTC' : 'Start a session to enable actions',
+      sessLink: sessionActive,
+      benchJob: jobStarted ? 'job-001' : 'No job yet',
+      benchState: jobRunning ? 'running' : jobDone ? 'finished' : '',
+      benchStateColor: jobRunning ? '#1a7f37' : '#4a5358',
+      benchTime: jobStarted ? Math.floor(elapsed) + ' / 150 s' : '',
+      benchPct: pct(elapsed / 150), benchBar: jobStarted,
+      progShow: !!prog, progNone: !prog, progText: prog || '',
+      btnLabel: sessionActive ? 'End session' : 'Start session',
+      btnBg: sessionActive ? (sp ? '#fde8e8' : '#ffffff') : (sp ? '#0f6265' : '#167f83'),
+      btnFg: sessionActive ? '#c62828' : '#ffffff',
+      btnBorder: sessionActive ? '#e8a3a3' : (sp ? '#0f6265' : '#167f83')
+    };
+
+    const tab = t < E.resultsTab ? 'b' : t < E.activityTab ? 'r' : 'a';
+    const tabStyle = (k) => (tab === k ? { bg: '#167f83', fg: '#ffffff', border: '#167f83' } : { bg: pressed('tab-' + k) ? '#e3f5f5' : '#ffffff', fg: '#30343b', border: '#a8dfe0' });
+    const tabs = { b: tabStyle('b'), r: tabStyle('r'), a: tabStyle('a'), showB: tab === 'b', showR: tab === 'r', showA: tab === 'a' };
+    const rp = { job: jobStarted ? 'job-001' : '', status: jobRunning ? 'running' : jobDone ? 'finished' : 'idle', statusColor: jobRunning ? '#1a7f37' : '#5d666b', time: jobStarted ? Math.floor(elapsed) + ' / 150 s' : '' };
+
+    const startEnabled = sessionActive && !jobStarted;
+    const bench = {
+      inputBg: jobRunning ? '#eef8f8' : '#ffffff',
+      startBg: startEnabled ? (t > 7.6 || pressed('job') ? '#0f6265' : '#167f83') : '#a3cfcf',
+      stopFg: jobRunning ? '#c62828' : '#d9a3a3', stopBorder: jobRunning ? '#e8a3a3' : '#f0d6d6',
+      note: jobRunning ? 'Inputs are locked while job-001 runs.' : jobDone ? 'job-001 finished.' : sessionActive ? 'Ready to run against the router.' : 'Start a session before running a job.'
+    };
+
+    const compCount = Math.round(cum(completed, CS0, Math.min(now, CS1 + 3)));
+    const rps = jobRunning ? completed(now) : jobDone ? compCount / 150 : 0;
+    const p95 = jobRunning ? ttft95(now) : jobDone ? 127 : 0;
+    const MX = (c) => (c - CS0) / 150 * 252;
+    const cEndJob = Math.min(now, CS1);
+    const res = {
+      pct: pct(elapsed / 150),
+      status: jobRunning ? 'running · ' + Math.floor(elapsed) + ' / 150 s' : jobDone ? 'finished · 150 / 150 s' : 'idle',
+      completed: String(compCount), rps: rps.toFixed(2), tok: String(Math.round(rps * 256)), slo: jobStarted ? '100%' : '–',
+      t50: p95 ? Math.round(p95 * 0.89) + ' ms' : '–', t95: p95 ? Math.round(p95) + ' ms' : '–', t99: p95 ? Math.round(p95 * 1.54) + ' ms' : '–',
+      itl: p95 ? '11 ms' : '–', r50: p95 ? '2.97 s' : '–', r95: p95 ? '4.44 s' : '–', r99: p95 ? '4.9 s' : '–',
+      compPath: linePath(completed, CS0, cEndJob, 3, MX, (v) => 80 - v / 6 * 80),
+      compArea: areaPath(completed, CS0, cEndJob, 3, MX, (v) => 80 - v / 6 * 80, 80),
+      ttftPath: linePath(ttft95, CS0, cEndJob, 3, MX, (v) => 80 - v / 2400 * 70),
+      ttftArea: areaPath(ttft95, CS0, cEndJob, 3, MX, (v) => 80 - v / 2400 * 70, 80),
+      elapsedLabel: mmss(elapsed)
+    };
+
+    const acts = ACT.filter((a) => t >= a.t).map((a, i) => ({
+      n: String(i + 1), started: clock(cs(a.t)), action: a.action, target: a.target,
+      dur: t >= a.end ? (cs(a.end) - cs(a.t)).toFixed(1) + ' s' : 'running',
+      out: t >= a.end ? 'ok' : 'in progress', outC: t >= a.end ? '#1a7f37' : '#8a6100', bg: i % 2 ? '#f6fafa' : '#ffffff'
+    })).reverse();
+
+    const menu = { show: !!menuDef, top: menuDef ? menuDef.top : 0, items: [] };
+    if (menuDef) {
+      const hov = t >= menuDef.hoverFrom;
+      const defs = [['Pause…', '', 34, true], ['Resume', 'Resume follows a pause in this session.', 48, false], ['Stop…', '', 34, true], ['Start', 'Start follows a stop or an ejection.', 48, false], ['Readmit', 'Readmit needs a drained or blocked engine; ' + menuDef.id + ' is active.', 64, false]];
+      menu.items = defs.map((d, i) => ({ label: d[0], note: d[1], h: d[2], fg: d[3] ? '#c62828' : '#9aa3a6', bg: hov && i === menuDef.hoverIdx ? '#fdecec' : '#ffffff' }));
+    }
+    const dlg = dlgDef ? { show: true, title: dlgDef.title, body: dlgDef.body, confirm: dlgDef.confirm, bg: t >= dlgDef.click - 0.05 ? '#5a1414' : dlgDef.bg } : { show: false, title: '', body: '', confirm: '', bg: '#c62828' };
+
+    const PW = 712, PH = 154, PW2 = 704, PH2 = 174;
+    const X = (c) => (c - W0) / WSPAN * PW;
+    const Y = (v) => PH - v / 6 * PH;
+    const X2 = (c) => (c - W0) / WSPAN * PW2;
+    const Y2 = (v) => PH2 - v / 3000 * PH2;
+    const cEnd = Math.min(now, W0 + WSPAN);
+    const bandShow = now >= CS0;
+    const bEnd = Math.min(now, CS1);
+    const latOn = completed(now) > 0.2 || (jobStarted && now < CS1 + 6);
+    const gf = {
+      clock: clock(now),
+      offPath: linePath(offered, W0, cEnd, 3, X, Y), offArea: areaPath(offered, W0, cEnd, 3, X, Y, PH),
+      compPath: linePath(completed, W0, cEnd, 3, X, Y), dropPath: linePath(() => 0, W0, cEnd, 3, X, Y),
+      promptPath: linePath((c) => completed(c) * 512, W0, cEnd, 3, X2, Y2), outPath: linePath((c) => completed(c) * 256, W0, cEnd, 3, X2, Y2),
+      band: { show: bandShow, left: X(CS0).toFixed(1), width: Math.max(1, X(bEnd) - X(CS0)).toFixed(1), left2: X2(CS0).toFixed(1), width2: Math.max(1, X2(bEnd) - X2(CS0)).toFixed(1) },
+      ann: ANN.filter((a) => t >= a.t).map((a) => ({ x1: X(cs(a.t)).toFixed(1), x2: X2(cs(a.t)).toFixed(1), label: a.label, labelTop: a.row ? -20 : -38, labelBg: t - a.t < 2.5 ? '#e0b3ff' : '#b877d9' })),
+      offered: fmtK(Math.round(cum(offered, CS0, Math.min(now, CS1 + 1)))),
+      completed: fmtK(Math.round(cum(completed, CS0, Math.min(now, CS1 + 4)))),
+      slo: jobStarted ? '100%' : 'No data', sloBg: jobStarted ? '#56a64b' : '#22252b',
+      ttftPct: latOn ? (Math.max(ttft95(now), 110) / 2100 * 100).toFixed(1) + '%' : 'No data',
+      tpotPct: latOn ? '24.4%' : 'No data', latBg: latOn ? '#56a64b' : '#22252b',
+      engines: IDS.map((id) => {
+        const f = F[id];
+        const gs = GSTATE[engState(id, t)];
+        return { id, role: ROLE(id) === 'prefill' ? 'Prefill' : 'Decode', roleBg: ROLE(id) === 'prefill' ? '#26a69a' : '#3d71a8', state: gs[0], stateBg: gs[1], stateFg: gs[2], res: String(f.res), resW: pct(f.res / 32), run: String(f.run), runW: pct(f.run / 32), kv: f.kv.toFixed(1) + '%', kvW: f.kv > 0.05 ? pct(Math.max(0.008, f.kv / 100)) : '0%', tok: fmtK(f.tok) };
+      })
+    };
+
+    const [cx, cy] = curPos(t);
+    const visC = (t >= 3.0 && t < 66.6 ? 1 : 0) * (1 - gE);
+    let rip = null;
+    CLICKS.forEach((c) => { if (t >= c && t - c < 0.45) rip = c; });
+    let cur;
+    if (rip !== null) {
+      const p = (t - rip) / 0.45;
+      const [rx, ry] = curPos(rip);
+      const size = 10 + 38 * p;
+      cur = { x: cx.toFixed(1), y: cy.toFixed(1), op: visC.toFixed(3), rx: rx.toFixed(1), ry: ry.toFixed(1), rs: size.toFixed(1), rm: (-size / 2).toFixed(1), rop: ((1 - p) * 0.9 * visC).toFixed(3) };
+    } else {
+      cur = { x: cx.toFixed(1), y: cy.toFixed(1), op: visC.toFixed(3), rx: '0', ry: '0', rs: '0', rm: '0', rop: '0' };
+    }
+
+    let capText = '', capIdx = 0;
+    CAPS.forEach((c, i) => { if (t >= c[0]) { capText = c[1]; capIdx = i; } });
+    const cap = { show: capText !== '', text: capText, step: pad2(capIdx) + ' / ' + pad2(CAPS.length - 2) };
+
+    const titleBg = t < 2.6 ? 1 : 1 - clamp((t - 2.6) / 0.6, 0, 1);
+    const outroBg = clamp((t - 66.6) / 0.5, 0, 1);
+    const ov = { titleBg: titleBg.toFixed(3), titleText: (clamp(t / 0.5, 0, 1) * titleBg).toFixed(3), outroBg: outroBg.toFixed(3), outroText: (outroBg * (1 - clamp((t - 69.4) / 0.5, 0, 1))).toFixed(3) };
+
+    let activeCh = 0;
+    CHAPTERS.forEach((c, i) => { if (t >= c[1]) activeCh = i; });
+    const ctl = {
+      show: this.props.showControls ?? true,
+      playing, paused: !playing, playLabel: playing ? 'Pause' : 'Play',
+      toggle: () => this.setState({ playing: !this.isPlaying() }),
+      scrub: (e) => this.seek(parseFloat(e.target.value)),
+      t: Number(t.toFixed(1)),
+      time: mmss(t) + ' / ' + mmss(T_END),
+      chapters: CHAPTERS.map((c, i) => ({ label: c[0], go: () => this.seek(c[1]), bg: i === activeCh ? '#167f83' : 'transparent', fg: i === activeCh ? '#ffffff' : '#adbec1', border: i === activeCh ? '#167f83' : '#3b545b' }))
+    };
+
+    const chrome = onGraf
+      ? { tab1Bg: 'transparent', tab1Fg: '#9aa0a6', tab2Bg: '#35363a', tab2Fg: '#e8eaed', url: '127.0.0.1:13000/d/narwhal-router/narwhal-orchestrator' }
+      : { tab1Bg: '#35363a', tab1Fg: '#e8eaed', tab2Bg: 'transparent', tab2Fg: '#9aa0a6', url: '127.0.0.1:18020/console' };
+
+    return {
+      chrome,
+      consoleOp: (1 - gE).toFixed(3), grafOp: gE.toFixed(3), grafShift: ((1 - gE) * 30).toFixed(1),
+      strip, c: { split: F.actP + 'P:' + F.actD + 'D', chips, rows, last },
+      tabs, rp, bench, res, acts, menu, dlg,
+      g: gf, cur, cap, ov, ctl
+    };
+  }
+}
+</script>
+<script>
+(() => {
+  const width = 1600;
+  const height = 956;
+
+  function fit() {
+    const root = document.getElementById("dc-root");
+    if (!root || !root.firstElementChild) {
+      requestAnimationFrame(fit);
+      return;
+    }
+    const scale = Math.min(1, window.innerWidth / width, window.innerHeight / height);
+    root.style.width = `${width * scale}px`;
+    root.style.height = `${height * scale}px`;
+    root.firstElementChild.style.transform = `scale(${scale})`;
+    root.firstElementChild.style.transformOrigin = "top left";
+  }
+
+  window.addEventListener("load", fit);
+  window.addEventListener("resize", fit);
+  fit();
+})();
+</script>
+</body>
+</html>

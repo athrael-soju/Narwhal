@@ -1,5 +1,5 @@
 ---
-description: Start and end a fleet control session, read the session strip, know which actions are exclusive, and follow the session's activity log.
+description: Start and end a fleet control session, then read its activity log and exclusive actions.
 ---
 
 # Running a test session

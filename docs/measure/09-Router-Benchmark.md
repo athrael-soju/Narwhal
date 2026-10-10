@@ -6,7 +6,7 @@ description: Measure relayed frames per router CPU-second for Narwhal router pro
 
 The router benchmark measures streamed frames relayed per CPU-second of one router process, with simulated engines serving the fleet. The `scale` command runs several router processes against one set of simulated engines.
 
-A relayed frame is a token-bearing `data:` event a client receives, counted as [`token_events`](04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) in each client row.
+A relayed frame is a token-bearing `data:` event a client receives, counted as [`token_events`](04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal) in each client row.
 
 Router CPU seconds are the router process's user and system time from `/proc/<pid>/stat`.
 

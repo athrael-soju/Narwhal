@@ -4,13 +4,13 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 
 # Upgrade and rollback
 
-## 10. Upgrade and rollback
+## Upgrade and rollback
 
-### 10.1 Rolling upgrade with compatible handoff versions
+### Rolling upgrade with compatible handoff versions
 
 #### Upgrading the standby
 
-1. Check that both releases share a [handoff version](01-Start-Routers.md#2-keeping-one-deployment-set).
+1. Check that both releases share a [handoff version](01-Start-Routers.md#keeping-one-deployment-set).
 2. Record the active router's `ha.epoch` from `/narwhal/state`.
 3. Stop the standby.
 4. Install the new deployment set on that host.
@@ -30,7 +30,7 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 2. Start that router as standby.
 3. Wait for its `/ready` to return HTTP 503.
 
-### 10.2 Upgrading across a handoff-version change
+### Upgrading across a handoff-version change
 
 Incompatible handoff versions need a maintenance window.
 
@@ -43,7 +43,7 @@ Incompatible handoff versions need a maintenance window.
 7. Confirm the primary is the only backend returning HTTP 200 from `/ready`.
 8. Restore ingress.
 
-### 10.3 Rolling back
+### Rolling back
 
 1. Remove the router you are rolling back from the load balancer.
 2. Stop the new router gracefully.
@@ -70,11 +70,11 @@ Incompatible handoff versions need a maintenance window.
 13. Return the router to service.
 14. Restore its standby.
 
-### 10.4 Upgrading across the contract field rename
+### Upgrading across the contract field rename
 
 The release that renames `vllm_version`, `nixl_version` and `nixl_connector_version` to `engine_version`, `transfer_version` and `connector_version` changes the contract fingerprint and the profile generation digests. Existing fleet files, attestation documents and dev templates still load. The same release renames the contract tool's `capture-nixl` action to `capture-connector`, and the preflight transfer evidence fields `nixl_transfer_*` to `transfer_*`.
 
-1. Upgrade the routers as in [10.1](#101-rolling-upgrade-with-compatible-handoff-versions).
+1. Upgrade the routers as in [Rolling upgrade with compatible handoff versions](#rolling-upgrade-with-compatible-handoff-versions).
 2. Restart every `narwhal-attest` sidecar on the upgraded build.
 3. Regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 4. Run preflight.

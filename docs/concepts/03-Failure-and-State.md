@@ -76,7 +76,7 @@ Router peer release rounds send each live KV consumer a transfer probe from anot
 
 `UCX_CUDA_IPC_CACHE` in `runtime.environment` selects the trade-off for CUDA IPC engines. At `y`, the UCX default, a stopped peer's GPU memory stays mapped until a wave restart, and transfers from a restarted or idle-evicted producer go through the cached mapping. At `n`, with UCX 1.22 or later, peer release rounds release that memory, and each transfer from a restarted or idle-evicted producer maps and unmaps the producer's KV memory.
 
-`launch.peer_release` in an engine's attestation reports whether that engine releases a stopped peer's memory, and the image check records the same value in [`checked.json`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification). The value is `true` for an engine with zero CUDA IPC peers, and for an engine with UCX 1.22 or later and the CUDA IPC cache off. Every other CUDA IPC engine reports `false`.
+`launch.peer_release` in an engine's attestation reports whether that engine releases a stopped peer's memory, and the image check records the same value in [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification). The value is `true` for an engine with zero CUDA IPC peers, and for an engine with UCX 1.22 or later and the CUDA IPC cache off. Every other CUDA IPC engine reports `false`.
 
 #### Release rounds
 
@@ -108,7 +108,7 @@ While memory is short, the engine checks every 5 seconds and logs `waiting for K
 
 `narwhal-check` warns about each host-sharing producer with a host peer in two cases. A host peer whose `launch.peer_release` attestation is `false`, missing, or unreadable keeps the stopped producer's memory mapped. A host peer with zero other producers for its release probe receives zero release probes.
 
-A [wave restart](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) recovers a crashed engine in both cases.
+A [wave restart](../operate/03-Restart-Engines.md#restart-an-engine-wave) recovers a crashed engine in both cases.
 
 ### Last-engine protection
 
@@ -139,7 +139,7 @@ Lifecycle readmission requires a complete `engine_contract`.
 
 With `engine_contract` set, under `recovery.engine_restart_policy` `individual`, automatic recovery runs the readmission checks when the ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds. An engine that fails automatic recovery stays blocked until an operator requests readmission. While a blocked engine waits and another engine stays in placement, each other ejected engine recovers individually.
 
-When zero engines remain in placement, recovery runs as one [whole wave](../operate/03-Restart-Engines.md#75-recovering-loss-of-every-placement-peer). A blocked whole-wave member holds the wave.
+When zero engines remain in placement, recovery runs as one [whole wave](../operate/03-Restart-Engines.md#recover-loss-of-every-placement-peer). A blocked whole-wave member holds the wave.
 
 Readmission runs the [lifecycle readmission checks](../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) in order.
 
@@ -155,7 +155,7 @@ An operator drain survives healthy responses, resume, and takeover until readmis
 
 With the default `serving.max_attempts` of `2`, an admitted request that fails transiently before visible output can retry once on other engines, within its original deadline and the shared retry credits. With the default `serving.queue_capacity` of `0`, the router refuses new requests immediately when every admission seat is occupied.
 
-[Bounded serving](../configuration/02-Serving-and-Role-Control.md#4-request-admission-and-bounded-serving) can queue a request or [retry](01-Request-and-Topology.md#how-a-request-executes) it within its original deadline.
+[Bounded serving](../configuration/02-Serving-and-Role-Control.md#request-admission-and-bounded-serving) can queue a request or [retry](01-Request-and-Topology.md#request-execution) it within its original deadline.
 
 ## Durable control-plane state
 

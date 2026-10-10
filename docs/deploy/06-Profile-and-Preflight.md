@@ -2,7 +2,7 @@
 description: Run the narwhal-check preflight gates against profiled, idle Narwhal engines.
 ---
 
-# Gate F: Profiling once and running the live KV contract
+# Profile engines and run preflight
 
 ## Profiling idle engines
 
@@ -26,7 +26,7 @@ Run these steps from the router shell.
 
 8. Compare each printed effective sweep with every checked serving plan.
 
-Gate B's `deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's `--max-num-seqs`.
+`deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's `--max-num-seqs`.
 
 The effective sweep has these bounds:
 
@@ -46,7 +46,7 @@ Preflight fails and router startup stops when the profile engine IDs differ from
 
 Set the service-level objective (SLO) targets before preflight:
 
-1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#5-setting-production-slos) from the service requirement and the measured engine curves.
+1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#setting-production-slos) from the service requirement and the measured engine curves.
 2. Keep the time per output token (TPOT) target above the measured per-token floor.
 
 ## Calibrating the first-token deadline
@@ -191,4 +191,4 @@ If the first-token deadline expires, check the calibration artifact and the dead
 
 Keep the command, fleet file, preflight output, process identities, and profile store together.
 
-[![Next: Gate G: Starting the service and validating capacity through the private path](https://img.shields.io/badge/next-Gate%20G%3A%20Starting%20the%20service%20and%20validating%20capacity%20through%20the%20private%20path-0f766e)](07-Serve-and-Measure.md)
+[Serve and measure](07-Serve-and-Measure.md)

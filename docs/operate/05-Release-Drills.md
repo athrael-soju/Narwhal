@@ -4,7 +4,7 @@ description: Validate every Narwhal release with drills on an idle fleet.
 
 # Release drills
 
-## 11. Validating every release
+## Validating every release
 
 Run the release drills on an idle fleet with external admission closed:
 
@@ -43,17 +43,17 @@ The router failover drill passes when:
 
 ### Individual restart drill
 
-Use `recovery.engine_restart_policy = individual` and the prerequisites in [Restarting one engine](03-Restart-Engines.md#7-restarting-one-engine).
+Use `recovery.engine_restart_policy = individual` and the prerequisites in [Restarting one engine](03-Restart-Engines.md#restart-one-engine).
 
 1. Drain the engine.
-2. Replace it through the production supervisor with a launch that changes its attested [`launch_digest`](../configuration/01-Fleet-Schema.md#33-attestation), or with any relaunch when its sidecar reports an attestation digest only.
+2. Replace it through the production supervisor with a launch that changes its attested [`launch_digest`](../configuration/01-Fleet-Schema.md#attestation), or with any relaunch when its sidecar reports an attestation digest only.
 3. Save the pre-stop drain observation, both process identities, and the supervisor output.
 4. Request readmission with the previous profile loaded, through `curl` with `--fail` removed.
 5. Keep the rejection: HTTP 409, the profile generation error, and `accepts_new = false`.
 6. [Activate the fresh profiles](03-Restart-Engines.md#activating-replacement-profiles).
 7. Request explicit readmission.
 8. Save the successful response.
-9. Confirm it shows `state = active`, `accepts_new = true`, a newer process start, and every [readmission check](03-Restart-Engines.md#73-requesting-readmission) passing.
+9. Confirm it shows `state = active`, `accepts_new = true`, a newer process start, and every [readmission check](03-Restart-Engines.md#request-readmission) passing.
 10. Send a routed request.
 11. Confirm its placement includes the returned engine.
 12. Match the client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) and the router's cumulative counters.
@@ -65,7 +65,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 
 #### Draining and restarting
 
-1. [Drain the wave](03-Restart-Engines.md#81-draining-the-wave).
+1. [Drain the wave](03-Restart-Engines.md#drain-the-wave).
 2. Save the HTTP 503 readiness reading.
 3. Save the drain identities.
 4. Confirm zero resident work and `wave.ready_to_stop = true`.
@@ -146,8 +146,8 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 2. Leave the replacement engine running.
 3. Check that its attestation endpoint returns the digest from its loaded profile.
 4. Check that the whole-wave hold remains active.
-5. [Request and verify whole-wave readmission](03-Restart-Engines.md#82-restarting-the-fleet).
-6. Verify that every member passed every [readmission check](03-Restart-Engines.md#73-requesting-readmission).
+5. [Request and verify whole-wave readmission](03-Restart-Engines.md#restart-the-fleet).
+6. Verify that every member passed every [readmission check](03-Restart-Engines.md#request-readmission).
 7. Find the journal's `engine_lifecycle` event with `action = wave_readmitted`.
 8. Send a routed request.
 9. Match its client result to the journal and the router's cumulative counters.
@@ -155,7 +155,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 
 ### Unplanned whole-wave hold drill
 
-`whole_wave` requires a [liveness sweep](03-Restart-Engines.md#9-detecting-process-replacement): `recovery.liveness_every` above `0`, default `10`.
+`whole_wave` requires a [liveness sweep](03-Restart-Engines.md#detect-process-replacement): `recovery.liveness_every` above `0`, default `10`.
 
 1. Set `recovery.engine_restart_policy = whole_wave`.
 2. Wait until every engine is admitted and idle.
@@ -163,7 +163,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
 4. Wait for the router to withdraw readiness.
 5. Wait for the router to exclude every member.
 6. Save the `process_excluded` and `restart_required` lifecycle events.
-7. [Recover the unplanned whole-wave hold](03-Restart-Engines.md#83-recovering-an-unplanned-whole-wave-hold).
+7. [Recover the unplanned whole-wave hold](03-Restart-Engines.md#recover-an-unplanned-whole-wave-hold).
 8. Check that the drain recorded identities before member replacement.
 9. Verify full readmission and a routed request.
 

@@ -17,7 +17,7 @@ Start a router: `narwhal-serve --fleet PATH`.
 
 ## Serving options
 
-Command-line options take [precedence](../configuration/06-Fabric-and-Operations.md#18-cli-precedence) over the matching fleet configuration fields.
+Command-line options take [precedence](../configuration/06-Fabric-and-Operations.md#cli-precedence) over the matching fleet configuration fields.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ Takeover with `--standby-of URL` requires both:
 - `--standby-takeover-after` consecutive polls have failed.
 - The shared lease has expired.
 
-Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#4-starting-a-router-pair).
+Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#starting-a-router-pair).
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |

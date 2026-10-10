@@ -1,5 +1,5 @@
 ---
-description: Run engine actions, configuration overlays and AIPerf load jobs against a running fleet from the fleet control service and console, with a private run record per session.
+description: Run engine actions, configuration overlays, and AIPerf load jobs from the fleet control service.
 ---
 
 # Controlling the fleet
@@ -18,6 +18,31 @@ The service runs on the router host, listens on loopback, and authenticates API 
 Hooks are the commands, defined in the private configuration, that perform each change, such as stopping an engine or restarting the router. Drains and readmits use the router's lifecycle API instead.
 
 Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it closes the session's record and leaves the fleet as it is. **Restore baseline** undoes the session's changes.
+
+## Walkthrough
+
+[![Fleet control walkthrough title frame.](../assets/fleet-control/walkthrough/thumbnail.png)](../assets/fleet-control/walkthrough/index.html){ .narwhal-walkthrough-trigger }
+
+<dialog id="fleet-control-walkthrough" class="narwhal-walkthrough-dialog" aria-label="Fleet control walkthrough"><button type="button" class="narwhal-walkthrough-close" aria-label="Close walkthrough">×</button><iframe title="Fleet control walkthrough"></iframe></dialog>
+
+<script>
+(() => {
+  const trigger = document.querySelector(".narwhal-walkthrough-trigger");
+  const dialog = document.querySelector("#fleet-control-walkthrough");
+  const frame = dialog.querySelector("iframe");
+
+  trigger.addEventListener("click", (event) => {
+    event.preventDefault();
+    frame.src = trigger.href;
+    dialog.showModal();
+  });
+  dialog.querySelector("button").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => { frame.src = "about:blank"; });
+})();
+</script>
 
 ## Pages
 

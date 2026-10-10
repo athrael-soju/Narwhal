@@ -4,9 +4,9 @@ description: Narwhal fleet settings for engine recovery, warm standby, engine au
 
 # Recovery, authentication, and profile validation
 
-## 8. Engine health and recovery
+## Engine health and recovery
 
-### 8.1 Breaker and drift settings
+### Breaker and drift settings
 
 These fields set breaker thresholds, liveness probing, failure quarantine and drift scoring.
 
@@ -32,7 +32,7 @@ Compare the penalty with the time to first token (TTFT) target and the measured 
 
 At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class.
 
-[Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#failure-quarantine) compares placement and client outcomes with `recovery.failure_quarantine_s` at `0` and above it.
+[Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine) give the criteria for setting `recovery.failure_quarantine_s`.
 
 An inconclusive inference probe:
 
@@ -43,7 +43,7 @@ The state handoff carries the producer IDs of failed KV-transfer paths in [`infe
 
 A new router process restores each `inference_sources` suspect by the rules in [restored and process-local state](../http-api/07-Handoff-and-Lifecycle.md#restored-and-process-local-state).
 
-### 8.2 Decode drift evidence
+### Decode drift evidence
 
 The drift tracker scores fresh decode residuals and stalled inter-token gaps against the engine's recent healthy baseline. It excludes a placement estimate left over after decode completes.
 
@@ -62,7 +62,7 @@ A window that closes with at least one observation and fewer than `recovery.heal
 
 `/narwhal/state` reports scored and undersampled windows in `health.<iid>.scored` and `health.<iid>.undersampled`, and the age of the most recent scored window in `health.<iid>.last_scored_s_ago`. Prometheus counts scored and undersampled windows in `narwhal_health_windows_scored_total` and `narwhal_health_windows_undersampled_total`.
 
-### 8.3 Engine restart policy
+### Engine restart policy
 
 `recovery.engine_restart_policy` accepts:
 
@@ -74,11 +74,10 @@ A window that closes with at least one observation and fewer than `recovery.heal
 - a complete `engine_contract`
 - `recovery.liveness_every > 0`
 
-Under `whole_wave`, an ejection or identity failure places a whole-wave hold on the fleet until an operator completes the [engine-wave restart](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave).
+Under `whole_wave`, an ejection or identity failure places a whole-wave hold on the fleet until an operator completes the [engine-wave restart](../operate/03-Restart-Engines.md#restart-an-engine-wave).
 
----
 
-## 9. Resume, shutdown, and warm-standby state
+## Resume, shutdown, and warm-standby state
 
 These fields set the state handoff file, resume at startup and the shutdown drain.
 
@@ -99,11 +98,10 @@ A saved state handoff with an unknown schema or version aborts startup. A schema
 
 A successful resume restores roles, ejections, lifecycle holds and complete-backend-outage state. It clears per-engine dwell timestamps. The prefill-to-decode cooldown begins when Narwhal creates the replacement scheduler.
 
-Configure warm-standby takeover with the `narwhal-serve` options in [Starting a router pair](../operate/01-Start-Routers.md#4-starting-a-router-pair).
+Configure warm-standby takeover with the `narwhal-serve` options in [Starting a router pair](../operate/01-Start-Routers.md#starting-a-router-pair).
 
----
 
-## 10. Engine authentication and protocol adapters
+## Engine authentication and protocol adapters
 
 Ingress terminates public client credentials.
 
@@ -138,9 +136,8 @@ Use the same authentication mode for workload measurement and production serving
 
 `engine.backend` defaults to `"vllm"`. `engine.connector` and `engine.dialect` default to the backend's connector and dialect: `"nixl"` and `"vllm"` for vLLM, `"mooncake"` and `"sglang"` for SGLang. SGLang's `nixl` connector keeps each engine in its launch role, so a fleet that uses it sets `pin` on every engine.
 
----
 
-## 11. Profile validation
+## Profile validation
 
 These fields locate the profile store and set the decode-fit error limits for `narwhal-check`.
 

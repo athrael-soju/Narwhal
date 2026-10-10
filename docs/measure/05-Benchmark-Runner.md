@@ -177,5 +177,5 @@ The runner stops at the first point that ends with one of these `result.json` co
 | `probe_error` | A readiness or model probe failed |
 | `initial_drain_timeout`, `initial_drain_state_error` | The drain wait before the client timed out or failed to read `/narwhal/state` |
 | `drain_timeout`, `drain_state_error` | The drain wait after the client timed out or failed to read `/narwhal/state` |
-| `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#8-measuring-05-requests) |
+| `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#measuring-05-requests) |
 | `evidence_error` | The evidence collector failed |

@@ -93,7 +93,7 @@ Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-th
 | --- | --- |
 | Group | One role-permitted directed pair at one input length, with `--samples` attempts |
 | Sweep `k` | Attempt `k` of every group |
-| Device slot | The engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#21-shared-device-allocation), otherwise the engine |
+| Device slot | The engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), otherwise the engine |
 | Round | A set of pairs in which each device slot produces at most once and consumes at most once |
 | Round count | The largest number of pairs that one device slot produces or consumes |
 | Sweep 1 | Each group runs alone in order of producer ID, then input length in `--input-tokens` order, then pair |
