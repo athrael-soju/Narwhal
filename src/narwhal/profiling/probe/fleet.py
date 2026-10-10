@@ -20,6 +20,7 @@ from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import attested_launches
 from ...engines.connector import RendezvousConnector
+from ...engines.dialect import EngineDialect
 from ...provenance import stamp
 from ...runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from ...types import Role
@@ -78,8 +79,26 @@ def _lane_peer(spec: EngineSpec, lane: list[EngineSpec], engines: list[EngineSpe
     return _peer(spec, lane) if len(lane) > 1 else _peer(spec, engines)
 
 
+async def _reset_caches(
+    client: httpx.AsyncClient, dialect: EngineDialect, urls: tuple[str, ...]
+) -> None:
+    # A peer still holding the previous sweep's cache evicts it to receive KV, which slows the
+    # measured prefill, so each placement starts both engines with empty caches.
+    path = dialect.cache_reset_path
+    if path is None:
+        return
+    for url in urls:
+        try:
+            r = await client.post(f"{url}{path}")
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"cache reset failed on {url}: {type(exc).__name__}") from exc
+        if r.status_code != 200:
+            raise RuntimeError(f"cache reset failed on {url} ({r.status_code}): {r.text[:200]}")
+
+
 def _pair_roles(
     cfg: FleetConfig,
+    dialect: EngineDialect,
     pairing: PairedTransport,
     switcher: RoleSwitcher,
     spec: EngineSpec,
@@ -97,6 +116,7 @@ def _pair_roles(
             timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
         ) as control:
             await place_pair(switcher, control, producer, consumer)
+            await _reset_caches(control, dialect, (spec.url, peer.url))
         pairing.pairs[origin(spec.url)] = Pairing(role, origin(peer.url), producer[1] or {})
 
     return serve_as
@@ -383,7 +403,9 @@ async def run(
                         else _lane_peer(spec, lane, cfg.engines)
                     )
                     engine_evidence["peer"] = peer.iid
-                    roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches, phases)
+                    roles = _pair_roles(
+                        cfg, dialect, pairing, switcher, spec, peer, launches, phases
+                    )
                 profile = await profile_instance(
                     client,
                     spec.iid,

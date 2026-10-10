@@ -823,6 +823,45 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
         )
 
+    async def test_each_pair_placement_resets_both_engine_caches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+        spec, peer = cfg.engines[0], cfg.engines[1]
+        dialect = load_backend("sglang").dialect
+        calls = []
+        status = 200
+
+        async def answer(request):
+            calls.append(f"{request.url.port} {request.url.path}")
+            return httpx.Response(status, text="pending requests")
+
+        class Switcher:
+            async def switch(self, client, url, role, launch):
+                calls.append(f"{httpx.URL(url).port} {role.value}")
+
+        real = httpx.AsyncClient
+
+        def client(**kwargs):
+            return real(transport=httpx.MockTransport(answer), **kwargs)
+
+        pairing = SimpleNamespace(pairs={})
+        serve_as = fleet_probe._pair_roles(cfg, dialect, pairing, Switcher(), spec, peer, {})
+        own, other = httpx.URL(spec.url).port, httpx.URL(peer.url).port
+        with patch.object(fleet_probe.httpx, "AsyncClient", client):
+            await serve_as(Role.DECODE)
+            self.assertEqual(
+                calls,
+                [
+                    f"{other} prefill",
+                    f"{own} decode",
+                    f"{own} /flush_cache",
+                    f"{other} /flush_cache",
+                ],
+            )
+            status = 400
+            with self.assertRaisesRegex(RuntimeError, r"cache reset failed .*\(400\)"):
+                await serve_as(Role.PREFILL)
+
     def test_paired_profile_lanes_run_disjoint_pairs(self):
         with tempfile.TemporaryDirectory() as folder:
             engines = fleet(Path(folder)).engines
