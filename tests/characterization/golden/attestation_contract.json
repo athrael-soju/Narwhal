@@ -64,7 +64,7 @@
       "error": "<tmp>/fleet.json: engine_contract.connector is required"
     },
     "handshake_disabled": {
-      "error": "<tmp>/fleet.json: engine_contract.enforce_handshake_compat must stay true; disabling vLLM's NIXL compatibility hash permits silent corruption"
+      "error": "<tmp>/fleet.json: engine_contract.enforce_handshake_compat must stay true; disabling the connector's compatibility check permits silent corruption"
     },
     "missing_engine_version": {
       "error": "<tmp>/fleet.json: engine_contract.engine_version is required"

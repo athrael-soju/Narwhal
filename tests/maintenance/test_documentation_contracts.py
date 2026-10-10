@@ -1,5 +1,3 @@
-"""Compare reference tables with the configuration, parsers and schema registry."""
-
 import argparse
 import ast
 import importlib
@@ -10,6 +8,8 @@ import unittest
 from dataclasses import asdict
 from unittest.mock import patch
 
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineContract, EngineSpec, FleetConfig
 from narwhal.config.serialization import document
 from narwhal.contracts import CONTRACTS
@@ -18,12 +18,10 @@ from narwhal.serving.outcomes import ERROR_RESPONSES
 from tests.fixtures import ROOT
 
 
-class ParserCaptured(Exception):
-    """Stop command execution before configuration or external I/O."""
+class ParserCaptured(Exception): ...
 
 
 def parser_actions(parser):
-    """Include options belonging to fleet subcommands."""
     for action in parser._actions:
         yield action
         if isinstance(action, argparse._SubParsersAction):
@@ -32,7 +30,6 @@ def parser_actions(parser):
 
 
 def error_table_rows(text):
-    """Yield the HTTP and error `type` cells of each row in tables that carry both columns."""
     columns = None
     for line in text.splitlines():
         if not line.startswith("|"):
@@ -50,12 +47,10 @@ def error_table_rows(text):
 
 class DocumentationContractTests(unittest.TestCase):
     def test_configuration_literal_defaults(self):
-        """Backticked JSON defaults agree with their owning configuration fields.
-
-        The settings guide states the same defaults, so it is checked with the reference.
-        """
         engine = asdict(EngineSpec("e0", "http://stub"))
-        contract = EngineContract().fields()
+        backend = load_backend(DEFAULT_BACKEND)
+        connector = backend.connector(backend.default_connector).contract_name
+        contract = EngineContract(connector=connector).fields()
         cfg = FleetConfig(model="stub", engines=[EngineSpec("e0", "http://stub")], slo=SLO(1, 1))
         fleet = document(cfg)
         section = ""
@@ -93,7 +88,6 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertGreaterEqual(checked, 85)
 
     def test_cli_tables_name_registered_options_and_literal_defaults(self):
-        """Each command table maps to its shipped parser, including subcommands."""
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         sections = {}
         for page in (ROOT / "docs/cli").glob("*.md"):
@@ -141,7 +135,6 @@ class DocumentationContractTests(unittest.TestCase):
                         self.assertEqual(actual, expected)
 
     def test_cuda_runtime_install_pins_each_dev_template(self):
-        """The documented CUDA install provides the runtime each dev template requires."""
         text = (ROOT / "docs/dev/CUDA-Runtime.md").read_text()
         packages = dict(re.findall(r"'([a-z0-9-]+)==([^']+)'", text))
         packages["vllm-gguf-plugin"] = re.search(r"/vllm_gguf_plugin-([^-]+)-cp310", text)[1]
@@ -164,7 +157,6 @@ class DocumentationContractTests(unittest.TestCase):
                 )
 
     def test_reference_versions_cover_the_contract_registry(self):
-        """Every versioned interface appears with its current schema version."""
         text = (ROOT / "docs/telemetry/05-Compatibility.md").read_text()
         rows = re.findall(r"^\|[^|]+\|\s*`(narwhal\.[^`]+)`\s*\|\s*(\d+)\s*\|", text, re.M)
         self.assertEqual(
@@ -173,7 +165,6 @@ class DocumentationContractTests(unittest.TestCase):
         )
 
     def test_http_error_tables_list_every_status_and_error_type(self):
-        """The HTTP API error tables list exactly the registered status and error type pairs."""
         listed = set()
         for page in sorted((ROOT / "docs/http-api").glob("*.md")):
             for status, error_type in error_table_rows(page.read_text()):
@@ -187,7 +178,6 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertEqual(listed, ERROR_RESPONSES)
 
     def test_serving_error_bodies_use_the_registered_builder(self):
-        """Serving code builds every JSON error body through `error_response`."""
         literal = []
         for path in sorted((ROOT / "src/narwhal/serving").rglob("*.py")):
             if path.name == "outcomes.py":

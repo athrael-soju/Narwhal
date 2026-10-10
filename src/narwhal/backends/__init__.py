@@ -23,14 +23,19 @@ DEFAULT_BACKEND = "vllm"
 @dataclass(frozen=True)
 class EngineBackend:
     name: str
+    # The engine's name in operator output, such as "vLLM".
+    label: str
     dialect: EngineDialect
     connectors: Mapping[str, KvHandoff]
+    default_connector: str
     identity: EngineIdentityReader
     kv_events: KvEventDecoder
     metrics: EngineMetrics
     fabric: FabricLifecycle
     launcher: Callable[[], EngineLauncher] = field(repr=False)
     role_switch: RoleSwitcher | None = None
+    # Earlier field names this backend wrote, by section ("contract", "engine").
+    renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def connector(self, name: str) -> KvHandoff:
         try:
@@ -61,3 +66,11 @@ def load(name: str) -> EngineBackend:
     if not isinstance(backend, EngineBackend) or backend.name != name:
         raise ValueError(f"entry point {name!r} does not build the {name!r} EngineBackend")
     return backend
+
+
+def renamed_fields(section: str) -> dict[str, str]:
+    return {
+        old: new
+        for name in names()
+        for old, new in load(name).renamed_fields.get(section, {}).items()
+    }

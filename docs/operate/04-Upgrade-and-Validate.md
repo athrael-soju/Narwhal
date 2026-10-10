@@ -72,7 +72,7 @@ Incompatible handoff versions need a maintenance window.
 
 ### 10.4 Upgrading across the contract field rename
 
-The release that renames `vllm_version`, `nixl_version` and `nixl_connector_version` to `engine_version`, `transfer_version` and `connector_version` changes the contract fingerprint and the profile generation digests. Existing fleet files and attestation documents still load.
+The release that renames `vllm_version`, `nixl_version` and `nixl_connector_version` to `engine_version`, `transfer_version` and `connector_version` changes the contract fingerprint and the profile generation digests. Existing fleet files, attestation documents and dev templates still load. The same release renames the contract tool's `capture-nixl` action to `capture-connector`, and the preflight transfer evidence fields `nixl_transfer_*` to `transfer_*`.
 
 1. Upgrade the routers as in [10.1](#101-rolling-upgrade-with-compatible-handoff-versions).
 2. Restart every `narwhal-attest` sidecar on the upgraded build.

@@ -20,8 +20,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare, inspect and launch pinned vLLM/NIXL engines with container or "
-        "native backends."
+        description="Prepare, inspect and launch pinned engines with container or native backends."
     )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     add_version_argument(parser)
@@ -34,7 +33,7 @@ def _main(argv: list[str]) -> int:
         "write cache-layout.json and remove the completed sizing container (container only).",
         "model-dimensions": "Inspect model dimensions using a checked plan; "
         "write model-dimensions.json (container only).",
-        "handshake-policy": "Inspect the installed NIXL compatibility policy using a checked "
+        "handshake-policy": "Inspect the installed connector compatibility policy using a checked "
         "plan; write handshake-policy.json (container and native).",
         "start": "Start one serving container from a checked plan and record container.id; "
         "verify HTTP readiness separately (container only).",

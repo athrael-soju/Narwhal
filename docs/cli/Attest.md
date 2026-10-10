@@ -17,6 +17,7 @@ At startup, the sidecar exits with status 1 when the engine's vLLM version diffe
 | `--version` | | Print the installed distribution version. |
 | `--document PATH` | required | Attestation document holding contract values and a source per field. |
 | `--engine-base URL` | required | vLLM base URL that serves `/version` and `/metrics`. |
+| `--backend NAME` | `vllm` | Engine backend that reads the engine's identity and cache events. |
 | `--host HOST` | `127.0.0.1` | Address to bind. |
 | `--port PORT` | `8010` | Port to listen on. |
 | `--timeout-s SECONDS` | `5.0` | Timeout for reading the engine's identity. |

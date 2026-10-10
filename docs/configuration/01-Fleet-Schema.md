@@ -146,7 +146,7 @@ The optional `hardware` block needs all three fields when present.
 | `kv_cache_dtype`           | `""`              | The KV-cache dtype.                                                                            |
 | `cross_layers_blocks`      | `null`            | Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API. |
 | `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager is part of the layout.                                  |
-| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name.                                                           |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. The default is the name of `engine.connector`'s connector. |
 | `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |

@@ -4,8 +4,10 @@ import json
 import math
 from dataclasses import fields
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
+from ..backends import DEFAULT_BACKEND
+from ..backends import load as load_backend
 from ..contracts import FLEET, ContractVersionError, validate_document
 from ..scheduling.control import SLO, Thresholds
 from ..serving.policy import ServingPolicy
@@ -246,7 +248,7 @@ def load(path: str | Path) -> FleetConfig:
             connector=_read_str(
                 problems,
                 "engine_contract.connector",
-                contract_raw.get("connector", "NixlConnector"),
+                contract_raw.get("connector", _contract_connector(engine_raw)),
             ),
             kv_role=_read_str(problems, "engine_contract.kv_role", contract_raw.get("kv_role", "")),
             transfer_mode=_read_str(
@@ -485,9 +487,9 @@ def load(path: str | Path) -> FleetConfig:
         resume=_read_bool(problems, "recovery.resume", recovery_raw.get("resume", False)),
         min_prefill=min_prefill,
         min_decode=min_decode,
-        backend=_read_str(problems, "engine.backend", engine_raw.get("backend", "vllm")),
-        connector=_read_str(problems, "engine.connector", engine_raw.get("connector", "nixl")),
-        dialect=_read_str(problems, "engine.dialect", engine_raw.get("dialect", "vllm")),
+        backend=_read_str(problems, "engine.backend", engine_raw.get("backend", DEFAULT_BACKEND)),
+        connector=_read_str(problems, "engine.connector", engine_raw.get("connector", "")),
+        dialect=_read_str(problems, "engine.dialect", engine_raw.get("dialect", "")),
         engine_contract=engine_contract,
         hardware=hardware,
         profile_validation=profile_validation,
@@ -645,6 +647,15 @@ _ENGINE_CONTRACT_KEYS = {
 
 
 _HARDWARE_KEYS = {"accelerator", "accelerators_per_engine", "tensor_parallel"}
+
+
+def _contract_connector(engine_raw: dict[str, Any]) -> str:
+    try:
+        backend = load_backend(str(engine_raw.get("backend", DEFAULT_BACKEND)))
+        name = str(engine_raw.get("connector", backend.default_connector))
+        return backend.connector(name).contract_name
+    except ValueError:
+        return ""
 
 
 def _reject_constant(name: str) -> NoReturn:

@@ -29,10 +29,10 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e3",
-          "nixl_transfer_count": 1.0,
-          "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
         },
         "consumer_before": {
           "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
@@ -44,16 +44,14 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e3",
-          "nixl_transfer_count": 0.0,
-          "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
         },
         "decode_seconds": "<seconds>",
         "descriptor_sha256": "db9dd50839f3c7fe440a789702dedcd8487159dd2914e6a8b2f1af41f54a1906",
         "first_token_seconds": "<seconds>",
-        "nixl_transfer_count_delta": 1.0,
-        "nixl_transfer_seconds": 0.01,
         "output_tokens": 4,
         "prefill_seconds": "<seconds>",
         "producer": "e0",
@@ -67,10 +65,10 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e0",
-          "nixl_transfer_count": 0.0,
-          "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
         },
         "producer_before": {
           "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
@@ -82,17 +80,19 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e0",
-          "nixl_transfer_count": 0.0,
-          "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
         },
         "remote_engine_id": "e0-engine",
         "remote_host": "127.0.0.1",
         "remote_port": 5600,
         "status": "passed",
+        "transfer_count_delta": 1.0,
         "transfer_metric": "vllm:nixl_xfer_time_seconds",
-        "transfer_mode": null
+        "transfer_mode": null,
+        "transfer_seconds": 0.01
       },
       {
         "connector": "nixl",
@@ -107,10 +107,10 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e0",
-          "nixl_transfer_count": 1.0,
-          "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
         },
         "consumer_before": {
           "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
@@ -122,16 +122,14 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e0",
-          "nixl_transfer_count": 0.0,
-          "nixl_transfer_seconds_sum": 0.0,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
         },
         "decode_seconds": "<seconds>",
         "descriptor_sha256": "90885f2f6bd4e4ba25398a0c900a3bd29e0fb9336e207a444e066d6381f5eb27",
         "first_token_seconds": "<seconds>",
-        "nixl_transfer_count_delta": 1.0,
-        "nixl_transfer_seconds": 0.01,
         "output_tokens": 4,
         "prefill_seconds": "<seconds>",
         "producer": "e3",
@@ -145,10 +143,10 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e3",
-          "nixl_transfer_count": 1.0,
-          "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
         },
         "producer_before": {
           "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
@@ -160,17 +158,19 @@
           "contract_fingerprint": "f5e095959e161d2d",
           "engine_version": "1.0.0",
           "iid": "e3",
-          "nixl_transfer_count": 1.0,
-          "nixl_transfer_seconds_sum": 0.01,
           "process_start_time_seconds": 100.0,
-          "transfer_mode_source": "fixture"
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
         },
         "remote_engine_id": "e3-engine",
         "remote_host": "127.0.0.1",
         "remote_port": 5601,
         "status": "passed",
+        "transfer_count_delta": 1.0,
         "transfer_metric": "vllm:nixl_xfer_time_seconds",
-        "transfer_mode": null
+        "transfer_mode": null,
+        "transfer_seconds": 0.01
       }
     ],
     "profile_sha256": "<sha256>",
@@ -210,8 +210,8 @@
     "  ok    e0 /tokenize -> 64 tokens",
     "  ok    e3 /tokenize -> 64 tokens",
     "produce",
-    "  ok    e0 returned kv_transfer_params (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
-    "  ok    e3 returned kv_transfer_params (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
+    "  ok    e0 returned handoff parameters (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
+    "  ok    e3 returned handoff parameters (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
     "consume (mesh, 1x)",
     "  ok    e0 -> e3 moved KV and produced 4 tokens, first token <seconds>",
     "  ok    e3 -> e0 moved KV and produced 4 tokens, first token <seconds>",

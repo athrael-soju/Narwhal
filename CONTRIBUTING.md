@@ -58,7 +58,7 @@ These targets run the checks:
 | `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
 | `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                               |
 | `make publication`         | Scans the Git index for private files and private key material                                                               |
-| `make boundary`            | Fails when code outside `src/narwhal/backends/` is engine-specific and not in `tools/maintenance/backend_boundary.txt`      |
+| `make boundary`            | Fails when code outside `src/narwhal/backends/` imports a backend package or names an engine-specific term                  |
 | `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                              |
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                    |
 | `make test`                | Runs the unit suite                                                                                                          |

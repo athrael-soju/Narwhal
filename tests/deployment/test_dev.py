@@ -440,7 +440,7 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "budgets exceed"):
             self.initialize()
         self.spec["allocation"]["device_allowance"] = 0.5
-        self.spec["ports"]["nixl_first"] = self.spec["ports"]["engine_first"]
+        self.spec["ports"]["side_channel_first"] = self.spec["ports"]["engine_first"]
         with self.assertRaisesRegex(ValueError, "collide"):
             self.initialize()
         self.assertFalse(self.root.exists())

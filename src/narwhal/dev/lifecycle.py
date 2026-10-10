@@ -26,7 +26,7 @@ from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
-from .template import _check_free_ports, _port_layout, _sha256
+from .template import _check_free_ports, _port_layout, _sha256, current_ports
 
 
 class LifecycleDocumentError(ValueError):
@@ -108,7 +108,7 @@ def write(path: Path, value: dict) -> None:
 
 
 def instance(root: Path) -> dict:
-    value = read(root / "instance.json")
+    value = current_ports(read(root / "instance.json"))
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
     expected = Path(value["python_executable"])
@@ -386,7 +386,9 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(hook),
             "NARWHAL_ENGINE_PORT": str(config["ports"]["engine_first"] + index),
             "NARWHAL_ATTEST_PORT": str(config["ports"]["attestation_first"] + index),
-            engine_launcher.side_channel_port_env: str(config["ports"]["nixl_first"] + index),
+            engine_launcher.side_channel_port_env: str(
+                config["ports"]["side_channel_first"] + index
+            ),
             "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],

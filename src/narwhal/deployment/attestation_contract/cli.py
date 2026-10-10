@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
         "deployment evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    capture = commands.add_parser("capture-nixl")
+    capture = commands.add_parser("capture-connector")
     capture.add_argument("--run", required=True, type=Path)
     native = commands.add_parser("native-capture")
     native.add_argument("--run", required=True, type=Path)
@@ -38,9 +38,9 @@ def main(argv: list[str] | None = None) -> int:
     fleet.add_argument("--fleet", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.command == "capture-nixl":
+        if args.command == "capture-connector":
             result = _launcher(args.run).capture_connector(args.run)
-            print(f"Captured pinned NIXL protocol in {result}")
+            print(f"Captured pinned connector protocol in {result}")
         elif args.command == "native-capture":
             result = _launcher(args.run).capture_native(args.run)
             print(f"Captured native engine attestation in {result}")
