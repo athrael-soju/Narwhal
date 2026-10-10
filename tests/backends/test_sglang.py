@@ -10,6 +10,7 @@ import msgpack
 from narwhal.backends import load
 from narwhal.backends.sglang import attestation, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
+from narwhal.backends.sglang.role_switch import SglangRoleSwitch
 from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
@@ -232,6 +233,40 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_refused_switch_raises(self):
         with self.assertRaisesRegex(ValueError, "not idle"):
             await self.switch("decode", Role.PREFILL, {"success": False, "message": "not idle"})
+
+    async def test_a_decode_engine_switches_again_for_a_producer_it_has_stale(self):
+        modes = {"a": "decode", "b": "decode"}
+        posted = []
+
+        def handle(request):
+            host = request.url.host
+            if request.method == "GET":
+                return httpx.Response(
+                    200, json={"internal_states": [{"disaggregation_mode": modes[host]}]}
+                )
+            role = json.loads(request.content)["new_role"]
+            modes[host] = role
+            posted.append(f"{host} {role}")
+            return httpx.Response(200, json={"success": True, "message": "ok"})
+
+        switcher = SglangRoleSwitch()
+        a, b = ("http://a", LAUNCH), ("http://b", LAUNCH)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            # b's endpoints predate this switcher.
+            await switcher.place(client, a, b)
+            self.assertEqual(posted, ["a prefill", "b prefill", "b decode"])
+            posted.clear()
+            await switcher.place(client, a, b)
+            self.assertEqual(posted, [])
+            # a enters prefill again, so b still holds a's earlier endpoint.
+            await switcher.switch(client, a[0], Role.DECODE, LAUNCH)
+            await switcher.place(client, a, b)
+            self.assertEqual(posted, ["a decode", "a prefill", "b prefill", "b decode"])
+            posted.clear()
+            # b switched since it last took a handoff from a's current generation.
+            await switcher.place(client, b, a)
+            await switcher.place(client, a, b)
+            self.assertEqual(posted, ["b prefill", "a decode", "a prefill", "b decode"])
 
     def test_only_mooncake_switches_roles(self):
         self.assertIsNotNone(BACKEND.role_switcher("mooncake"))

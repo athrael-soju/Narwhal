@@ -23,6 +23,16 @@ class RoleSwitcher(ABC):
         launch: Mapping[str, Any] | None = None,
     ) -> None: ...
 
+    async def place(
+        self,
+        client: httpx.AsyncClient,
+        producer: tuple[str, Mapping[str, Any] | None],
+        consumer: tuple[str, Mapping[str, Any] | None],
+    ) -> None:
+        """Serve `producer` as prefill and `consumer` as decode for a handoff between them."""
+        await self.switch(client, producer[0], Role.PREFILL, producer[1])
+        await self.switch(client, consumer[0], Role.DECODE, consumer[1])
+
 
 class RouterRoleSwitch(RoleSwitcher):
     requires_idle = False
@@ -47,5 +57,4 @@ async def place_pair(
     producer: tuple[str, Mapping[str, Any] | None],
     consumer: tuple[str, Mapping[str, Any] | None],
 ) -> None:
-    await switcher.switch(client, producer[0], Role.PREFILL, producer[1])
-    await switcher.switch(client, consumer[0], Role.DECODE, consumer[1])
+    await switcher.place(client, producer, consumer)

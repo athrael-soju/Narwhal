@@ -30,6 +30,7 @@ from narwhal.profiling.probe.offline import merge_profiles, refit_saved_prefill
 from narwhal.profiling.probe.prefill import probe_prefill
 from narwhal.profiling.probe.sweep import Sweep, bounded_sweep, load_sequence_limits
 from narwhal.profiling.store import ProfileStore
+from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
@@ -836,8 +837,10 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             calls.append(f"{request.url.port} {request.url.path}")
             return httpx.Response(status, text="pending requests")
 
-        class Switcher:
-            async def switch(self, client, url, role, launch):
+        class Switcher(RoleSwitcher):
+            requires_idle = True
+
+            async def switch(self, client, url, role, launch=None):
                 calls.append(f"{httpx.URL(url).port} {role.value}")
 
         real = httpx.AsyncClient
