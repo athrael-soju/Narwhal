@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib import resources
 from typing import TYPE_CHECKING
 
 from ...runtime import listeners
@@ -57,4 +58,5 @@ def backend() -> EngineBackend:
             "engine": {"vllm_version": "version"},
             "dev_ports": {"nixl_first": "side_channel_first"},
         },
+        icon=resources.files(__name__).joinpath("icon.png").read_bytes(),
     )

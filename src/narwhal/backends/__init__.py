@@ -34,6 +34,8 @@ class EngineBackend:
     fabric: FabricLifecycle
     launcher: Callable[[], EngineLauncher] = field(repr=False)
     role_switch: RoleSwitcher | None = None
+    # A small PNG of the engine's logo for operator views.
+    icon: bytes = field(default=b"", repr=False)
     # Earlier field names this backend wrote, by section ("contract", "engine").
     renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -58,7 +59,7 @@ CONTROL_ANNOTATIONS = (
 _URL_CHARACTERS = re.compile(r"[A-Za-z0-9._~%:/\[\]-]+")
 # <<name>> takes the backend's panel text; <<name{selector}>> its query for that selector.
 _PLACEHOLDER = re.compile(r"<<(\w+)(?:\{([^<>]*)\})?>>")
-# Value mappings that show each registered backend's label.
+# Value mappings that show each registered backend's icon.
 BACKEND_BADGES = "<<backend_badges>>"
 
 
@@ -152,8 +153,12 @@ def _placeholders(value: object) -> set[str]:
     return set()
 
 
+def _icon(png: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
 def _backend_badges() -> dict[str, Any]:
-    options = {name: {"text": load_backend(name).label} for name in backend_names()}
+    options = {name: {"text": _icon(load_backend(name).icon)} for name in backend_names()}
     return {"type": "value", "options": options}
 
 
