@@ -16,6 +16,7 @@ from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
+from ..backends import load as load_backend
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
 from ..observability.metrics.render import render
@@ -148,6 +149,7 @@ def create_app(
                     timeout_s=cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
                     transport=lifecycle_transport,
+                    reader=load_backend(cfg.backend).identity,
                 )
             except (httpx.HTTPError, ValueError, KeyError) as exc:
                 generation_failures.append(

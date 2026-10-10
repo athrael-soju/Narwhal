@@ -49,7 +49,7 @@ async def read_generation(
     timeout_s: float,
     headers: dict[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
-    reader: EngineIdentityReader | None = None,
+    reader: EngineIdentityReader,
 ) -> GenerationEvidence:
     identity = await fetch_engine_identity(
         spec.url,

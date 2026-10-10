@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.engines.attestation import EngineIdentity
 from narwhal.profiling.generation import (
@@ -41,6 +42,8 @@ from tools.measurement.router_benchmark import report as bench_report
 from tools.measurement.router_benchmark import run as bench_run
 from tools.measurement.router_benchmark import sampling as bench_sampling
 from tools.measurement.simulated_engine import SIMULATED_VERSION, SimulatedEngine
+
+VLLM_IDENTITY = load_backend("vllm").identity
 
 BUSY = "narwhal_event_loop_busy_seconds_total"
 ALLOCATION = bench_cpus.Allocation(
@@ -738,7 +741,9 @@ class RouterContractTests(unittest.IsolatedAsyncioTestCase):
         cfg = FleetConfig.load(bench_fleet.write_fleet(out, lines, shape))
         store = ProfileStore(cfg.profiles_path)
         for spec in cfg.engines:
-            generation = await read_generation(spec, None, timeout_s=1, transport=mock)
+            generation = await read_generation(
+                spec, None, timeout_s=1, transport=mock, reader=VLLM_IDENTITY
+            )
             (profile,) = store.profiles_for_engine(spec.iid)
             self.assertIsNone(
                 generation_problem(spec.iid, profile.generation_digest, generation.digest)
