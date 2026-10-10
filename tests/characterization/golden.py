@@ -35,4 +35,8 @@ def assert_golden(
     if not path.exists():
         case.fail(f"{path.name} is missing; run with NARWHAL_UPDATE_GOLDEN=1 to record it")
     case.maxDiff = None
-    case.assertEqual(json.loads(text), json.loads(path.read_text()), path.name)
+    case.assertEqual(
+        json.loads(text),
+        json.loads(path.read_text()),
+        f"{path.name}; NARWHAL_UPDATE_GOLDEN=1 re-records it",
+    )
