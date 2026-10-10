@@ -566,7 +566,7 @@ class EngineClient:
                         yield relayed
                         return
                     if first:
-                        if sse_token_bearing(event, self.dialect):
+                        if sse_token_bearing(event, self.dialect, endpoint):
                             first = False
                         else:
                             metadata += 1

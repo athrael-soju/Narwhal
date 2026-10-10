@@ -13,6 +13,7 @@ from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
+from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
@@ -51,6 +52,25 @@ class RequestCapTests(unittest.TestCase):
     def test_the_requested_cap_or_no_cap_line_passes(self):
         attestation.check_request_cap(ARGS, "max_running_requests=64, context_len=32768\n")
         attestation.check_request_cap(ARGS, "no scheduler summary\n")
+
+
+class ChatTokenTests(unittest.TestCase):
+    def test_streamed_chat_counts_chunks_without_token_ids(self):
+        dialect = load("sglang").dialect
+        self.assertTrue(dialect.streams_token_ids("/v1/completions"))
+        self.assertFalse(dialect.streams_token_ids("/v1/chat/completions"))
+        self.assertTrue(load("vllm").dialect.streams_token_ids("/v1/chat/completions"))
+        chunks = [
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            {"choices": [{"delta": {"reasoning_content": "Think"}}]},
+            {"choices": [{"delta": {"content": "Red"}}]},
+        ]
+        events = [SseEvent("data: " + json.dumps(chunk), chunk) for chunk in chunks]
+        self.assertEqual([sse_token_count(event) for event in events], [0, 1, 1])
+        self.assertEqual(
+            [sse_token_bearing(event, dialect, "/v1/chat/completions") for event in events],
+            [False, True, True],
+        )
 
 
 class ConnectorTests(unittest.TestCase):
