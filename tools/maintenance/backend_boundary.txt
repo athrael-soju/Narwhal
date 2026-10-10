@@ -22,12 +22,3 @@ src/narwhal/diagnostics/check/engines.py
 src/narwhal/diagnostics/check/evidence.py
 src/narwhal/diagnostics/check/transfer.py
 src/narwhal/engines/attestation.py
-src/narwhal/engines/client.py
-src/narwhal/engines/connector.py
-src/narwhal/engines/dialect.py
-src/narwhal/profiling/probe/decode.py
-src/narwhal/profiling/probe/engine.py
-src/narwhal/profiling/probe/instance.py
-src/narwhal/profiling/probe/prefill.py
-src/narwhal/serving/completion.py
-src/narwhal/serving/handoff.py

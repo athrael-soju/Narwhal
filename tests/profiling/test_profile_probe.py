@@ -13,7 +13,6 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.model import SharedDeviceAllocation
-from narwhal.engines.dialect import VllmDialect
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS
 from narwhal.profiling.probe import cli as profile_cli
@@ -35,6 +34,7 @@ from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
 
 VLLM_METRICS = load_backend("vllm").metrics
+DIALECT = load_backend("vllm").dialect
 
 
 class MeasuredStream(httpx.AsyncByteStream):
@@ -69,7 +69,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 client,
                 [("p", "http://prefill", Role.PREFILL)],
                 "stub",
-                VllmDialect(),
+                DIALECT,
                 3.8,
                 ColocatedWorkload(100, 100, 32, 32, 8),
                 observation_timeout_s=75.0,
@@ -98,7 +98,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 client,
                 [("p", "http://prefill", Role.PREFILL), ("d", "http://decode", Role.DECODE)],
                 "stub",
-                VllmDialect(),
+                DIALECT,
                 3.8,
                 workload,
             )
@@ -137,7 +137,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 client,
                 [("d1", "http://good", Role.DECODE), ("d2", "http://stalled", Role.DECODE)],
                 "stub",
-                VllmDialect(),
+                DIALECT,
                 3.8,
                 ColocatedWorkload(100, 100, 32, 32, 8),
             )
@@ -175,7 +175,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 client,
                 [("d1", "http://good", Role.DECODE), ("d2", "http://failing", Role.DECODE)],
                 "stub",
-                VllmDialect(),
+                DIALECT,
                 3.8,
                 ColocatedWorkload(100, 100, 32, 32, 8),
             )
@@ -261,7 +261,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 lambda request: httpx.Response(200, json={"count": next(counts)})
             )
         ) as client:
-            text, count = await make_prompt(client, "http://e", "stub", 10)
+            text, count = await make_prompt(client, "http://e", "stub", 10, DIALECT)
         self.assertEqual(count, 9)
         self.assertEqual(len(text), 50)
 
@@ -285,6 +285,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         "http://e",
                         "stub",
                         target,
+                        DIALECT,
                         prefix=prefix,
                         max_input_tokens=target,
                     )
@@ -305,7 +306,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(tokenize)) as client:
             with self.assertRaisesRegex(RuntimeError, "prefix requires 20 tokens"):
                 await make_prompt(
-                    client, "http://e", "stub", 8, prefix="unique ", max_input_tokens=8
+                    client, "http://e", "stub", 8, DIALECT, prefix="unique ", max_input_tokens=8
                 )
         self.assertLessEqual(calls, 16)
 
@@ -320,7 +321,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request, response=response: response)
             ) as client:
                 with self.subTest(status=response.status_code), self.assertRaises(RuntimeError):
-                    await make_prompt(client, "http://e", "stub", 10)
+                    await make_prompt(client, "http://e", "stub", 10, DIALECT)
 
     async def test_prefill_requires_matching_usage_and_length_finish(self):
         good = {
@@ -346,13 +347,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     if accepted:
                         samples = await probe_prefill(
-                            client, "http://e", "stub", lens=(4,), repeats=2
+                            client, "http://e", "stub", DIALECT, lens=(4,), repeats=2
                         )
                         self.assertEqual([row[0] for row in samples], [4, 4])
                         self.assertTrue(all(row[1] >= 0 for row in samples))
                     else:
                         with self.assertRaisesRegex(RuntimeError, "exact token usage"):
-                            await probe_prefill(client, "http://e", "stub", lens=(4,))
+                            await probe_prefill(client, "http://e", "stub", DIALECT, lens=(4,))
 
     async def test_live_context_bounds_prefill_before_completion(self):
         sent = []
@@ -378,13 +379,14 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
             with patch.object(prefill_probe, "make_prompt", side_effect=prompt):
-                limit = await engine_context_limit(client, "http://e", "stub", VllmDialect())
+                limit = await engine_context_limit(client, "http://e", "stub", DIALECT)
                 sweep = bounded_sweep(Sweep(), limit)
                 with redirect_stdout(io.StringIO()):
                     samples = await probe_prefill(
                         client,
                         "http://e",
                         "stub",
+                        DIALECT,
                         sweep.prefill_lens,
                         repeats=1,
                         max_model_len=limit,
@@ -393,7 +395,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(max(sent), 16300)
                 with self.assertRaisesRegex(ValueError, "exceeds.*max_model_len"):
                     await probe_prefill(
-                        client, "http://e", "stub", lens=(16384,), repeats=1, max_model_len=limit
+                        client,
+                        "http://e",
+                        "stub",
+                        DIALECT,
+                        lens=(16384,),
+                        repeats=1,
+                        max_model_len=limit,
                     )
                 self.assertEqual(max(sent), 16300)
         self.assertEqual(max(bounded_sweep(Sweep(), 8192).prefill_lens), 4300)
@@ -403,7 +411,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"count": 1}))
         ) as client:
             with self.assertRaisesRegex(RuntimeError, "no valid max_model_len"):
-                await engine_context_limit(client, "http://e", "stub", VllmDialect())
+                await engine_context_limit(client, "http://e", "stub", DIALECT)
 
     def test_generated_sequence_limits_bound_decode_cohorts_before_measurement(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -447,7 +455,15 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(decode_probe, "time", SimpleNamespace(monotonic=lambda: stream.now)):
                 try:
                     await decode_probe._one_decode_stream(
-                        client, "http://e", "stub", "prompt", 10, state, samples, tokens=tokens
+                        client,
+                        "http://e",
+                        "stub",
+                        "prompt",
+                        10,
+                        state,
+                        samples,
+                        DIALECT,
+                        tokens=tokens,
                     )
                 finally:
                     self.assertEqual((state["resident"], state["requests"]), (0, 0))
@@ -503,7 +519,13 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertRaisesRegex(RuntimeError, "insufficient complete-cohort"),
             ):
                 await probe_decode(
-                    client, "http://e", "stub", concurrency=(1,), input_lens=(10,), tokens=2
+                    client,
+                    "http://e",
+                    "stub",
+                    DIALECT,
+                    concurrency=(1,),
+                    input_lens=(10,),
+                    tokens=2,
                 )
 
     def test_overlapping_tokens_cover_the_admission_lag(self):
@@ -517,7 +539,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_decode_sweep_retries_a_lagged_cohort_with_overlapping_tokens(self):
         calls: list[int] = []
 
-        async def lagged(client, url, model, prompt, input_len, state, observed, tokens, dialect):
+        async def lagged(client, url, model, prompt, input_len, state, observed, dialect, tokens):
             calls.append(tokens)
             state.setdefault("first_at", 0.0)
             if tokens < 128:
@@ -535,6 +557,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 "http://e",
                 "stub",
+                DIALECT,
                 concurrency=(4,),
                 input_lens=(100,),
                 tokens=64,
@@ -553,6 +576,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 "http://e",
                 "stub",
+                DIALECT,
                 concurrency=(4,),
                 input_lens=(100,),
                 tokens=64,
@@ -572,7 +596,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(decode_probe, "_one_decode_stream", side_effect=burst),
         ):
             samples = await probe_decode(
-                None, "http://e", "stub", concurrency=(1,), input_lens=(128,), tokens=4
+                None, "http://e", "stub", DIALECT, concurrency=(1,), input_lens=(128,), tokens=4
             )
         self.assertAlmostEqual(samples[0][2], 0.03)
 
@@ -584,7 +608,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         evidence = {}
         with patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]):
             row = await profile_instance(
-                None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+                None, "e", "http://e", "stub", DIALECT, metrics=VLLM_METRICS, evidence=evidence
             )
         self.assertEqual(evidence["prefix_cache_hit_tokens"], 0)
         self.assertEqual((row.decode_min_requests, row.decode_max_requests), (1, 16))
@@ -614,14 +638,26 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 if message:
                     with self.assertRaisesRegex(RuntimeError, message):
                         await profile_instance(
-                            None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+                            None,
+                            "e",
+                            "http://e",
+                            "stub",
+                            DIALECT,
+                            metrics=VLLM_METRICS,
+                            evidence=evidence,
                         )
                     self.assertEqual(evidence["prefix_cache_hit_tokens"], 64)
                     # Cached prefill fails before the decode sweep runs.
                     instance_probe.probe_decode.assert_not_awaited()
                 else:
                     await profile_instance(
-                        None, "e", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence
+                        None,
+                        "e",
+                        "http://e",
+                        "stub",
+                        DIALECT,
+                        metrics=VLLM_METRICS,
+                        evidence=evidence,
                     )
                     self.assertIsNone(evidence["prefix_cache_hit_tokens"])
 
@@ -654,12 +690,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 redirect_stdout(io.StringIO()),
             ):
-                await probe_prefill(client, "http://e", "stub", lens=(4,), repeats=3)
+                await probe_prefill(client, "http://e", "stub", DIALECT, lens=(4,), repeats=3)
                 state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": 2}
                 await asyncio.gather(
                     *(
                         decode_probe._one_decode_stream(
-                            client, "http://e", "stub", "prompt", 4, state, [], tokens=3
+                            client, "http://e", "stub", "prompt", 4, state, [], DIALECT, tokens=3
                         )
                         for _ in range(2)
                     )
@@ -668,7 +704,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     client,
                     [("p", "http://p", Role.PREFILL)],
                     "stub",
-                    VllmDialect(),
+                    DIALECT,
                     3.8,
                     workload,
                 )
@@ -709,7 +745,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(lambda request: httpx.Response(200))
             )
 
-            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+            async def measured(client, iid, url, model, dialect, sweep, *args, evidence, **kwargs):
                 self.assertEqual(sweep.decode_concurrency, (1, 4, 8))
                 evidence["prefill"] = [[10, 0.1]]
                 return profile(iid)
@@ -795,7 +831,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
             active = {"now": 0, "peak": 0}
 
-            async def measured(client, iid, url, model, sweep, *args, evidence, **kwargs):
+            async def measured(client, iid, url, model, dialect, sweep, *args, evidence, **kwargs):
                 active["now"] += 1
                 active["peak"] = max(active["peak"], active["now"])
                 await asyncio.sleep(0.02)

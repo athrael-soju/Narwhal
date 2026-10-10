@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
 
 
@@ -104,14 +104,13 @@ async def make_prompt(
     url: str,
     model: str,
     target: int,
-    dialect: EngineDialect | None = None,
+    dialect: EngineDialect,
     chars_per_token: float = 3.8,
     timeout_s: float = 30.0,
     prefix: str = "",
     max_input_tokens: int | None = None,
 ) -> tuple[str, int]:
     word = "benchmark "
-    dialect = dialect or VllmDialect()
     if max_input_tokens is not None and max_input_tokens < 1:
         raise ValueError("max_input_tokens must be positive")
     if dialect.tokenize_path is None:

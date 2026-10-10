@@ -1,5 +1,3 @@
-"""One original deadline, terminal outcome and reservation owner per request."""
-
 from __future__ import annotations
 
 import asyncio
@@ -22,8 +20,6 @@ QUEUE_STAGES = ("admission", "prefill", "decode")
 
 
 class RequestLifecycle:
-    """Retain ownership across admission, backoff and fresh KV attempts."""
-
     def __init__(
         self,
         router: NarwhalRouter,
@@ -74,7 +70,6 @@ class RequestLifecycle:
     def offered(
         cls, router: NarwhalRouter, headers: dict[str, str], *, arrived: float | None = None
     ) -> RequestLifecycle:
-        """Create the original owner at HTTP ingress or direct serving entry."""
         seen = router._clock() if arrived is None else arrived
         request = Request(str(uuid.uuid4()), input_len=0, arrived_at=seen)
         state = cls(
@@ -89,13 +84,11 @@ class RequestLifecycle:
         return state
 
     def resolve_demand(self, *, retain_unsized: bool = False) -> None:
-        """Settle the pending body exactly once, including early HTTP rejection."""
         if self.demand_pending:
             self.demand_pending = False
             self.router.controller.demand.resolve_unsized(at=self.arrived, retain=retain_unsized)
 
     async def wait(self, operation: Callable[[], Awaitable[T]]) -> T:
-        """Apply the remaining original budget without resetting it per leg."""
         remaining = self.deadline - self.router._clock()
         if remaining <= 0:
             raise RequestExpired(DEADLINE_MESSAGE)
@@ -109,18 +102,15 @@ class RequestLifecycle:
             raise
 
     def admit(self) -> None:
-        """Own one active admission seat."""
         self.admitted = True
         self.router.inflight += 1
         self.router._seat_since[self.rid] = self.router._clock()
 
     def reserve(self, instance: Instance) -> None:
-        """Own one router reservation until this attempt releases it."""
         self.router.monitor.dispatched(instance.iid, self.request)
         self.owned.add(instance.iid)
 
     def release(self) -> None:
-        """Release owned engine reservations and unassigned demand once."""
         # Each release can hand the seat to a waiter in the same pass.
         while self.owned:
             self.router.monitor.finished(self.owned.pop(), self.rid)
@@ -128,21 +118,17 @@ class RequestLifecycle:
 
     @property
     def queue_wait_s(self) -> float:
-        """Total seconds waited across every stage."""
         return sum(self.queue_waits.values())
 
     @property
     def queue_budget_s(self) -> float:
-        """Seconds of `serving.queue_timeout_s` left after the admission and prefill-seat waits."""
         spent = self.queue_waits.get("admission", 0.0) + self.queue_waits.get("prefill", 0.0)
         return self.router.cfg.serving.queue_timeout_s - spent
 
     def waited(self, stage: str, seconds: float) -> None:
-        """Add one wait at `stage`; the stage counts as reached even at zero seconds."""
         self.queue_waits[stage] = self.queue_waits.get(stage, 0.0) + seconds
 
     def begin_attempt(self) -> None:
-        """Count an actual prefill dispatch, keeping retries out of arrivals."""
         self.attempts += 1
         self.dispatched = True
         if self.retry_reserved:
@@ -156,19 +142,15 @@ class RequestLifecycle:
         self.prefill_iid = self.decode_iid = None
         self.request.output_len = 0
 
-    def engine_headers(self, headers: dict[str, str], phase: str) -> dict[str, str]:
-        """Give each engine leg a fresh ID while retaining client correlation locally."""
-        # vLLM's X-Request-Id overrides body.request_id and names NIXL ownership.
-        return {**headers, "x-request-id": f"{self.rid}-a{self.attempts}-{phase}"}
+    def leg_id(self, phase: str) -> str:
+        return f"{self.rid}-a{self.attempts}-{phase}"
 
     def record_upstream_time(self, phase: str, began: float) -> None:
-        """Count elapsed HTTP leg time including failed and cancelled attempts."""
         elapsed = max(0.0, self.router._clock() - began)
         self.upstream_seconds[phase] += elapsed
         self.router.upstream_seconds[phase] += elapsed
 
     async def retry(self, exc: BaseException) -> bool:
-        """Spend shared quota for a classified failure before visible output."""
         router = self.router
         policy = router.cfg.serving.retry_policy()
         retryable = transient(exc)
@@ -225,7 +207,6 @@ class RequestLifecycle:
         return True
 
     def release_retry_credit(self) -> None:
-        """Return the credit of a retry that ends before it dispatches."""
         if self.retry_reserved:
             self.retry_reserved = False
             self.router.retry_budget.release()
@@ -241,11 +222,6 @@ class RequestLifecycle:
         error_code: str | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Settle terminal counters, reservations and one journal row.
-
-        `reason` labels failed, rejected, refused and expired outcomes. `error_type` and
-        `error_code` repeat the client error body's `type` and `code`.
-        """
         if self.terminal is not None:
             return
         if terminal == "cancelled" and self.router._clock() >= self.deadline:

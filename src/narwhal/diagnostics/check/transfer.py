@@ -9,7 +9,6 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.client import EngineClient, EngineError, first_output_timeout
 from ...engines.connector import PrefillResult
-from ...engines.dialect import lookup as lookup_dialect
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
 from .engines import PROBE_PROMPT
@@ -61,7 +60,7 @@ async def gate_consume(
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     # A model may end the probe prompt at once.
     body = {
         "model": cfg.model,

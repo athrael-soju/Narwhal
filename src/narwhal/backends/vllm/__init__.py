@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...engines.connector import NixlConnector
-from ...engines.dialect import VllmDialect
 from ...runtime import listeners
 from ...runtime.fabric import FabricLifecycle
 from ...runtime.role_switch import RouterRoleSwitch
 from .. import EngineBackend
+from .connector import NixlConnector
+from .dialect import VllmDialect
 from .identity import VllmIdentity
 from .kv_events import VllmKvEvents
 from .metrics import VllmMetrics

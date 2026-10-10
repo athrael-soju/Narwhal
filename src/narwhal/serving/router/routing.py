@@ -14,8 +14,6 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
 from ...engines.client import EngineClient
-from ...engines.connector import lookup as lookup_connector
-from ...engines.dialect import lookup as lookup_dialect
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
@@ -166,6 +164,7 @@ class NarwhalRouter:
             )
         self.lifecycle_transport = transport
         self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
+        self.backend = load_backend(cfg.backend)
         self.engines = EngineClient(
             timeout_s=cfg.request_timeout_s,
             prefill_timeout_s=cfg.prefill_timeout_s,
@@ -177,13 +176,13 @@ class NarwhalRouter:
             health_timeout_s=cfg.health_timeout_s,
             transport=transport,
             dial=dial,
-            kv=lookup_connector(cfg.connector),
-            dialect=lookup_dialect(cfg.dialect),
+            kv=self.backend.connector(cfg.connector),
+            dialect=self.backend.dialect,
             model=cfg.model,
             engine_api_key=cfg.resolve_engine_key(),
         )
         self.verifier = SuspectVerifier(self)
-        self.peer_release = PeerRelease(self._clock)
+        self.peer_release = PeerRelease(self._clock, self.backend.fabric)
         # The journal writes this into its run metadata when it opens.
         journal.extra = {
             "token_accounting": self._token_accounting(),
@@ -205,10 +204,10 @@ class NarwhalRouter:
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
         self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
-        # Engine ID to the `--max-num-seqs` its verified attestation reports.
+        # Per-engine values from each verified attestation.
         self.sequence_limits: dict[str, int] = {}
-        # Engine ID to the NIXL producer lease in seconds from its verified attestation.
         self.kv_leases: dict[str, int] = {}
+        self.launches: dict[str, dict[str, Any]] = {}
         self.unsized_offered = 0
         self.expired = 0
         # Outcome counts by reason for each counted terminal state.
@@ -307,7 +306,9 @@ class NarwhalRouter:
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
 
     def attested(self, iid: str, payload: Any) -> None:
-        identity = load_backend(self.cfg.backend).identity
+        identity = self.backend.identity
+        launch = payload.get("launch") if isinstance(payload, dict) else None
+        self.launches[iid] = launch if isinstance(launch, dict) else {}
         for values, value in (
             (self.sequence_limits, identity.sequence_limit(payload)),
             (self.kv_leases, identity.kv_lease(payload)),
