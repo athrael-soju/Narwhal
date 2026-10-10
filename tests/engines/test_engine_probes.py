@@ -22,6 +22,7 @@ from narwhal.types import (
     LEG_STREAM,
     LEG_TIMEOUT,
 )
+from tests.serving.test_rendezvous import FakeRendezvous
 from tests.wire import engine_transports, vllm_engine
 
 
@@ -288,3 +289,56 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         headers = {"Authorization": "Bearer forwarded", "x-request-id": "r"}
         self.assertEqual(self.client._auth(headers), headers)
         self.assertEqual(self.client._auth({})["authorization"], "Bearer synthetic-engine-key")
+
+
+class RendezvousProbeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.calls = []
+        self.prefill_status = 200
+        self.prefill_seen = asyncio.Event()
+        self.decode_seen = asyncio.Event()
+        self.client = EngineClient(
+            kv=FakeRendezvous(),
+            dialect=vllm_engine()["dialect"],
+            model="stub",
+            **engine_transports(self.handle),
+        )
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def handle(self, request):
+        body = json.loads(request.content)
+        self.calls.append((str(request.url), body))
+        if body["leg"] == "prefill":
+            self.prefill_seen.set()
+            # Each leg waits for the other, so only concurrent legs complete.
+            await asyncio.wait_for(self.decode_seen.wait(), 5)
+            return httpx.Response(self.prefill_status, json={})
+        self.decode_seen.set()
+        if self.prefill_status != 200:
+            await asyncio.Event().wait()
+        await asyncio.wait_for(self.prefill_seen.wait(), 5)
+        return httpx.Response(
+            200, text='data: {"choices":[{"text":"x","token_ids":[1]}]}\n\ndata: [DONE]\n\n'
+        )
+
+    async def test_directed_probe_runs_both_legs_concurrently_with_one_rendezvous(self):
+        result = await self.client.probe_inference(
+            "http://decode", prefill_url="http://prefill", deadline_s=2
+        )
+        self.assertEqual((result.prefill, result.decode), (ProbeLeg(), ProbeLeg()))
+        legs = {body["leg"]: (url, body) for url, body in self.calls}
+        self.assertTrue(legs["prefill"][0].startswith("http://prefill/"))
+        self.assertTrue(legs["decode"][0].startswith("http://decode/"))
+        self.assertEqual(legs["prefill"][1]["room"], legs["decode"][1]["room"])
+        self.assertEqual(legs["prefill"][1]["prompt"], legs["decode"][1]["prompt"])
+        self.assertEqual(legs["prefill"][1]["max_tokens"], 1)
+
+    async def test_failed_prefill_leaves_decode_inconclusive_within_the_wait_bound(self):
+        self.prefill_status = 500
+        began = time.monotonic()
+        result = await self.client.probe_inference(
+            "http://decode", prefill_url="http://prefill", deadline_s=5
+        )
+        self.assertLess(time.monotonic() - began, 2)
+        self.assertEqual(result.prefill, ProbeLeg(failed=LEG_INFERENCE_STATUS))
+        self.assertEqual(result.decode, ProbeLeg(inconclusive=True))

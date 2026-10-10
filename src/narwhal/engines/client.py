@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+import math
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
 from typing import Any, TypeGuard
@@ -470,11 +471,20 @@ class EngineClient:
                 yield relayed
 
     async def probe_inference(
-        self, url: str, *, prefill_url: str | None = None, deadline_s: float | None = None
+        self,
+        url: str,
+        *,
+        prefill_url: str | None = None,
+        deadline_s: float | None = None,
+        producer: Mapping[str, Any] | None = None,
     ) -> InferenceProbe | None:
         if not self.model:
             return None
         prompt = f"{uuid4().hex} {_PROBE_PROMPT}"
+        if isinstance(self.kv, RendezvousConnector):
+            return await self._probe_rendezvous(
+                self.kv, url, prefill_url or url, producer or {}, prompt, deadline_s
+            )
         handoff: list[PrefillResult] = []
         try:
             async with asyncio.timeout(deadline_s):
@@ -495,10 +505,51 @@ class EngineClient:
             decode = ProbeLeg(failed=LEG_STREAM)
         return InferenceProbe(prefill=prefill, decode=decode)
 
+    async def _probe_rendezvous(
+        self,
+        kv: RendezvousConnector,
+        url: str,
+        prefill_url: str,
+        producer: Mapping[str, Any],
+        prompt: str,
+        deadline_s: float | None,
+    ) -> InferenceProbe:
+        rendezvous = kv.rendezvous(producer)
+
+        async def bounded(leg: Awaitable[ProbeLeg], limit: float | None, late: str) -> ProbeLeg:
+            try:
+                async with asyncio.timeout(limit):
+                    return await leg
+            except TimeoutError:
+                return ProbeLeg(failed=late)
+
+        decode_limit = min(deadline_s or math.inf, kv.decode_wait_s)
+        prefill, decode = await asyncio.gather(
+            bounded(
+                self._probe_prefill(prefill_url, prompt=prompt, rendezvous=rendezvous),
+                deadline_s,
+                LEG_TIMEOUT,
+            ),
+            bounded(
+                self._probe_decode(url, prompt=prompt, rendezvous=rendezvous),
+                decode_limit,
+                LEG_STREAM,
+            ),
+        )
+        if prefill.failed or prefill.inconclusive:
+            # Decode cannot finish without its prefill leg, so its result says nothing.
+            decode = ProbeLeg(inconclusive=True)
+        return InferenceProbe(prefill=prefill, decode=decode)
+
     async def _probe_prefill(
-        self, url: str, *, handoff: list[PrefillResult] | None = None, prompt: str = _PROBE_PROMPT
+        self,
+        url: str,
+        *,
+        handoff: list[PrefillResult] | None = None,
+        prompt: str = _PROBE_PROMPT,
+        rendezvous: dict[str, Any] | None = None,
     ) -> ProbeLeg:
-        body = self._prefill_leg({"model": self.model, "prompt": prompt})
+        body = self._prefill_leg({"model": self.model, "prompt": prompt}, rendezvous)
         try:
             r = await self._control.post(
                 f"{url}{_PROBE_ENDPOINT}",
@@ -512,6 +563,8 @@ class EngineClient:
             return ProbeLeg(failed=leg_failure_class(exc))
         if r.status_code != 200:
             return ProbeLeg(failed=_status_class(r.status_code))
+        if rendezvous is not None:
+            return ProbeLeg()
         try:
             result = self.descriptor_kv.prefill_result(
                 r.json(), url=url, endpoint=_PROBE_ENDPOINT, request_id=None
@@ -524,7 +577,12 @@ class EngineClient:
         return ProbeLeg()
 
     async def _probe_decode(
-        self, url: str, *, kv_params: PrefillResult | None = None, prompt: str = _PROBE_PROMPT
+        self,
+        url: str,
+        *,
+        kv_params: PrefillResult | None = None,
+        prompt: str = _PROBE_PROMPT,
+        rendezvous: dict[str, Any] | None = None,
     ) -> ProbeLeg:
         body = {
             "model": self.model,
@@ -534,7 +592,12 @@ class EngineClient:
             # A model may end this prompt at once.
             **self.dialect.decode_probe_extras(1),
         }
-        body = self.descriptor_kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)
+        if rendezvous is not None and isinstance(self.kv, RendezvousConnector):
+            body = self.kv.decode_body(body, rendezvous)
+        else:
+            body = self.descriptor_kv.decode_body(
+                body, kv_params, url=url, endpoint=_PROBE_ENDPOINT
+            )
         timeouts = self._control.timeout.as_dict()
         # probe_inference's per-leg deadline bounds the wait for the first token.
         timeouts["read"] = None

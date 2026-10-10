@@ -203,6 +203,7 @@ class SuspectVerifier:
                 url,
                 prefill_url=inst.url if inst is not None else None,
                 deadline_s=self.router.cfg.probe_deadline_s(),
+                producer=self.router.launches.get(producer or iid),
             )
             fields = {"producer": producer or None, "recorded_producer": recorded or None}
             if (
