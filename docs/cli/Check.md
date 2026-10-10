@@ -53,9 +53,11 @@ Options for first-token calibration:
 
 ## What a KV probe does
 
-Each probe sends the prompt `"benchmark " * 64`, tokenized for the model under test, and asks for four output tokens with vLLM's `min_tokens` and `ignore_eos`. Both legs of a probe share one unique `cache_salt`, and each `pace` repeat uses a fresh one.
+Each probe sends the prompt `"benchmark " * 64`, tokenized for the model under test, and asks for four output tokens with `min_tokens` and `ignore_eos`. Both legs of a probe share one unique `cache_salt`, and each `pace` repeat uses a fresh one.
 
 `consume` takes a KV handoff from an eligible peer. It tests every eligible ordered pair, or a ring with `--ring`.
+
+A transfer passes when the consumer's transfer histogram count and sum both grow. The histogram is `vllm:nixl_xfer_time_seconds` on vLLM, and the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. The pair record names it in `transfer_metric`, with `transfer_count_delta` and `transfer_seconds`.
 
 The first-token deadline is `engine.first_token_timeout_s`, and the probe deadline is `serving.request_timeout_s`. A probe succeeds when its stream ends before the probe deadline.
 

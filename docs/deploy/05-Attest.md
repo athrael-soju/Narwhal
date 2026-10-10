@@ -1,5 +1,5 @@
 ---
-description: Generate and serve attestation documents for the live vLLM engines of a Narwhal fleet.
+description: Generate and serve attestation documents for the live vLLM or SGLang engines of a Narwhal fleet.
 ---
 
 # Attest live engines
@@ -21,7 +21,7 @@ Each engine's `ENGINE_RUN` directory supplies:
 
 ## Capturing the attestation inputs
 
-Run these steps in each engine's role shell.
+Run these steps in each engine's role shell. For an SGLang engine, run only [Saving the startup log](#saving-the-startup-log), [Capturing the connector version](#capturing-the-connector-version) and [Capturing the model dimensions](#capturing-the-model-dimensions), then [generate the document](#generating-the-document).
 
 ### Saving the startup log
 
@@ -33,13 +33,15 @@ export ENGINE_STARTUP_LOG="$ENGINE_RUN/startup.log"
 
 The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
-### Capturing the NIXL connector version
+### Capturing the connector version
 
 ```bash
 .venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-connector --run "$ENGINE_RUN"
 ```
 
-`contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.
+For a vLLM engine, `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.
+
+For an SGLang engine, the capture writes `server-info.json` from the live engine's `/server_info`. It supplies `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package.
 
 ### Capturing the model dimensions
 
@@ -57,6 +59,8 @@ The capture requires the live container's plan and launcher hashes to match `lau
 | `kv_heads`           | `get_total_num_kv_heads()`                                                                                     |
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
 | `model_architecture` | Resolved architecture                                                                                          |
+
+For an SGLang engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`.
 
 ### Capturing the cache grouping
 

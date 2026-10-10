@@ -8,7 +8,7 @@ description: Prepare and run vLLM engines from engine launch records with narwha
 
 The `native` backend runs in the checked Python environment on Linux or WSL2. The `container` backend runs in Docker.
 
-The `native` backend uses two variables. `NARWHAL_MODEL_REVISION` holds the required model revision, a 40-character commit or a `sha256:` digest. `NARWHAL_MODEL_PATH` names a local GGUF file, and `prepare` records its SHA-256.
+The `native` backend uses two variables. `NARWHAL_MODEL_REVISION` holds the required model revision, a 40-character commit or a `sha256:` digest. `NARWHAL_MODEL_PATH` names a local GGUF file, whose SHA-256 `prepare` records, or a checkpoint directory. It defaults to `NARWHAL_MODEL_DIR`. SGLang engines take a checkpoint directory.
 
 GGUF models:
 
@@ -92,7 +92,7 @@ The limit is `shared_device.device_allowance` times total device memory. Each re
 - Aggregate increase
 - Allowance
 
-For each engine's identity, the `container` backend records the container ID, Linux PID, image ID, and serving arguments. The `native` backend records the Linux PID, boot ID, process start tick, vLLM version, `/metrics` process start, model revision, and arguments.
+For each engine's identity, the `container` backend records the container ID, Linux PID, image ID, and serving arguments. The `native` backend records the Linux PID, boot ID, process start tick, engine version, process start, model revision, and arguments.
 
 `container` on failure:
 

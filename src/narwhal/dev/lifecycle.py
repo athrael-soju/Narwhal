@@ -26,7 +26,7 @@ from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
-from .template import _check_free_ports, _port_layout, _sha256, current_ports
+from .template import _check_free_ports, _port_layout, _sha256, current_ports, model_files
 
 
 class LifecycleDocumentError(ValueError):
@@ -251,7 +251,10 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         measured["profiles"]["path"] = str(profile)
         fleet_path = run / f"profile-{prefill}p{count - prefill}d.fleet.json"
         write(fleet_path, measured)
-        args = ["--fleet", str(fleet_path), "--colocated"]
+        args = ["--fleet", str(fleet_path)]
+        # A backend that profiles engines in pairs takes no neighbour load.
+        if "neighbour_prefill_rps" in spec["profile"]:
+            args.append("--colocated")
         for key, value in spec["profile"].items():
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
             args.extend(["--" + key.replace("_", "-"), rendered])
@@ -325,8 +328,9 @@ def up(root: Path) -> dict:
                 raise ValueError("run dev down before starting another generation")
         spec = read(root / "template.json")
         launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
-        if _sha256(Path(config["model_path"])) != spec["model"]["sha256"]:
-            raise ValueError("GGUF model changed after dev init")
+        for path, expected in model_files(spec["model"], Path(config["model_path"])).items():
+            if _sha256(path) != expected:
+                raise ValueError(f"model file {path.name} changed after dev init")
         for name, expected in spec["model"].get("tokenizer_sha256", {}).items():
             if _sha256(Path(config["model_dir"]) / name) != expected:
                 raise ValueError(f"tokenizer file {name} changed after dev init")

@@ -106,6 +106,12 @@ def _check_packages(packages: dict[str, str]) -> None:
             raise ValueError(f"native runtime requires {name}=={expected}; found {found}")
 
 
+def model_files(model: dict, model_path: Path) -> dict[Path, str]:
+    if "filename" in model:
+        return {model_path: model["sha256"]}
+    return {model_path / name: expected for name, expected in model["files_sha256"].items()}
+
+
 def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
     ports = template["ports"]
     if not 2 <= count <= 8:
@@ -233,14 +239,8 @@ def materialize(
         return output
     hub = Path.home() / ".cache/huggingface/hub"
     model = spec["model"]
-    model_path = (
-        model_path
-        or hub
-        / ("models--" + model["repository"].replace("/", "--"))
-        / "snapshots"
-        / model["revision"]
-        / model["filename"]
-    )
+    snapshot = hub / ("models--" + model["repository"].replace("/", "--")) / "snapshots"
+    model_path = model_path or snapshot / model["revision"] / model.get("filename", "")
     model_dir = (
         model_dir
         or hub
@@ -252,11 +252,17 @@ def materialize(
     model_dir = model_dir.expanduser().resolve(strict=True)
     # Hugging Face snapshot files are often symlinks to blobs.
     model_path = model_path.expanduser().absolute()
-    if not model_path.is_file():
+    if "filename" not in model:
+        if not model_path.is_dir():
+            raise ValueError("model path must name a checkpoint directory")
+        for path, expected in model_files(model, model_path).items():
+            if _sha256(path) != expected:
+                raise ValueError(f"model file {path.name} differs from the pinned revision")
+    elif not model_path.is_file():
         raise ValueError("GGUF model path must name a file")
-    if model_path.name != spec["model"]["filename"]:
-        raise ValueError(f"template requires {spec['model']['filename']}")
-    if _sha256(model_path) != spec["model"]["sha256"]:
+    elif model_path.name != model["filename"]:
+        raise ValueError(f"template requires {model['filename']}")
+    elif _sha256(model_path) != model["sha256"]:
         raise ValueError("GGUF file SHA-256 differs from the pinned model revision")
     config_path = model_dir / "config.json"
     if not config_path.is_file():
@@ -333,6 +339,11 @@ def materialize(
         "recovery": {"state_path": str(output / "router-state.json")},
         "engine": {
             "first_token_timeout_s": 10.0,
+            **(
+                {"backend": runtime["backend"], "connector": runtime["connector"]}
+                if "backend" in runtime
+                else {}
+            ),
             **(
                 {"engine_api_key_env": "NARWHAL_ENGINE_API_KEY"}
                 if os.environ.get("NARWHAL_ENGINE_API_KEY")
