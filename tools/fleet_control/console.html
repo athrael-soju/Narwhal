@@ -346,12 +346,28 @@ body.framed .connect { margin: 0; padding: 4px; border: 0; max-width: none; }
 .connect input { flex: 1 1 200px; }
 .message { margin: 8px 0 0; font-size: 12px; }
 
+/* Panel help: a "?" that shows its text on hover or focus. */
+.help { position: relative; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font: 600 10.5px/1 var(--sans); cursor: help; }
+.help:hover, .help:focus-visible { color: var(--primary); border-color: var(--primary); outline: none; }
+.help::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: -8px; z-index: 30; width: max-content; max-width: min(340px, 80vw); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow); color: var(--text); font: 400 12px/1.45 var(--sans); white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.12s; }
+.help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+
+/* Buttons that share a row's width. */
+.fill-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+@media (max-width: 600px) { .fill-row { grid-auto-flow: row; } }
+
 /* Board. */
 .board { display: grid; gap: 16px; max-width: 1680px; margin: 0 auto; padding: 20px 24px 48px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .area-engines, .area-dashboard { grid-column: 1 / -1; }
-.area-load, .area-results { align-self: stretch; }
-/* Activity: fixed height, scrolling rows. */
-.area-activity { align-self: stretch; min-height: 400px; }
+.board-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; align-self: stretch; }
+/* Benchmark: the form above its results, as one panel. */
+.benchmark { gap: 0; border-radius: 10px; box-shadow: var(--panel-shadow); }
+.benchmark > .panel { box-shadow: none; }
+.benchmark > .area-load { border-bottom: 0; border-radius: 10px 10px 0 0; }
+.benchmark > .area-results { flex: 1 1 auto; border-top: 1px solid var(--line-soft); border-radius: 0 0 10px 10px; }
+body.framed .benchmark, body.framed .benchmark > .panel { border: 0; border-radius: 0; box-shadow: none; }
+/* Activity: fills the column, scrolling rows. */
+.area-activity { flex: 1 1 auto; min-height: 400px; }
 @media (max-width: 1200px) { .area-activity { height: 420px; } }
 .activity-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
 .activity-scroll thead th { position: sticky; top: 0; z-index: 1; }
@@ -501,7 +517,6 @@ th[aria-sort="descending"] .sort::after { content: "↓"; }
 @media (max-width: 560px) { .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .field.wide, .field.half { grid-column: span 2; } }
 .panel-form .hint { padding: 10px 12px; background: var(--inset); border-radius: 4px; line-height: 1.55; }
 /* The Benchmark form fills its panel. */
-#view-load .panel-form { flex: 1 1 auto; justify-content: space-between; }
 #view-load .fields { row-gap: 18px; }
 #view-load .field input, #view-load .field select { height: 36px; }
 body.framed #view-load { min-height: 100vh; }
@@ -511,7 +526,9 @@ body.framed #view-load { min-height: 100vh; }
 .results-head .lbl { font: 11.5px var(--mono); white-space: nowrap; }
 #results-body { display: flex; flex-direction: column; gap: 12px; }
 #results-body[hidden] { display: none; }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 14px; margin: 0; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 0; }
+@media (max-width: 600px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpis dt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kpis > div { display: flex; flex-direction: column; gap: 4px; padding-left: 12px; border-left: 1px solid var(--line); }
 .kpis dt { font: 500 10.5px/1.45 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .kpis dd { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; font: 500 22px/1.2 var(--mono); letter-spacing: -0.02em; color: var(--strong); }
@@ -531,8 +548,8 @@ table.latency th:last-child, table.latency td:last-child { padding-right: 10px; 
 table.latency td:last-child { color: var(--muted); }
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 20px; }
 .charts figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.charts figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 8px; }
-.charts figcaption span:first-child { font-size: 12px; font-weight: 500; color: var(--strong); }
+.charts figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-height: 18px; }
+.charts figcaption span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--strong); }
 .charts figcaption span:last-child { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
 svg.chart { display: block; width: 100%; height: 80px; }
 .chart .area { fill: var(--info); opacity: 0.12; }
@@ -640,7 +657,7 @@ dialog ul:empty { display: none; }
 <main id="board" class="board" hidden>
   <section id="view-engines" class="view panel area-engines" aria-labelledby="engines-title">
     <div class="panel-head">
-      <h2 id="engines-title">Engines <span id="engines-state" class="sub"></span></h2>
+      <h2 id="engines-title">Engines <span class="help" tabindex="0" role="img" aria-label="Engines in the baseline fleet, with role, state and resident requests. Act on an engine from its row." data-tip="Engines in the baseline fleet, with role, state and resident requests. Act on an engine from its row.">?</span> <span id="engines-state" class="sub"></span></h2>
       <div class="legend" aria-label="Role colours"><span class="role role-prefill">prefill</span><span class="role role-decode">decode</span><span class="role role-colocated">colocated</span></div>
     </div>
     <p id="engines-notice" class="notice" hidden></p>
@@ -677,9 +694,10 @@ dialog ul:empty { display: none; }
     <div id="last-action" class="inset last-action" hidden></div>
   </section>
 
+  <div class="board-col benchmark">
   <section id="view-load" class="view panel area-load" aria-labelledby="load-title">
     <div class="panel-head">
-      <h2 id="load-title">Benchmark <span id="job-title" class="sub"></span></h2>
+      <h2 id="load-title">Benchmark <span class="help" tabindex="0" role="img" aria-label="Runs an AIPerf job against the router. The job ends at its duration or request limit, or on Stop job." data-tip="Runs an AIPerf job against the router. The job ends at its duration or request limit, or on Stop job.">?</span> <span id="job-title" class="sub"></span></h2>
       <span class="head-end"><span id="job-state" class="lbl"></span><span id="job-time" class="sub"></span></span>
     </div>
     <p id="load-notice" class="notice" hidden></p>
@@ -697,23 +715,22 @@ dialog ul:empty { display: none; }
         <div class="field"><label for="job-warmup" class="k">Warm-up</label><input id="job-warmup" type="number" min="1" step="1" inputmode="numeric"></div>
       </div>
       <p id="workload-hint" class="hint"></p>
-      <div class="row">
+      <div class="fill-row">
         <button id="job-start" class="btn btn-primary" type="submit">Start job</button>
         <button id="job-stop" class="btn btn-danger" type="button">Stop job</button>
-        <span id="job-locked" class="lbl" hidden></span>
       </div>
+      <span id="job-locked" class="lbl" hidden></span>
       <p id="fb-job" class="feedback" hidden></p>
     </form>
   </section>
 
   <section id="view-results" class="view panel area-results" aria-labelledby="results-title">
     <div class="panel-head">
-      <h2 id="results-title">Benchmark results <span id="results-job" class="sub"></span></h2>
-      <span class="head-end"><a id="job-document" href="#" hidden>Job document</a><span id="job-document-later" class="lbl" hidden>Job document available when the job ends</span></span>
+      <h2 id="results-title">Results <span class="help" tabindex="0" role="img" aria-label="Figures of the current or last job, from AIPerf&#x27;s per-request records. Refreshed every 3 seconds. Warm-up requests are excluded." data-tip="Figures of the current or last job, from AIPerf&#x27;s per-request records. Refreshed every 3 seconds. Warm-up requests are excluded.">?</span> <span id="results-job" class="sub"></span></h2>
+      <span class="head-end"><a id="job-document" href="#" hidden>Download results</a><span id="job-document-later" class="lbl" hidden>Download available when the job ends</span></span>
     </div>
-    <p id="results-empty" class="lbl">Start a benchmark to see its results here as they arrive.</p>
     <p id="job-error" class="notice bad" hidden></p>
-    <div id="results-body" hidden>
+    <div id="results-body">
       <div class="results-head"><progress id="results-progress" max="1" value="0" aria-label="Job progress"></progress><span id="results-clock" class="lbl"></span></div>
       <dl id="results-kpis" class="kpis"></dl>
       <table class="latency">
@@ -726,10 +743,12 @@ dialog ul:empty { display: none; }
       </div>
     </div>
   </section>
+  </div>
 
+  <div class="board-col">
   <section id="view-config" class="view panel area-config" aria-labelledby="config-title">
     <div class="panel-head">
-      <h2 id="config-title">Configuration</h2>
+      <h2 id="config-title">Configuration <span class="help" tabindex="0" role="img" aria-label="Changes from the baseline in this session. Check overlay previews a JSON merge patch. Apply overlay applies it. Cold restart runs the cold_restart hook. Restore baseline undoes the session&#x27;s changes." data-tip="Changes from the baseline in this session. Check overlay previews a JSON merge patch. Apply overlay applies it. Cold restart runs the cold_restart hook. Restore baseline undoes the session&#x27;s changes.">?</span></h2>
       <span id="config-state" class="lbl"></span>
     </div>
     <div id="config-changes" class="inset"></div>
@@ -742,10 +761,9 @@ dialog ul:empty { display: none; }
     </div>
     <p id="overlay-status" class="overlay-status"></p>
     <div id="overlay-check" class="check" hidden></div>
-    <div class="row config-actions">
+    <div class="fill-row config-actions">
       <button id="overlay-check-button" class="btn" type="button">Check overlay</button>
       <button id="overlay-apply" class="btn btn-primary" type="button">Apply overlay</button>
-      <span class="spacer"></span>
       <button id="cold-restart" class="btn btn-danger" type="button">Cold restart</button>
       <button id="restore" class="btn btn-danger" type="button">Restore baseline</button>
     </div>
@@ -754,8 +772,8 @@ dialog ul:empty { display: none; }
 
   <section id="view-activity" class="view panel area-activity" aria-labelledby="activity-title">
     <div class="panel-head">
-      <h2 id="activity-title">Activity <span id="activity-state" class="sub"></span></h2>
-      <a id="run-record" href="#" class="lbl" hidden>Run record</a>
+      <h2 id="activity-title">Activity <span class="help" tabindex="0" role="img" aria-label="Actions recorded in this session, newest first. Download session log saves the session&#x27;s run record." data-tip="Actions recorded in this session, newest first. Download session log saves the session&#x27;s run record.">?</span> <span id="activity-state" class="sub"></span></h2>
+      <a id="run-record" href="#" class="lbl" hidden>Download session log</a>
     </div>
     <div class="scroll activity-scroll" tabindex="0" aria-label="Recorded actions">
       <table class="tbl">
@@ -764,6 +782,7 @@ dialog ul:empty { display: none; }
       </table>
     </div>
   </section>
+  </div>
 
   <aside id="dashboard" class="panel area-dashboard" aria-labelledby="dashboard-title">
     <div class="panel-head"><h2 id="dashboard-title">Dashboard</h2></div>
@@ -864,7 +883,7 @@ function showTheme() {
 }
 try {
   const saved = localStorage.getItem(THEME_KEY);
-  if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+  if (!document.documentElement.dataset.theme && (saved === "light" || saved === "dark")) document.documentElement.dataset.theme = saved;
 } catch (error) { /* The system theme applies. */ }
 $("theme").addEventListener("click", () => {
   const next = currentTheme() === "dark" ? "light" : "dark";
@@ -2042,45 +2061,47 @@ function renderResults() {
   const job = state.health && state.health.job;
   const live = job && state.live && state.live.started_at === job.started_at ? state.live : null;
   $("results-job").textContent = job ? job.id : "";
-  $("results-empty").hidden = Boolean(job);
-  $("results-body").hidden = !job;
   $("job-document").hidden = !job || job.state === "running";
   $("job-document-later").hidden = !job || job.state !== "running";
   $("job-error").hidden = !(job && job.error);
   $("job-error").textContent = job && job.error ? job.error : "";
-  if (!job) return;
   const progress = jobProgress(job);
   $("results-progress").hidden = !progress || progress.fraction === null;
   if (progress && progress.fraction !== null) $("results-progress").value = progress.fraction;
-  $("results-clock").textContent = job.state + (progress && progress.label ? " · " + progress.label : "");
-  if (!live) return;
-  const requests = live.requests;
-  const throughput = live.throughput;
+  $("results-clock").textContent = !job ? "Start a benchmark to see its results here as they arrive."
+    : job.state + (progress && progress.label ? " · " + progress.label : "");
+  // Without a job's records, the figures stay blank.
+  const show = (text) => (live ? text : "\u00a0");
+  const requests = live ? live.requests : {};
+  const throughput = live ? live.throughput : {};
   const kpis = [
-    kpi("Completed", amount(requests.completed, 0), job.params.requests ? "of " + amount(job.params.requests, 0) : ""),
-    kpi("Errors", amount(requests.errors, 0), "", requests.errors ? "tone-bad" : ""),
-    kpi("Requests/s", amount(throughput.requests_per_s)),
-    kpi("Output tok/s", amount(throughput.output_tokens_per_s, 0)),
+    kpi("Completed", show(amount(requests.completed, 0)), live && job.params.requests ? "of " + amount(job.params.requests, 0) : ""),
+    kpi("Errors", show(amount(requests.errors, 0)), "", requests.errors ? "tone-bad" : ""),
+    kpi("Requests/s", show(amount(throughput.requests_per_s))),
+    kpi("Output tok/s", show(amount(throughput.output_tokens_per_s, 0))),
   ];
-  if (live.goodput && requests.completed) {
+  if (live && live.goodput && requests.completed) {
     const share = 100 * live.goodput.good_requests / requests.completed;
     kpis.push(kpi("Within SLO", amount(share, 1) + "%", "", share >= 95 ? "tone-ok" : share >= 90 ? "tone-warn" : "tone-bad"));
+  } else {
+    kpis.push(kpi("Within SLO", show("-")));
   }
   $("results-kpis").replaceChildren(...kpis);
   const rows = LATENCY_ROWS.map(([name, label]) => {
-    const stats = live.latency[name] || {};
-    const target = live.slo[name];
+    const stats = (live && live.latency[name]) || {};
+    const target = live && live.slo[name];
     return el("tr", {},
       el("td", {}, label),
-      el("td", {}, milliseconds(stats.p50)),
-      el("td", { class: targetTone(stats.p95, target) }, milliseconds(stats.p95)),
-      el("td", {}, milliseconds(stats.p99)),
-      el("td", {}, target ? milliseconds(target) : "-"));
+      el("td", {}, show(milliseconds(stats.p50))),
+      el("td", { class: targetTone(stats.p95, target) }, show(milliseconds(stats.p95))),
+      el("td", {}, show(milliseconds(stats.p99))),
+      el("td", {}, show(target ? milliseconds(target) : "-")));
   });
   $("results-latency").replaceChildren(...rows);
-  const points = live.series.points;
+  const points = live ? live.series.points : [];
   drawChart("chart-rate", points.map((point) => [point.t, point.requests_per_s]), null, (value) => amount(value, 1) + "/s");
-  drawChart("chart-ttft", points.map((point) => [point.t, point.ttft_p95]), live.slo.ttft, milliseconds);
+  drawChart("chart-ttft", points.map((point) => [point.t, point.ttft_p95]), live ? live.slo.ttft : null, milliseconds);
+  if (!live) $("chart-rate-meta").textContent = $("chart-ttft-meta").textContent = "";
 }
 
 // Draw one series and its target line.
@@ -2122,7 +2143,7 @@ function drawChart(id, points, target, format) {
   }
   svg.replaceChildren(...nodes);
   $(id + "-meta").textContent = (values.length ? "peak " + format(peak) : "waiting for requests") + (target ? " · target " + format(target) : "");
-  $(id + "-axis").replaceChildren(el("span", {}, "0:00"), el("span", {}, end ? duration(end * 1000) : ""));
+  $(id + "-axis").replaceChildren(el("span", {}, "0:00"), el("span", {}, end ? duration(end * 1000) : "\u00a0"));
 }
 
 function renderJob() {
@@ -2131,11 +2152,11 @@ function renderJob() {
   const running = Boolean(job && job.state === "running");
   const gate = sessionGate();
   setControl($("job-start"), state.pending.has("job") ? "The job request is running." : gate || (running ? job.id + " is running." : ""));
-  setControl($("job-stop"), state.pending.has("job") ? "The job request is running." : !health.session ? "Start a session first." : running ? "" : "No load job is running.");
+  setControl($("job-stop"), state.pending.has("job") ? "The job request is running." : !health.session ? "Start a session first." : running ? "" : "No benchmark is running.");
   for (const id of JOB_INPUTS) $(id).disabled = running;
   $("job-title").textContent = job ? job.id : "";
   const progress = jobProgress(job);
-  $("job-state").textContent = job ? job.state : "No load job";
+  $("job-state").textContent = job ? job.state : "No benchmark";
   $("job-state").className = running ? "tone-ok strong-state" : job && job.state === "failed" ? "tone-bad strong-state" : "lbl";
   $("job-time").textContent = progress && progress.label ? progress.label : "";
   $("job-locked").hidden = !running;

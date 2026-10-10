@@ -29,7 +29,9 @@ If the control service or Grafana listens on a router-host address other than `1
 
 **Connect** keeps the token in the tab's session storage. Closing the tab or selecting **Forget token** clears it. If the service rejects the token, the page asks for it again.
 
-The console shows times in UTC and follows the browser's light or dark preference. To override the theme, add `theme=light` or `theme=dark` to the URL.
+Times are in UTC. To switch between light and dark mode, select the theme button in the header. To open the console in one mode, add `theme=light` or `theme=dark` to the URL.
+
+The **?** beside each panel title describes the panel.
 
 ## Connecting automatically
 

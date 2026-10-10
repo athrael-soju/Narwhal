@@ -8,8 +8,8 @@ The service runs one AIPerf job at a time against `router.url`. To change the ra
 
 <div class="narwhal-panel-row" markdown>
 
-![Benchmark view with a running job.](../../assets/fleet-control/load-job.png#only-light)
-![Benchmark view with a running job.](../../assets/fleet-control/load-job-dark.png#only-dark)
+![Benchmark panel with a running job.](../../assets/fleet-control/load-job.png#only-light)
+![Benchmark panel with a running job.](../../assets/fleet-control/load-job-dark.png#only-dark)
 
 </div>
 
@@ -19,7 +19,7 @@ The hint under the inputs describes the selected workload and the inputs it acce
 
 ## Start a job
 
-In the **Benchmark** view, select a workload and set its inputs:
+In the **Benchmark** panel, select a workload and set its inputs:
 
 | Input            | Field             | Meaning                                                                                                  | Range        | Default  |
 | ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
@@ -51,11 +51,11 @@ A `timestamped_trace` workload sends each request at its recorded time. With bot
 
 ## While the job runs
 
-The view locks its inputs, and the session strip shows the job's progress. **Stop job** stops AIPerf.
+The panel locks its inputs, and the session strip shows the job's progress. **Stop job** stops AIPerf.
 
 ## Benchmark results
 
-**Benchmark results** updates every few seconds while the job runs and keeps the final figures when it ends. It reads AIPerf's per-request records and leaves out warm-up requests. It shows:
+**Results** shows the current or last job's figures from AIPerf's per-request records, refreshed every 3 seconds. Warm-up requests are excluded. It shows:
 
 - the job's progress against its duration
 - completed requests, errors, requests per second and output tokens per second
@@ -72,6 +72,6 @@ A p95 value turns yellow at 80% of its target and red at 100%.
 
 </div>
 
-**Job document** downloads the full job document as `<job>.json`. [Load jobs](10-API-Reference.md#load-jobs) in the API reference lists its fields.
+**Download results** saves the job document as `<job>.json`. [Load jobs](10-API-Reference.md#load-jobs) in the API reference lists its fields.
 
 A job fails when its trace file is unreadable, AIPerf fails to start or exits non-zero, or the AIPerf summary export is missing or unreadable.
