@@ -18,7 +18,7 @@ When the fleet configuration sets `engine_contract`, a live sweep binds each fit
 
 A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
 
-On an SGLang fleet, a live sweep measures engines one after another, each with the next engine in the fleet as its peer. For each leg it switches the engine and its peer to prefill and decode. It requires `engine.connector` `mooncake` and at least two engines, and rejects `--colocated`. The engine evidence records the peer in `peer`.
+On an SGLang fleet, a live sweep pairs the selected engines in fleet order, and each engine borrows the other engine of its pair as its peer. With an odd count, the last three engines form one group, and each borrows the next engine in the group. A single selected engine borrows the next engine in the fleet. For each leg the sweep switches the engine and its peer to prefill and decode. Pairs measure at the same time, each in its own process. With an even count, they switch legs together. When any selected engine sets `shared_device`, the sweep measures engines one after another. It requires `engine.connector` `mooncake` and at least two engines, and rejects `--colocated`. The engine evidence records the peer in `peer`.
 
 Every mode rejects symlink destinations.
 
@@ -82,7 +82,7 @@ All modes validate these options:
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input-length and concurrency point. | At least 1 |
 
-A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
+Before its decode sweep, each engine serves one unmeasured decode stream. A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
 
 ## Shared-GPU neighbour traffic
 
