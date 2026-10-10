@@ -657,7 +657,7 @@ dialog ul:empty { display: none; }
 <main id="board" class="board" hidden>
   <section id="view-engines" class="view panel area-engines" aria-labelledby="engines-title">
     <div class="panel-head">
-      <h2 id="engines-title">Engines <span class="help" tabindex="0" role="img" aria-label="Engines in the baseline fleet, with role, state and resident requests. Act on an engine from its row." data-tip="Engines in the baseline fleet, with role, state and resident requests. Act on an engine from its row.">?</span> <span id="engines-state" class="sub"></span></h2>
+      <h2 id="engines-title">Engines <span class="help" tabindex="0" role="img" aria-label="Every engine in the fleet and what it is doing right now. Use the buttons on a row to drain, pause, stop or bring an engine back into service." data-tip="Every engine in the fleet and what it is doing right now. Use the buttons on a row to drain, pause, stop or bring an engine back into service.">?</span> <span id="engines-state" class="sub"></span></h2>
       <div class="legend" aria-label="Role colours"><span class="role role-prefill">prefill</span><span class="role role-decode">decode</span><span class="role role-colocated">colocated</span></div>
     </div>
     <p id="engines-notice" class="notice" hidden></p>
@@ -697,7 +697,7 @@ dialog ul:empty { display: none; }
   <div class="board-col benchmark">
   <section id="view-load" class="view panel area-load" aria-labelledby="load-title">
     <div class="panel-head">
-      <h2 id="load-title">Benchmark <span class="help" tabindex="0" role="img" aria-label="Runs an AIPerf job against the router. The job ends at its duration or request limit, or on Stop job." data-tip="Runs an AIPerf job against the router. The job ends at its duration or request limit, or on Stop job.">?</span> <span id="job-title" class="sub"></span></h2>
+      <h2 id="load-title">Benchmark <span class="help" tabindex="0" role="img" aria-label="Sends test traffic through the router with AIPerf so you can see how the fleet performs. Pick a workload, set how hard to push, and start a job." data-tip="Sends test traffic through the router with AIPerf so you can see how the fleet performs. Pick a workload, set how hard to push, and start a job.">?</span> <span id="job-title" class="sub"></span></h2>
       <span class="head-end"><span id="job-state" class="lbl"></span><span id="job-time" class="sub"></span></span>
     </div>
     <p id="load-notice" class="notice" hidden></p>
@@ -726,7 +726,7 @@ dialog ul:empty { display: none; }
 
   <section id="view-results" class="view panel area-results" aria-labelledby="results-title">
     <div class="panel-head">
-      <h2 id="results-title">Results <span class="help" tabindex="0" role="img" aria-label="Figures of the current or last job, from AIPerf&#x27;s per-request records. Refreshed every 3 seconds. Warm-up requests are excluded." data-tip="Figures of the current or last job, from AIPerf&#x27;s per-request records. Refreshed every 3 seconds. Warm-up requests are excluded.">?</span> <span id="results-job" class="sub"></span></h2>
+      <h2 id="results-title">Results <span class="help" tabindex="0" role="img" aria-label="Live throughput and latency for the benchmark, updated every 3 seconds as requests complete. Warm-up requests are not counted." data-tip="Live throughput and latency for the benchmark, updated every 3 seconds as requests complete. Warm-up requests are not counted.">?</span> <span id="results-job" class="sub"></span></h2>
       <span class="head-end"><a id="job-document" href="#" hidden>Download results</a><span id="job-document-later" class="lbl" hidden>Download available when the job ends</span></span>
     </div>
     <p id="job-error" class="notice bad" hidden></p>
@@ -748,7 +748,7 @@ dialog ul:empty { display: none; }
   <div class="board-col">
   <section id="view-config" class="view panel area-config" aria-labelledby="config-title">
     <div class="panel-head">
-      <h2 id="config-title">Configuration <span class="help" tabindex="0" role="img" aria-label="Changes from the baseline in this session. Check overlay previews a JSON merge patch. Apply overlay applies it. Cold restart runs the cold_restart hook. Restore baseline undoes the session&#x27;s changes." data-tip="Changes from the baseline in this session. Check overlay previews a JSON merge patch. Apply overlay applies it. Cold restart runs the cold_restart hook. Restore baseline undoes the session&#x27;s changes.">?</span></h2>
+      <h2 id="config-title">Configuration <span class="help" tabindex="0" role="img" aria-label="Try configuration changes on the live fleet. Check an overlay to see what it would change before you apply it, and use Restore baseline to undo everything this session changed." data-tip="Try configuration changes on the live fleet. Check an overlay to see what it would change before you apply it, and use Restore baseline to undo everything this session changed.">?</span></h2>
       <span id="config-state" class="lbl"></span>
     </div>
     <div id="config-changes" class="inset"></div>
@@ -772,7 +772,7 @@ dialog ul:empty { display: none; }
 
   <section id="view-activity" class="view panel area-activity" aria-labelledby="activity-title">
     <div class="panel-head">
-      <h2 id="activity-title">Activity <span class="help" tabindex="0" role="img" aria-label="Actions recorded in this session, newest first. Download session log saves the session&#x27;s run record." data-tip="Actions recorded in this session, newest first. Download session log saves the session&#x27;s run record.">?</span> <span id="activity-state" class="sub"></span></h2>
+      <h2 id="activity-title">Activity <span class="help" tabindex="0" role="img" aria-label="A log of everything done in this session, newest first. Download the session log to keep the full record." data-tip="A log of everything done in this session, newest first. Download the session log to keep the full record.">?</span> <span id="activity-state" class="sub"></span></h2>
       <a id="run-record" href="#" class="lbl" hidden>Download session log</a>
     </div>
     <div class="scroll activity-scroll" tabindex="0" aria-label="Recorded actions">

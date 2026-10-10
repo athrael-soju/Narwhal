@@ -283,6 +283,13 @@
   width: 100%;
 }
 
+/* Console screenshots show centred at their own size. */
+.md-typeset .narwhal-panel-row img[src*="/fleet-control/"] {
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
 [data-md-color-scheme="default"] .md-typeset .narwhal-panel-row img[src$="#only-dark"],
 [data-md-color-scheme="slate"] .md-typeset .narwhal-panel-row img[src$="#only-light"] {
   display: none;
