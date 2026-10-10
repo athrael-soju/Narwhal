@@ -26,6 +26,7 @@ from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
 from ...runtime.role_switch import engine_side
 from ...runtime.standby import ready as router_ready
+from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
 from ...scheduling.health import DriftTracker
 from ...scheduling.monitor import InstanceMonitor
@@ -189,6 +190,7 @@ class NarwhalRouter:
         )
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
+        self.transfer_refresh = TransferRefresh()
         switcher = self.backend.role_switcher(cfg.connector)
         # A router-side switch lets any engine serve either leg; otherwise each serves its role.
         self.role_switch = engine_side(switcher)
@@ -199,6 +201,7 @@ class NarwhalRouter:
         elif self.role_switch is not None:
             self.scheduler.switch_requires_idle = True
             self.scheduler.on_flip = self._begin_switch
+            self.scheduler.stale_handoff = self.stale_handoff
         # The journal writes this into its run metadata when it opens.
         journal.extra = {
             "token_accounting": self._token_accounting(),
@@ -334,7 +337,15 @@ class NarwhalRouter:
             self.scheduler.eject(iid, "role_switch")
 
     async def switch_role(self, iid: str, role: Role) -> str | None:
-        if self.role_switch is None:
+        return await self._engine_side(iid, role, refresh=False)
+
+    async def refresh_transfer_state(self, iid: str) -> str | None:
+        """Clear the transfer state an engine holds from earlier handoffs, keeping its role."""
+        return await self._engine_side(iid, self.monitor.instances[iid].role, refresh=True)
+
+    async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:
+        switcher = self.role_switch
+        if switcher is None:
             return None
         self.scheduler.availability.switching.add(iid)
         try:
@@ -343,15 +354,25 @@ class NarwhalRouter:
                 headers=self.cfg.engine_headers(),
                 transport=self.lifecycle_transport,
             ) as client:
-                await self.role_switch.switch(
-                    client, self.monitor.instances[iid].url, role, self.launches.get(iid)
-                )
+                change = switcher.refresh if refresh else switcher.switch
+                await change(client, self.monitor.instances[iid].url, role, self.launches.get(iid))
         except (httpx.HTTPError, ValueError) as exc:
             return f"{type(exc).__name__}: {exc}"
         finally:
             self.scheduler.availability.switching.discard(iid)
             self.scheduler.refresh_floor_state()
         return None
+
+    def stale_handoff(self, producer: str, consumer: str) -> bool:
+        switcher, instances = self.role_switch, self.monitor.instances
+        return switcher is not None and switcher.stale_handoff(
+            instances[producer].url, instances[consumer].url
+        )
+
+    def note_handoff(self, producer: str, consumer: str) -> None:
+        if self.role_switch is not None:
+            instances = self.monitor.instances
+            self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
 
     def attested(self, iid: str, payload: Any) -> None:
         identity = self.backend.identity

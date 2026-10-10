@@ -15,6 +15,7 @@ Each engine monitoring pass runs these stages:
 | `drains` | Drain settlement |
 | `rollover` | Interval rollover |
 | `readmission` | Readmission and [peer release](#peer-memory-release) rounds |
+| `transfer_refresh` | [Transfer state refresh](#transfer-state-refresh) of SGLang decode engines |
 | `liveness` | Liveness probes |
 | `residency` | Prefix residency refresh from attestation sidecars |
 | `handoff` | State handoff persistence |
@@ -109,6 +110,16 @@ While memory is short, the engine checks every 5 seconds and logs `waiting for K
 `narwhal-check` warns about each host-sharing producer with a host peer in two cases. A host peer whose `launch.peer_release` attestation is `false`, missing, or unreadable keeps the stopped producer's memory mapped. A host peer with zero other producers for its release probe receives zero release probes.
 
 A [wave restart](../operate/03-Restart-Engines.md#restart-an-engine-wave) recovers a crashed engine in both cases.
+
+### Transfer state refresh
+
+An SGLang decode engine keeps each prefill engine's transfer endpoint until the decode engine switches roles. A prefill engine listens on a new endpoint each time it enters prefill, so a decode engine that took handoffs from an engine before that engine's latest switch into prefill holds a stale endpoint, and handoffs between them time out after 30 seconds.
+
+The router records each placed handoff and each role switch it applies. It counts a decode engine as stale for a producer when the decode engine took a handoff from an earlier prefill period of that producer, and for every producer when the router has not switched the decode engine since the router started.
+
+- Placement takes a decode leg on a stale decode engine only when every other decode engine is stale for that producer, and places prefill on a producer that a decode engine can take.
+- At startup, after it switches engines to their roles, the router refreshes each stale decode engine by switching it to prefill and back.
+- Each monitoring pass refreshes one idle stale decode engine. When every live decode engine is stale for a producer, the pass holds the decode engine with the fewest decode requests out of new placements and refreshes it when its requests finish.
 
 ### Last-engine protection
 

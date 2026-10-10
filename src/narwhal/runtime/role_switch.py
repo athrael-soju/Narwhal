@@ -33,6 +33,24 @@ class RoleSwitcher(ABC):
         await self.switch(client, producer[0], Role.PREFILL, producer[1])
         await self.switch(client, consumer[0], Role.DECODE, consumer[1])
 
+    def stale_handoff(self, producer: str, consumer: str) -> bool:
+        """Whether `consumer` must refresh before it takes a handoff from `producer`."""
+        return False
+
+    def record_handoff(self, producer: str, consumer: str) -> None:
+        """Note a handoff placed from `producer` to `consumer`."""
+        return None
+
+    async def refresh(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Clear the transfer state `base` holds from earlier handoffs; it keeps `role`."""
+        return None
+
 
 class RouterRoleSwitch(RoleSwitcher):
     requires_idle = False

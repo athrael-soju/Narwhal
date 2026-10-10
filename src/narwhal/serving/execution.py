@@ -309,6 +309,7 @@ async def _prepare_rendezvous(
     decode = await _place(state, prefill=False, claim=state.reserve)
     state.begin_attempt()
     state.prefill_iid, state.decode_iid = prefill.iid, decode.iid
+    router.note_handoff(prefill.iid, decode.iid)
     rendezvous = kv.rendezvous(router.launches.get(prefill.iid, {}))
     request_id = state.leg_id("prefill")
 
