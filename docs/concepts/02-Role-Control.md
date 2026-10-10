@@ -10,7 +10,7 @@ Narwhal splits its engines between two roles. Prefill engines process incoming p
 
 During normal operation, the role controller runs at most one evaluation every `controller.reactive.step_s`. Each evaluation compares the current split of engines between prefill and decode with every split that differs from it by one engine. Each split gets a score based on three metrics: time to first token (TTFT), time per output token (TPOT), and how long requests wait for a decode slot. For each metric, the projected value is divided by its service-level objective (SLO) target, and the split's score is the worst of these ratios.
 
-The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) covers requests waiting for a decode slot and requests still in prefill. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
+The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) covers requests waiting for a decode slot and requests still in prefill. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
 
 Prompts longer than any in the test range are still included in the demand estimate. For these, the model extends the [prompt-processing cost curve](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile) beyond the tested range to estimate their cost.
 
@@ -26,7 +26,7 @@ The trigger clears once every queued request is projected to finish within `slo.
 
 Consolidation takes an engine away from a role that has spare capacity. The role controller can consolidate when the projected load of the role giving up the engine, called the source load, is at or below `controller.thresholds.shrink`. Expansion adds prefill capacity. When prefill load stays at or above `controller.thresholds.expand`, the role controller can move decode engines to prefill. Both kinds of move must pass the profile, safety, and confirmation checks.
 
-Before the role controller moves a decode engine to prefill, two things must be true: the [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#76-evidence-gating-for-decode-to-prefill-consolidation), the period used to collect enough arrivals to judge demand, must be closed, and decode demand must be stable. Two kinds of move are allowed while the window is still open: moving a prefill engine to decode when the source load is at or below `controller.thresholds.shrink`, and floor repair (restoring a role's minimum engine count) in either direction.
+Before the role controller moves a decode engine to prefill, two things must be true: the [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation), the period used to collect enough arrivals to judge demand, must be closed, and decode demand must be stable. Two kinds of move are allowed while the window is still open: moving a prefill engine to decode when the source load is at or below `controller.thresholds.shrink`, and floor repair (restoring a role's minimum engine count) in either direction.
 
 The window closes when `controller.reactive.evidence_span_s` has passed and at least `controller.reactive.evidence_min_arrivals` requests have arrived, or when `controller.reactive.evidence_max_span_s` has passed if traffic is light. The window starts over after a first-token timeout, after a move to decode takes effect, or after a decode floor repair.
 
@@ -64,7 +64,7 @@ While the shift lasts, a departure can keep moving engines in its direction base
 
 All other moves are based on window demand.
 
-Once a departure has moved an engine, the role controller blocks moves in the opposite direction until [the departure closes](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions), which is at most `controller.reactive.window_s` after it started.
+Once a departure has moved an engine, the role controller blocks moves in the opposite direction until [the departure closes](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions), which is at most `controller.reactive.window_s` after it started.
 
 ### Steady demand
 
@@ -94,7 +94,7 @@ A projected-TTFT recovery evaluation applies all the guards above. It also check
 
 ### Advisory mode
 
-When `controller.advisory` is `true`, as in an [advisory rollout](../configuration/02-Serving-and-Role-Control.md#74-advisory-rollout), the role controller doesn't change the live split. It only records what it would have done: the proposed split, what triggered the evaluation, the reason, and the advisory result.
+When `controller.advisory` is `true`, as in an [advisory rollout](../configuration/02-Serving-and-Role-Control.md#advisory-rollout), the role controller doesn't change the live split. It only records what it would have done: the proposed split, what triggered the evaluation, the reason, and the advisory result.
 
 ## Floors, fallback, and degraded capacity
 

@@ -4,7 +4,7 @@ description: Define the production boundary and start a Narwhal primary and stan
 
 # Production boundary and router pair
 
-## 1. Production boundary
+## Production boundary
 
 A production deployment divides the work between Narwhal and the site's components:
 
@@ -18,7 +18,7 @@ A production deployment divides the work between Narwhal and the site's componen
 | Shared storage | One lease domain shared by both router hosts |
 | Monitoring | Metric scraping, journal retention, and paging per site policy |
 
-## 2. Keeping one deployment set
+## Keeping one deployment set
 
 Install on both router hosts, with the same release identifier:
 
@@ -26,7 +26,7 @@ Install on both router hosts, with the same release identifier:
 - the fleet configuration
 - the profile store
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
-- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#6-freezing-the-deployment-under-test)
+- the [deployment evidence set](../measure/02-Targets-and-Freeze.md#freezing-the-deployment-under-test)
 
 The first-token calibration artifact binds to each engine's [process generation](../Core-Concepts.md#terms). When an engine relaunch changes its process generation:
 
@@ -40,9 +40,9 @@ Inspect state handoff contracts before a router change:
 narwhal-check --print-contract-versions
 ```
 
-When the handoff contract versions match on both routers, follow the [rolling upgrade](04-Upgrade-and-Validate.md#101-rolling-upgrade-with-compatible-handoff-versions). When they differ, follow [Upgrading across a handoff-version change](04-Upgrade-and-Validate.md#102-upgrading-across-a-handoff-version-change).
+When the handoff contract versions match on both routers, follow the [rolling upgrade](04-Upgrade-and-Validate.md#rolling-upgrade-with-compatible-handoff-versions). When they differ, follow [Upgrading across a handoff-version change](04-Upgrade-and-Validate.md#upgrading-across-a-handoff-version-change).
 
-## 3. Configuring the client path
+## Configuring the client path
 
 Public ingress carries the completion routes clients use. The private network carries `/narwhal/*`, `/metrics`, `/health`, `/ready`, the engine APIs, and the attestation endpoints.
 
@@ -63,7 +63,7 @@ Each engine leg receives:
 
 Configure the load balancer from the shipped [HAProxy configuration](https://github.com/athrael-soju/Narwhal/blob/main/deploy/ha/haproxy.cfg).
 
-## 4. Starting a router pair
+## Starting a router pair
 
 Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set.
 

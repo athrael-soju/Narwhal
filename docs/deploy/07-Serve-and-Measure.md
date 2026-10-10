@@ -2,7 +2,7 @@
 description: Start the Narwhal router and validate fleet capacity through the private path.
 ---
 
-# Gate G: Starting the service and validating capacity through the private path
+# Serve and measure
 
 ## Starting and locally verifying the router
 
@@ -102,15 +102,15 @@ If a service listens on an address other than the router's `127.0.0.1`, pass one
 
 ## Running the initial capacity trial
 
-The trial requires the Gate C [capacity-trial prefix-caching setting](03-Validate-Engines.md#preparing-checking-and-starting-each-engine) on every engine.
+The trial requires the [capacity-trial prefix-caching setting](03-Validate-Engines.md#preparing-checking-and-starting-each-engine) on every engine.
 
-The [synthetic load trial](../measure/03-Load-Trial.md#7-running-the-synthetic-deployment-trial) sets the TTFT, TPOT, and attainment thresholds.
+The [synthetic load trial](../measure/03-Load-Trial.md#running-the-synthetic-deployment-trial) sets the TTFT, TPOT, and attainment thresholds.
 
 Run the trial:
 
 1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
-2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#6-freezing-the-deployment-under-test) under a new deployment identifier.
-3. Attach Gate F's passing preflight to the deployment evidence.
+2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#freezing-the-deployment-under-test) under a new deployment identifier.
+3. Attach the passing preflight result to the deployment evidence.
 4. Retain the monitoring startup output and the router and engine scrape evidence.
 5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
 6. Retain the workload definition, the request-level records, and the summaries.

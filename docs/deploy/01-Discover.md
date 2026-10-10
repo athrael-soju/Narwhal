@@ -2,7 +2,7 @@
 description: Freeze the deployment inputs and discover the hosts of a Narwhal vLLM fleet.
 ---
 
-# Gate A: Freezing inputs and discovering the real deployment
+# Discover the deployment
 
 ## Loading the private environment
 
@@ -180,4 +180,4 @@ If a host key is new or changed:
 
 If authentication or the connection fails, check the username, credential, route, SSH port, and firewall.
 
-[![Next: Gate B: Packaging and installing the approved revision](https://img.shields.io/badge/next-Gate%20B%3A%20Packaging%20and%20installing%20the%20approved%20revision-0f766e)](02-Install.md)
+[Install the approved revision](02-Install.md)

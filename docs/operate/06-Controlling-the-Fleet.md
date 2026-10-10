@@ -1,5 +1,5 @@
 ---
-description: Run engine actions, configuration overlays and AIPerf load jobs against a running fleet from the fleet control service and console, with a private run record per session.
+description: Run engine actions, configuration overlays, and AIPerf load jobs from the fleet control service.
 ---
 
 # Controlling the fleet

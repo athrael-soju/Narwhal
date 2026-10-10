@@ -4,7 +4,7 @@ description: Interpret Narwhal router health, readiness and placement state duri
 
 # Router state and placement monitoring
 
-## 5. Interpreting router state
+## Interpreting router state
 
 ### `/health`
 
@@ -38,7 +38,7 @@ A replacement router:
 - applies the same lifecycle rules
 - keeps saved ejections until recovery succeeds
 
-## 6. Monitoring placement and control
+## Monitoring placement and control
 
 Prometheus and Grafana setup: [Setting up observability](../Observability.md).
 

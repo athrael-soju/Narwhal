@@ -1,5 +1,5 @@
 ---
-description: Open the fleet control console from the Narwhal Orchestrator dashboard and mark actions and load jobs on its charts.
+description: Open the fleet control console from the Narwhal Orchestrator dashboard and read session markers.
 ---
 
 # Using the console from Grafana

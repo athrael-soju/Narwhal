@@ -1,5 +1,5 @@
 ---
-description: Run an AIPerf workload against the router from the fleet control console, stop it early, and read its results and job document.
+description: Run and stop an AIPerf workload from the fleet control console, then inspect its results.
 ---
 
 # Load jobs

@@ -4,7 +4,9 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 # Metrics and role controller state
 
-## Reading live state from Prometheus
+## Prometheus metrics
+
+`/metrics` exposes these series. [`GET /narwhal/state`](../http-api/05-Live-State.md) returns the JSON state document; [Reading the dashboard](../observability/05-Dashboard.md) explains the Grafana panels.
 
 A new router process starts each series at these values:
 
@@ -77,7 +79,7 @@ These metrics track role changes and pool load:
 | `narwhal_engine_seats` | Each engine's [seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), labelled by `iid` and `phase` (`prefill` or `decode`), `0` for no limit. |
 | `narwhal_flip_reversals_total` | Moves whose target role differs from the same engine's previous recorded move, counted from that engine's second move. |
 | `narwhal_flips_refused_total` | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
-| `narwhal_pool_load` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#7-role-control), with `1.0` at the phase target. |
+| `narwhal_pool_load` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#role-control), with `1.0` at the phase target. |
 
 ## Reading latency histograms
 

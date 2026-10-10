@@ -4,9 +4,9 @@ description: Top-level keys, a minimal fleet definition and the engine compatibi
 
 # Fleet schema and engine contract
 
-## 1. Configuration model
+## Configuration model
 
-### 1.1 Top-level keys
+### Top-level keys
 
 A fleet file accepts the top-level keys `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery` and `profiles`, and annotation keys that start with `_`. Any other top-level key is an error.
 
@@ -25,11 +25,11 @@ A type mistake produces an error like this:
 fleet.json: controller.monitor_interval_s must be a number; serving.max_connections must be an integer; engine.tokenize must be a boolean
 ```
 
-### 1.2 Paths
+### Paths
 
 The deployment workflow resolves relative fleet and profile paths from the checkout root. `narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` from its working directory at startup.
 
-### 1.3 Environment loading
+### Environment loading
 
 Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#loading-the-private-environment) loads.
 
@@ -58,9 +58,8 @@ A partial reference, default syntax such as `${NAME:-x}`, and a resolved value t
 
 Save resolved URLs from `FleetConfig.save()` to a Git-ignored fleet path.
 
----
 
-## 2. Minimal fleet definition
+## Minimal fleet definition
 
 A fleet needs six fields:
 
@@ -96,7 +95,7 @@ Each engine entry takes these fields:
 }
 ```
 
-### 2.1 Shared-device allocation
+### Shared-device allocation
 
 A `shared_device` group places two to eight engines on one GPU.
 
@@ -109,17 +108,16 @@ A `shared_device` group places two to eight engines on one GPU.
 
 The group's `gpu_memory_utilization` values sum to at most its `device_allowance`.
 
----
 
-## 3. Engine shape and compatibility contract
+## Engine shape and compatibility contract
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` sets every [contract field](#32-contract-fields) to a nonempty string, positive integer or boolean. `image_digest` is optional.
+A complete `engine_contract` sets every [contract field](#contract-fields) to a nonempty string, positive integer or boolean. `image_digest` is optional.
 
 With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
 
-### 3.1 Hardware block
+### Hardware block
 
 The optional `hardware` block needs all three fields when present.
 
@@ -129,7 +127,7 @@ The optional `hardware` block needs all three fields when present.
 | `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                              |
 | `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                          |
 
-### 3.2 Contract fields
+### Contract fields
 
 | Field                      | Default           | Requirement                                                                                    |
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
@@ -152,7 +150,7 @@ The optional `hardware` block needs all three fields when present.
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
 
-Capture every contract value from the deployed engine in [Gate E: Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
+Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Values to check against the live engine:
 
@@ -162,9 +160,9 @@ Values to check against the live engine:
 - the resolved `transfer_mode` class and mode
 - `enforce_handshake_compat`, both the configured value and the installed default
 
-### 3.3 Attestation
+### Attestation
 
-The generator in [Gate E: Attesting the live engines](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
+The [attestation generator](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
 
 Fill in the fleet contract:
 

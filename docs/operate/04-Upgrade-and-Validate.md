@@ -4,13 +4,13 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 
 # Upgrade and rollback
 
-## 10. Upgrade and rollback
+## Upgrade and rollback
 
-### 10.1 Rolling upgrade with compatible handoff versions
+### Rolling upgrade with compatible handoff versions
 
 #### Upgrading the standby
 
-1. Check that both releases share a [handoff version](01-Start-Routers.md#2-keeping-one-deployment-set).
+1. Check that both releases share a [handoff version](01-Start-Routers.md#keeping-one-deployment-set).
 2. Record the active router's `ha.epoch` from `/narwhal/state`.
 3. Stop the standby.
 4. Install the new deployment set on that host.
@@ -30,7 +30,7 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 2. Start that router as standby.
 3. Wait for its `/ready` to return HTTP 503.
 
-### 10.2 Upgrading across a handoff-version change
+### Upgrading across a handoff-version change
 
 Incompatible handoff versions need a maintenance window.
 
@@ -43,7 +43,7 @@ Incompatible handoff versions need a maintenance window.
 7. Confirm the primary is the only backend returning HTTP 200 from `/ready`.
 8. Restore ingress.
 
-### 10.3 Rolling back
+### Rolling back
 
 1. Remove the router you are rolling back from the load balancer.
 2. Stop the new router gracefully.

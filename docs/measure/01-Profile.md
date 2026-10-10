@@ -4,7 +4,7 @@ description: Define the TTFT and TPOT measurement contract and build a validated
 
 # Measurement contract and profiling
 
-## 1. Defining the measurement contract
+## Defining the measurement contract
 
 Record time to first token (TTFT) and time per output token (TPOT) separately for each source:
 
@@ -30,9 +30,9 @@ The service-level objective (SLO) denominator counts every scored request, inclu
 
 Record the [journal contract](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) stream-accounting rule with each result set.
 
-## 2. Reusing or creating an idle-fleet latency profile
+## Reusing or creating an idle-fleet latency profile
 
-A measurement run can reuse the `profiles.json` and `profiles.samples.json` pair from [Gate F: Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while each engine's process generation stays the same.
+A measurement run can reuse `profiles.json` and `profiles.samples.json` from [profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while each engine's process generation stays the same.
 
 Before you select deployment SLOs, profile each engine whose process generation changed:
 
@@ -147,7 +147,7 @@ Roll out the warm fit:
 4. Compare its held-out error with the recorded threshold.
 5. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.
 
-## 3. Retaining profile samples and fits
+## Retaining profile samples and fits
 
 Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the deployment record.
 
@@ -177,7 +177,7 @@ With `--overwrite`, `narwhal-profile` writes a new output pair for the selected 
 
 The KV capacity source is the physical KV constraint when vLLM `cache_config_info` reports `kv_cache_size_tokens`, and the TPOT-derived limit when it omits `kv_cache_size_tokens`.
 
-## 4. Validating the profile before using it
+## Validating the profile before using it
 
 ### Prefill fit
 

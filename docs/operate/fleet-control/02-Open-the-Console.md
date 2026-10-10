@@ -1,5 +1,5 @@
 ---
-description: Reach the fleet control console from a workstation through the operator tunnel, and choose between pasting the bearer token and connecting automatically.
+description: Open the fleet control console from a workstation through the operator tunnel.
 ---
 
 # Opening the console

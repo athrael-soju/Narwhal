@@ -4,7 +4,7 @@ description: Engine endpoints, engine launch records and runtime image verificat
 
 # Engine endpoints and launch records
 
-## 14. Engine endpoints generated from node environments
+## Engine endpoints generated from node environments
 
 An engine URL points to the running vLLM HTTP service, for example:
 
@@ -56,20 +56,19 @@ Discovery needs at least two engines with the same accelerator product, GPU coun
 
 Discovery adds one fleet record per engine. The first engine starts in the prefill role, and each remaining engine starts in decode.
 
-A single-engine fleet is valid in the fleet schema, with both [role floors](02-Serving-and-Role-Control.md#72-role-floors) at `1`.
+A single-engine fleet is valid in the fleet schema, with both [role floors](02-Serving-and-Role-Control.md#role-floors) at `1`.
 
-Store per-site fleet files in a [Git-ignored path](06-Fabric-and-Operations.md#20-configuration-provenance-and-publication).
+Store per-site fleet files in a [Git-ignored path](06-Fabric-and-Operations.md#configuration-provenance-and-publication).
 
 For the profiling, preflight, and serving commands:
 
 1. Load `.env` and `config/deployment.env`.
 2. Pass `--fleet "$NARWHAL_FLEET"`.
 
-The monitoring stack's scrape-target generator, `tools/observability/make_targets.py`, resolves endpoint URLs with the fleet's [whole-value substitution rules](01-Fleet-Schema.md#13-environment-loading).
+The monitoring stack's scrape-target generator, `tools/observability/make_targets.py`, resolves endpoint URLs with the fleet's [whole-value substitution rules](01-Fleet-Schema.md#environment-loading).
 
----
 
-## 15. Engine launch records
+## Engine launch records
 
 `NARWHAL_LAUNCH_CONFIG` selects the discovery-generated launch-record file on the management workstation (default `config/engine-launch.local.json`).
 
@@ -89,7 +88,7 @@ To change GPU allocation or runtime policy:
 1. Change the corresponding `.env` policy input.
 2. Rerun discovery into a fresh output set.
 
-### 15.1 Allocation and transport fields
+### Allocation and transport fields
 
 Each launch record holds these allocation and transport fields:
 
@@ -124,9 +123,8 @@ When preparation reports an error in an `.env` input or a remote prerequisite:
 1. Fix the input or prerequisite.
 2. Prepare a new run.
 
----
 
-## 16. Runtime launch records and image verification
+## Runtime launch records and image verification
 
 Every generated engine record contains a `runtime` object that `narwhal-engine` reads.
 
@@ -200,7 +198,7 @@ Launch directories, environment files, and runtime captures live under the Git-i
 
 Record the application revision, launcher digest, and container ID with each deployment.
 
-### 16.1 Prefix caching and cache events
+### Prefix caching and cache events
 
 vLLM turns prefix caching on by default. Prefix caching is off when `extra_args` contains vLLM's `--no-enable-prefix-caching`, when vLLM's resolved engine configuration turns it off for the model, or when vLLM turns it off during model load for some attention configurations.
 
@@ -231,7 +229,7 @@ To keep prefix caching on and turn event publishing off, add vLLM's event settin
 
 The launcher rejects every other `--kv-events-config` value.
 
-### 16.2 Resetting prefix caches
+### Resetting prefix caches
 
 vLLM serves `POST /reset_prefix_cache` on an engine started with `VLLM_SERVER_DEV_MODE=1`. The route empties the engine's prefix cache.
 
@@ -242,7 +240,7 @@ vLLM serves `POST /reset_prefix_cache` on an engine started with `VLLM_SERVER_DE
     ```
 
 2. Prepare and start the engine from the updated launch record.
-3. [Profile the engine](../measure/01-Profile.md#2-reusing-or-creating-an-idle-fleet-latency-profile) for its new [`launch_digest`](01-Fleet-Schema.md#33-attestation).
+3. [Profile the engine](../measure/01-Profile.md#reusing-or-creating-an-idle-fleet-latency-profile) for its new [`launch_digest`](01-Fleet-Schema.md#attestation).
 4. If the fleet configures a first-token calibration artifact, [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 
 While the router is idle, reset the engine's prefix cache, with `<engine-url>` replaced by the engine's URL:

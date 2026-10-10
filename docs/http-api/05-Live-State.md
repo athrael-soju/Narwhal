@@ -8,6 +8,8 @@ description: Read live admission, scheduler and role controller state from GET /
 
 Returns the live router and scheduler state as a `narwhal.state` schema version `1` document.
 
+[Metrics and role controller state](../telemetry/03-Metrics-and-Control.md) defines Prometheus series. [Reading the dashboard](../observability/05-Dashboard.md) explains their Grafana panels.
+
 ### Top-level fields
 
 The state document carries these top-level fields:
@@ -356,7 +358,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `unsized_offers`                                  | [Unsized offers](06-SLO-and-Demand.md#unsized-offers) in `controller.reactive.window_s`                                                                           |
 | `projected_ttft_ratio`                            | Demand model's projected TTFT for the candidate split, as a ratio to the TTFT target                                                                              |
 | `projected_tpot_ratio`                            | Demand model's projected TPOT for the candidate split, as a ratio to the TPOT target                                                                              |
-| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions)                                            |
+| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions)                                            |
 | `objective`                                       | Candidate split's objective                                                                                                                                       |
 | `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                                                                                          |
 | `decode_request_limit`                            | Applied decode request limit                                                                                                                                      |
@@ -404,7 +406,7 @@ These decisions add fields to `control.last_decision`:
 | Decision                                                                                               | `demand_horizon_s`                                                                               | `prefill_work`, `arrivals`     | `decode_work`                                                                                                   |
 | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | Hold before scoring                                                                                    |                                                                                                  | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
-| A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) confirmation-span move | [Confirmation span](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions) | Confirmation span              | Larger of residency over the latest `controller.reactive.step_s` and expected decode over the confirmation span |
+| A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) confirmation-span move | [Confirmation span](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) | Confirmation span              | Larger of residency over the latest `controller.reactive.step_s` and expected decode over the confirmation span |
 | Other decode-to-prefill proposal                                                                       | `controller.reactive.window_s`                                                                   | `controller.reactive.window_s` | Larger of the `controller.reactive.evidence_span_s` and `controller.reactive.window_s` estimates                |
 | Every other scored decision                                                                            | `controller.reactive.window_s`                                                                   | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
 

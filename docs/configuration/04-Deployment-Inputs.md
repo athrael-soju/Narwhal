@@ -4,7 +4,7 @@ description: The deployment environment, generated artifacts, host inventory and
 
 # Deployment inputs and SSH trust
 
-## 12. Deployment inputs and generated artifacts
+## Deployment inputs and generated artifacts
 
 The workstation `.env` holds the deployment revision, engine image, model and run paths, service ports, SSH destinations, and [launch-policy overrides](../deploy/01-Discover.md#confirming-the-launch-policy).
 
@@ -27,7 +27,7 @@ Discovery writes one private set of files per fleet at mode 0600:
 
 Load `.env` and `config/deployment.env` before reusing saved discovery inputs.
 
-### 12.1 Source revision and deployment bundle
+### Source revision and deployment bundle
 
 `NARWHAL_DEPLOYMENT_REVISION` is the full commit SHA from the management checkout.
 
@@ -43,7 +43,7 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 | `tools/deployment/prepare_host_env.py` | Role files at mode 0600, with shell literals copied through unchanged                                 |
 | `deploy_hosts.py install`              | The bundle and a checkout cloned from it on each selected host                                        |
 
-### 12.2 Generated host-side files
+### Generated host-side files
 
 | Remote file                                   | Contents                                                                                                                                                                       | Source                                                                                                                                                                                                   |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -85,7 +85,7 @@ Export fails when:
 - a variable name contains `SSH`
 - a variable name matches an access variable from the host inventory
 
-### 12.3 Profiling limits
+### Profiling limits
 
 Profile with the generated limits from the router shell:
 
@@ -93,7 +93,7 @@ Profile with the generated limits from the router shell:
 .venv/bin/narwhal-profile --fleet runs/deployment/fleet.json --limits runs/deployment/profiling-limits.json
 ```
 
-### 12.4 Role shells
+### Role shells
 
 Load a generated role environment:
 
@@ -103,9 +103,8 @@ python3 tools/deployment/deploy_hosts.py shell --run <directory> --role <role>
 
 A host with both roles holds both role files in one checkout.
 
----
 
-## 13. Host inventory and SSH trust
+## Host inventory and SSH trust
 
 `NARWHAL_HOSTS` selects the physical-host inventory (default `config/hosts.local.json`).
 
@@ -131,7 +130,7 @@ The workstation `.env` holds destination values and credentials, and the invento
 
 With `password_env` omitted, SSH connections use OpenSSH key or agent authentication. With `password_env` set, they use password authentication from the populated named variable.
 
-### 13.1 Inventory validation
+### Inventory validation
 
 Validate the inventory:
 
@@ -147,7 +146,7 @@ These `deploy_hosts.py` commands read the inventory:
 | `check-access`        | Verifies one connection per host                                                                                                                 |
 | `shell --role <role>` | Resolves the role's host from the inventory                                                                                                      |
 
-### 13.2 Known-hosts handling
+### Known-hosts handling
 
 `NARWHAL_SSH_KNOWN_HOSTS` selects the SSH known-hosts file. For discovery, it is optional, defaults to `config/ssh.known_hosts`, and host keys follow OpenSSH `accept-new`. Deployment commands require it, load it from `config/deployment.env`, and apply strict host-key checking against this file.
 
@@ -172,7 +171,7 @@ To replace the key of a changed server:
 1. Verify the replacement through the private access source.
 2. Update the checkout-local known-hosts file.
 
-### 13.3 Prepared and remote runs
+### Prepared and remote runs
 
 `prepare --out <directory>` writes:
 

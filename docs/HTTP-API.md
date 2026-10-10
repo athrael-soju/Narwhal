@@ -8,22 +8,16 @@ description: Reference for the OpenAI-compatible completion routes and the healt
 
 Each Narwhal interface uses one public namespace:
 
-| Interface            | Public namespace                                                               |
-| -------------------- | ------------------------------------------------------------------------------ |
-| Python distribution  | `narwhal-inference`                                                            |
-| Python import        | `narwhal`                                                                      |
-| Operator commands    | `narwhal-*`                                                                    |
-| Completion API       | `/v1/completions`, `/v1/chat/completions`                                      |
-| Model inspection     | `/v1/models`                                                                   |
-| Health and readiness | `/health`, `/ready`                                                            |
-| Metrics              | `/metrics`                                                                     |
-| Router state         | `/narwhal/state`                                                               |
-| State handoff        | `/narwhal/handoff`                                                             |
-| Lifecycle control    | `/narwhal/lifecycle`, `/narwhal/lifecycle/drain`, `/narwhal/lifecycle/readmit` |
-| Router telemetry     | `narwhal_*`                                                                    |
-| Persisted schemas    | `narwhal.*`, versioned per document                                            |
-| OpenAPI schema       | `/openapi.json`                                                                |
-| Schema browser       | `/docs`                                                                        |
+| Interface | Route |
+| --- | --- |
+| Completion API | `/v1/completions`, `/v1/chat/completions` |
+| Model inspection | `/v1/models` |
+| Health and readiness | `/health`, `/ready` |
+| Metrics | `/metrics` |
+| Router state | `/narwhal/state` |
+| State handoff | `/narwhal/handoff` |
+| Lifecycle control | `/narwhal/lifecycle`, `/narwhal/lifecycle/drain`, `/narwhal/lifecycle/readmit` |
+| OpenAPI schema and browser | `/openapi.json`, `/docs` |
 
 The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="2"} 1`.
 
@@ -75,7 +69,7 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 
 </div>
 
-## Which endpoint do I need?
+## Endpoint selection
 
 | If you want to...                                             | Call                                                                                                                                                                                                       |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -90,7 +84,3 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 
 !!! warning
     Keep `/narwhal/state`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.
-
-## Citing this work
-
-Citation metadata for Narwhal and the Arrow paper is in [CITATION.cff](https://github.com/athrael-soju/Narwhal/blob/main/CITATION.cff).

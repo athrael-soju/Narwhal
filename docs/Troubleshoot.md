@@ -61,7 +61,7 @@ Start from the router's health and readiness:
 
 For rising client errors:
 
-- If HTTP 429 responses increase, [classify them by outcome reason](#1-classify-outcomes-by-reason) before changing capacity.
+- If HTTP 429 responses increase, [classify them by outcome reason](#classify-outcomes-by-reason) before changing capacity.
 - If HTTP 502 responses increase, inspect engine failures, ejection, quarantine, and in-flight work.
 - If HTTP 504 responses increase, separate queue and request expiry from engine timeouts with the response error and terminal journal row.
 - If a stream ends with an error frame after the HTTP 200 response starts, inspect the failed attempts, final outcome, and participating engines.
@@ -96,7 +96,7 @@ Procedures by path:
 
 Use this procedure when HTTP 429, 503, or 504 responses rise while engines pass health checks. If the router has ejected or held engines, follow [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md) first.
 
-### 1. Classify outcomes by reason
+### Classify outcomes by reason
 
 Each rejected, refused, expired, or failed request increments one outcome counter on the router's `/metrics`, labelled with the [outcome reason](telemetry/01-Journal.md#outcome-reasons) that ended it. Query each counter over the incident window, grouped by its label:
 
@@ -135,7 +135,7 @@ Match the largest counts to a class:
 
 [Admission and refusal semantics](http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [Engine failure handling](http-api/03-Backend-and-Failures.md#engine-failure-handling) list the status, error type, and code of each response.
 
-### 2. Diagnose the class
+### Diagnose the class
 
 #### In-flight limit rejections
 
@@ -161,7 +161,7 @@ Check: read `admission_price` on the refused journal rows. Its parts are `backlo
 | --- | --- | --- |
 | `queue` | Prefill work resident on the cheapest prefill engine, `backlog_s`, plus the time the request already waited, `elapsed_s`, pushes `price_s` past the TTFT budget. | Reduce the offered rate, or add prefill capacity. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
 | `prompt` | The prompt's own prefill, `own_prefill_s`, exceeds the TTFT budget. | Shorten the prompt, or raise `slo.ttft_s`. Draining the prefill backlog does not clear this cause. |
-| `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work. | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#72-role-floors). |
+| `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work. | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#role-floors). |
 
 #### Decode capacity refusals
 
@@ -203,9 +203,9 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 
 Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats.
 
-Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#41-global-admission).
+Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 
-### 3. Confirm the binding limit and verify recovery
+### Confirm the binding limit and verify recovery
 
 1. Keep the request mix, `serving.max_connections`, queue settings, and timeouts fixed.
 2. Test two offered rates under those conditions.
@@ -216,8 +216,8 @@ Before you change an admission, queue, retry or in-flight setting, read [Choosin
 
 The class is resolved when the counter series that identified it stops increasing at the offered rate, and the journal shows no new terminal rows with that reason.
 
-The load-test router outcome ratio divides router completions by admitted requests. [Deployment attainment](measure/04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal) divides the client completions that meet the service-level objective by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
+The load-test router outcome ratio divides router completions by admitted requests. [Deployment attainment](measure/04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal) divides the client completions that meet the service-level objective by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
 
 ## Validating recovery
 
-Run the [release validation drills](operate/05-Release-Drills.md#11-validating-every-release).
+Run the [release validation drills](operate/05-Release-Drills.md#validating-every-release).

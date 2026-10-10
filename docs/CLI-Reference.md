@@ -76,13 +76,13 @@ These commands add exit codes for specific cases:
 
 | Command | Exit code | Case | Reference |
 | --- | :--: | --- | --- |
-| `narwhal dev` | `1` | The instance reports `degraded`. | [![narwhal dev output and exit codes](https://img.shields.io/badge/docs-Output%20and%20exit%20codes-0f766e)](cli/Dev.md#output-and-exit-codes) |
-| `narwhal dev init` | `2` | An initialization check fails. | [![narwhal dev output and exit codes](https://img.shields.io/badge/docs-Output%20and%20exit%20codes-0f766e)](cli/Dev.md#output-and-exit-codes) |
-| `narwhal-engine prepare` | `2` | Preparation fails. | [![narwhal-engine actions](https://img.shields.io/badge/docs-Actions-0f766e)](cli/Engine.md#actions) |
-| `narwhal-engine` | `1` | An output artifact already exists. | [![narwhal-engine actions](https://img.shields.io/badge/docs-Actions-0f766e)](cli/Engine.md#actions) |
-| `narwhal-check` | `1` | A gate is skipped with `--evidence-out`. | [![narwhal-check exit codes](https://img.shields.io/badge/docs-Exit%20codes-0f766e)](cli/Check.md#exit-codes) |
-| `narwhal diagnostics collect` | `3` | Partial bundle. | [![narwhal diagnostics manifest and exit status](https://img.shields.io/badge/docs-Manifest%20and%20exit%20status-0f766e)](Diagnostic-Bundles.md#manifest-and-exit-status) |
-| `narwhal diagnostics collect` | `4` | I/O failure. | [![narwhal diagnostics manifest and exit status](https://img.shields.io/badge/docs-Manifest%20and%20exit%20status-0f766e)](Diagnostic-Bundles.md#manifest-and-exit-status) |
+| `narwhal dev` | `1` | The instance reports `degraded`. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
+| `narwhal dev init` | `2` | An initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
+| `narwhal-engine prepare` | `2` | Preparation fails. | [narwhal-engine actions](cli/Engine.md#actions) |
+| `narwhal-engine` | `1` | An output artifact already exists. | [narwhal-engine actions](cli/Engine.md#actions) |
+| `narwhal-check` | `1` | A gate is skipped with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |
+| `narwhal diagnostics collect` | `3` | Partial bundle. | [narwhal diagnostics manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status) |
+| `narwhal diagnostics collect` | `4` | I/O failure. | [narwhal diagnostics manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status) |
 
 ## Failure diagnostics
 

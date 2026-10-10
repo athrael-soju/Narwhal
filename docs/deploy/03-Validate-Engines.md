@@ -2,7 +2,7 @@
 description: Validate and start every vLLM engine in a Narwhal fleet.
 ---
 
-# Gate C: Validating and starting every engine
+# Validate and start engines
 
 ## Inspecting every engine host
 
@@ -157,9 +157,9 @@ The launcher builds one launch plan per engine with these properties:
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                         |
 | Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                      |
 | Cache events                  | Published by vLLM over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                           |
-| Cache event opt-out           | [![Prefix caching and cache events documentation](https://img.shields.io/badge/docs-Prefix%20caching%20and%20cache%20events-0f766e)](../configuration/05-Engine-Launch.md#161-prefix-caching-and-cache-events) |
+| Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) |
 
-For the Gate G [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
+For the [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching` to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
 
 To add the flag after launch:
 
@@ -217,7 +217,7 @@ A passing check confirms:
 - the plan hash
 - the resolved prefix-caching setting and cache-event endpoints, matched against the plan
 
-The check writes [`checked.json`](../configuration/05-Engine-Launch.md#16-runtime-launch-records-and-image-verification).
+The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 A failed check names the failing package, tokenizer, or identity check.
 
@@ -225,7 +225,7 @@ The checked tokenizer is the final `--tokenizer` value in the serving arguments,
 
 For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
-When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment run in [Gate B](02-Install.md).
+When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
 
 Start the engines:
 
@@ -334,6 +334,6 @@ test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FA
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
-Compare the resolved layouts and page geometry within each signature group. When every engine in the group matches, Gate D uses one budget for the group. An engine that differs gets a separate budget.
+Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-[![Next: Gate D: Proving the transfer fabric against the serving cache](https://img.shields.io/badge/next-Gate%20D%3A%20Proving%20the%20transfer%20fabric%20against%20the%20serving%20cache-0f766e)](04-Qualify-Fabric.md)
+[Qualify the transfer fabric](04-Qualify-Fabric.md)
