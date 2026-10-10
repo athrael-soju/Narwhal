@@ -379,7 +379,8 @@ class CacheSizingTests(unittest.TestCase):
                 else plan["launcher_sha256"]
             )
             hook_path = (
-                Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
+                Path(__file__).resolve().parents[2]
+                / "src/narwhal/backends/vllm/cache_capture_hook.py"
             )
             worker_module = ModuleType("vllm.v1.worker.gpu_worker")
             worker_module.Worker = type("Worker", (), {"init_device": lambda self: None})
@@ -421,7 +422,9 @@ class CacheSizingTests(unittest.TestCase):
             self.assertIsNot(Core._initialize_kv_caches, original)
 
     def test_live_hook_waits_for_peer_held_memory_before_device_init(self):
-        hook_path = Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
+        hook_path = (
+            Path(__file__).resolve().parents[2] / "src/narwhal/backends/vllm/cache_capture_hook.py"
+        )
         gib = 2**30
         for readings, polls, ready in (
             ([(10 * gib, 100 * gib), (95 * gib, 100 * gib)], 1, True),

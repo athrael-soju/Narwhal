@@ -26,19 +26,19 @@ Run these steps from the router shell.
 
 8. Compare each printed effective sweep with every checked serving plan.
 
-`deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's `--max-num-seqs`.
+`deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's sequence limit: `--max-num-seqs` for vLLM and `--max-running-requests` for SGLang.
 
 The effective sweep has these bounds:
 
 | Sweep input          | Bound                                                     |
 | -------------------- | --------------------------------------------------------- |
-| Decode concurrency   | At most `--max-num-seqs`                                  |
+| Decode concurrency   | At most the engine's sequence limit                       |
 | Prefill lengths      | Input plus one output token fits the live `max_model_len` |
 | Decode input lengths | Input plus 64 output tokens fits the live `max_model_len` |
 
 Prefix caching can stay on during profiling.
 
-If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If `--max-num-seqs` allows fewer than two decode concurrency points, change the engine launch policy.
+If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
 
 Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 
