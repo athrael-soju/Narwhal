@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 
 class HandoffExpired(Exception):
@@ -40,10 +41,15 @@ class PrefillResult:
         return params
 
 
-class KvConnector(ABC):
-    """Adapt the prefill and decode bodies to one KV transport."""
-
+class KvHandoff(ABC):
     name: str
+
+    @abstractmethod
+    def handoff_bound(self, lease_s: int) -> float:
+        """Return the seconds after prefill within which decode may still consume the KV."""
+
+
+class KvConnector(KvHandoff):
     # Same-engine decode must remove this client-supplied field.
     param_key: str = "kv_transfer_params"
 
@@ -90,10 +96,31 @@ class KvConnector(ABC):
         return leg
 
 
+class RendezvousConnector(KvHandoff):
+    # The engine never times out a decode leg whose prefill is lost.
+    decode_wait_s: ClassVar[float]
+
+    @abstractmethod
+    def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]:
+        """Return per-request fields binding both legs to the prefill engine `producer`."""
+
+    @abstractmethod
+    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
+        """Build the prefill leg."""
+
+    @abstractmethod
+    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
+        """Build the decode leg."""
+
+
 class NixlConnector(KvConnector):
     """Adapt vLLM's NixlConnector protocol."""
 
     name = "nixl"
+    renewal_divisor: ClassVar[int] = 6
+
+    def handoff_bound(self, lease_s: int) -> float:
+        return float(lease_s - lease_s // self.renewal_divisor)
 
     def prefill_params(self) -> dict[str, Any]:
         """Request a remote decode handoff."""

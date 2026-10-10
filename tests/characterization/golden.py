@@ -1,8 +1,3 @@
-"""Compare JSON records with the golden files beside these tests.
-
-Set NARWHAL_UPDATE_GOLDEN=1 to rewrite the files from the current behaviour.
-"""
-
 import json
 import os
 import unittest
@@ -32,7 +27,6 @@ def assert_golden(
     value: Any,
     replacements: dict[str, str] | None = None,
 ) -> None:
-    """Fail unless `value` matches golden/<name>.json, with `replacements` applied first."""
     text = json.dumps(_plain(value, replacements or {}), indent=2, sort_keys=True) + "\n"
     path = GOLDEN / f"{name}.json"
     if os.environ.get("NARWHAL_UPDATE_GOLDEN") == "1":

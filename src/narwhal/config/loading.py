@@ -481,6 +481,7 @@ def load(path: str | Path) -> FleetConfig:
         resume=_read_bool(problems, "recovery.resume", recovery_raw.get("resume", False)),
         min_prefill=min_prefill,
         min_decode=min_decode,
+        backend=_read_str(problems, "engine.backend", engine_raw.get("backend", "vllm")),
         connector=_read_str(problems, "engine.connector", engine_raw.get("connector", "nixl")),
         dialect=_read_str(problems, "engine.dialect", engine_raw.get("dialect", "vllm")),
         engine_contract=engine_contract,
@@ -578,6 +579,7 @@ _SERVING_KEYS = {
     *(f.name for f in fields(ServingPolicy)),
 }
 _ENGINE_KEYS = {
+    "backend",
     "connector",
     "dialect",
     "tokenize",

@@ -21,6 +21,7 @@
   },
   "serialized": {
     "engine": {
+      "backend": "vllm",
       "chars_per_token": 3.8,
       "connect_timeout_s": 10.0,
       "connector": "nixl",
@@ -124,10 +125,10 @@
       "error": "<tmp>/fleet.json: unknown engine_contract key 'engine_version' (a typo falls back to the default silently)"
     },
     "unknown_engine_connector": {
-      "error": "<tmp>/fleet.json: unknown connector 'unknown': known ones are nixl"
+      "error": "<tmp>/fleet.json: backend 'vllm' has no connector 'unknown': known ones are nixl"
     },
     "unknown_engine_dialect": {
-      "error": "<tmp>/fleet.json: unknown dialect 'unknown': known ones are vllm"
+      "error": "<tmp>/fleet.json: backend 'vllm' has no dialect 'unknown': its dialect is vllm"
     }
   }
 }

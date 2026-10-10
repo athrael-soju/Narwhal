@@ -1,5 +1,3 @@
-"""Golden records of engine identity, attestation and the declared engine contract."""
-
 import copy
 import json
 import os
@@ -44,7 +42,6 @@ LAUNCH = {"args": ["--max-num-seqs", "64", "--kv-transfer-config", json.dumps(TR
 
 
 def recorded(request: httpx.Request) -> dict:
-    """Return the protocol-visible parts of one engine request."""
     body = request.content
     return {
         "method": request.method,
@@ -57,7 +54,6 @@ def recorded(request: httpx.Request) -> dict:
 
 
 def version_and_metrics(request: httpx.Request, version: str, start: float) -> httpx.Response:
-    """Answer the engine identity routes the way a vLLM process does."""
     if request.url.path == "/version":
         return httpx.Response(200, json={"version": version})
     if request.url.path == "/metrics":
@@ -73,8 +69,6 @@ def version_and_metrics(request: httpx.Request, version: str, start: float) -> h
 
 
 class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
-    """Pin the identity and attestation evidence a vLLM fleet exchanges today."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -90,7 +84,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         return EngineIdentity(self.version, start)
 
     async def router(self, transport, dial=None) -> NarwhalRouter:
-        """Build a router over the fixture fleet with injected engine transports."""
         extra = {} if dial is None else {"dial": dial}
         router = NarwhalRouter(self.cfg, RunJournal(self.tmp / "journal.jsonl"), transport, **extra)
         self.addAsyncCleanup(router.engines.aclose)
@@ -98,7 +91,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         return router
 
     async def test_sidecar_engine_requests_and_routes(self):
-        """The sidecar reads /version and /metrics and serves attestation and residency."""
         requests = []
         state = {"start": 100.0, "failed": False}
 
@@ -153,7 +145,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_verification_failures_and_attested_limits(self):
-        """Verification names vLLM identity mismatches; the router reads launch limits."""
         payload = make_attestation(self.document, self.identity())
         failures = {
             "matching": verify_attestation(payload, self.contract, self.identity()),
@@ -208,7 +199,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_identity_reads_and_profile_generation(self):
-        """Identity capture and profile generation read the same vLLM process evidence."""
         requests = []
         starts = {"stub-0": 100.0, "stub-1": 200.0}
         payloads = {}
@@ -260,7 +250,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "attestation_identity", records)
 
     async def test_readmission_engine_requests_in_order(self):
-        """Readmission probes health, identity, attestation, models, generation and fabric."""
         requests = []
         starts = {"e0": 101.0, "e3": 100.0}
         hosts = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
@@ -335,7 +324,6 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_engine_contract_loading_validation_and_serialization(self):
-        """The fleet loader fills vLLM and NIXL defaults and names each invalid field."""
         raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
         path = self.tmp / "fleet.json"
 

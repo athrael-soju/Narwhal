@@ -1,5 +1,3 @@
-"""A recording fake of the vLLM HTTP surface that Narwhal's probes and gates call."""
-
 import asyncio
 import hashlib
 import json
@@ -32,7 +30,6 @@ TIMED = {
 
 
 def prompt_label(prompt):
-    """Name a prompt by its word count and digest, after its random sizing prefix."""
     prefixed = bool(UUID_PREFIX.match(prompt))
     text = UUID_PREFIX.sub("", prompt)
     digest = hashlib.sha256(text.encode()).hexdigest()[:16]
@@ -40,10 +37,6 @@ def prompt_label(prompt):
 
 
 def normalized(value, salts):
-    """Replace prompts and cache salts, which vary per run, with stable labels.
-
-    Each distinct salt is numbered in order of first use, so shared salts stay visible.
-    """
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():
@@ -61,8 +54,6 @@ def normalized(value, salts):
 
 
 class TokenStream(httpx.AsyncByteStream):
-    """Stream one token per SSE event, yielding to the loop between events."""
-
     def __init__(self, tokens):
         self.tokens = tokens
 
@@ -76,8 +67,6 @@ class TokenStream(httpx.AsyncByteStream):
 
 
 class FakeVllm:
-    """Answer vLLM routes for the engines in `names` (host -> iid) and record each request."""
-
     def __init__(self, names, contract=None):
         self.names = names
         self.contract = contract
@@ -120,7 +109,6 @@ class FakeVllm:
         )
 
     def cached_tokens(self, iid, salt, words):
-        """Count block-aligned prompt words shared with an earlier prompt under `salt`."""
         best = 0
         for earlier in self.cache[iid].get(salt, []):
             shared = 0
@@ -197,7 +185,6 @@ class FakeVllm:
 
 
 def untimed(value):
-    """Replace measured durations and capture times with a placeholder."""
     if isinstance(value, dict):
         return {
             key: "<seconds>" if key in TIMED and item is not None else untimed(item)
@@ -209,7 +196,6 @@ def untimed(value):
 
 
 def routed(handler):
-    """Return an httpx.AsyncClient class whose clients reach `handler` by default."""
     base = httpx.AsyncClient
 
     class Routed(base):
