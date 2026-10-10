@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import DEFAULT_BACKEND
 from narwhal.backends import load as load_backend
+from narwhal.backends import names as backend_names
 from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
@@ -57,6 +58,8 @@ CONTROL_ANNOTATIONS = (
 _URL_CHARACTERS = re.compile(r"[A-Za-z0-9._~%:/\[\]-]+")
 # <<name>> takes the backend's panel text; <<name{selector}>> its query for that selector.
 _PLACEHOLDER = re.compile(r"<<(\w+)(?:\{([^<>]*)\})?>>")
+# Value mappings that show each registered backend's label.
+BACKEND_BADGES = "<<backend_badges>>"
 
 
 def _directory(path: Path, mode: int) -> None:
@@ -149,12 +152,19 @@ def _placeholders(value: object) -> set[str]:
     return set()
 
 
+def _backend_badges() -> dict[str, Any]:
+    options = {name: {"text": load_backend(name).label} for name in backend_names()}
+    return {"type": "value", "options": options}
+
+
 def render_dashboard(source: Mapping[str, Any], backend: str = DEFAULT_BACKEND) -> dict[str, Any]:
     engine = load_backend(backend)
     series = engine.metrics.dashboard_series
     text = {"engine": engine.label, **engine.metrics.dashboard_text}
 
     def fill(value: Any) -> Any:
+        if value == BACKEND_BADGES:
+            return _backend_badges()
         if isinstance(value, str):
             return _PLACEHOLDER.sub(
                 lambda match: (
@@ -176,7 +186,7 @@ def render_dashboard(source: Mapping[str, Any], backend: str = DEFAULT_BACKEND) 
     dropped = {
         name
         for name, element in spec["elements"].items()
-        if _placeholders(element) - set(series) - set(text)
+        if _placeholders(element) - set(series) - set(text) - {"backend_badges"}
     }
     spec["elements"] = {
         name: element for name, element in spec["elements"].items() if name not in dropped

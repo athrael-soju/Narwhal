@@ -62,7 +62,7 @@ The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [rea
 | Dashboard                | `narwhal-router` loads from Grafana's `dashboard.grafana.app/v2beta1` API with its `router` selector defaulting to All (regex `.*`) |
 | Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present                                                     |
 | `narwhal-router` job     | Exactly one healthy target at `NARWHAL_ROUTER_URL`                                                                                  |
-| `engines` job            | One healthy target per fleet engine, labelled with its `iid`                                                                        |
+| `engines` job            | One healthy target per fleet engine, labelled with its `iid` and `backend`                                                          |
 | Router readiness         | `narwhal_router_ready` reports `1`                                                                                                  |
 
 Each startup stage has a deadline:

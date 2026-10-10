@@ -116,7 +116,7 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
+The engine table shows each engine's backend, current role, state and load. **Backend** names the engine backend that serves the engine, such as vLLM or SGLang. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
 

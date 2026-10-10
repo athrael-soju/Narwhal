@@ -76,8 +76,8 @@ class TargetGenerationTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((output / "engines.json").read_text()),
                 [
-                    {"targets": ["[fd00::10]:8002"], "labels": {"iid": "e0"}},
-                    {"targets": ["127.0.0.2:8002"], "labels": {"iid": "e1"}},
+                    {"targets": ["[fd00::10]:8002"], "labels": {"iid": "e0", "backend": "vllm"}},
+                    {"targets": ["127.0.0.2:8002"], "labels": {"iid": "e1", "backend": "vllm"}},
                 ],
             )
             self.assertEqual((output / "router.json").stat().st_mode & 0o777, 0o644)

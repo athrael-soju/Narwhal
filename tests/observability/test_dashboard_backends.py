@@ -14,7 +14,7 @@ from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
 # The vLLM rendering, pinned so a dashboard change is deliberate.
-VLLM_SHA256 = "23417a1f3583f0ef12e775e73a6f81d33bfe33962afc5bd6161e5a9cf274ae5e"
+VLLM_SHA256 = "1593ddf3b05837666938fca218c09c731fa0326b00876b8cde4c4d6e6da3a6d0"
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
@@ -41,6 +41,27 @@ class BackendDashboardTests(unittest.TestCase):
                 self.assertEqual(engine_prefixes(rendered), {name})
                 for template in load_backend(name).metrics.dashboard_series.values():
                     self.assertIn("@sel", template)
+
+    def test_engine_table_labels_each_engine_with_its_backend(self):
+        for name in names():
+            with self.subTest(backend=name):
+                table = artifacts.render_dashboard(SHIPPED, name)["spec"]["elements"]["panel-7"]
+                overrides = table["spec"]["vizConfig"]["spec"]["fieldConfig"]["overrides"]
+                [badge] = [o for o in overrides if o["matcher"]["options"] == "Backend"]
+                self.assertEqual(
+                    badge["properties"][0]["value"],
+                    [
+                        {
+                            "type": "value",
+                            "options": {b: {"text": load_backend(b).label} for b in names()},
+                        }
+                    ],
+                )
+                exprs = [
+                    q["spec"]["query"]["spec"]["expr"]
+                    for q in table["spec"]["data"]["spec"]["queries"]
+                ]
+                self.assertIn('max by(iid, backend) (up{job="engines",iid=~"$iid"})', exprs)
 
     def test_a_panel_the_backend_cannot_fill_is_left_out(self):
         metrics = load_backend("vllm").metrics
