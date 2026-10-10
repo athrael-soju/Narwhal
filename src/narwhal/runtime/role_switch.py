@@ -34,3 +34,18 @@ class RouterRoleSwitch(RoleSwitcher):
         role: Role,
         launch: Mapping[str, Any] | None = None,
     ) -> None: ...
+
+
+def engine_side(switcher: RoleSwitcher | None) -> RoleSwitcher | None:
+    # A switcher that needs an idle engine changes the engine itself, not only the router.
+    return switcher if switcher is not None and switcher.requires_idle else None
+
+
+async def place_pair(
+    switcher: RoleSwitcher,
+    client: httpx.AsyncClient,
+    producer: tuple[str, Mapping[str, Any] | None],
+    consumer: tuple[str, Mapping[str, Any] | None],
+) -> None:
+    await switcher.switch(client, producer[0], Role.PREFILL, producer[1])
+    await switcher.switch(client, consumer[0], Role.DECODE, consumer[1])

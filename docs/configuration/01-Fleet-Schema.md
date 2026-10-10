@@ -115,7 +115,7 @@ The group's `gpu_memory_utilization` values sum to at most its `device_allowance
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` sets every [contract field](#32-contract-fields) to a nonempty string, positive integer or boolean. `image_digest` is optional.
+A complete `engine_contract` sets every [contract field](#32-contract-fields) that the engine backend attests to a nonempty string, positive integer or boolean. `image_digest` is optional. SGLang attests every field except `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat`, which stay `0`, `null` or `""`.
 
 With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
 
@@ -150,7 +150,7 @@ The optional `hardware` block needs all three fields when present.
 | `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
-| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
+| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` for SGLang. |
 
 Earlier releases named three of these fields differently. The loader and `narwhal-attest` still read the earlier names, in the fleet file, the attestation document and its `sources`:
 

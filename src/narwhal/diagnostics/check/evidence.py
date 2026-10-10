@@ -30,6 +30,7 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         timeout_s=cfg.health_timeout_s,
         headers=cfg.engine_headers(),
         reader=load_backend(cfg.backend).identity,
+        attestation_url=spec.attestation_url,
     )
     async with httpx.AsyncClient(timeout=cfg.health_timeout_s) as client:
         attestation = await client.get(spec.attestation_url)
@@ -56,10 +57,10 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         **({"launch_digest": payload["launch_digest"]} if "launch_digest" in payload else {}),
         "contract_fingerprint": cfg.engine_contract.fingerprint(),
         "cache_layout_sources": {
-            name: sources[name] for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
+            name: sources.get(name) for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
         },
-        "connector_source": sources["connector_version"],
-        "transfer_mode_source": sources["transfer_mode"],
+        "connector_source": sources.get("connector_version"),
+        "transfer_mode_source": sources.get("transfer_mode"),
         "transfer_count": count,
         "transfer_seconds_sum": seconds,
     }

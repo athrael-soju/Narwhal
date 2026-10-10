@@ -18,7 +18,8 @@ from ...deployment.attestation_contract.evidence import (
 )
 from ...deployment.launch_engine.plan import env_file_name, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
-from .identity import parse_generation, server_version
+from ...engines.host_process import container_start, native_start
+from .identity import ATTESTED_FIELDS, server_version
 from .plan import TRANSFER_PACKAGES, option
 from .runtime import API_KEY_ENV
 
@@ -35,14 +36,6 @@ SERVER_FIELDS = (
     "speculative_algorithm",
     "max_running_requests",
 )
-# Contract fields that describe vLLM's connector and cache manager.
-UNUSED_FIELDS = {
-    "connector_version",
-    "cross_layers_blocks",
-    "hybrid_kv_cache_manager",
-    "kv_role",
-    "transfer_mode",
-}
 # Flags whose values change per launch.
 _PER_LAUNCH_VALUES = frozenset(
     ("--host", "--port", "--served-model-name", "--kv-events-config", "--model-path")
@@ -114,8 +107,6 @@ def capture_server(run: Path) -> Path:
     with httpx.Client(timeout=10, headers=headers) as client:
         info = client.get(f"{base}/server_info")
         info.raise_for_status()
-        metrics = client.get(f"{base}/metrics")
-        metrics.raise_for_status()
     payload = info.json()
     if not isinstance(payload, dict):
         raise ValueError("/server_info returned no object")
@@ -124,7 +115,11 @@ def capture_server(run: Path) -> Path:
     server = {name: payload.get(name) for name in SERVER_FIELDS}
     record = {
         "server": server,
-        "generation": parse_generation(metrics.text),
+        "process_start_time_seconds": (
+            native_start(identity["pid"])
+            if isinstance(identity, dict)
+            else container_start(str(identity))
+        ),
         "plan_sha256": plan_hash,
         **(
             {"process": identity}
@@ -209,10 +204,9 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "kv_role": "",
         "transfer_mode": "",
         "speculative_config": server.get("speculative_algorithm") or "disabled",
-        # SGLang has no handshake compatibility check to disable.
-        "enforce_handshake_compat": True,
+        "enforce_handshake_compat": None,
     }
-    missing = sorted(set(EngineContract(**contract).missing()) - UNUSED_FIELDS)
+    missing = EngineContract(**contract).missing(ATTESTED_FIELDS)
     if missing:
         raise ValueError("Derived engine contract is incomplete: " + ", ".join(missing))
     evidence = {
@@ -228,7 +222,6 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "kv_cache_dtype": server_path,
         "connector": run / "launch.json",
         "speculative_config": server_path,
-        "enforce_handshake_compat": run / "launch.json",
     }
     if native:
         evidence.pop("image_digest")

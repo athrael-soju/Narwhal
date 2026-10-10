@@ -5,12 +5,16 @@ import time
 from hashlib import sha256
 from typing import cast
 
+import httpx
+
 from ...backends import load as load_backend
 from ...config import FleetConfig
+from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, EngineError, first_output_timeout
-from ...engines.connector import PrefillResult
+from ...engines.connector import PrefillResult, RendezvousConnector
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
+from ...runtime.role_switch import engine_side, place_pair
 from .engines import PROBE_PROMPT
 from .evidence import pair_snapshot, same_generation
 from .report import Report
@@ -18,9 +22,18 @@ from .report import Report
 
 async def gate_produce(
     cfg: FleetConfig, live: set[str], client: EngineClient, rep: Report
-) -> dict[str, PrefillResult]:
+) -> dict[str, PrefillResult | None]:
     print("produce")
-    handoffs: dict[str, PrefillResult] = {}
+    handoffs: dict[str, PrefillResult | None] = {}
+    if isinstance(client.kv, RendezvousConnector):
+        # A rendezvous prefill leg completes only with its decode leg.
+        for spec in cfg.engines:
+            if spec.iid in live:
+                handoffs[spec.iid] = None
+                rep.ok(f"{spec.iid} hands off by rendezvous; its consume pairs check the transfer")
+            else:
+                rep.skip(f"{spec.iid} produce: unreachable")
+        return handoffs
     body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 1, "temperature": 0.0}
     for spec in cfg.engines:
         if spec.iid not in live:
@@ -39,7 +52,7 @@ async def gate_produce(
 async def gate_consume(
     cfg: FleetConfig,
     live: set[str],
-    handoffs: dict[str, PrefillResult],
+    handoffs: dict[str, PrefillResult | None],
     client: EngineClient,
     rep: Report,
     mesh: bool,
@@ -70,6 +83,12 @@ async def gate_consume(
         **dialect.decode_probe_extras(4),
     }
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
+    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    launches = (
+        await attested_launches([by_id[iid] for iid in ids], timeout_s=cfg.health_timeout_s)
+        if switcher is not None or isinstance(client.kv, RendezvousConnector)
+        else {}
+    )
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
         record: dict[str, object] = {"producer": src, "consumer": dst}
@@ -82,20 +101,30 @@ async def gate_consume(
                 before_dst = await pair_snapshot(cfg, dst)
                 record["producer_before"] = before_src
                 record["consumer_before"] = before_dst
+            if switcher is not None:
+                async with httpx.AsyncClient(
+                    timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                ) as control:
+                    await place_pair(
+                        switcher,
+                        control,
+                        (by_id[src].url, launches.get(src)),
+                        (by_id[dst].url, launches.get(dst)),
+                    )
             attempt = {**body, **dialect.cold_probe_extras()}
             deadline = asyncio.timeout(cfg.request_timeout_s)
             async with deadline:
-                started = time.monotonic()
-                params = await client.prefill(by_id[src].url, "/v1/completions", attempt, {})
-                prefill_seconds = time.monotonic() - started
+                handoff = await client.start_handoff(
+                    by_id[src].url, "/v1/completions", attempt, {}, producer=launches.get(src)
+                )
                 started = decode_started = time.monotonic()
                 tokens = 0
-                async for batch in client.decode(
+                async for batch in client.decode_handoff(
+                    handoff,
                     by_id[dst].url,
                     "/v1/completions",
                     attempt,
                     {},
-                    params,
                     first_token_timeout_s=cfg.first_token_timeout_s,
                 ):
                     for event in batch:
@@ -124,17 +153,17 @@ async def gate_consume(
                 )
                 if count_delta < 1 or transfer_seconds <= 0:
                     raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
-                descriptor = params.parameters()
+                descriptor = handoff.parameters
                 record.update(
                     status="passed",
-                    connector=params.connector,
+                    connector=handoff.connector,
                     transfer_metric=load_backend(cfg.backend).metrics.transfer_series,
                     transfer_mode=descriptor.get("transfer_mode"),
                     remote_engine_id=descriptor.get("remote_engine_id"),
                     remote_host=descriptor.get("remote_host"),
                     remote_port=descriptor.get("remote_port"),
-                    descriptor_sha256=sha256(params.descriptor_json.encode()).hexdigest(),
-                    prefill_seconds=prefill_seconds,
+                    descriptor_sha256=sha256(handoff.descriptor_json.encode()).hexdigest(),
+                    prefill_seconds=handoff.prefill_seconds,
                     decode_seconds=decode_seconds,
                     first_token_seconds=first_token_seconds,
                     transfer_count_delta=count_delta,

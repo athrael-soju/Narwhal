@@ -9,7 +9,8 @@ import msgpack
 
 from narwhal.backends import load
 from narwhal.backends.sglang import attestation, plan, runtime
-from narwhal.backends.sglang.identity import parse_generation
+from narwhal.backends.sglang.identity import SglangIdentity
+from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.observability.journal import RunJournal
@@ -62,14 +63,28 @@ class ConnectorTests(unittest.TestCase):
 
 
 class IdentityAndEventTests(unittest.TestCase):
-    def test_generation_sums_the_startup_phases(self):
-        metrics = (
-            'sglang:startup_time_seconds{phase="load_weight"} 2.5\n'
-            'sglang:startup_time_seconds{phase="scheduler_e2e"} 7.25\n'
-        )
-        self.assertEqual(parse_generation(metrics), 9.75)
-        with self.assertRaises(ValueError):
-            parse_generation("sglang:num_running_reqs 0\n")
+    def test_process_start_comes_from_the_host(self):
+        self.assertFalse(SglangIdentity.reports_process_start)
+
+        async def read(**kwargs):
+            return await fetch_engine_identity(
+                "http://engine",
+                reader=SglangIdentity(),
+                transport=httpx.MockTransport(
+                    lambda request: (
+                        httpx.Response(200, json={"version": "1.0", "api_key": "secret"})
+                        if request.url.path == "/server_info"
+                        else httpx.Response(200, json={"process_start_time_seconds": 42.5})
+                    )
+                ),
+                **kwargs,
+            )
+
+        with self.assertRaisesRegex(ValueError, "sidecar"):
+            asyncio.run(read())
+        self.assertEqual(asyncio.run(read(process=lambda: 7.0)).process_start_time_seconds, 7.0)
+        identity = asyncio.run(read(attestation_url="http://sidecar:9/v1/attestation"))
+        self.assertEqual((identity.version, identity.process_start_time_seconds), ("1.0", 42.5))
 
     def test_salt_and_adapter_key_the_first_root_block(self):
         payload = msgpack.packb(
@@ -134,6 +149,15 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(decode_cuda_graph_memory_gb=0), "decode_cuda_graph_memory_gb"),
             (runtime_record(extra_args=["--page-size", "64"]), "--page-size"),
             (runtime_record(environment={"SGLANG_HOST_IP": "x"}), "SGLANG_HOST_IP"),
+            (runtime_record(role="decode"), "runtime.role is set by the router"),
+            (
+                runtime_record(
+                    connector="nixl",
+                    expected_packages={"sglang": "0.5.21", "nixl": "1.5.0"},
+                    decode_cuda_graph_memory_gb=None,
+                ),
+                "runtime.role must be prefill or decode",
+            ),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 plan.validate_runtime(record)
@@ -142,8 +166,28 @@ class LaunchTests(unittest.TestCase):
                 connector="nixl",
                 expected_packages={"sglang": "0.5.21", "nixl": "1.5.0"},
                 decode_cuda_graph_memory_gb=None,
+                role="decode",
             )
         )
+
+    def test_a_fixed_role_engine_launches_in_its_role(self):
+        runtime = runtime_record(
+            connector="nixl",
+            expected_packages={"sglang": "0.5.21", "nixl": "1.5.0"},
+            role="decode",
+        )
+        runtime.pop("decode_cuda_graph_memory_gb", None)
+        args, transfer = plan.serve_args(
+            {"runtime": runtime, "tensor_parallel_size": 1},
+            model="/model",
+            served_name="m",
+            host="0.0.0.0",
+            port=8000,
+            kv_events=None,
+        )
+        self.assertEqual(args[args.index("--disaggregation-mode") + 1], "decode")
+        self.assertNotIn("--enable-pd-role-switch", args)
+        self.assertEqual((transfer["launch_role"], transfer["role_switch"]), ("decode", False))
 
     def test_every_engine_launches_as_prefill_with_the_pins(self):
         record = {"runtime": runtime_record(), "tensor_parallel_size": 2}

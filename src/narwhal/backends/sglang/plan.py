@@ -69,6 +69,12 @@ def validate_runtime(runtime: dict) -> None:
         or runtime.get("kv_cache_dtype") != "auto"
     ):
         raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
+    if name not in ROLE_SWITCH_CONNECTORS and runtime.get("role") not in ("prefill", "decode"):
+        raise ValueError(
+            f"runtime.role must be prefill or decode; {name} engines keep their launch role"
+        )
+    if name in ROLE_SWITCH_CONNECTORS and "role" in runtime:
+        raise ValueError(f"runtime.role is set by the router for {name} engines")
     if name in ROLE_SWITCH_CONNECTORS:
         memory = runtime.get("decode_cuda_graph_memory_gb")
         if (
@@ -126,11 +132,12 @@ def serve_args(
     runtime = record["runtime"]
     name = connector(runtime)
     switches = name in ROLE_SWITCH_CONNECTORS
+    # A switching engine starts as prefill and the router switches decode engines at admission:
+    # an engine launched as decode fails after a decode-prefill-decode round trip.
+    role = "prefill" if switches else runtime["role"]
     transfer = {
         "transfer_backend": name,
-        # Every engine starts as prefill; the router switches decode engines at admission.
-        # An engine launched as decode fails after a decode-prefill-decode round trip.
-        "launch_role": "prefill",
+        "launch_role": role,
         "role_switch": switches,
         **(
             {"decode_cuda_graph_memory_gb": float(runtime["decode_cuda_graph_memory_gb"])}
@@ -167,7 +174,7 @@ def serve_args(
         "--enable-metrics",
         "--enable-cache-report",
         "--disaggregation-mode",
-        "prefill",
+        role,
         "--disaggregation-transfer-backend",
         name,
         *(["--enable-pd-role-switch"] if switches else []),

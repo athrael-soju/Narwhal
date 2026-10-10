@@ -51,6 +51,7 @@ async def check_process_identities(
                     transport=router.lifecycle_transport,
                     headers=router.engines._auth(None),
                     reader=load_backend(cfg.backend).identity,
+                    attestation_url=spec.attestation_url,
                 )
                 if not spec.attestation_url:
                     return None, "attestation_url is not configured"
@@ -114,7 +115,7 @@ async def capture_process_identities(
     specs = {spec.iid: spec for spec in cfg.engines}
     starts: dict[str, float] = {}
     failures: dict[str, str] = {}
-    if cfg.engine_contract is None or cfg.engine_contract.missing():
+    if cfg.engine_contract is None or cfg.contract_missing():
         detail = "lifecycle drain requires a complete engine_contract"
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
@@ -125,6 +126,7 @@ async def capture_process_identities(
                 transport=transport,
                 headers=cfg.engine_headers(),
                 reader=load_backend(cfg.backend).identity,
+                attestation_url=specs[iid].attestation_url,
             )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"

@@ -21,10 +21,11 @@ def residency_arguments(plan: dict, checked: dict) -> list[str]:
 
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
+    backend = engine_backend(plan.get("engine"))
     if plan.get("backend") == "native":
-        live_native(run, plan, checked)
+        process = ["--engine-pid", str(live_native(run, plan, checked)["pid"])]
     else:
-        live_container(run, checked)
+        process = ["--engine-container", live_container(run, checked)]
     role = plan.get("role", "")
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
@@ -50,6 +51,8 @@ def serve(run: Path) -> int:
         "--port",
         str(url.port),
         "--backend",
-        engine_backend(plan.get("engine")).name,
+        backend.name,
     ]
+    if not backend.identity.reports_process_start:
+        arguments += process
     return attest_main(arguments + residency_arguments(plan, checked))

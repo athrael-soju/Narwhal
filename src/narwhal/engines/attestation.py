@@ -5,11 +5,12 @@ import asyncio
 import json
 import math
 import re
+import subprocess
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from uuid import uuid4
 
 import httpx
@@ -20,7 +21,7 @@ from ..backends import DEFAULT_BACKEND, renamed_fields
 from ..backends import load as load_backend
 from ..backends import names as backend_names
 from ..cli_support import add_version_argument
-from ..config import EngineContract
+from ..config import EngineContract, EngineSpec
 from ..config.model import current_contract_names
 from ..contracts import (
     ATTESTATION,
@@ -29,10 +30,12 @@ from ..contracts import (
     validate_document,
     versioned,
 )
+from .host_process import process_clock
 from .residency import ResidencyIndex
 from .residency_feed import ResidencyFeed
 
 ATTESTATION_PATH = "/v1/attestation"
+PROCESS_PATH = "/v1/process"
 RESIDENCY_PATH = "/v1/residency"
 # Socket names inside the launch plan's cache-event directory; the launcher uses the same.
 EVENTS_SOCKET = "events.sock"
@@ -46,9 +49,24 @@ class EngineIdentity:
 
 
 class EngineIdentityReader(ABC):
+    # False when the engine publishes no process start; its sidecar measures it on the host.
+    reports_process_start: ClassVar[bool] = True
+    # The contract fields the backend attests; None means every field.
+    contract_fields: ClassVar[frozenset[str] | None] = None
+
+    @abstractmethod
+    async def version(
+        self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
+    ) -> str: ...
+
     @abstractmethod
     async def read(
-        self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: Mapping[str, str] | None = None,
+        *,
+        process_start: float | None = None,
     ) -> EngineIdentity: ...
 
     @abstractmethod
@@ -103,10 +121,7 @@ def _read_contract(raw: Any) -> EngineContract:
     int_fields = {"connector_version", "kv_heads", "head_size", "hidden_layers"}
     for name in bool_fields:
         value = raw.get(name, defaults[name])
-        if name == "enforce_handshake_compat":
-            if not isinstance(value, bool):
-                raise ValueError(f"contract.{name} must be a boolean")
-        elif value is not None and not isinstance(value, bool):
+        if value is not None and not isinstance(value, bool):
             raise ValueError(f"contract.{name} must be a boolean or null")
     for name in int_fields:
         value = raw.get(name, defaults[name])
@@ -136,13 +151,13 @@ def _read_contract(raw: Any) -> EngineContract:
         kv_role=cast(str, values["kv_role"]),
         transfer_mode=cast(str, values["transfer_mode"]),
         speculative_config=cast(str, values["speculative_config"]),
-        enforce_handshake_compat=cast(bool, values["enforce_handshake_compat"]),
+        enforce_handshake_compat=cast(bool | None, values["enforce_handshake_compat"]),
     )
     if not contract.engine_version:
         raise ValueError("contract.engine_version is required")
     if not contract.connector:
         raise ValueError("contract.connector is required")
-    if not contract.enforce_handshake_compat:
+    if contract.enforce_handshake_compat is False:
         raise ValueError("contract.enforce_handshake_compat must stay true")
     if contract.image_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", contract.image_digest):
         raise ValueError("contract.image_digest must be an immutable sha256 digest")
@@ -180,11 +195,59 @@ async def fetch_engine_identity(
     transport: httpx.AsyncBaseTransport | None = None,
     headers: dict[str, str] | None = None,
     reader: EngineIdentityReader | None = None,
+    attestation_url: str | None = None,
+    process: Callable[[], float] | None = None,
 ) -> EngineIdentity:
     if reader is None:
         reader = load_backend(DEFAULT_BACKEND).identity
+    start = None
+    if not reader.reports_process_start:
+        if process is not None:
+            # A host process read can run docker; it stays off the event loop.
+            start = await asyncio.to_thread(process)
+        elif attestation_url:
+            start = await read_process_start(
+                attestation_url, timeout_s=timeout_s, transport=transport
+            )
+        else:
+            raise ValueError("the engine publishes no process start; read it through its sidecar")
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport, headers=headers) as client:
-        return await reader.read(client, engine_base)
+        return await reader.read(client, engine_base, process_start=start)
+
+
+async def read_process_start(
+    attestation_url: str,
+    *,
+    timeout_s: float = 5.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> float:
+    url = httpx.URL(attestation_url).copy_with(path=PROCESS_PATH, query=None)
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    value = response.json().get("process_start_time_seconds")
+    if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+        raise ValueError(f"{url} returned no process start time")
+    return float(value)
+
+
+async def attested_launches(
+    specs: list[EngineSpec],
+    *,
+    timeout_s: float,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, dict[str, Any]]:
+    # Each engine's attested launch record holds its handoff and role-switch settings.
+    launches: dict[str, dict[str, Any]] = {}
+    async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+        for spec in specs:
+            if not spec.attestation_url:
+                raise ValueError(f"{spec.iid} has no attestation URL for its launch record")
+            response = await client.get(spec.attestation_url)
+            response.raise_for_status()
+            launch = response.json().get("launch")
+            launches[spec.iid] = launch if isinstance(launch, dict) else {}
+    return launches
 
 
 def make_attestation(
@@ -302,6 +365,7 @@ def build_app(
     transport: httpx.AsyncBaseTransport | None = None,
     residency: ResidencyIndex | None = None,
     reader: EngineIdentityReader | None = None,
+    process: Callable[[], float] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
@@ -314,8 +378,9 @@ def build_app(
                 timeout_s=timeout_s,
                 transport=transport,
                 reader=reader,
+                process=process,
             )
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError) as exc:
             raise HTTPException(
                 status_code=503, detail=f"engine identity unreadable: {exc}"
             ) from exc
@@ -330,6 +395,17 @@ def build_app(
     async def health() -> dict[str, str]:
         await current_identity()
         return {"status": "ok"}
+
+    if process is not None:
+
+        @app.get(PROCESS_PATH)
+        async def process_start() -> dict[str, float]:
+            try:
+                return {"process_start_time_seconds": await asyncio.to_thread(process)}
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                raise HTTPException(
+                    status_code=503, detail=f"engine process unreadable: {exc}"
+                ) from exc
 
     @app.get(ATTESTATION_PATH)
     async def attestation() -> dict[str, Any]:
@@ -394,6 +470,13 @@ def main(argv: list[str] | None = None) -> int:
         help="directory holding the engine's cache-event sockets; enables residency routes",
     )
     parser.add_argument("--model", help="served model name; required with --kv-events")
+    process_owner = parser.add_mutually_exclusive_group()
+    process_owner.add_argument(
+        "--engine-container", help="engine container whose start time identifies the process"
+    )
+    process_owner.add_argument(
+        "--engine-pid", type=int, help="engine process ID whose start time identifies the process"
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
@@ -402,6 +485,11 @@ def main(argv: list[str] | None = None) -> int:
     from ..cli_errors import failure
 
     backend = load_backend(args.backend)
+    process = None
+    if args.engine_container is not None or args.engine_pid is not None:
+        process = process_clock(container=args.engine_container, pid=args.engine_pid)
+    elif not backend.identity.reports_process_start:
+        parser.error(f"--backend {args.backend} requires --engine-container or --engine-pid")
 
     try:
         document = AttestationDocument.load(args.document)
@@ -410,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         identity = asyncio.run(
             fetch_engine_identity(
-                args.engine_base, timeout_s=args.timeout_s, reader=backend.identity
+                args.engine_base, timeout_s=args.timeout_s, reader=backend.identity, process=process
             )
         )
         if identity.version != document.contract.engine_version:
@@ -418,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"engine runs version {identity.version}, "
                 f"document expects {document.contract.engine_version}"
             )
-    except (OSError, ValueError, httpx.HTTPError) as exc:
+    except (OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
         return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)
     residency = feed = None
     if args.kv_events is not None:
@@ -439,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_s=args.timeout_s,
                 residency=residency,
                 reader=backend.identity,
+                process=process,
             ),
             host=args.host,
             port=args.port,

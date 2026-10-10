@@ -1,29 +1,22 @@
 from __future__ import annotations
 
-import math
-import re
 from collections.abc import Mapping
 from typing import Any
 
 import httpx
 
+from ...config import EngineContract
 from ...engines.attestation import EngineIdentity, EngineIdentityReader
 
-# SGLang publishes no process start time. It measures its startup phases once per launch, so
-# their sum tells one engine process from the next.
-_STARTUP = re.compile(
-    r"^sglang:startup_time_seconds(?:\{[^}]*\})?\s+([0-9.eE+-]+)(?:\s|$)", re.MULTILINE
-)
-
-
-def parse_generation(metrics: str) -> float:
-    values = [float(value) for value in _STARTUP.findall(metrics)]
-    if not values:
-        raise ValueError("/metrics has no sglang:startup_time_seconds")
-    total = math.fsum(values)
-    if not math.isfinite(total) or total <= 0:
-        raise ValueError("sglang:startup_time_seconds must be positive and finite")
-    return total
+# vLLM's connector, cache manager and handshake fields have no SGLang counterpart.
+ATTESTED_FIELDS = frozenset(EngineContract().fields()) - {
+    "connector_version",
+    "cross_layers_blocks",
+    "hybrid_kv_cache_manager",
+    "kv_role",
+    "transfer_mode",
+    "enforce_handshake_compat",
+}
 
 
 def server_version(payload: Any) -> str:
@@ -44,17 +37,28 @@ def launch_option(payload: Any, name: str) -> str | None:
 
 
 class SglangIdentity(EngineIdentityReader):
-    async def read(
+    reports_process_start = False
+    contract_fields = ATTESTED_FIELDS
+
+    async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
-    ) -> EngineIdentity:
-        base = base.rstrip("/")
+    ) -> str:
         # /server_info also carries the engine's API keys; only the version leaves this call.
-        info = await client.get(f"{base}/server_info", headers=headers)
+        info = await client.get(f"{base.rstrip('/')}/server_info", headers=headers)
         info.raise_for_status()
-        version = server_version(info.json())
-        metrics = await client.get(f"{base}/metrics", headers=headers)
-        metrics.raise_for_status()
-        return EngineIdentity(version, parse_generation(metrics.text))
+        return server_version(info.json())
+
+    async def read(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: Mapping[str, str] | None = None,
+        *,
+        process_start: float | None = None,
+    ) -> EngineIdentity:
+        if process_start is None:
+            raise ValueError("SGLang publishes no process start; its sidecar reads it on the host")
+        return EngineIdentity(await self.version(client, base, headers), process_start)
 
     def sequence_limit(self, attestation: Any) -> int | None:
         value = launch_option(attestation, "--max-running-requests")

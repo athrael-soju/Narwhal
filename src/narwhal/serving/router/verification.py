@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from ...engines.client import EngineError, InferenceProbe, first_output_timeout, leg_failure_class
+from ...engines.client import (
+    EngineError,
+    InferenceProbe,
+    ProbeLeg,
+    first_output_timeout,
+    leg_failure_class,
+)
 from ...types import LEG_OVERLOAD, LEG_STREAM, Role
 
 if TYPE_CHECKING:
@@ -190,6 +196,9 @@ class SuspectVerifier:
         )
         if others:
             order.append(others[0].iid)
+        if scheduler.availability.roles_bound:
+            # An engine bound to its role cannot serve both legs of a standalone probe.
+            return order or [""]
         return [*order, ""]
 
     async def _verify_path(self, iid: str, url: str, recorded: str) -> bool:
@@ -197,7 +206,14 @@ class SuspectVerifier:
 
         A failed producer leg tests nothing on `iid`, so the next producer runs the probe.
         """
+        scheduler = self.router.scheduler
+        if scheduler.availability.roles_bound:
+            inst = self.router.monitor.instances.get(iid)
+            if inst is not None and inst.role is Role.PREFILL:
+                return await self._verify_producer(iid, url)
         for producer in self.producers(iid, recorded):
+            if not producer and scheduler.availability.roles_bound:
+                return self._no_peer(iid, "producer", recorded_producer=recorded or None)
             inst = self.router.monitor.instances.get(producer) if producer else None
             probe = await self.router.engines.probe_inference(
                 url,
@@ -228,6 +244,55 @@ class SuspectVerifier:
                 )
                 continue
             return self._resolve_inference_probe(iid, probe, **fields)
+        return False
+
+    async def _verify_producer(self, iid: str, url: str) -> bool:
+        """Probe a prefill-bound suspect as the producer of each live decode peer in turn."""
+        scheduler = self.router.scheduler
+        consumers = sorted(
+            scheduler.role_pool(Role.DECODE, scheduler.live_instances(exclude={iid})),
+            key=lambda inst: (len(inst.decode), inst.iid),
+        )
+        for consumer in consumers:
+            probe = await self.router.engines.probe_inference(
+                consumer.url,
+                prefill_url=url,
+                deadline_s=self.router.cfg.probe_deadline_s(),
+                producer=self.router.launches.get(iid),
+            )
+            fields = {"consumer": consumer.iid}
+            if probe is None:
+                return self._resolve_inference_probe(iid, probe, **fields)
+            prefill, decode = probe.prefill, probe.decode
+            if prefill.failed is None and not prefill.inconclusive and decode.failed is not None:
+                self._probe_outcome(
+                    iid,
+                    "verify_inference",
+                    "consumer_failed",
+                    consumer_class=decode.failed,
+                    **fields,
+                )
+                log.info(
+                    "suspect %s inference probe: consumer %s leg failed %s; "
+                    "trying the next consumer",
+                    iid,
+                    consumer.iid,
+                    decode.failed,
+                )
+                continue
+            # The suspect's verdict rests on its own leg; a decode leg after a failed
+            # prefill tested nothing.
+            own = InferenceProbe(
+                prefill=prefill,
+                decode=decode if prefill.failed is None else ProbeLeg(),
+            )
+            return self._resolve_inference_probe(iid, own, **fields)
+        return self._no_peer(iid, "consumer")
+
+    def _no_peer(self, iid: str, peer: str, **fields: Any) -> bool:
+        """Defer a role-bound suspect that has no live peer in the opposite role."""
+        self._probe_outcome(iid, "verify_inference", "inconclusive", reason=f"no_{peer}", **fields)
+        log.info("suspect %s inference probe needs a live %s; verdict deferred", iid, peer)
         return False
 
     def _resolve_inference_probe(

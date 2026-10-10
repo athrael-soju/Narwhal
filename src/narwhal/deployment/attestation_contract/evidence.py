@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from ...engines.attestation import fetch_engine_identity
+from ...engines.host_process import process_clock
 from ..launch_engine.backend import engine_backend
 from ..launch_engine.plan import read_env
 from ..launch_engine.runtime import digest, write_private
@@ -82,7 +83,12 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
     key = values.get(engine.api_key_env, "")
     headers = {"Authorization": f"Bearer {key}"} if key else None
     identity = asyncio.run(
-        fetch_engine_identity(plan["endpoint"], headers=headers, reader=backend.identity)
+        fetch_engine_identity(
+            plan["endpoint"],
+            headers=headers,
+            reader=backend.identity,
+            process=process_clock(pid=process["pid"]),
+        )
     )
     if (
         identity.version != startup[engine.version_field]

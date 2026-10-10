@@ -43,18 +43,28 @@ def _launch_arg(payload: Any, name: str) -> str | None:
 
 
 class VllmIdentity(EngineIdentityReader):
-    async def read(
+    async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
-    ) -> EngineIdentity:
-        base = base.rstrip("/")
-        version_response = await client.get(f"{base}/version", headers=headers)
-        version_response.raise_for_status()
-        version = version_response.json().get("version")
+    ) -> str:
+        response = await client.get(f"{base.rstrip('/')}/version", headers=headers)
+        response.raise_for_status()
+        version = response.json().get("version")
         if not isinstance(version, str) or not version.strip():
             raise ValueError("/version returned no version")
-        metrics_response = await client.get(f"{base}/metrics", headers=headers)
+        return version.strip()
+
+    async def read(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: Mapping[str, str] | None = None,
+        *,
+        process_start: float | None = None,
+    ) -> EngineIdentity:
+        version = await self.version(client, base, headers)
+        metrics_response = await client.get(f"{base.rstrip('/')}/metrics", headers=headers)
         metrics_response.raise_for_status()
-        return EngineIdentity(version.strip(), parse_process_start(metrics_response.text))
+        return EngineIdentity(version, parse_process_start(metrics_response.text))
 
     def sequence_limit(self, attestation: Any) -> int | None:
         value = _launch_arg(attestation, "--max-num-seqs")
