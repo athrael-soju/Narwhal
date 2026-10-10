@@ -1,5 +1,6 @@
 ---
 description: Run engine actions, configuration overlays, and AIPerf load jobs from the fleet control service.
+glightbox: true
 ---
 
 # Controlling the fleet
@@ -18,6 +19,10 @@ The service runs on the router host, listens on loopback, and authenticates API 
 Hooks are the commands, defined in the private configuration, that perform each change, such as stopping an engine or restarting the router. Drains and readmits use the router's lifecycle API instead.
 
 Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it closes the session's record and leaves the fleet as it is. **Restore baseline** undoes the session's changes.
+
+## Walkthrough
+
+[![Fleet control walkthrough title frame.](../assets/fleet-control/walkthrough/thumbnail.png)](../assets/fleet-control/walkthrough/index.html){ .glightbox data-type="external" data-width="1600px" data-height="956px" }
 
 ## Pages
 

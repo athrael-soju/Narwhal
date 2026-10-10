@@ -8,9 +8,7 @@ description: Narwhal documentation for development, fleet deployment, operation,
   <img src="assets/social-preview.png" alt="The Narwhal logo, a black narwhal with a teal spiral tusk above the wordmark">
 </div>
 
-Narwhal is a Python framework for disaggregated LLM inference. It assigns prefill and decode roles across dual-capability engines as demand changes.
-
-The [README](https://github.com/athrael-soju/Narwhal#what-is-narwhal) defines the product contract.
+Narwhal is a Python framework for disaggregated LLM inference. It assigns prefill and decode roles across dual-capability engines as demand changes. Read the [README](https://github.com/athrael-soju/Narwhal#what-is-narwhal) for an overview & contract.
 
 ## Run Narwhal
 
