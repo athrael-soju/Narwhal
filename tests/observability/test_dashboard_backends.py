@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import re
@@ -14,7 +15,7 @@ from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
 # The vLLM rendering, pinned so a dashboard change is deliberate.
-VLLM_SHA256 = "1593ddf3b05837666938fca218c09c731fa0326b00876b8cde4c4d6e6da3a6d0"
+VLLM_SHA256 = "79823d80d5d23f640375b58bcce770019d72192fdde87a07a4870bfe2694747b"
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
@@ -42,7 +43,7 @@ class BackendDashboardTests(unittest.TestCase):
                 for template in load_backend(name).metrics.dashboard_series.values():
                     self.assertIn("@sel", template)
 
-    def test_engine_table_labels_each_engine_with_its_backend(self):
+    def test_engine_table_shows_each_engine_backend_icon(self):
         for name in names():
             with self.subTest(backend=name):
                 table = artifacts.render_dashboard(SHIPPED, name)["spec"]["elements"]["panel-7"]
@@ -53,7 +54,13 @@ class BackendDashboardTests(unittest.TestCase):
                     [
                         {
                             "type": "value",
-                            "options": {b: {"text": load_backend(b).label} for b in names()},
+                            "options": {
+                                b: {
+                                    "text": "data:image/png;base64,"
+                                    + base64.b64encode(load_backend(b).icon).decode()
+                                }
+                                for b in names()
+                            },
                         }
                     ],
                 )

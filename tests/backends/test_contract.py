@@ -44,6 +44,8 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         backend = self.backend
         self.assertEqual(backend.name, self.name)
         self.assertTrue(backend.label)
+        self.assertTrue(backend.icon.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertLess(len(backend.icon), 16384)
         self.assertIn(self.name, sim.PROTOCOLS)
         self.assertIn(backend.default_connector, backend.connectors)
         for key, kv in backend.connectors.items():

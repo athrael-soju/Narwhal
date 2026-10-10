@@ -80,6 +80,8 @@ Issues = "https://github.com/athrael-soju/Narwhal/issues"
 [tool.setuptools.package-data]
 narwhal = ["py.typed", "fleet.example.json"]
 "narwhal.dev" = ["small-cuda-v1.json", "reference-v1.json"]
+"narwhal.backends.vllm" = ["icon.png"]
+"narwhal.backends.sglang" = ["icon.png"]
 
 [tool.ruff]
 line-length = 100

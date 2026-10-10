@@ -666,8 +666,18 @@
                         ]
                       },
                       {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "image"
+                        }
+                      },
+                      {
                         "id": "custom.width",
-                        "value": 80
+                        "value": 70
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
                       }
                     ]
                   },
