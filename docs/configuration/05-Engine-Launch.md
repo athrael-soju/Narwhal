@@ -213,7 +213,9 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 
 The model path names a checkpoint directory. The launcher rejects a GGUF file.
 
-A `mooncake` engine launches as prefill with `--enable-pd-role-switch`, and the router switches each decode engine through `POST /pd_role_switch` and swaps roles at runtime. A `nixl` engine serves the role in `runtime.role` for its lifetime, so the fleet sets `pin` on every engine.
+A `mooncake` engine launches as prefill with `--enable-pd-role-switch`, and the router switches each decode engine through `POST /pd_role_switch` and swaps roles at runtime. The launcher adds `--disaggregation-decode-enable-radix-cache` to a `mooncake` engine unless `--disable-radix-cache` is set, so a switched decode engine evicts cached KV to admit requests. A `nixl` engine serves the role in `runtime.role` for its lifetime, so the fleet sets `pin` on every engine.
+
+Give each engine on a host its own RDMA device with `--disaggregation-ib-device`. Engines that share one device slow each other's KV transfers.
 
 The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size` and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph` and `--enable-mixed-chunk`.
 
