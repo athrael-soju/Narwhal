@@ -478,7 +478,9 @@ async def serve_request(
     if state.outcome["error"] is not None:
         return _failure_response(state)
     try:
-        out = reassemble(events, endpoint=endpoint)
+        out = reassemble(
+            events, endpoint=endpoint, choice_fields=router.engines.dialect.choice_fields
+        )
     except ValueError as exc:
         return _terminal_failure(state, exc)
     state.finish("completed")

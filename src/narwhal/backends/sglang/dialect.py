@@ -19,6 +19,8 @@ class SglangDialect(EngineDialect):
     # SGLang's uvicorn server closes an idle connection after 5 s.
     keepalive_expiry_s = 4.0
     engine_output_fields = ("token_ids", "prompt_token_ids")
+    # The stop token or string that ended the output.
+    choice_fields = ("matched_stop",)
     # A client request ID or rendezvous would collide with the router's own.
     reserved_fields = ("rid", *BOOTSTRAP_FIELDS)
     tokenize_passthrough: ClassVar[tuple[str, ...]] = (

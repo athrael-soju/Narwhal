@@ -16,6 +16,7 @@ from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
+from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
 from tests.fixtures import fleet
@@ -98,6 +99,29 @@ class ContextLimitTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(paths, [("GET", "/v1/models")])
             with self.assertRaisesRegex(RuntimeError, "no valid max_model_len for absent"):
                 await engine_context_limit(client, "http://e", "absent", dialect)
+
+
+class ReassemblyTests(unittest.TestCase):
+    def test_a_stop_ended_stream_keeps_the_matched_stop(self):
+        dialect = load("sglang").dialect
+        for endpoint, piece in (
+            ("/v1/completions", {"text": "Red"}),
+            ("/v1/chat/completions", {"delta": {"content": "Red"}}),
+        ):
+            chunks = [
+                {"choices": [{"index": 0, **piece, "finish_reason": None, "matched_stop": None}]},
+                {"choices": [{"index": 0, "finish_reason": "stop", "matched_stop": 151645}]},
+            ]
+            events = [SseEvent("data: " + json.dumps(chunk), chunk) for chunk in chunks]
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaisesRegex(ValueError, "unsupported field"):
+                    reassemble(events, endpoint=endpoint)
+                choice = reassemble(events, endpoint=endpoint, choice_fields=dialect.choice_fields)[
+                    "choices"
+                ][0]
+                self.assertEqual(
+                    (choice["finish_reason"], choice["matched_stop"]), ("stop", 151645)
+                )
 
 
 class ConnectorTests(unittest.TestCase):
