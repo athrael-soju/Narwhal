@@ -196,6 +196,16 @@ class RoundTests(unittest.TestCase):
             engines = [iid for pair in members for iid in pair]
             self.assertEqual(len(engines), len(set(engines)))
 
+    def test_each_phase_keeps_every_engine_in_one_role(self):
+        engines = [f"n{i}" for i in range(1, 9)]
+        pairs = [(src, dst) for src in engines for dst in engines if src != dst]
+        phases = calibration.role_phases(pairs)
+        self.assertEqual(sorted(pair for phase in phases for pair in phase), sorted(pairs))
+        self.assertEqual(len(phases), 6)
+        for phase in phases:
+            producers = {src for src, _ in phase}
+            self.assertFalse(producers & {dst for _, dst in phase})
+
 
 class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
