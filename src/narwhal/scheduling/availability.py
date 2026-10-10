@@ -81,6 +81,10 @@ class EngineAvailability:
         self.on_eject = on_eject
         self.ejected: dict[str, float] = {}
         self.draining: set[str] = set()
+        # Engines changing roles on the engine side take no work until the change completes.
+        self.switching: set[str] = set()
+        # True when an engine serves only its current role's legs.
+        self.roles_bound = False
         self.failures: dict[str, Counter[str]] = {klass: Counter() for klass in LEG_CLASSES}
         self.liveness_misses: dict[str, int] = {}
         self._last_sweep = 0.0
@@ -213,6 +217,7 @@ class EngineAvailability:
             and inst.iid not in exclude
             and inst.iid not in self.ejected
             and inst.iid not in self.draining
+            and inst.iid not in self.switching
             and inst.iid not in self.quarantined
         ]
 
@@ -256,9 +261,10 @@ class EngineAvailability:
 
     def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
         """Return the engines in `instances` that hold `role`, else the unpinned ones."""
-        return [i for i in instances if i.role is role] or [
-            i for i in instances if i.iid not in self.pinned
-        ]
+        matching = [i for i in instances if i.role is role]
+        if matching or self.roles_bound:
+            return matching
+        return [i for i in instances if i.iid not in self.pinned]
 
     def role_covered_without(self, iid: str) -> bool:
         """Return whether another live engine places every role that `iid` places.

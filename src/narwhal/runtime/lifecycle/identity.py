@@ -70,6 +70,12 @@ async def check_process_identities(
                 if problems:
                     return None, "; ".join(problems)
                 router.attested(spec.iid, payload)
+                # Engines that switch roles themselves start in their launch role.
+                switched = await router.switch_role(
+                    spec.iid, router.monitor.instances[spec.iid].role
+                )
+                if switched is not None:
+                    return None, f"role switch failed: {switched}"
                 return identity.process_start_time_seconds, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 return None, f"process identity unavailable: {type(exc).__name__}"

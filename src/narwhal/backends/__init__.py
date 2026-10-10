@@ -37,6 +37,14 @@ class EngineBackend:
     # Earlier field names this backend wrote, by section ("contract", "engine").
     renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
+    def role_switcher(self, connector: str) -> RoleSwitcher | None:
+        switcher = self.role_switch
+        if switcher is None or (
+            switcher.connectors is not None and connector not in switcher.connectors
+        ):
+            return None
+        return switcher
+
     def connector(self, name: str) -> KvHandoff:
         try:
             return self.connectors[name]

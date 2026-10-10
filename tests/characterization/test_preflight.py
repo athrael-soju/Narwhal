@@ -135,7 +135,7 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_peer_release_rounds(self):
         router = self.router()
         now = [1000.0]
-        router.peer_release = PeerRelease(lambda: now[0])
+        router.peer_release = PeerRelease(lambda: now[0], load_backend("vllm").fabric)
         urls = {spec.url: spec.iid for spec in router.cfg.engines}
         calls = []
         missed = {"e1"}

@@ -122,6 +122,12 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 router.attested(spec.iid, payload)
+                if spec.iid in engines and (
+                    switched := await router.switch_role(
+                        spec.iid, router.monitor.instances[spec.iid].role
+                    )
+                ):
+                    outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
                 )

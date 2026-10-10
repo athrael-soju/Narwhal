@@ -232,7 +232,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_response_keeps_slo_met_and_peer_release_rounds(self):
         now = [100.0]
-        self.router.peer_release = PeerRelease(lambda: now[0])
+        self.router.peer_release = PeerRelease(lambda: now[0], load_backend("vllm").fabric)
         self.router.peer_release.track({"p": "ejected"})
         now[0] = 170.0
         self.assertEqual(self.router.peer_release.due(), ["p"])

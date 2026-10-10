@@ -152,7 +152,7 @@ def handoff(params: object) -> bool:
 
 
 class VllmWire:
-    def route(self, engine: SimulatedEngine, method: str, path: str) -> Reply | None:
+    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
         if (method, path) == ("GET", "/version"):
             return Reply(200, body=compact({"version": SIMULATED_VERSION}))
         return None
@@ -194,8 +194,65 @@ class VllmWire:
         }
 
 
+class SglangWire:
+    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+        if (method, path) == ("GET", "/server_info"):
+            state = {"disaggregation_mode": engine.role, "decode_cuda_graph_memory_gb": 0.0}
+            return Reply(
+                200,
+                body=compact(
+                    {
+                        "version": SIMULATED_VERSION,
+                        "disaggregation_mode": "prefill",
+                        "api_key": None,
+                        "internal_states": [state],
+                    }
+                ),
+            )
+        if (method, path) in (("GET", "/flush_cache"), ("POST", "/flush_cache")):
+            return Reply(200, "text/plain", b"Cache flushed.")
+        if (method, path) == ("POST", "/pd_role_switch"):
+            try:
+                role = json.loads(body).get("new_role")
+            except (ValueError, AttributeError):
+                role = None
+            if role not in ("prefill", "decode"):
+                return error(400, "new_role must be prefill or decode", "BadRequestError")
+            old, engine.role = engine.role, role
+            return Reply(
+                200,
+                body=compact({"success": True, "message": "ok", "old_role": old, "new_role": role}),
+            )
+        return None
+
+    def identity_metrics(self, engine: SimulatedEngine) -> str:
+        # The engine's startup phases stand in for a process start time.
+        return (
+            "# HELP sglang:startup_time_seconds Engine startup duration by phase in seconds.\n"
+            "# TYPE sglang:startup_time_seconds gauge\n"
+            f'sglang:startup_time_seconds{{phase="load_weight"}} '
+            f"{engine.process_start_time_seconds!r}\n"
+        )
+
+    def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
+        rid = payload.get("rid")
+        return rid if isinstance(rid, str) else None
+
+    def decode_error(self, payload: dict[str, Any]) -> Reply | None:
+        if type(payload.get("bootstrap_room")) is not int:
+            return error(
+                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
+            )
+        return None
+
+    def prefill_fields(
+        self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
+    ) -> dict[str, Any]:
+        return {}
+
+
 # One wire protocol per engine backend name.
-PROTOCOLS = {"vllm": VllmWire()}
+PROTOCOLS = {"sglang": SglangWire(), "vllm": VllmWire()}
 
 
 class SimulatedEngine:
@@ -216,6 +273,7 @@ class SimulatedEngine:
         self.frames_per_write = frames_per_write
         self.prefill_s = prefill_s
         self.process_start_time_seconds = time.time()
+        self.role = "prefill"
         self.late_ticks = 0
         self.prefilling = 0
         self.peak = {"prefill": 0, "decode": 0}
@@ -237,7 +295,7 @@ class SimulatedEngine:
         route = (method, path)
         if route == ("GET", "/health"):
             return Reply(200)
-        identity = self.wire.route(self, method, path)
+        identity = self.wire.route(self, method, path, body)
         if identity is not None:
             return identity
         if route == ("GET", "/metrics"):

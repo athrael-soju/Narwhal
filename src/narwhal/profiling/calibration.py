@@ -314,6 +314,7 @@ async def verify_calibration(
                 cfg.engine_contract,
                 timeout_s=cfg.health_timeout_s,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
                 transport=transport,
             )
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -531,6 +532,7 @@ async def calibrate(
             cfg.engine_contract,
             timeout_s=observation_timeout_s,
             headers=cfg.engine_headers(),
+            reader=load_backend(cfg.backend).identity,
         )
         for spec in cfg.engines
     }
@@ -626,6 +628,7 @@ async def calibrate(
                 cfg.engine_contract,
                 timeout_s=observation_timeout_s,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
             )
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             generation_errors.append(f"{spec.iid}: {type(exc).__name__}: {exc}")

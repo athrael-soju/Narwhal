@@ -57,6 +57,10 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
+        # Set when engines change roles on the engine side: a donor must be idle, and the
+        # callback applies each change.
+        self.switch_requires_idle = False
+        self.on_flip: Callable[[Instance, Role], None] | None = None
         # Refreshes a request's cache evidence older than the given seconds from current residency.
         self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
         self.roles = RoleChanges(self, flip_history)
