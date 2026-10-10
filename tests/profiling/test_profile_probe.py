@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import asdict, replace
@@ -29,6 +30,7 @@ from narwhal.profiling.probe.offline import merge_profiles, refit_saved_prefill
 from narwhal.profiling.probe.prefill import probe_prefill
 from narwhal.profiling.probe.sweep import Sweep, bounded_sweep, load_sequence_limits
 from narwhal.profiling.store import ProfileStore
+from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
@@ -822,6 +824,57 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
         )
+
+    async def test_each_pair_placement_resets_both_engine_caches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+        spec, peer = cfg.engines[0], cfg.engines[1]
+        dialect = load_backend("sglang").dialect
+        calls = []
+        status = 200
+
+        async def answer(request):
+            calls.append(f"{request.url.port} {request.url.path}")
+            return httpx.Response(status, text="pending requests")
+
+        class Switcher(RoleSwitcher):
+            requires_idle = True
+
+            async def switch(self, client, url, role, launch=None):
+                calls.append(f"{httpx.URL(url).port} {role.value}")
+
+        real = httpx.AsyncClient
+
+        def client(**kwargs):
+            return real(transport=httpx.MockTransport(answer), **kwargs)
+
+        pairing = SimpleNamespace(pairs={})
+        serve_as = fleet_probe._pair_roles(cfg, dialect, pairing, Switcher(), spec, peer, {})
+        own, other = httpx.URL(spec.url).port, httpx.URL(peer.url).port
+        with patch.object(fleet_probe.httpx, "AsyncClient", client):
+            await serve_as(Role.DECODE)
+            self.assertEqual(
+                calls,
+                [
+                    f"{other} prefill",
+                    f"{own} decode",
+                    f"{own} /flush_cache",
+                    f"{other} /flush_cache",
+                ],
+            )
+            status = 400
+            with self.assertRaisesRegex(RuntimeError, r"cache reset failed .*\(400\)"):
+                await serve_as(Role.PREFILL)
+
+    def test_a_finished_lane_stands_in_at_later_phase_switches(self):
+        phases = threading.Barrier(2)
+        stand_in = threading.Thread(target=fleet_probe._stand_in, args=(phases,))
+        stand_in.start()
+        for _ in range(3):
+            phases.wait(5)
+        phases.abort()
+        stand_in.join(5)
+        self.assertFalse(stand_in.is_alive())
 
     def test_paired_profile_lanes_run_disjoint_pairs(self):
         with tempfile.TemporaryDirectory() as folder:

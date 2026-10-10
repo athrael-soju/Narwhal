@@ -37,6 +37,31 @@ class SglangRoleSwitch(RoleSwitcher):
     requires_idle = True
     connectors = frozenset(ROLE_SWITCH_CONNECTORS)
 
+    def __init__(self) -> None:
+        # Times each engine entered prefill through this switcher.
+        self._generations: dict[str, int] = {}
+        # Per decode engine, the generation of each producer it took a handoff from since its
+        # own last switch.
+        self._received: dict[str, dict[str, int]] = {}
+
+    async def place(
+        self,
+        client: httpx.AsyncClient,
+        producer: tuple[str, Mapping[str, Any] | None],
+        consumer: tuple[str, Mapping[str, Any] | None],
+    ) -> None:
+        await super().place(client, producer, consumer)
+        source, target = producer[0].rstrip("/"), consumer[0].rstrip("/")
+        generation = self._generations.setdefault(source, 0)
+        received = self._received.get(target)
+        # A decode engine keeps each producer's transfer endpoint until it switches itself, and
+        # a producer that enters prefill again listens on a new one. An engine this switcher has
+        # not switched may hold endpoints from before it.
+        if received is None or received.get(source, generation) != generation:
+            await self.switch(client, target, Role.PREFILL, consumer[1])
+            await self.switch(client, target, Role.DECODE, consumer[1])
+        self._received[target][source] = generation
+
     async def switch(
         self,
         client: httpx.AsyncClient,
@@ -59,3 +84,6 @@ class SglangRoleSwitch(RoleSwitcher):
         if not isinstance(result, dict) or result.get("success") is not True:
             message = result.get("message") if isinstance(result, dict) else result
             raise ValueError(f"engine refused the switch to {role.value}: {message}")
+        self._received[base] = {}
+        if role is Role.PREFILL:
+            self._generations[base] = self._generations.get(base, 0) + 1

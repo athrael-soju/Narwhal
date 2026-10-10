@@ -120,13 +120,13 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. An SGLang engine that exports `sglang:num_running_reqs` without `sglang:cached_tokens_total` has served no cache hit and counts zero hits.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
 
 - The engine fails a warm sweep condition.
-- A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words.
+- A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words. With one-token blocks, any primer past its prefix qualifies.
 - The prefix-cache hit counter becomes unreadable during the warm sweep.
 - A warm case reuses zero cached tokens.
 - The measured warm cases cover fewer than two prefix lengths, two suffix lengths, or five cases.
