@@ -431,60 +431,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([grid["x"] for grid in row], [0, 8, 16])
         self.assertEqual(waiting_grid["y"], pressure_grid["y"] + pressure_grid["height"])
 
-    def test_dashboard_attributes_drops_and_failed_attempts_by_reason(self):
-        outcomes, outcome_grid = titled("Request outcomes")
-        outcome_colors = override_colors(outcomes)
-        dropped, dropped_grid = titled("Dropped requests by reason")
-        queries = legend_queries(dropped)
-        # Bar legend: (outcome, label, the outcome's series on Request outcomes).
-        bars = {
-            "refused: {{cause}}": ("refused", "cause", "refused (predictive)"),
-            "rejected: {{reason}}": ("rejected", "reason", "rejected (capacity)"),
-            "failed: {{reason}}": ("failed", "reason", "failed"),
-            "expired: {{reason}}": ("expired", "reason", "expired"),
-        }
-        self.assertEqual(set(queries), set(bars))
-        colors = override_colors(dropped)
-        for legend, (outcome, label, series) in bars.items():
-            with self.subTest(outcome=outcome):
-                expr = queries[legend]
-                self.assertTrue(
-                    expr.startswith(
-                        f"round(sum by({label}) (increase(narwhal_{outcome}_total"
-                        '{job="narwhal-router",instance=~"$router"}[$__range]))) > 0'
-                    ),
-                    expr,
-                )
-                self.assertEqual(colors[f"^{outcome}: "], outcome_colors[series])
-        for query in dropped["data"]["spec"]["queries"]:
-            self.assertTrue(query["spec"]["query"]["spec"]["instant"])
-        attempts, attempts_grid = titled("Failed attempts by reason")
-        [expr] = panel_queries({"spec": attempts})
-        self.assertIn("sum by(phase, reason) (increase(narwhal_attempt_failures_total{", expr)
-        colors = override_colors(attempts)
-        self.assertEqual(colors["^prefill: "], DASHBOARD_PALETTE["prefill"])
-        self.assertEqual(colors["^decode: "], DASHBOARD_PALETTE["decode"])
-        self.assertEqual(colors["^(admission|queue): "], DASHBOARD_PALETTE["router delay"])
-        for panel in (dropped, attempts):
-            self.assertEqual(panel["vizConfig"]["kind"], "bargauge")
-        # Request, attempt and producer engine read left to right under Request outcomes.
-        _, kv_grid = titled("Expired KV by producer")
-        row = (dropped_grid, attempts_grid, kv_grid)
-        self.assertEqual({grid["y"] for grid in row}, {outcome_grid["y"] + outcome_grid["height"]})
-        self.assertEqual([grid["x"] for grid in row], [0, 8, 16])
-
-    def test_dashboard_shows_expired_kv_per_producer_engine(self):
-        panel, _ = titled("Expired KV by producer")
-        self.assertEqual(
-            legend_queries(panel),
-            {
-                "{{iid}}": 'sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{job="engines",'
-                'iid=~"$iid"}[$__rate_interval]))'
-            },
-        )
-        color = panel["vizConfig"]["spec"]["fieldConfig"]["defaults"]["color"]
-        self.assertEqual(color, {"mode": "fixed", "fixedColor": DASHBOARD_PALETTE["severe"]})
-
     def test_router_event_loop_stays_the_last_row(self):
         spec = dashboard()["spec"]
         _, loop = titled("Router event loop")

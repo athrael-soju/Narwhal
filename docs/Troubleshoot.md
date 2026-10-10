@@ -107,8 +107,6 @@ sum by (reason) (increase(narwhal_expired_total[5m]))
 sum by (reason) (increase(narwhal_failed_total[5m]))
 ```
 
-The [drop reasons panels](observability/05-Dashboard.md#drop-reasons-failed-attempts-and-expired-kv) chart the same series.
-
 To classify individual requests, count the router journal's terminal rows by outcome. Set `JOURNAL` to the router's journal path, `journal.jsonl` beside `profiles.path` unless `narwhal-serve --journal` sets another path:
 
 ```bash

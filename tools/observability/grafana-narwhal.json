@@ -3131,375 +3131,6 @@
           }
         }
       },
-      "panel-54": {
-        "kind": "Panel",
-        "spec": {
-          "id": 54,
-          "title": "Dropped requests by reason",
-          "description": "Refused, rejected, failed and expired requests on the selected router over the displayed interval, by reason. Reasons with no requests are hidden.",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(cause) (increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "refused: {{cause}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "rejected: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "B"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "failed: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "C"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "expired: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "D"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "bargauge",
-            "spec": {
-              "options": {
-                "orientation": "horizontal",
-                "displayMode": "basic",
-                "valueMode": "color",
-                "namePlacement": "left",
-                "showUnfilled": true,
-                "sizing": "auto",
-                "minVizWidth": 8,
-                "minVizHeight": 16,
-                "maxVizHeight": 24,
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "legend": {
-                  "showLegend": false,
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "calcs": []
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "short",
-                  "decimals": 0,
-                  "min": 0,
-                  "noValue": "None"
-                },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^refused: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#F2CC0C"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^rejected: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#FF9830"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^failed: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#D44A3A"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^expired: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#C4162A"
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "panel-55": {
-        "kind": "Panel",
-        "spec": {
-          "id": 55,
-          "title": "Failed attempts by reason",
-          "description": "Failed attempts on the selected router over the displayed interval, by the phase the attempt reached and the failure reason. Reasons with no failures are hidden.",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(phase, reason) (increase(narwhal_attempt_failures_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "{{phase}}: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "bargauge",
-            "spec": {
-              "options": {
-                "orientation": "horizontal",
-                "displayMode": "basic",
-                "valueMode": "color",
-                "namePlacement": "left",
-                "showUnfilled": true,
-                "sizing": "auto",
-                "minVizWidth": 8,
-                "minVizHeight": 16,
-                "maxVizHeight": 24,
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "legend": {
-                  "showLegend": false,
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "calcs": []
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "short",
-                  "decimals": 0,
-                  "min": 0,
-                  "noValue": "None"
-                },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^(admission|queue): "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#A352CC"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^prefill: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#299E97"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^decode: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#336B9E"
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "panel-56": {
-        "kind": "Panel",
-        "spec": {
-          "id": 56,
-          "title": "<<handoff_title>>",
-          "description": "<<handoff_description>>",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "<<handoff{job=\"engines\",iid=~\"$iid\"}>>",
-                        "legendFormat": "{{iid}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "timeseries",
-            "spec": {
-              "options": {
-                "tooltip": {
-                  "mode": "multi",
-                  "sort": "desc"
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "<<handoff_unit>>",
-                  "min": 0,
-                  "custom": {
-                    "fillOpacity": 9,
-                    "gradientMode": "opacity",
-                    "lineWidth": 2,
-                    "showPoints": "never"
-                  },
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "<<handoff_color>>"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "panel-57": {
         "kind": "Panel",
         "spec": {
@@ -3921,7 +3552,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 35,
+              "y": 27,
               "width": 24,
               "height": 8,
               "element": {
@@ -3960,7 +3591,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -3973,7 +3604,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 8,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -3986,7 +3617,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {
@@ -3999,7 +3630,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4012,7 +3643,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 8,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {
@@ -4025,7 +3656,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -4038,7 +3669,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 67,
+              "y": 59,
               "width": 24,
               "height": 8,
               "element": {
@@ -4050,47 +3681,8 @@
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "x": 0,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-54"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
               "x": 8,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-55"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-56"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 8,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4103,7 +3695,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4116,7 +3708,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {

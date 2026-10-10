@@ -35,17 +35,8 @@ class VllmMetrics(EngineMetrics):
             "sum by(iid) (rate(vllm:prompt_tokens_total{@sel}[$__rate_interval]))"
         ),
         "output_tokens": "sum by(iid) (rate(vllm:generation_tokens_total{@sel}[$__rate_interval]))",
-        "handoff": (
-            "sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{@sel}[$__rate_interval]))"
-        ),
     }
-    dashboard_text: ClassVar[Mapping[str, str]] = {
-        "handoff_title": "Expired KV by producer",
-        "handoff_description": "Requests per second whose KV expired on each producer engine, "
-        "from the vLLM NIXL connector counter.",
-        "handoff_unit": "ops",
-        "handoff_color": "#C4162A",
-    }
+    dashboard_text: ClassVar[Mapping[str, str]] = {}
 
     def kv_capacity(self, metrics: str) -> int | None:
         values = [int(float(match)) for match in _KV_CAPACITY.findall(metrics)]
