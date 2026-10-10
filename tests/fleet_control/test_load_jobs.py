@@ -10,6 +10,7 @@ import signal
 import stat
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,15 @@ from tools.fleet_control.config import (
     RouterEndpoint,
     load_config,
 )
+from tools.fleet_control.live import LiveRecords, live_routes
 from tools.fleet_control.service import ControlService
-from tools.fleet_control.workloads import LoadConfig, Workload, validate_params
+from tools.fleet_control.workloads import (
+    KINDS,
+    LoadConfig,
+    MixEntry,
+    Workload,
+    validate_params,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 FLEET = ROOT / "tests/data/fleet.json"
@@ -80,7 +88,13 @@ SUMMARY: dict[str, Any] = {
 
 def aiperf_record(rid: str, phase: str = "profiling", error: dict[str, Any] | None = None) -> str:
     row = {
-        "metadata": {"x_request_id": rid, "benchmark_phase": phase, "was_cancelled": False},
+        "metadata": {
+            "x_request_id": rid,
+            "benchmark_phase": phase,
+            "was_cancelled": False,
+            "request_start_ns": 0,
+            "request_end_ns": 1_000_000_000,
+        },
         "metrics": {"request_latency": {"value": 1.0, "unit": "ms"}},
         "error": error,
     }
@@ -152,7 +166,7 @@ class LoadConfigTests(unittest.TestCase):
         config = load_config(ROOT / "config/fleet-control.example.json", {})
         assert config.load is not None
         kinds = {workload.kind for workload in config.load.workloads.values()}
-        self.assertEqual(kinds, {"synthetic", "timestamped_trace", "prefix_trace"})
+        self.assertEqual(kinds, set(KINDS))
         self.assertEqual(config.load.endpoint_type, "chat")
         self.assertTrue(config.load.streaming)
         self.assertEqual(
@@ -225,7 +239,8 @@ class LoadConfigTests(unittest.TestCase):
             "load.grace_period_s must be a non-negative number of seconds",
             "load.extra_args must be a list of non-empty strings",
             "load.workloads.bad name: names use letters",
-            "load.workloads.no-kind.kind must be one of synthetic, timestamped_trace, prefix_trace",
+            "load.workloads.no-kind.kind must be one of synthetic, mixed, multi_turn, "
+            "public_dataset, timestamped_trace, prefix_trace",
             "load.workloads.zero.isl must be a positive number of tokens",
             "load.workloads.zero.osl must be a positive number of tokens",
             "load.workloads.zero.osl_stddev must be a non-negative number of tokens",
@@ -307,16 +322,28 @@ class ParameterTests(unittest.TestCase):
     def test_parameter_types_and_names_are_checked(self) -> None:
         self.refused("workload must name a library entry: chat-512-256, prefix, replay")
         self.refused("workload must name a library entry", workload="missing")
-        self.refused("unknown job parameter 'requests'", workload="replay", requests=10)
-        for value in (0, -1, "2", True, float("inf")):
+        self.refused("unknown job parameter 'users'", workload="replay", users=10)
+        for value in (0, 0.05, -1, "2", True, float("inf"), 1001):
             with self.subTest(rate=value):
-                self.refused("rate must be a positive number", workload="prefix", rate=value)
-        for value in (0, 1.5, True):
+                self.refused(
+                    "rate must be a number from 0.1 to 1000 requests per second",
+                    workload="prefix",
+                    rate=value,
+                )
+        for value in (0, 1.5, True, 4097):
             with self.subTest(concurrency=value):
                 self.refused(
-                    "concurrency must be a positive integer", workload="replay", concurrency=value
+                    "concurrency must be an integer from 1 to 4096",
+                    workload="replay",
+                    concurrency=value,
                 )
-        self.refused("duration_s must be a positive number", workload="replay", duration_s=0)
+        for value in (0, 86401):
+            with self.subTest(duration_s=value):
+                self.refused(
+                    "duration_s must be a number from 1 to 86400 seconds",
+                    workload="replay",
+                    duration_s=value,
+                )
 
 
 COMMON = (
@@ -528,7 +555,9 @@ class RunnerCase(unittest.IsolatedAsyncioTestCase):
         self.service = ControlService(config, runner=runner_for(config, self.env), env=self.env)
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(
-                app=create_app(self.service, TOKEN, [workload_routes(load)])
+                app=create_app(
+                    self.service, TOKEN, [workload_routes(load), live_routes(self.service, {})]
+                )
             ),
             base_url="http://control",
             headers={"authorization": f"Bearer {TOKEN}"},
@@ -644,19 +673,74 @@ class CompletedJobTests(RunnerCase):
         response = await self.client.get("/api/workloads")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
+            response.json()["limits"]["rate"],
+            {"min": 0.1, "max": 1000, "integer": False, "default": 2},
+        )
+        self.assertEqual(
+            response.json()["limits"]["concurrency"],
+            {"min": 1, "max": 4096, "integer": True, "default": 32},
+        )
+        self.assertEqual(
             response.json()["workloads"],
             [
                 {
                     "name": "chat-512-256",
                     "kind": "synthetic",
+                    "label": "chat-512-256",
+                    "description": "",
                     "isl": 512,
                     "isl_stddev": 0.0,
                     "osl": 256,
                     "osl_stddev": 16.0,
+                    "ignore_eos": False,
                 },
-                {"name": "replay", "kind": "timestamped_trace", "block_size": 300},
+                {
+                    "name": "replay",
+                    "kind": "timestamped_trace",
+                    "label": "replay",
+                    "description": "",
+                    "block_size": 300,
+                    "ignore_eos": False,
+                },
             ],
         )
+
+
+class LiveRouteTests(RunnerCase):
+    async def test_live_results_need_a_job(self) -> None:
+        await self.start_session()
+        response = await self.client.get("/api/jobs/current/live")
+        self.assertEqual(response.status_code, 404, response.text)
+
+    async def test_overlapping_polls_count_each_request_once(self) -> None:
+        await self.start_session()
+        await self.start_job(workload="chat-512-256", rate=2, duration_s=30)
+        await self.finished_job()
+        running = 0
+        overlaps = 0
+        refresh = LiveRecords.refresh
+
+        # Hold each refresh long enough for the other polls to arrive.
+        def slow_refresh(records: LiveRecords) -> None:
+            nonlocal running, overlaps
+            running += 1
+            overlaps = max(overlaps, running)
+            time.sleep(0.05)
+            refresh(records)
+            running -= 1
+
+        with mock.patch.object(LiveRecords, "refresh", slow_refresh):
+            replies = await asyncio.gather(
+                *(self.client.get("/api/jobs/current/live") for _ in range(4))
+            )
+        self.assertEqual(overlaps, 1)
+        for reply in replies:
+            self.assertEqual(reply.status_code, 200, reply.text)
+            body = reply.json()
+            self.assertEqual((body["job"], body["state"]), ("job-001", "succeeded"))
+            requests = body["requests"]
+            self.assertEqual((requests["total"], requests["completed"]), (100, 97))
+            self.assertEqual(requests["warmup"], 1)
 
 
 class SlowJobTests(RunnerCase):
@@ -764,6 +848,291 @@ class MissingExecutableTests(RunnerCase):
         self.assertEqual(job["state"], "failed")
         self.assertTrue(job["error"].startswith("AIPerfFailed: aiperf could not start"), job)
         self.assertIsNone(job["result"]["exit_code"])
+
+
+LIBRARY: dict[str, Any] = {
+    "shared-system": {
+        "kind": "synthetic",
+        "label": "Same system prompt on every request",
+        "description": "Every request starts with one 2000-token system prompt.",
+        "isl": 512,
+        "osl": 256,
+        "system_prompt_tokens": 2000,
+        "ignore_eos": True,
+    },
+    "documents": {
+        "kind": "synthetic",
+        "isl": 256,
+        "osl": 128,
+        "prefix_prompts": 8,
+        "prefix_tokens": 4096,
+    },
+    "mixed-sizes": {
+        "kind": "mixed",
+        "mix": [
+            {"isl": 128, "osl": 64, "percent": 25},
+            {"isl": 512, "osl": 128, "percent": 50, "osl_stddev": 16},
+            {"isl": 4096, "osl": 256, "percent": 25},
+        ],
+        "cache_bust": "first_turn_prefix",
+    },
+    "conversations": {
+        "kind": "multi_turn",
+        "isl": 256,
+        "osl": 128,
+        "turns": 4,
+        "turns_stddev": 1,
+        "turn_delay_s": 2,
+        "turn_delay_stddev_s": 0.5,
+    },
+    "sharegpt": {
+        "kind": "public_dataset",
+        "dataset": "sharegpt",
+        "cancel_percent": 10,
+        "cancel_after_s": 2,
+    },
+}
+
+
+def write_load(folder: str, load: object) -> Path:
+    path = Path(folder) / "fleet-control.local.json"
+    document = {"fleet": str(FLEET), "hooks": {"restore": {"argv": ["x"]}}, "load": load}
+    path.write_text(json.dumps(document))
+    return path
+
+
+def library_load(workloads: dict[str, Any], **settings: Any) -> dict[str, Any]:
+    return {"aiperf": "aiperf", "model": "m", "tokenizer": "t", "workloads": workloads, **settings}
+
+
+class WorkloadKindTests(unittest.TestCase):
+    def load(self, workloads: dict[str, Any], **settings: Any) -> LoadConfig:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(write_load(folder, library_load(workloads, **settings)), {})
+        assert config.load is not None
+        return config.load
+
+    def problems(self, workloads: dict[str, Any], **settings: Any) -> str:
+        with tempfile.TemporaryDirectory() as folder, self.assertRaises(ConfigError) as caught:
+            load_config(write_load(folder, library_load(workloads, **settings)), {})
+        return str(caught.exception)
+
+    def test_each_kind_and_key_is_read(self) -> None:
+        workloads = self.load(LIBRARY).workloads
+        self.assertEqual(
+            workloads["shared-system"],
+            Workload(
+                "shared-system",
+                "synthetic",
+                label="Same system prompt on every request",
+                description="Every request starts with one 2000-token system prompt.",
+                isl=512,
+                osl=256,
+                system_prompt_tokens=2000,
+                ignore_eos=True,
+            ),
+        )
+        self.assertEqual(
+            (workloads["documents"].prefix_prompts, workloads["documents"].prefix_tokens), (8, 4096)
+        )
+        self.assertEqual(
+            workloads["mixed-sizes"].mix,
+            (
+                MixEntry(128, 64, 25.0),
+                MixEntry(512, 128, 50.0, osl_stddev=16.0),
+                MixEntry(4096, 256, 25.0),
+            ),
+        )
+        self.assertEqual(workloads["mixed-sizes"].cache_bust, "first_turn_prefix")
+        conversations = workloads["conversations"]
+        self.assertEqual(
+            (conversations.turns, conversations.turn_delay_s, conversations.turn_delay_stddev_s),
+            (4, 2.0, 0.5),
+        )
+        sharegpt = workloads["sharegpt"]
+        self.assertEqual(
+            (sharegpt.dataset, sharegpt.cancel_percent, sharegpt.cancel_after_s),
+            ("sharegpt", 10.0, 2.0),
+        )
+        self.assertEqual(sharegpt.document()["label"], "sharegpt")
+
+    def test_workload_problems_are_reported(self) -> None:
+        message = self.problems(
+            {
+                "uneven": {"kind": "mixed", "mix": [{"isl": 1, "osl": 1, "percent": 60}]},
+                "empty-mix": {"kind": "mixed", "mix": []},
+                "half-pool": {"kind": "synthetic", "isl": 1, "osl": 1, "prefix_prompts": 2},
+                "both": {
+                    "kind": "synthetic",
+                    "isl": 1,
+                    "osl": 1,
+                    "system_prompt_tokens": 10,
+                    "prefix_prompts": 2,
+                    "prefix_tokens": 10,
+                },
+                "one-turn": {"kind": "multi_turn", "isl": 1, "osl": 1, "turns": 1},
+                "dataset": {"kind": "public_dataset", "dataset": "unknown"},
+                "cancel": {"kind": "public_dataset", "dataset": "sharegpt", "cancel_after_s": 1},
+                "bust": {"kind": "prefix_trace", "file": "p", "block_size": 16, "cache_bust": "x"},
+                "label": {"kind": "synthetic", "isl": 1, "osl": 1, "label": "x" * 61},
+                "trace-shaping": {"kind": "prefix_trace", "file": "p", "block_size": 16, "isl": 3},
+            }
+        )
+        for problem in (
+            "load.workloads.uneven.mix percentages must sum to 100",
+            "load.workloads.empty-mix.mix must be a non-empty list of request sizes",
+            "load.workloads.half-pool: prefix_prompts and prefix_tokens are set together",
+            "load.workloads.both: system_prompt_tokens and prefix_prompts are exclusive",
+            "load.workloads.one-turn.turns must be an integer of at least 2",
+            "load.workloads.dataset.dataset must be one of sharegpt",
+            "load.workloads.cancel.cancel_after_s needs cancel_percent",
+            "load.workloads.bust.cache_bust must be one of system_prefix",
+            "load.workloads.label.label must be non-empty text of at most 60 characters",
+            "unknown key load.workloads.trace-shaping.isl",
+        ):
+            self.assertIn(problem, message)
+
+    def test_chat_only_workloads_need_the_chat_endpoint(self) -> None:
+        message = self.problems(LIBRARY, endpoint_type="completions")
+        for problem in (
+            "load.workloads.shared-system: system_prompt_tokens needs endpoint_type chat",
+            "load.workloads.mixed-sizes: cache_bust needs endpoint_type chat",
+            "load.workloads.conversations: a multi_turn workload needs endpoint_type chat",
+            "load.workloads.sharegpt: a public_dataset workload needs endpoint_type chat",
+        ):
+            self.assertIn(problem, message)
+        self.assertNotIn("load.workloads.documents", message)
+
+    def test_extra_inputs_and_ignore_eos_have_one_owner(self) -> None:
+        message = self.problems(LIBRARY, extra_args=["--extra-inputs", "min_tokens:1"])
+        self.assertIn(
+            "load.extra_args sets --extra-inputs, so no workload may set ignore_eos", message
+        )
+        documents = {"documents": LIBRARY["documents"]}
+        load = self.load(documents, extra_args=["--extra-inputs", "ignore_eos:true"])
+        self.assertEqual(load.extra_args, ("--extra-inputs", "ignore_eos:true"))
+
+
+class JobOptionTests(unittest.TestCase):
+    workloads = load_config_for("aiperf").workloads
+
+    def refused(self, message: str, **params: Any) -> None:
+        with self.assertRaises(ValueError) as caught:
+            validate_params(self.workloads, params)
+        self.assertIn(message, str(caught.exception))
+
+    def test_arrival_ramp_requests_and_warmup(self) -> None:
+        params = {
+            "workload": "chat-512-256",
+            "rate": 4,
+            "arrival": "bursty",
+            "ramp_s": 30,
+            "requests": 500,
+            "warmup_requests": 20,
+        }
+        self.assertEqual(validate_params(self.workloads, params), {**params, "kind": "synthetic"})
+        self.refused(
+            "arrival needs a rate", workload="chat-512-256", arrival="steady", concurrency=2
+        )
+        self.refused(
+            "arrival must be one of steady, random, bursty",
+            workload="chat-512-256",
+            rate=1,
+            arrival="poisson",
+            duration_s=5,
+        )
+        self.refused("needs duration_s, requests or both", workload="chat-512-256", concurrency=2)
+        for key, maximum in (("requests", 1_000_000), ("warmup_requests", 10_000)):
+            for value in (0, maximum + 1):
+                with self.subTest(key=key, value=value):
+                    self.refused(
+                        f"{key} must be an integer from 1 to {maximum}",
+                        workload="replay",
+                        **{key: value},
+                    )
+        for value in (0.5, 3601):
+            with self.subTest(ramp_s=value):
+                self.refused(
+                    "ramp_s must be a number from 1 to 3600 seconds",
+                    workload="prefix",
+                    ramp_s=value,
+                )
+
+    def test_timestamped_traces_refuse_timing_options(self) -> None:
+        self.refused(
+            "replays its recorded timestamps and takes no ramp_s, warmup_requests",
+            workload="replay",
+            ramp_s=10,
+            warmup_requests=5,
+        )
+        self.assertEqual(
+            validate_params(self.workloads, {"workload": "replay", "requests": 50}),
+            {"workload": "replay", "kind": "timestamped_trace", "requests": 50},
+        )
+
+
+class KindCommandTests(unittest.TestCase):
+    def argv(self, name: str, params: dict[str, Any]) -> list[str]:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(write_load(folder, library_load(LIBRARY)), {})
+        assert config.load is not None
+        workload = config.load.workloads[name]
+        return command(config.load, URL, workload, params, Path("/runs/job-001/aiperf"))
+
+    def after(self, argv: list[str], flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    def test_shared_system_prompt_ignore_eos_and_steady_arrival(self) -> None:
+        argv = self.argv("shared-system", {"rate": 2, "arrival": "steady", "duration_s": 60})
+        self.assertEqual(self.after(argv, "--shared-system-prompt-length"), "2000")
+        self.assertEqual(self.after(argv, "--arrival-pattern"), "constant")
+        self.assertNotIn("--arrival-smoothness", argv)
+        self.assertEqual(argv[-2:], ["--extra-inputs", "ignore_eos:true"])
+
+    def test_prefix_pool_with_bursty_arrival_and_ramps(self) -> None:
+        params = {"rate": 2, "arrival": "bursty", "concurrency": 8, "ramp_s": 20, "requests": 100}
+        argv = self.argv("documents", params)
+        self.assertEqual(self.after(argv, "--num-prefix-prompts"), "8")
+        self.assertEqual(self.after(argv, "--prefix-prompt-length"), "4096")
+        self.assertEqual(self.after(argv, "--arrival-pattern"), "gamma")
+        self.assertEqual(self.after(argv, "--arrival-smoothness"), "0.5")
+        self.assertEqual(self.after(argv, "--request-rate-ramp-duration"), "20")
+        self.assertEqual(self.after(argv, "--concurrency-ramp-duration"), "20")
+        self.assertEqual(self.after(argv, "--request-count"), "100")
+        self.assertNotIn("--benchmark-duration", argv)
+        self.assertNotIn("--extra-inputs", argv)
+
+    def test_mixed_sizes_become_one_sequence_distribution(self) -> None:
+        argv = self.argv("mixed-sizes", {"concurrency": 4, "duration_s": 30, "warmup_requests": 10})
+        self.assertNotIn("--isl", argv)
+        self.assertEqual(
+            json.loads(self.after(argv, "--seq-dist")),
+            {
+                "pairs": [
+                    {"isl": 128, "isl_stddev": 0.0, "osl": 64, "osl_stddev": 0.0, "prob": 25.0},
+                    {"isl": 512, "isl_stddev": 0.0, "osl": 128, "osl_stddev": 16.0, "prob": 50.0},
+                    {"isl": 4096, "isl_stddev": 0.0, "osl": 256, "osl_stddev": 0.0, "prob": 25.0},
+                ]
+            },
+        )
+        self.assertEqual(self.after(argv, "--cache-bust"), "first_turn_prefix")
+        self.assertEqual(self.after(argv, "--warmup-request-count"), "10")
+
+    def test_conversations_take_turn_counts_and_delays_in_milliseconds(self) -> None:
+        argv = self.argv("conversations", {"concurrency": 4, "duration_s": 30})
+        self.assertEqual(self.after(argv, "--isl"), "256")
+        self.assertEqual(self.after(argv, "--conversation-turn-mean"), "4")
+        self.assertEqual(self.after(argv, "--conversation-turn-stddev"), "1")
+        self.assertEqual(self.after(argv, "--conversation-turn-delay-mean"), "2000")
+        self.assertEqual(self.after(argv, "--conversation-turn-delay-stddev"), "500")
+
+    def test_public_dataset_with_cancellations(self) -> None:
+        argv = self.argv("sharegpt", {"rate": 1, "duration_s": 30})
+        self.assertEqual(self.after(argv, "--public-dataset"), "sharegpt")
+        self.assertNotIn("--isl", argv)
+        self.assertNotIn("--input-file", argv)
+        self.assertEqual(self.after(argv, "--request-cancellation-rate"), "10")
+        self.assertEqual(self.after(argv, "--request-cancellation-delay"), "2")
 
 
 class CliWiringTests(unittest.TestCase):

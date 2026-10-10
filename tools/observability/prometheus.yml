@@ -14,3 +14,9 @@ scrape_configs:
   - job_name: engines
     file_sd_configs:
       - files: ["/etc/prometheus/targets/engines.json"]
+  # Empty unless NARWHAL_CONTROL_METRICS_URL is set.
+  - job_name: fleet-control
+    authorization:
+      credentials_file: /etc/prometheus/fleet-control-token
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/fleet-control.json"]

@@ -13,17 +13,13 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .records import Action
-from .service import ActionError, ControlService
+from .service import ActionError, ControlService, session_changes
 
 API = "/api"
 
 
 class BearerAuth:
-    """Refuse every HTTP request whose Authorization header lacks the control token.
-
-    A GET request for one of the `public` paths passes without the token. Those paths serve
-    the console page, which holds no fleet data and sends the token with each API request.
-    """
+    """Refuse HTTP requests without the control token, except GETs for `public` paths."""
 
     def __init__(self, app: ASGIApp, token: str, public: Iterable[str] = ()) -> None:
         self.app = app
@@ -87,7 +83,9 @@ def core_routes(service: ControlService) -> APIRouter:
     async def session() -> JSONResponse:
         if service.session is None:
             return JSONResponse({"detail": "no session is active"}, status_code=404)
-        return JSONResponse(service.session.document())
+        return JSONResponse(
+            {**service.session.document(), "changes": session_changes(service.session)}
+        )
 
     @routes.post("/session/end")
     async def end_session() -> JSONResponse:
@@ -124,10 +122,7 @@ def create_app(
     routers: Iterable[APIRouter] = (),
     public: Iterable[str] = (),
 ) -> FastAPI:
-    """Build the control app; `routers` add further routes behind the same token.
-
-    GET requests for the `public` paths pass without the token; only data-free pages belong there.
-    """
+    """Build the control app with `routers` behind the token."""
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

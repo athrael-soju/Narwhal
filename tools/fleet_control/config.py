@@ -21,26 +21,45 @@ DEFAULT_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 DEFAULT_RUNS_DIR = Path("runs/fleet-control")
 DEFAULT_HOOK_TIMEOUT_S = 900.0
 DEFAULT_ROUTER_URL = "http://127.0.0.1:8000"
-# Lifecycle readmission validates the engine and its KV peers before it answers.
+# Readmission validates the engine and its KV peers.
 DEFAULT_ROUTER_TIMEOUT_S = 600.0
 # The largest router journal extract copied for one session or load job.
 DEFAULT_JOURNAL_MAX_BYTES = 256 * 1024 * 1024
-# A token from `openssl rand -hex 32` or `secrets.token_urlsafe(32)` clears this floor.
+# Minimum token length.
 MIN_TOKEN_LENGTH = 32
-# The UID of the shipped Narwhal Orchestrator dashboard, tools/observability/grafana-narwhal.json.
+# UID of the Narwhal Orchestrator dashboard.
 DEFAULT_DASHBOARD_UID = "narwhal-router"
-# The shipped dashboard's own time range and refresh interval.
+# Default panel time range and refresh interval.
 DEFAULT_PANEL_FROM = "now-15m"
 DEFAULT_PANEL_REFRESH = "5s"
-RESTORE_HOOK = "restore"
-REQUIRED_HOOKS = frozenset({RESTORE_HOOK})
-_KEYS = {"host", "port", "token_env", "runs_dir", "fleet", "hooks", "router", "load", "console"}
+_KEYS = {
+    "host",
+    "port",
+    "token_env",
+    "runs_dir",
+    "fleet",
+    "hooks",
+    "router",
+    "prometheus_url",
+    "load",
+    "console",
+}
 _HOOK_KEYS = {"argv", "timeout_s"}
 _ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
-_CONSOLE_KEYS = {"grafana_url", "dashboard_uid", "panels", "from", "refresh"}
+_CONSOLE_KEYS = {
+    "grafana_url",
+    "dashboard_uid",
+    "panels",
+    "from",
+    "refresh",
+    "embed_in_grafana",
+    "auto_connect",
+    "trusted_hosts",
+}
 _DASHBOARD_UID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RELATIVE_TIME = re.compile(r"^now(-[1-9][0-9]*[smhdwMy])?$")
 _INTERVAL = re.compile(r"^[1-9][0-9]*[smhd]$")
+_HOST_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
 class ConfigError(ValueError):
@@ -58,11 +77,7 @@ class Hook:
 
 @dataclass(frozen=True)
 class RouterEndpoint:
-    """The Narwhal router whose state and lifecycle API the service calls.
-
-    `journal` is the router's request journal on this host, from which sessions and load jobs
-    copy the rows they produced; None records no extract.
-    """
+    """The Narwhal router the service calls."""
 
     url: str = DEFAULT_ROUTER_URL
     timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S
@@ -72,22 +87,21 @@ class RouterEndpoint:
 
 @dataclass(frozen=True)
 class ConsoleConfig:
-    """The Grafana dashboard panels the console page embeds beside its controls.
-
-    `grafana_url` is the Grafana address as the operator's browser reaches it, usually the
-    workstation end of the operator tunnel rather than the address on the router host.
-    """
+    """Console settings."""
 
     grafana_url: str
-    panels: tuple[int, ...]
+    panels: tuple[int, ...] = ()
     dashboard_uid: str = DEFAULT_DASHBOARD_UID
     time_from: str = DEFAULT_PANEL_FROM
     refresh: str = DEFAULT_PANEL_REFRESH
+    embed_in_grafana: bool = False
+    auto_connect: bool = False
+    trusted_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class ControlConfig:
-    """Listener, credential, record location, baseline fleet, router, hooks, load and console."""
+    """The control service configuration."""
 
     fleet: Path
     hooks: Mapping[str, Hook]
@@ -96,6 +110,7 @@ class ControlConfig:
     token_env: str = DEFAULT_TOKEN_ENV
     runs_dir: Path = DEFAULT_RUNS_DIR
     router: RouterEndpoint = RouterEndpoint()
+    prometheus_url: str | None = None
     load: LoadConfig | None = None
     console: ConsoleConfig | None = None
 
@@ -143,6 +158,9 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         problems.append("fleet must name the baseline fleet configuration (or set NARWHAL_FLEET)")
     hooks = _read_hooks(problems, raw.get("hooks"))
     router = _read_router(problems, raw.get("router", {}))
+    prometheus = raw.get("prometheus_url")
+    if prometheus is not None and (not isinstance(prometheus, str) or not _is_http_url(prometheus)):
+        problems.append(f"prometheus_url must be an http or https URL, got {prometheus!r}")
     load = read_load(problems, raw["load"]) if "load" in raw else None
     console = read_console(problems, raw["console"]) if "console" in raw else None
     if problems:
@@ -155,6 +173,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
         token_env=str(token_env),
         runs_dir=Path(str(runs_dir)),
         router=router,
+        prometheus_url=None if prometheus is None else str(prometheus).rstrip("/"),
         load=load,
         console=console,
     )
@@ -162,7 +181,7 @@ def load_config(path: Path, env: Mapping[str, str]) -> ControlConfig:
 
 def _read_hooks(problems: list[str], raw: object) -> dict[str, Hook]:
     if not isinstance(raw, dict):
-        problems.append("hooks must be an object naming at least the restore command")
+        problems.append("hooks must be an object")
         return {}
     hooks = {}
     for name, spec in raw.items():
@@ -189,7 +208,6 @@ def _read_hooks(problems: list[str], raw: object) -> dict[str, Hook]:
             problems.append(f"{label}.timeout_s must be a positive number of seconds")
             continue
         hooks[name] = Hook(name, tuple(argv), float(timeout))
-    problems.extend(f"hooks.{name} is required" for name in sorted(REQUIRED_HOOKS - set(raw)))
     return hooks
 
 
@@ -211,7 +229,7 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
         problems.append("router.timeout_s must be a positive number of seconds")
         timeout = DEFAULT_ROUTER_TIMEOUT_S
     journal = raw.get("journal")
-    # The file may not exist yet: the router creates it when it starts.
+    # The router creates the journal when it starts.
     if journal is not None and (not isinstance(journal, str) or not Path(journal).is_absolute()):
         problems.append("router.journal must be the absolute path of the router's journal file")
         journal = None
@@ -235,16 +253,21 @@ def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
     count = len(problems)
     problems.extend(f"unknown key console.{key}" for key in sorted(set(raw) - _CONSOLE_KEYS))
     url = raw.get("grafana_url")
-    if not isinstance(url, str) or not _is_http_url(url) or any(c in url for c in "?#@"):
+    same_origin = isinstance(url, str) and url.startswith("/") and not url.startswith("//")
+    if (
+        not isinstance(url, str)
+        or not (same_origin or _is_http_url(url))
+        or any(c in url for c in "?#@")
+    ):
         problems.append(
-            "console.grafana_url must be an http or https URL without credentials, "
+            "console.grafana_url must be a path or an http or https URL without credentials, "
             "query or fragment"
         )
     uid = raw.get("dashboard_uid", DEFAULT_DASHBOARD_UID)
     if not isinstance(uid, str) or not _DASHBOARD_UID.match(uid):
         problems.append("console.dashboard_uid must be a Grafana dashboard UID")
     panels = raw.get("panels")
-    if (
+    if "panels" in raw and (
         not isinstance(panels, list)
         or not panels
         or not all(isinstance(p, int) and not isinstance(p, bool) and p >= 1 for p in panels)
@@ -257,14 +280,30 @@ def read_console(problems: list[str], raw: object) -> ConsoleConfig | None:
     refresh = raw.get("refresh", DEFAULT_PANEL_REFRESH)
     if not isinstance(refresh, str) or not _INTERVAL.match(refresh):
         problems.append("console.refresh must be an interval such as 5s or 1m")
+    embed = raw.get("embed_in_grafana", False)
+    if not isinstance(embed, bool):
+        problems.append("console.embed_in_grafana must be true or false")
+    auto_connect = raw.get("auto_connect", False)
+    if not isinstance(auto_connect, bool):
+        problems.append("console.auto_connect must be true or false")
+    trusted = raw.get("trusted_hosts", [])
+    if not isinstance(trusted, list) or not all(
+        isinstance(name, str) and _HOST_NAME.match(name) for name in trusted
+    ):
+        problems.append("console.trusted_hosts must be a list of host names or IPv4 addresses")
+    elif trusted and auto_connect is not True:
+        problems.append("console.trusted_hosts requires console.auto_connect")
     if len(problems) > count:
         return None
     return ConsoleConfig(
         grafana_url=str(url).rstrip("/"),
-        panels=tuple(panels),
+        panels=tuple(panels or ()),
         dashboard_uid=str(uid),
         time_from=str(time_from),
         refresh=str(refresh),
+        embed_in_grafana=embed,
+        auto_connect=auto_connect,
+        trusted_hosts=tuple(name.lower() for name in trusted),
     )
 
 

@@ -5,261 +5,803 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>Narwhal fleet control</title>
+<link rel="icon" href="data:image/png;base64,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">
 <style>
+/* Design tokens. */
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
+  color-scheme: light;
+  --sans: Roboto, "Helvetica Neue", system-ui, sans-serif;
+  --mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --aqua: #45d2d5;
+  --header: #191919;
+  --header-text: #eef5f5;
+  --prefill: #299e97;
+  --decode: #336b9e;
+  --colocated: #8c84ce;
+  --page: #ffffff;
+  --bg: #ffffff;
   --panel: #ffffff;
-  --text: #1c2430;
-  --muted: #5b6676;
-  --line: #d8dde4;
-  --accent: #0f766e;
-  --accent-text: #ffffff;
-  --ok: #17803d;
-  --warn: #9a6700;
-  --bad: #b42318;
-  --changed: #fff4cc;
-  --code: #eef1f4;
+  --raise: #f7f9f9;
+  --inset: #edfafa;
+  --input: #ffffff;
+  --line: #b8e6e7;
+  --line-soft: #dceff0;
+  --col-line: #e7f4f4;
+  --th: #30343b;
+  --stripe: #f7f9f9;
+  --row-hover: #edfafa;
+  --heading: #30343b;
+  --text: #30343b;
+  --strong: #191919;
+  --muted: #5f6b70;
+  --faint: #8fa1a6;
+  --btn: #ffffff;
+  --btn-hover: #edfafa;
+  --btn-line: #b8e6e7;
+  --primary: #167f83;
+  --primary-hover: #0f6265;
+  --primary-text: #ffffff;
+  --danger-line: #e3a3a8;
+  --danger-solid: #c0262d;
+  --link: #167f83;
+  --focus: #167f83;
+  --ok: #1a7a3e;
+  --warn: #8a5f00;
+  --orange: #ad4700;
+  --bad: #c0262d;
+  --magenta: #8a3fb0;
+  --info: #167f83;
+  --ok-tint: rgb(26 122 62 / 10%);
+  --warn-tint: rgb(224 160 0 / 14%);
+  --orange-tint: rgb(255 140 50 / 14%);
+  --bad-tint: rgb(192 38 45 / 9%);
+  --active: rgb(224 160 0 / 8%);
+  --backdrop: rgb(15 18 23 / 45%);
+  --panel-shadow: 0 4px 13px rgb(15 98 101 / 8%);
+  --shadow: 0 12px 32px rgb(15 18 23 / 18%);
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418;
-    --panel: #1a1f25;
-    --text: #e6e9ed;
-    --muted: #9aa4b1;
-    --line: #2f3741;
-    --accent: #2bb3a3;
-    --accent-text: #0b1214;
-    --ok: #4cc27a;
-    --warn: #e0b341;
-    --bad: #f07167;
-    --changed: #3d3418;
-    --code: #232a32;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: radial-gradient(ellipse 70rem 30rem at 55% 0, #22353d, #17242b);
+    --bg: #17242b;
+    --panel: #1d2d35;
+    --raise: #22343c;
+    --inset: #203039;
+    --input: #17242b;
+    --line: #3b545b;
+    --line-soft: #3b545b;
+    --col-line: #3b545b;
+    --th: #2e444b;
+    --stripe: #22343c;
+    --row-hover: #2c454b;
+    --heading: #eff5f5;
+    --text: #dce7e8;
+    --strong: #eff5f5;
+    --muted: #adbec1;
+    --faint: #8fa7ac;
+    --btn: #22343c;
+    --btn-hover: #2c454b;
+    --btn-line: #3b545b;
+    --primary: #45d2d5;
+    --primary-hover: #8ce9ea;
+    --primary-text: #101a20;
+    --danger-line: #7a2e35;
+    --danger-solid: #c4283a;
+    --link: #45d2d5;
+    --focus: #45d2d5;
+    --ok: #5ccf8a;
+    --warn: #f1b83a;
+    --orange: #ff9147;
+    --bad: #ff6b74;
+    --magenta: #cf97ea;
+    --info: #45d2d5;
+    --ok-tint: rgb(92 207 138 / 12%);
+    --warn-tint: rgb(241 184 58 / 12%);
+    --orange-tint: rgb(255 145 71 / 13%);
+    --bad-tint: rgb(255 107 116 / 12%);
+    --active: rgb(241 184 58 / 6%);
+    --backdrop: rgb(10 16 20 / 70%);
+    --panel-shadow: 0 10px 29px rgb(2 14 18 / 18%);
+    --shadow: 0 12px 32px rgb(0 0 0 / 55%);
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: radial-gradient(ellipse 70rem 30rem at 55% 0, #22353d, #17242b);
+  --bg: #17242b;
+  --panel: #1d2d35;
+  --raise: #22343c;
+  --inset: #203039;
+  --input: #17242b;
+  --line: #3b545b;
+  --line-soft: #3b545b;
+  --col-line: #3b545b;
+  --th: #2e444b;
+  --stripe: #22343c;
+  --row-hover: #2c454b;
+  --heading: #eff5f5;
+  --text: #dce7e8;
+  --strong: #eff5f5;
+  --muted: #adbec1;
+  --faint: #8fa7ac;
+  --btn: #22343c;
+  --btn-hover: #2c454b;
+  --btn-line: #3b545b;
+  --primary: #45d2d5;
+  --primary-hover: #8ce9ea;
+  --primary-text: #101a20;
+  --danger-line: #7a2e35;
+  --danger-solid: #c4283a;
+  --link: #45d2d5;
+  --focus: #45d2d5;
+  --ok: #5ccf8a;
+  --warn: #f1b83a;
+  --orange: #ff9147;
+  --bad: #ff6b74;
+  --magenta: #cf97ea;
+  --info: #45d2d5;
+  --ok-tint: rgb(92 207 138 / 12%);
+  --warn-tint: rgb(241 184 58 / 12%);
+  --orange-tint: rgb(255 145 71 / 13%);
+  --bad-tint: rgb(255 107 116 / 12%);
+  --active: rgb(241 184 58 / 6%);
+  --backdrop: rgb(10 16 20 / 70%);
+  --panel-shadow: 0 10px 29px rgb(2 14 18 / 18%);
+  --shadow: 0 12px 32px rgb(0 0 0 / 55%);
+}
 * { box-sizing: border-box; }
+html, body { margin: 0; }
 body {
-  margin: 0;
-  background: var(--bg);
+  min-height: 100vh;
+  background: var(--page);
   color: var(--text);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
 }
-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+body.framed { background: var(--panel); }
+h1, h2 { margin: 0; font-size: 15px; font-weight: 750; color: var(--heading); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.mono, code, pre, textarea, input, select { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+code { overflow-wrap: anywhere; }
+pre { background: var(--inset); border-radius: 4px; padding: 8px; max-height: 240px; overflow: auto; margin: 6px 0 0; font-size: 12px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
-h1 { font-size: 17px; margin: 0; }
-h2 { font-size: 15px; margin: 0 0 8px; }
-h3 { font-size: 13px; margin: 12px 0 6px; }
-#status-line { color: var(--muted); flex: 1 1 auto; }
-#status-line strong { color: var(--text); font-weight: 600; }
-form { margin: 0; }
-label { display: inline-flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+/* Small uppercase labels for fields, columns and strip items. */
+.k { font: 500 10.5px/1.45 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lbl { font-size: 12px; color: var(--muted); }
+.strong { color: var(--strong); }
+.faint { color: var(--faint); }
+.tone-ok { color: var(--ok); }
+.tone-warn { color: var(--warn); }
+.tone-orange { color: var(--orange); }
+.tone-bad { color: var(--bad); }
+.tone-magenta { color: var(--magenta); }
+.tone-muted { color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.state { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
+.state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+
+/* Controls. */
 input, select, textarea, button { font: inherit; color: var(--text); }
-input, select, textarea {
-  background: var(--bg);
+input, select {
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--input);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 4px 6px;
+  color: var(--strong);
+  font: 400 12.5px/1 var(--mono);
 }
-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
-button {
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 132px;
+  padding: 10px 12px;
+  resize: vertical;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--strong);
+  font: 400 12px/1.6 var(--mono);
+}
+input:disabled, select:disabled, textarea:disabled { background: var(--inset); color: var(--text); cursor: not-allowed; }
+textarea[aria-invalid="true"], input[aria-invalid="true"] { border-color: var(--danger-line); }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--btn-line);
+  background: var(--btn);
+  color: var(--strong);
+  font: 500 12.5px/1 var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--btn-hover); }
+.btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn.theme { width: 28px; padding: 0; justify-content: center; font-size: 15px; }
+.btn-icon { width: 28px; padding: 0; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+.btn-danger { background: transparent; border-color: var(--danger-line); color: var(--bad); }
+.btn-danger:hover:not(:disabled) { background: var(--bad-tint); }
+.btn-danger-solid { background: var(--danger-solid); border-color: var(--danger-solid); color: #ffffff; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn[aria-busy="true"] { cursor: progress; }
+.dots { display: flex; gap: 2.4px; }
+.dots span { width: 2.6px; height: 2.6px; border-radius: 50%; background: currentColor; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.spacer { flex: 1 1 auto; }
+.hint { color: var(--muted); font-size: 12px; margin: 0; }
+.notice { margin: 0; padding: 10px 12px; border-radius: 4px; background: var(--inset); font-size: 12px; }
+.notice.bad { background: var(--bad-tint); color: var(--bad); }
+.inset { display: flex; flex-direction: column; gap: 8px; background: var(--inset); border-radius: 4px; padding: 12px 14px; }
+.spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+progress { appearance: none; display: block; border: 0; border-radius: 2px; background: var(--line); overflow: hidden; height: 3px; }
+progress::-webkit-progress-bar { background: var(--line); }
+progress::-webkit-progress-value { background: var(--info); border-radius: 2px; }
+progress::-moz-progress-bar { background: var(--info); border-radius: 2px; }
+progress.drain { width: 96px; }
+progress.drain::-webkit-progress-value { background: var(--warn); }
+progress.drain::-moz-progress-bar { background: var(--warn); }
+
+/* Header and session strip. */
+.strip { background: var(--panel); border-bottom: 1px solid var(--line-soft); }
+body:not(.framed) .strip { position: sticky; top: 0; z-index: 3; }
+.strip-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; min-height: 56px; padding: 10px 24px; background: var(--header); color: var(--header-text); border-bottom: 3px solid var(--aqua); }
+.strip-title { display: flex; align-items: center; gap: 12px; }
+.strip-title img { flex: none; width: 34px; height: 34px; padding: 2px; background: #ffffff; border-radius: 6px; }
+.strip-title .name { display: flex; flex-direction: column; gap: 2px; }
+.strip-title .name .k { font-size: 10px; color: var(--aqua); }
+.strip-title h1 { font-size: 16px; font-weight: 800; line-height: 1.1; color: #ffffff; }
+.strip-top .btn { background: transparent; border-color: #3b545b; color: var(--header-text); }
+.strip-top .btn:hover:not(:disabled) { background: #2e444b; }
+.divider { width: 1px; height: 24px; background: #3b545b; }
+.conn { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; color: #adbec1; }
+.conn .dot { background: #8fa7ac; }
+.conn.ok { color: #5ccf8a; }
+.conn.ok .dot, .conn.bad .dot { background: currentColor; }
+.conn.bad { color: #ff6b74; }
+.strip-cells { display: flex; flex-wrap: wrap; }
+#strip-signals, #strip-state { display: contents; }
+.cell { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 7px; min-width: 0; padding: 12px 24px; border-right: 1px solid var(--line-soft); }
+.cell-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; min-height: 24px; }
+.cell-line.middle { align-items: center; }
+.cell .note { font: 11.5px var(--mono); color: var(--muted); }
+.cell .value { font-size: 14px; font-weight: 600; }
+.cell .job { font-size: 13px; font-weight: 600; }
+#strip-job-progress { width: 180px; max-width: 100%; }
+#strip-actions { flex-direction: row; align-items: flex-end; justify-content: flex-end; flex-wrap: wrap; gap: 10px; border-right: 0; }
+.deadline { display: flex; flex-direction: column; gap: 7px; }
+.deadline span { display: flex; align-items: center; gap: 6px; }
+.deadline input { width: 96px; }
+.unit { font: 12px var(--mono); color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 7px; height: 24px; padding: 0 9px; border-radius: 3px; font: 600 12px/1 var(--sans); white-space: nowrap; background: var(--inset); color: var(--muted); }
+.pill.ok { background: var(--ok-tint); color: var(--ok); }
+.pill.ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.bad { background: var(--bad-tint); color: var(--bad); }
+.pill.warn { background: var(--orange-tint); color: var(--orange); }
+.pill.busy { background: var(--warn-tint); color: var(--warn); font-weight: 500; }
+.strip-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 24px; }
+.strip-confirm span { font-size: 12px; }
+.strip > .feedback { padding: 0 24px 10px; }
+.feedback { flex: 1 1 100%; margin: 0; font-size: 12px; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.feedback .detail { color: var(--muted); overflow-wrap: anywhere; }
+/* Room for Grafana's panel menu. */
+body.framed .panel-head { padding-right: 36px; }
+body.framed .strip { display: flex; align-items: center; gap: 0; min-height: 100vh; border: 0; padding: 0 36px 0 4px; white-space: nowrap; }
+body.framed .strip-top { display: contents; }
+body.framed .strip-title, body.framed .strip-top .divider, body.framed .strip-top .spacer, body.framed #open-dashboard, body.framed #theme { display: none; }
+body.framed .conn { padding-right: 16px; }
+body.framed .strip-cells { flex: 1 1 auto; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+body.framed .cell { padding: 2px 16px; gap: 4px; }
+body.framed .cell-line { flex-wrap: nowrap; }
+body.framed #strip-started { display: none; }
+body.framed #strip-busy { order: -1; }
+body.framed #strip-job-progress { width: 64px; }
+body.framed #strip-actions { align-items: center; }
+body.framed .deadline { flex-direction: row; align-items: center; gap: 8px; }
+body.framed .strip-confirm { padding: 0 0 0 16px; flex-wrap: nowrap; min-width: 0; }
+body.framed .strip-confirm span { overflow: hidden; text-overflow: ellipsis; }
+body.framed .strip > .feedback { flex: 0 1 auto; min-width: 0; padding: 0 0 0 16px; flex-wrap: nowrap; overflow: hidden; }
+body.framed .strip .feedback .detail { overflow: hidden; text-overflow: ellipsis; }
+.strip:is([data-fit="1"], [data-fit="2"], [data-fit="3"], [data-fit="4"]) #strip-job-progress,
+.strip:is([data-fit="2"], [data-fit="3"], [data-fit="4"]) .cell > .k,
+.strip:is([data-fit="3"], [data-fit="4"]) #from-session,
+.strip[data-fit="4"] #conn-text { display: none; }
+
+/* Connection card. */
+.connect { max-width: 460px; margin: 32px auto; padding: 16px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; }
+body.framed .connect { margin: 0; padding: 4px; border: 0; max-width: none; }
+.connect form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.connect input { flex: 1 1 200px; }
+.message { margin: 8px 0 0; font-size: 12px; }
+
+/* Panel help: a "?" that shows its text on hover or focus. */
+.help { position: relative; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); font: 600 10.5px/1 var(--sans); cursor: help; }
+.help:hover, .help:focus-visible { color: var(--primary); border-color: var(--primary); outline: none; }
+.help::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: -8px; z-index: 30; width: max-content; max-width: min(340px, 80vw); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: var(--shadow); color: var(--text); font: 400 12px/1.45 var(--sans); white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.12s; }
+.help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+
+/* Buttons that share a row's width. */
+.fill-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+@media (max-width: 600px) { .fill-row { grid-auto-flow: row; } }
+
+/* Board. */
+.board { display: grid; gap: 16px; max-width: 1680px; margin: 0 auto; padding: 20px 24px 48px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.area-engines, .area-dashboard { grid-column: 1 / -1; }
+.board-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; align-self: stretch; }
+/* Benchmark: the form above its results, as one panel. */
+.benchmark { gap: 0; border-radius: 10px; box-shadow: var(--panel-shadow); }
+.benchmark > .panel { box-shadow: none; }
+.benchmark > .area-load { border-bottom: 0; border-radius: 10px 10px 0 0; }
+.benchmark > .area-results { flex: 1 1 auto; border-top: 1px solid var(--line-soft); border-radius: 0 0 10px 10px; }
+body.framed .benchmark, body.framed .benchmark > .panel { border: 0; border-radius: 0; box-shadow: none; }
+/* Activity: fills the column, scrolling rows. */
+.area-activity { flex: 1 1 auto; min-height: 400px; }
+@media (max-width: 1200px) { .area-activity { height: 420px; } }
+.activity-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+.activity-scroll thead th { position: sticky; top: 0; z-index: 1; }
+body.framed .area-activity { height: 100vh; }
+@media (max-width: 1200px) { .board { grid-template-columns: minmax(0, 1fr); } }
+body.framed .board { display: block; padding: 0; max-width: none; }
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: 10px;
+  box-shadow: var(--panel-shadow);
+}
+.area-engines { padding-bottom: 12px; }
+body.framed .panel { border: 0; padding: 4px 8px 8px; background: transparent; box-shadow: none; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 28px; }
+.panel-head h2 { display: flex; align-items: baseline; gap: 10px; }
+.sub { font: 400 12px var(--mono); color: var(--muted); }
+.head-end { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
+.strong-state { font-weight: 500; }
+.legend { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+
+/* Tables. */
+@media (max-width: 900px) { .scroll { overflow-x: auto; } }
+.tbl { width: 100%; font-size: 12.5px; }
+/* Tables follow the docs tables: bordered, with rounded corners. */
+.tbl, table.latency { border-collapse: separate; border-spacing: 0; border: 1px solid var(--line); border-radius: 8px; }
+.tbl th + th, table.latency th + th { border-left: 1px solid rgb(69 210 213 / 35%); }
+.tbl td + td, table.latency td + td { border-left: 1px solid var(--col-line); }
+.tbl th:first-child, table.latency th:first-child { border-top-left-radius: 7px; }
+.tbl th:last-child, table.latency th:last-child { border-top-right-radius: 7px; }
+.tbl tbody tr:last-child td:first-child, table.latency tbody tr:last-child td:first-child { border-bottom-left-radius: 7px; }
+.tbl tbody tr:last-child td:last-child, table.latency tbody tr:last-child td:last-child { border-bottom-right-radius: 7px; }
+.tbl th { text-align: left; font: 750 11px/1 var(--sans); letter-spacing: 0.035em; text-transform: uppercase; color: #ffffff; background: var(--th); height: 36px; padding: 0 12px; border-bottom: 3px solid var(--aqua); white-space: nowrap; }
+.tbl tbody tr:nth-child(even) td { background: var(--stripe); }
+.tbl tbody tr:not(.filler):hover td { background: var(--row-hover); }
+.tbl tr.filler td::after { content: "\00a0"; }
+.tbl td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; vertical-align: top; }
+.tbl th:first-child, .tbl td:first-child { padding-left: 16px; }
+.tbl th:last-child, .tbl td:last-child { padding-right: 16px; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl .end { text-align: right; }
+.tbl td.wrap { white-space: normal; min-width: 180px; }
+.tbl .empty { color: var(--muted); }
+.tbl .err { display: block; max-width: 320px; margin-top: 3px; font-size: 11.5px; color: var(--muted); white-space: normal; }
+#engines td { vertical-align: middle; height: 40px; padding-top: 4px; padding-bottom: 4px; }
+#engines tr.selected td { background: var(--row-hover); }
+#engines tr.selected td:first-child { box-shadow: inset 2px 0 var(--info); }
+#engines tr.active td { background: var(--active); }
+.engine-id { font: 600 13px var(--mono); color: var(--strong); }
+.link { padding: 0; border: 0; background: none; cursor: pointer; text-align: left; }
+.link:hover { text-decoration: underline; }
+/* Engine list. */
+.summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--text); font: 500 12px/1 var(--sans); cursor: pointer; }
+.chip:hover { background: var(--btn-hover); }
+.chip[aria-pressed="true"] { background: var(--row-hover); border-color: var(--info); color: var(--strong); }
+.chip .count { font-family: var(--mono); color: var(--muted); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar input { width: 200px; }
+.toolbar select { width: 140px; }
+.pager select { width: auto; height: 28px; }
+.pager { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.pager .lbl { font-family: var(--mono); margin-right: 4px; }
+.sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.sort:hover { color: var(--strong); }
+th[aria-sort="ascending"] .sort::after { content: "↑"; }
+th[aria-sort="descending"] .sort::after { content: "↓"; }
+.engines-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (min-width: 1100px) {
+  .engines-body.with-drawer { grid-template-columns: minmax(0, 1fr) 320px; }
+}
+.drawer { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px 16px; background: var(--raise); border: 1px solid var(--line-soft); border-radius: 4px; }
+.drawer-head { display: flex; align-items: center; gap: 10px; }
+.drawer-head h3 { margin: 0; font: 600 14px var(--mono); color: var(--strong); }
+.drawer-head .btn { margin-left: auto; }
+.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12.5px; align-items: baseline; }
+.facts dt { font: 500 10.5px/1.45 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.drawer .reason { margin: 0; font-size: 12px; color: var(--muted); }
+.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.history li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.history .err { flex-basis: 100%; color: var(--muted); }
+.role { display: inline-flex; align-items: center; gap: 7px; font: 500 12px/1 var(--mono); color: var(--text); }
+.role::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--faint); }
+.role-prefill::before { background: var(--prefill); }
+.role-decode::before { background: var(--decode); }
+.role-colocated::before { background: var(--colocated); }
+.state-cell { display: inline-flex; align-items: center; gap: 8px; }
+.tags { display: inline-flex; gap: 4px; }
+.tag { font: 500 10.5px/1.5 var(--mono); padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); }
+.resident { display: flex; flex-direction: column; gap: 5px; width: 96px; color: var(--strong); }
+.last-cell { display: inline-flex; align-items: center; gap: 6px; }
+.last-cell .mono { color: var(--strong); }
+.last-cell .lbl { font: 11.5px var(--mono); }
+.last-cell .outcome { font-weight: 500; }
+.cell-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
+.last-action { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 10px 14px; font-size: 12px; }
+.last-action .strong { font-weight: 500; }
+
+/* Engine action menu. */
+.menu {
+  position: fixed;
+  z-index: 5;
+  width: 276px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--btn-line);
+  border-radius: 5px;
+  box-shadow: var(--shadow);
+}
+.menu[hidden] { display: none; }
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--strong);
+  font: 500 12.5px/1.3 var(--sans);
+  text-align: left;
   cursor: pointer;
 }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.danger { border-color: var(--bad); color: var(--bad); }
-button:disabled { opacity: 0.5; cursor: progress; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 6px 0; }
-main {
-  display: grid;
-  grid-template-columns: minmax(380px, 5fr) minmax(320px, 6fr);
-  gap: 12px;
-  padding: 12px 16px;
-}
-@media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
-#controls { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-section, aside {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 12px;
-  min-width: 0;
-}
-aside { align-self: start; }
+.menu-item:hover:not([aria-disabled="true"]), .menu-item:focus-visible { background: var(--btn-hover); outline-offset: -2px; }
+.menu-item.danger { color: var(--bad); }
+.menu-item[aria-disabled="true"] { cursor: not-allowed; color: var(--faint); }
+.menu-reason { font: 400 11px/1.35 var(--sans); color: var(--muted); white-space: normal; }
+
+/* Load job and configuration. */
+.panel-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field input, .field select { width: 100%; }
+.field.wide { grid-column: span 4; }
+.field.half { grid-column: span 2; }
+@media (max-width: 560px) { .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .field.wide, .field.half { grid-column: span 2; } }
+.panel-form .hint { padding: 10px 12px; background: var(--inset); border-radius: 4px; line-height: 1.55; }
+/* The Benchmark form fills its panel. */
+#view-load .fields { row-gap: 18px; }
+#view-load .field input, #view-load .field select { height: 36px; }
+body.framed #view-load { min-height: 100vh; }
+.panel-form .hint:empty { display: none; }
+.results-head { display: flex; align-items: center; gap: 12px; }
+.results-head progress { flex: 1 1 auto; }
+.results-head .lbl { font: 11.5px var(--mono); white-space: nowrap; }
+#results-body { display: flex; flex-direction: column; gap: 12px; }
+#results-body[hidden] { display: none; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 0; }
+@media (max-width: 600px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpis dt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kpis > div { display: flex; flex-direction: column; gap: 4px; padding-left: 12px; border-left: 1px solid var(--line); }
+.kpis dt { font: 500 10.5px/1.45 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.kpis dd { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; font: 500 22px/1.2 var(--mono); letter-spacing: -0.02em; color: var(--strong); }
+.kpis dd.tone-ok { color: var(--ok); }
+.kpis dd.tone-warn { color: var(--warn); }
+.kpis dd.tone-bad { color: var(--bad); }
+.kpis dd small { font: 400 11.5px var(--mono); letter-spacing: 0; color: var(--muted); }
+table.latency { width: 100%; font: 12.5px var(--mono); font-variant-numeric: tabular-nums; }
+table.latency th { height: 34px; font: 750 11px/1 var(--sans); letter-spacing: 0.035em; text-transform: uppercase; color: #ffffff; background: var(--th); border-bottom: 3px solid var(--aqua); }
+table.latency tbody tr:nth-child(even) td { background: var(--stripe); }
+table.latency th, table.latency td { text-align: right; padding: 0 8px; white-space: nowrap; }
+table.latency td { padding-top: 9px; padding-bottom: 9px; border-bottom: 1px solid var(--line-soft); }
+table.latency tbody tr:last-child td { border-bottom: 0; }
+table.latency th:first-child, table.latency td:first-child { text-align: left; padding-left: 10px; }
+table.latency td:first-child { font-family: var(--sans); }
+table.latency th:last-child, table.latency td:last-child { padding-right: 10px; }
+table.latency td:last-child { color: var(--muted); }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 20px; }
+.charts figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.charts figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-height: 18px; }
+.charts figcaption span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--strong); }
+.charts figcaption span:last-child { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+svg.chart { display: block; width: 100%; height: 80px; }
+.chart .area { fill: var(--info); opacity: 0.12; }
+.chart .series { fill: none; stroke: var(--info); stroke-width: 1.5; }
+.chart .target { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart-axis { display: flex; justify-content: space-between; font: 10.5px var(--mono); color: var(--muted); }
+.changes { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px 14px; font: 12px var(--mono); align-items: center; }
+.changes .key { overflow-wrap: anywhere; }
+.changes .old { color: var(--muted); text-decoration: line-through; }
+.changes .new { color: var(--strong); }
+.overlay-field { display: flex; flex-direction: column; gap: 6px; }
+.overlay-status { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.overlay-status.ok, .overlay-status.bad { font-weight: 400; }
+.overlay-status.ok { color: var(--ok); }
+.overlay-status.bad { color: var(--bad); }
+.overlay-status.ok::before, .overlay-status.bad::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.check .inset { background: transparent; border: 1px solid var(--line-soft); }
+.check ul { margin: 0; padding-left: 18px; color: var(--bad); font-size: 12px; }
+.config-actions { padding-top: 4px; }
+
+/* Dashboard panels on the standalone page. */
 #panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; }
-#panels iframe { width: 100%; height: 260px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-td.actions, td.nowrap { white-space: nowrap; }
-td.actions button { padding: 1px 6px; font-size: 12px; margin: 1px; }
-tr.changed td { background: var(--changed); }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0; font-size: 12px; }
-dt { color: var(--muted); }
-dd { margin: 0; overflow-wrap: anywhere; }
-pre {
-  background: var(--code);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 12px;
-  max-height: 320px;
+#panels iframe { width: 100%; height: 260px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--bg); }
+
+/* Confirmation dialog. */
+dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
   overflow: auto;
-  margin: 4px 0;
+  padding: 20px;
+  border: 1px solid var(--btn-line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
 }
-code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
-.muted { color: var(--muted); }
-.note { color: var(--muted); font-size: 12px; margin: 4px 0; }
-.outcome-ok { color: var(--ok); font-weight: 600; }
-.outcome-refused { color: var(--warn); font-weight: 600; }
-.outcome-failed { color: var(--bad); font-weight: 600; }
-.message { margin: 6px 0; font-size: 12px; }
-summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.scroll { overflow-x: auto; }
-[hidden] { display: none !important; }
+dialog[open] { display: flex; flex-direction: column; gap: 12px; }
+dialog::backdrop { background: var(--backdrop); }
+dialog h2 { font-size: 16px; }
+dialog p { margin: 0; line-height: 1.55; }
+dialog ul { margin: 0; padding: 10px 14px 10px 30px; background: var(--inset); border-radius: 4px; font: 12px var(--mono); display: flex; flex-direction: column; gap: 4px; }
+dialog ul:empty { display: none; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Narwhal fleet control</h1>
-  <div id="status-line">Not connected.</div>
-  <form id="token-form">
-    <div class="row">
-      <label>Control token
-        <input id="token-input" type="password" autocomplete="off" spellcheck="false" required>
-      </label>
-      <button class="primary" type="submit">Connect</button>
+<header id="view-status" class="view strip" aria-label="Fleet control session">
+  <div class="strip-top">
+    <div class="strip-title">
+      <img src="data:image/png;base64,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" alt="" width="34" height="34">
+      <div class="name"><span class="k">Narwhal</span><h1>Fleet control</h1></div>
     </div>
-  </form>
-  <button id="forget" type="button" hidden>Forget token</button>
+    <span class="divider" aria-hidden="true"></span>
+    <span id="conn" class="conn"><span class="dot" aria-hidden="true"></span><span id="conn-text">Not connected</span></span>
+    <span class="spacer"></span>
+    <button id="theme" class="btn btn-sm theme" type="button"></button>
+    <a id="open-dashboard" class="btn btn-sm" href="#" target="_blank" rel="noopener" hidden>Dashboard ↗</a>
+    <button id="forget" class="btn btn-sm" type="button" hidden>Forget token</button>
+  </div>
+  <div id="strip-cells" class="strip-cells">
+    <div id="strip-signals" hidden>
+      <div class="cell"><span class="k">Admission</span><span class="cell-line middle"><span id="admission" class="pill">-</span></span></div>
+      <div id="alerts-signal" class="cell" hidden><span class="k">Alerts</span><span class="cell-line middle"><span id="alerts" class="pill">-</span><span id="alerts-names" class="note"></span></span></div>
+    </div>
+    <div id="strip-state" hidden>
+      <div class="cell">
+        <span class="k">Session</span>
+        <span class="cell-line"><span id="strip-session" class="mono strong value">none</span><span id="strip-started" class="note"></span><a id="from-session" href="#" target="_top" class="lbl" hidden>From session start ↗</a></span>
+      </div>
+      <div class="cell">
+        <span class="k">Benchmark</span>
+        <span class="cell-line"><span id="strip-job" class="mono strong job">none</span><span id="strip-job-state" class="lbl"></span><span id="strip-job-time" class="note"></span></span>
+        <progress id="strip-job-progress" max="1" value="0" aria-label="Benchmark progress" hidden></progress>
+      </div>
+      <div id="strip-busy" class="cell" hidden><span class="k">In progress</span><span class="cell-line middle"><span class="pill busy"><span class="spin" aria-hidden="true"></span><span id="strip-busy-text" class="mono"></span></span></span></div>
+    </div>
+    <div id="strip-actions" class="cell" hidden>
+      <div class="deadline">
+        <label for="drain-deadline" class="k">Drain deadline</label>
+        <span><input id="drain-deadline" type="number" min="1" step="any" placeholder="default"><span class="unit">s</span></span>
+      </div>
+      <button id="session-start" class="btn btn-primary" type="button">Start session</button>
+      <button id="session-end" class="btn btn-danger" type="button" hidden>End session</button>
+    </div>
+    <div id="strip-confirm" class="strip-confirm" role="group" aria-labelledby="strip-confirm-text" hidden>
+      <span id="strip-confirm-text"></span>
+      <button id="strip-confirm-cancel" class="btn" type="button">Cancel</button>
+      <button id="strip-confirm-ok" class="btn btn-danger-solid" type="button">End session</button>
+    </div>
+  </div>
+  <p id="fb-session" class="feedback" hidden></p>
 </header>
-<p id="connect-message" class="message"></p>
-<main id="main" hidden>
-  <div id="controls">
-    <section id="session-panel">
-      <h2>Session</h2>
-      <dl>
-        <dt>Session</dt><dd id="session-id">none</dd>
-        <dt>Started</dt><dd id="session-started">-</dd>
-        <dt>In progress</dt><dd id="session-busy">-</dd>
-      </dl>
-      <div class="row">
-        <button id="session-start" class="primary" type="button">Start session</button>
-        <button id="session-end" class="danger" type="button">End session and restore</button>
-        <button id="session-refresh" type="button">Refresh run record</button>
-      </div>
-      <details>
-        <summary>Run record</summary>
-        <pre id="run-record">No session is active.</pre>
-      </details>
-    </section>
 
-    <section id="engines-panel">
-      <h2>Engines</h2>
-      <div class="row">
-        <label>Drain deadline (s)
-          <input id="drain-deadline" type="number" min="0" step="any" placeholder="router default">
-        </label>
-        <button id="engines-refresh" type="button">Refresh engines</button>
-      </div>
-      <p id="engines-message" class="note"></p>
+<section id="connect" class="connect" aria-labelledby="connect-title" hidden>
+  <h2 id="connect-title">Connect to the control service</h2>
+  <form id="token-form">
+    <label for="token-input" class="sr-only">Control token</label>
+    <input id="token-input" type="password" autocomplete="off" spellcheck="false" placeholder="Control token" required>
+    <button class="btn btn-primary" type="submit">Connect</button>
+  </form>
+  <p id="connect-message" class="message" role="alert"></p>
+</section>
+
+<main id="board" class="board" hidden>
+  <section id="view-engines" class="view panel area-engines" aria-labelledby="engines-title">
+    <div class="panel-head">
+      <h2 id="engines-title">Engines <span class="help" tabindex="0" role="img" aria-label="Every engine in the fleet and what it is doing right now. Use the buttons on a row to drain, pause, stop or bring an engine back into service." data-tip="Every engine in the fleet and what it is doing right now. Use the buttons on a row to drain, pause, stop or bring an engine back into service.">?</span> <span id="engines-state" class="sub"></span></h2>
+      <div class="legend" aria-label="Role colours"><span class="role role-prefill">prefill</span><span class="role role-decode">decode</span><span class="role role-colocated">colocated</span></div>
+    </div>
+    <p id="engines-notice" class="notice" hidden></p>
+    <div id="engine-summary" class="summary" role="group" aria-label="Filter engines by state"></div>
+    <div class="toolbar">
+      <label for="engine-search" class="sr-only">Find engines by ID</label>
+      <input id="engine-search" type="search" placeholder="Find engine" autocomplete="off" spellcheck="false">
+      <label for="engine-role" class="sr-only">Role</label>
+      <select id="engine-role"><option value="">All roles</option><option value="prefill">Prefill</option><option value="decode">Decode</option><option value="colocated">Colocated</option></select>
+      <button id="engine-clear" class="btn btn-sm" type="button" hidden>Clear filters</button>
+      <span class="pager">
+        <span id="engine-range" class="lbl"></span>
+        <label for="engine-per-page" class="sr-only">Engines per page</label>
+        <select id="engine-per-page"><option value="10">10 per page</option><option value="20">20 per page</option><option value="50">50 per page</option><option value="100">100 per page</option></select>
+        <button id="engine-prev" class="btn btn-sm btn-icon" type="button" aria-label="Previous page">‹</button>
+        <button id="engine-next" class="btn btn-sm btn-icon" type="button" aria-label="Next page">›</button>
+      </span>
+    </div>
+    <div id="engines-body" class="engines-body">
       <div class="scroll">
-        <table>
-          <thead><tr><th>Engine</th><th>Role</th><th>State</th><th>Actions</th></tr></thead>
+        <table class="tbl">
+          <thead><tr>
+            <th scope="col" data-sort="id"><button class="sort" type="button">Engine</button></th>
+            <th scope="col" data-sort="role"><button class="sort" type="button">Role</button></th>
+            <th scope="col" data-sort="state"><button class="sort" type="button">State</button></th>
+            <th scope="col" data-sort="resident"><button class="sort" type="button">Resident</button></th>
+            <th scope="col">Last action</th><th scope="col" class="end">Actions</th>
+          </tr></thead>
           <tbody id="engines"></tbody>
         </table>
       </div>
-      <h3 id="engine-change-title">Last engine action</h3>
-      <p id="engine-change-message" class="note">No engine action yet.</p>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
-          <tbody id="engine-change"></tbody>
-        </table>
-      </div>
-    </section>
+      <aside id="engine-drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
+    </div>
+    <div id="last-action" class="inset last-action" hidden></div>
+  </section>
 
-    <section id="load-panel">
-      <h2>Load job</h2>
-      <p id="load-message" class="note"></p>
-      <form id="job-form">
-        <div class="row">
-          <label>Workload <select id="job-workload"></select></label>
-          <label>Rate (req/s) <input id="job-rate" type="number" min="0" step="any"></label>
-          <label>Concurrency <input id="job-concurrency" type="number" min="1" step="1"></label>
-          <label>Duration (s) <input id="job-duration" type="number" min="0" step="any"></label>
-        </div>
-        <div class="row">
-          <button id="job-start" class="primary" type="submit">Start job</button>
-          <button id="job-stop" class="danger" type="button">Stop job</button>
-          <button id="job-refresh" type="button">Refresh status</button>
-        </div>
-      </form>
-      <p id="workload-hint" class="note"></p>
-      <dl id="job-status"></dl>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Client result</th><th>Value</th></tr></thead>
-          <tbody id="job-results"></tbody>
-        </table>
+  <div class="board-col benchmark">
+  <section id="view-load" class="view panel area-load" aria-labelledby="load-title">
+    <div class="panel-head">
+      <h2 id="load-title">Benchmark <span class="help" tabindex="0" role="img" aria-label="Sends test traffic through the router with AIPerf so you can see how the fleet performs. Pick a workload, set how hard to push, and start a job." data-tip="Sends test traffic through the router with AIPerf so you can see how the fleet performs. Pick a workload, set how hard to push, and start a job.">?</span> <span id="job-title" class="sub"></span></h2>
+      <span class="head-end"><span id="job-state" class="lbl"></span><span id="job-time" class="sub"></span></span>
+    </div>
+    <p id="load-notice" class="notice" hidden></p>
+    <form id="job-form" class="panel-form">
+      <div class="fields">
+        <div class="field wide"><label for="job-workload" class="k">Workload</label><select id="job-workload"></select></div>
+        <div class="field"><label for="job-rate" class="k">Rate (req/s)</label><input id="job-rate" type="number" min="0" step="any" inputmode="decimal"></div>
+        <div class="field half"><label for="job-arrival" class="k">Arrival</label><select id="job-arrival">
+          <option value="">Random (default)</option><option value="steady">Steady</option><option value="bursty">Bursty</option>
+        </select></div>
+        <div class="field"><label for="job-concurrency" class="k">Concurrency</label><input id="job-concurrency" type="number" min="1" step="1" inputmode="numeric"></div>
+        <div class="field"><label for="job-ramp" class="k">Ramp-up (s)</label><input id="job-ramp" type="number" min="0" step="any" inputmode="decimal"></div>
+        <div class="field"><label for="job-duration" class="k">Duration (s)</label><input id="job-duration" type="number" min="0" step="any" inputmode="decimal"></div>
+        <div class="field"><label for="job-requests" class="k">Requests</label><input id="job-requests" type="number" min="1" step="1" inputmode="numeric"></div>
+        <div class="field"><label for="job-warmup" class="k">Warm-up</label><input id="job-warmup" type="number" min="1" step="1" inputmode="numeric"></div>
       </div>
-      <details>
-        <summary>Job document</summary>
-        <pre id="job-document">No load job has run.</pre>
-      </details>
-    </section>
+      <p id="workload-hint" class="hint"></p>
+      <div class="fill-row">
+        <button id="job-start" class="btn btn-primary" type="submit">Start job</button>
+        <button id="job-stop" class="btn btn-danger" type="button">Stop job</button>
+      </div>
+      <span id="job-locked" class="lbl" hidden></span>
+      <p id="fb-job" class="feedback" hidden></p>
+    </form>
+  </section>
 
-    <section id="config-panel">
-      <h2>Configuration</h2>
-      <dl id="config-current"></dl>
-      <label for="overlay">Overlay (JSON merge patch on the current fleet configuration)</label>
-      <textarea id="overlay" spellcheck="false">{
-  "serving": {}
-}</textarea>
-      <div class="row">
-        <button id="overlay-apply" class="primary" type="button">Apply overlay</button>
-        <button id="cold-restart" class="danger" type="button">Cold restart</button>
-        <button id="restore" class="danger" type="button">Restore baseline</button>
+  <section id="view-results" class="view panel area-results" aria-labelledby="results-title">
+    <div class="panel-head">
+      <h2 id="results-title">Results <span class="help" tabindex="0" role="img" aria-label="Live throughput and latency for the benchmark, updated every 3 seconds as requests complete. Warm-up requests are not counted." data-tip="Live throughput and latency for the benchmark, updated every 3 seconds as requests complete. Warm-up requests are not counted.">?</span> <span id="results-job" class="sub"></span></h2>
+      <span class="head-end"><a id="job-document" href="#" hidden>Download results</a><span id="job-document-later" class="lbl" hidden>Download available when the job ends</span></span>
+    </div>
+    <p id="job-error" class="notice bad" hidden></p>
+    <div id="results-body">
+      <div class="results-head"><progress id="results-progress" max="1" value="0" aria-label="Job progress"></progress><span id="results-clock" class="lbl"></span></div>
+      <dl id="results-kpis" class="kpis"></dl>
+      <table class="latency">
+        <thead><tr><th scope="col">Latency</th><th scope="col">p50</th><th scope="col">p95</th><th scope="col">p99</th><th scope="col">Target</th></tr></thead>
+        <tbody id="results-latency"></tbody>
+      </table>
+      <div class="charts">
+        <figure><figcaption><span>Completed requests per second</span><span id="chart-rate-meta"></span></figcaption><svg id="chart-rate" class="chart" viewBox="0 0 300 96" preserveAspectRatio="none" role="img" aria-label="Completed requests per second over the job"></svg><div id="chart-rate-axis" class="chart-axis"></div></figure>
+        <figure><figcaption><span>Time to first token, p95</span><span id="chart-ttft-meta"></span></figcaption><svg id="chart-ttft" class="chart" viewBox="0 0 300 96" preserveAspectRatio="none" role="img" aria-label="Time to first token p95 over the job"></svg><div id="chart-ttft-axis" class="chart-axis"></div></figure>
       </div>
-    </section>
-
-    <section id="log-panel">
-      <h2>Action log</h2>
-      <p class="note">Actions of the active session, from its run record.</p>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>#</th><th>Action</th><th>Parameters</th><th>Time (UTC)</th><th>Outcome</th><th>Result</th></tr></thead>
-          <tbody id="action-log"></tbody>
-        </table>
-      </div>
-      <h3>Responses in this tab</h3>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Time</th><th>Request</th><th>HTTP</th><th>Detail</th></tr></thead>
-          <tbody id="responses"></tbody>
-        </table>
-      </div>
-      <details>
-        <summary>Last response body</summary>
-        <pre id="last-response">-</pre>
-      </details>
-    </section>
+    </div>
+  </section>
   </div>
 
-  <aside id="dashboard">
-    <h2>Dashboard</h2>
-    <p id="dashboard-note" class="note"></p>
+  <div class="board-col">
+  <section id="view-config" class="view panel area-config" aria-labelledby="config-title">
+    <div class="panel-head">
+      <h2 id="config-title">Configuration <span class="help" tabindex="0" role="img" aria-label="Try configuration changes on the live fleet. Check an overlay to see what it would change before you apply it, and use Restore baseline to undo everything this session changed." data-tip="Try configuration changes on the live fleet. Check an overlay to see what it would change before you apply it, and use Restore baseline to undo everything this session changed.">?</span></h2>
+      <span id="config-state" class="lbl"></span>
+    </div>
+    <div id="config-changes" class="inset"></div>
+    <div class="overlay-field">
+      <label for="overlay" class="k">Overlay</label>
+      <span id="overlay-help" class="lbl">JSON merge patch on the current fleet configuration, changing slo, controller, serving or recovery.</span>
+      <textarea id="overlay" spellcheck="false" rows="6" aria-describedby="overlay-help overlay-status">{
+  "serving": {}
+}</textarea>
+    </div>
+    <p id="overlay-status" class="overlay-status"></p>
+    <div id="overlay-check" class="check" hidden></div>
+    <div class="fill-row config-actions">
+      <button id="overlay-check-button" class="btn" type="button">Check overlay</button>
+      <button id="overlay-apply" class="btn btn-primary" type="button">Apply overlay</button>
+      <button id="cold-restart" class="btn btn-danger" type="button">Cold restart</button>
+      <button id="restore" class="btn btn-danger" type="button">Restore baseline</button>
+    </div>
+    <p id="fb-config" class="feedback" hidden></p>
+  </section>
+
+  <section id="view-activity" class="view panel area-activity" aria-labelledby="activity-title">
+    <div class="panel-head">
+      <h2 id="activity-title">Activity <span class="help" tabindex="0" role="img" aria-label="A log of everything done in this session, newest first. Download the session log to keep the full record." data-tip="A log of everything done in this session, newest first. Download the session log to keep the full record.">?</span> <span id="activity-state" class="sub"></span></h2>
+      <a id="run-record" href="#" class="lbl" hidden>Download session log</a>
+    </div>
+    <div class="scroll activity-scroll" tabindex="0" aria-label="Recorded actions">
+      <table class="tbl">
+        <thead><tr><th scope="col">#</th><th scope="col">Started (UTC)</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col" class="end">Duration</th><th scope="col">Outcome</th></tr></thead>
+        <tbody id="activity"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <aside id="dashboard" class="panel area-dashboard" aria-labelledby="dashboard-title">
+    <div class="panel-head"><h2 id="dashboard-title">Dashboard</h2></div>
+    <p id="dashboard-note" class="hint"></p>
     <div id="panels"></div>
   </aside>
 </main>
+
+<div id="engine-menu" class="menu" role="menu" hidden></div>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-effect">
+  <h2 id="confirm-title"></h2>
+  <p id="confirm-effect"></p>
+  <ul id="confirm-details"></ul>
+  <div class="dialog-actions">
+    <button id="confirm-cancel" class="btn" type="button">Cancel</button>
+    <button id="confirm-ok" class="btn btn-danger-solid" type="button">Confirm</button>
+  </div>
+</dialog>
+<div id="announcer" class="sr-only" aria-live="polite"></div>
 <script>
 "use strict";
 
@@ -267,6 +809,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 const ROUTES = {
   health: ["GET", "/api/health"],
   console: ["GET", "/api/console"],
+  fleet: ["GET", "/api/fleet"],
   sessionStart: ["POST", "/api/session"],
   sessionRecord: ["GET", "/api/session"],
   sessionEnd: ["POST", "/api/session/end"],
@@ -275,28 +818,112 @@ const ROUTES = {
   workloads: ["GET", "/api/workloads"],
   jobStart: ["POST", "/api/jobs"],
   jobCurrent: ["GET", "/api/jobs/current"],
+  jobLive: ["GET", "/api/jobs/current/live"],
   jobStop: ["POST", "/api/jobs/current/stop"],
+  overlayCheck: ["POST", "/api/config/overlay/check"],
   overlay: ["POST", "/api/config/overlay"],
   coldRestart: ["POST", "/api/config/cold-restart"],
   restore: ["POST", "/api/config/restore"],
 };
 const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit"];
+const HOOK_ACTIONS = { pause: "engine_pause", resume: "engine_resume", stop: "engine_stop", start: "engine_start" };
+const CONFIRMED_ACTIONS = ["pause", "stop", "drain"];
+const LIFECYCLE_TONES = { draining: "warn", drained: "warn", deadline_exceeded: "orange", validating: "magenta", blocked: "bad" };
+const SHORT_NAMES = {
+  "config.overlay": "overlay",
+  "config.cold_restart": "cold restart",
+  "config.restore": "restore",
+  "session.start": "session start",
+  "session.end": "session end",
+  "job.start": "job start",
+  "job.stop": "job stop",
+  "job.complete": "job end",
+};
+const OUTCOME_TONES = { ok: "ok", refused: "orange", failed: "bad" };
 const TOKEN_KEY = "narwhal-control-token";
-const POLL_MS = 3000;
-const MAX_RESPONSES = 50;
+const DEADLINE_KEY = "narwhal-control-drain-deadline";
+const THEME_KEY = "narwhal-control-theme";
+const PAGE_TOKEN = (document.querySelector('meta[name="narwhal-control-token"]') || {}).content || "";
+const POLL_MS = 2000;
+const ENGINE_POLL_MS = 3000;
+const FLEET_POLL_MS = 5000;
+const LIVE_POLL_MS = 3000;
+// Status polls between run record reads during a session.
+const RECORD_EVERY = 3;
+
+const THEME = new URLSearchParams(window.location.search).get("theme");
+if (THEME === "dark" || THEME === "light") document.documentElement.dataset.theme = THEME;
+const VIEWS = { status: "Session", engines: "Engines", activity: "Activity", load: "Benchmark", results: "Benchmark results", config: "Configuration" };
+const VIEW_PARAM = new URLSearchParams(window.location.search).get("view");
+const VIEW = VIEW_PARAM && Object.hasOwn(VIEWS, VIEW_PARAM) ? VIEW_PARAM : "";
+const FRAMED = window.self !== window.top;
+const shows = (...names) => !VIEW || names.includes(VIEW);
+const NEEDS = {
+  record: shows("status", "engines", "activity", "config"),
+  engines: shows("status", "engines", "activity"),
+  fleet: shows("status"),
+  workloads: shows("load"),
+  live: shows("results"),
+};
+const channel = typeof BroadcastChannel === "function" ? new BroadcastChannel("narwhal-fleet-control") : null;
 
 const $ = (id) => document.getElementById(id);
-let token = "";
-let poller = null;
-let lastStatus = "";
-let lastRecord = null;
-let workloads = {};
-const responses = [];
 
+// Light and dark theme, kept per browser.
+const SYSTEM_DARK = window.matchMedia("(prefers-color-scheme: dark)");
+function currentTheme() {
+  return document.documentElement.dataset.theme || (SYSTEM_DARK.matches ? "dark" : "light");
+}
+function showTheme() {
+  const dark = currentTheme() === "dark";
+  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  $("theme").textContent = dark ? "☀\uFE0E" : "☾\uFE0E";
+  $("theme").title = label;
+  $("theme").setAttribute("aria-label", label);
+}
+try {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (!document.documentElement.dataset.theme && (saved === "light" || saved === "dark")) document.documentElement.dataset.theme = saved;
+} catch (error) { /* The system theme applies. */ }
+$("theme").addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch (error) { /* Kept for this page only. */ }
+  showTheme();
+});
+SYSTEM_DARK.addEventListener("change", showTheme);
+showTheme();
+let token = "";
+const state = {
+  settings: null,
+  health: null,
+  record: null,
+  recordKey: "",
+  polls: 0,
+  reachable: true,
+  engines: null,
+  enginesError: "",
+  fleet: null,
+  workloads: {},
+  live: null,
+  limits: {},
+  pending: new Map(),
+  feedback: new Map(),
+  overlayCheck: null,
+  checking: false,
+  keys: {},
+  busy: {},
+  refreshAgain: false,
+  timers: [],
+};
+const rows = new Map();
+
+// Elements and formatting.
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props || {})) {
     if (key === "class") node.className = value;
+    else if (key.startsWith("aria-") || key.startsWith("data-") || key === "role") node.setAttribute(key, value);
     else node[key] = value;
   }
   for (const child of children) node.append(child instanceof Node ? child : text(child));
@@ -309,12 +936,103 @@ function text(value) {
   return String(value);
 }
 
-function pretty(value) {
-  return value === null || value === undefined ? "-" : JSON.stringify(value, null, 2);
+function clock(stamp) {
+  const time = Date.parse(stamp);
+  return Number.isNaN(time) ? "-" : new Date(time).toISOString().slice(11, 19);
+}
+
+function elapsedSince(stamp) {
+  const time = typeof stamp === "number" ? stamp : Date.parse(stamp);
+  return Number.isNaN(time) ? null : Math.max(0, Date.now() - time);
+}
+
+function between(start, end) {
+  const from = Date.parse(start);
+  const to = Date.parse(end);
+  return Number.isNaN(from) || Number.isNaN(to) ? null : to - from;
+}
+
+function duration(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
+  const total = Math.floor(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
+}
+
+function brief(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
+  if (ms < 60000) return (ms / 1000).toFixed(1) + " s";
+  return duration(ms);
+}
+
+function wholeSeconds(ms) {
+  return Math.floor(ms / 1000);
+}
+
+function amount(value, digits) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return number.toLocaleString("en-US", { maximumFractionDigits: digits === undefined ? 2 : digits });
+}
+
+function capital(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+function toned(tone, label) {
+  return el("span", { class: "tone-" + tone }, label);
+}
+
+function shortName(name) {
+  return name.startsWith("engine.") ? name.slice(7) : SHORT_NAMES[name] || name;
+}
+
+function shortSession(id) {
+  return id ? id.slice(-6) : "none";
+}
+
+function announce(message) {
+  $("announcer").textContent = message;
+}
+
+function update(key, node, build) {
+  const [signature, children] = build();
+  if (state.keys[key] === signature) return;
+  state.keys[key] = signature;
+  node.replaceChildren(...children);
+}
+
+// Pad a table body with blank rows up to `count` rows.
+function padRows(body, columns, count) {
+  for (const row of body.querySelectorAll("tr.filler")) row.remove();
+  for (let index = body.rows.length; index < count; index += 1) {
+    const row = body.insertRow();
+    row.className = "filler";
+    row.setAttribute("aria-hidden", "true");
+    for (let column = 0; column < columns; column += 1) row.insertCell();
+  }
+}
+
+function download(name, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2) + "\n"], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = el("a", { href: url, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Token storage and requests.
+function readStored(key) {
+  try { return sessionStorage.getItem(key) || ""; } catch (error) { return ""; }
 }
 
 function readStoredToken() {
-  try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (error) { return ""; }
+  return readStored(TOKEN_KEY);
 }
 
 function storeToken(value) {
@@ -322,6 +1040,10 @@ function storeToken(value) {
     if (value) sessionStorage.setItem(TOKEN_KEY, value);
     else sessionStorage.removeItem(TOKEN_KEY);
   } catch (error) { /* The token stays in memory for this page only. */ }
+}
+
+function broadcast(message) {
+  if (channel) channel.postMessage(message);
 }
 
 async function call(name, params, body) {
@@ -334,282 +1056,1319 @@ async function call(name, params, body) {
   }
   let response;
   try {
-    response = await fetch(path, init);
+    response = await fetch("." + path, init);
   } catch (error) {
     return { status: 0, path, body: { detail: "the control service is unreachable: " + error.message } };
   }
   let data = null;
   try { data = await response.json(); } catch (error) { data = null; }
-  if (response.status === 401) disconnect("The service refused the token.");
+  if (response.status === 401) {
+    disconnect(PAGE_TOKEN ? "The service refused the page's token. Reload the page." : "The service refused the token.");
+  }
   return { status: response.status, path, body: data };
 }
 
-function outcomeClass(outcome) {
-  return "outcome-" + (outcome || "failed");
-}
-
-// An action reply is the recorded entry; a refused or failed one nests it under `action`.
+// The recorded entry of an action reply.
 function actionEntry(body) {
   if (!body) return null;
   return body.action && typeof body.action === "object" ? body.action : body;
 }
 
-function noteResponse(label, reply) {
+function outcomeOf(reply) {
   const body = reply.body || {};
-  const action = actionEntry(body);
-  const detail = body.detail || action.error || action.outcome || "";
-  responses.unshift({ at: new Date().toLocaleTimeString(), label, status: reply.status, detail });
-  responses.length = Math.min(responses.length, MAX_RESPONSES);
-  const rows = responses.map((entry) => el("tr", {},
-    el("td", {}, entry.at), el("td", {}, entry.label), el("td", {}, entry.status || "-"),
-    el("td", {}, entry.detail)));
-  $("responses").replaceChildren(...rows);
-  $("last-response").textContent = pretty(reply.body);
-}
-
-// Run one control: disable its button, call the route, log the response, refresh the views.
-async function act(button, label, name, params, body) {
-  button.disabled = true;
-  try {
-    const reply = await call(name, params || {}, body);
-    noteResponse(label, reply);
-    return reply;
-  } finally {
-    button.disabled = false;
-    if (token) {
-      await refreshStatus(true);
-    }
+  const entry = actionEntry(body);
+  let kind = entry && OUTCOME_TONES[entry.outcome] ? entry.outcome : "";
+  if (!kind) {
+    if (reply.status >= 200 && reply.status < 300) kind = "ok";
+    else if (reply.status === 0 || reply.status >= 500) kind = "failed";
+    else kind = "refused";
   }
+  return { kind, detail: body.detail || (entry && entry.error) || "" };
 }
 
-function confirmThen(message, run) {
-  return () => { if (window.confirm(message)) run(); };
+// Run one control.
+async function act(key, label, name, params, body) {
+  if (state.pending.has(key)) return null;
+  state.pending.set(key, { label, started: Date.now() });
+  state.feedback.delete(key);
+  render();
+  let reply;
+  try {
+    reply = await call(name, params || {}, body);
+  } finally {
+    state.pending.delete(key);
+  }
+  const outcome = outcomeOf(reply);
+  const summary = outcome.kind === "ok" ? label + " succeeded" : label + " " + outcome.kind;
+  state.feedback.set(key, { kind: outcome.kind, label: summary, detail: outcome.kind === "ok" ? "" : outcome.detail, at: new Date().toISOString() });
+  announce(summary + (outcome.detail && outcome.kind !== "ok" ? ": " + outcome.detail : "."));
+  if (token) {
+    await refreshAll(true);
+    broadcast({ type: "changed" });
+  }
+  return reply;
 }
 
-// Status, polled while connected.
-async function refreshStatus(force) {
-  const reply = await call("health", {});
-  if (reply.status !== 200 || !reply.body) {
-    $("status-line").textContent = "Status unavailable: " + text(reply.body && reply.body.detail);
+function renderFeedback(node, key) {
+  const pending = state.pending.get(key);
+  const done = state.feedback.get(key);
+  if (pending) {
+    node.replaceChildren(el("span", { class: "spin", "aria-hidden": "true" }),
+      el("span", {}, pending.label + "…"), el("span", { class: "detail" }, duration(elapsedSince(pending.started))));
+  } else if (done) {
+    const parts = [toned(OUTCOME_TONES[done.kind], done.label), el("span", { class: "detail" }, "at " + clock(done.at))];
+    if (done.detail) parts.push(el("span", { class: "detail" }, done.detail));
+    node.replaceChildren(...parts);
+  }
+  const stale = done && done.kind === "ok" && elapsedSince(done.at) > 15000;
+  node.hidden = (!pending && !done) || (!pending && stale);
+}
+
+// Confirmation.
+let confirmResolve = null;
+
+function confirmAction(title, effect, details, confirmLabel) {
+  $("confirm-title").textContent = title;
+  $("confirm-effect").textContent = effect;
+  $("confirm-details").replaceChildren(...(details || []).map((line) => el("li", {}, line)));
+  $("confirm-details").hidden = !(details && details.length);
+  $("confirm-ok").textContent = confirmLabel;
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    $("confirm-dialog").showModal();
+    $("confirm-cancel").focus();
+  });
+}
+
+function closeConfirm(result) {
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if ($("confirm-dialog").open) $("confirm-dialog").close();
+  if (resolve) resolve(result);
+}
+
+function sessionGate() {
+  if (!state.health || !state.health.session) return "Start a session first.";
+  return busyGate();
+}
+
+function busyGate() {
+  if (state.health && state.health.in_progress) return shortName(state.health.in_progress) + " is in progress.";
+  if (state.pending.has("session") || state.pending.has("config")) return "Wait for the running action to finish.";
+  return "";
+}
+
+function hookConfigured(name) {
+  return Boolean(state.settings && state.settings.hooks && state.settings.hooks.includes(name));
+}
+
+function setControl(button, reason) {
+  button.disabled = Boolean(reason);
+  button.title = reason || "";
+}
+
+// Polling.
+async function refresh(force) {
+  if (state.busy.health) {
+    // Run a forced refresh once the poll in flight finishes.
+    if (force) state.refreshAgain = true;
     return;
   }
-  const status = reply.body;
-  const job = status.job;
-  const summary = [status.session, job && job.id, job && job.state, status.in_progress].join("|");
-  const line = [];
-  line.push(el("span", {}, "Session "), el("strong", {}, status.session || "none"));
-  line.push(el("span", {}, " · load job "), el("strong", {}, job ? job.id + " " + job.state : "none"));
-  if (status.in_progress) line.push(el("span", {}, " · in progress "), el("strong", {}, status.in_progress));
-  $("status-line").replaceChildren(...line);
-  $("session-id").textContent = status.session || "none";
-  $("session-busy").textContent = status.in_progress || "-";
-  renderJob(job);
-  if (force || summary !== lastStatus) {
-    lastStatus = summary;
-    await refreshRecord();
+  state.busy.health = true;
+  try {
+    const reply = await call("health", {});
+    if (reply.status !== 200 || !reply.body) {
+      state.reachable = false;
+      return;
+    }
+    state.reachable = true;
+    const health = reply.body;
+    state.health = health;
+    state.polls += 1;
+    const job = health.job;
+    const key = [health.session, health.in_progress, job && job.id, job && job.state].join("|");
+    if (NEEDS.record && (force || key !== state.recordKey || (health.session && state.polls % RECORD_EVERY === 0))) {
+      state.recordKey = key;
+      await refreshRecord();
+    }
+  } finally {
+    state.busy.health = false;
+    render();
+    if (state.refreshAgain) {
+      state.refreshAgain = false;
+      refreshAll(true);
+    }
   }
 }
 
 async function refreshRecord() {
-  const reply = await call("sessionRecord", {});
-  const record = reply.status === 200 ? reply.body : null;
-  lastRecord = record;
-  $("run-record").textContent = record ? pretty(record) : "No session is active.";
-  $("session-started").textContent = record ? record.started_at : "-";
-  renderConfiguration(record && record.configuration);
-  renderActions(record ? record.actions : []);
-}
-
-function renderConfiguration(current) {
-  const rows = [];
-  if (current) {
-    for (const key of ["source", "fleet", "digest", "applied_at"]) {
-      rows.push(el("dt", {}, key), el("dd", {}, el("code", {}, current[key])));
-    }
-  } else {
-    rows.push(el("dt", {}, "Current"), el("dd", {}, "no session is active"));
+  if (!state.health || !state.health.session) {
+    state.record = null;
+    return;
   }
-  $("config-current").replaceChildren(...rows);
-}
-
-function renderActions(actions) {
-  const clock = (stamp) => (stamp ? String(stamp).slice(11, 19) : "-");
-  const rows = (actions || []).slice().reverse().map((action) => el("tr", {},
-    el("td", {}, action.seq),
-    el("td", { class: "nowrap" }, el("code", {}, action.action)),
-    el("td", {}, el("code", {}, text(action.params))),
-    el("td", { class: "nowrap", title: action.started_at + " to " + action.finished_at },
-      clock(action.started_at) + " to " + clock(action.finished_at)),
-    el("td", {}, el("span", { class: outcomeClass(action.outcome) }, action.outcome),
-      ...(action.error ? [el("div", { class: "note" }, action.error)] : [])),
-    el("td", {}, action.result
-      ? el("details", {}, el("summary", {}, "view"), el("pre", {}, pretty(action.result)))
-      : "-")));
-  if (!rows.length) rows.push(el("tr", {}, el("td", { colSpan: 6, class: "muted" }, "No recorded actions.")));
-  $("action-log").replaceChildren(...rows);
-}
-
-// Engines.
-function engineState(slice) {
-  if (!slice || slice.error) return slice ? slice.error : "unknown";
-  const flags = ["ejected", "draining", "quarantined", "probation", "pinned"].filter((flag) => slice[flag]);
-  const lifecycle = slice.lifecycle && slice.lifecycle.state;
-  const parts = [];
-  if (!slice.known) parts.push("unknown to router");
-  if (lifecycle) parts.push("lifecycle " + lifecycle);
-  if (flags.length) parts.push(flags.join(", "));
-  return parts.length ? parts.join("; ") : "in service";
-}
-
-// Engine IDs from the session's baseline fleet configuration, for when router state is unreadable.
-function baselineEngines() {
-  const baseline = lastRecord && lastRecord.configurations && lastRecord.configurations[0];
-  const engines = baseline && baseline.document && baseline.document.engines;
-  return Array.isArray(engines) ? engines.map((engine) => String(engine.iid)) : [];
+  const reply = await call("sessionRecord", {});
+  state.record = reply.status === 200 ? reply.body : null;
 }
 
 async function refreshEngines() {
-  const reply = await call("engines", {});
-  let engines = {};
-  if (reply.status === 200 && reply.body) {
-    $("engines-message").textContent = "";
-    engines = reply.body.engines;
-  } else {
-    const detail = text(reply.body && reply.body.detail);
-    $("engines-message").textContent = detail;
-    for (const iid of baselineEngines()) engines[iid] = { error: "state unavailable" };
+  if (state.busy.engines) return;
+  state.busy.engines = true;
+  try {
+    const reply = await call("engines", {});
+    if (reply.status === 200 && reply.body) {
+      state.engines = reply.body.engines;
+      state.enginesError = "";
+    } else {
+      state.enginesError = text(reply.body && reply.body.detail);
+    }
+  } finally {
+    state.busy.engines = false;
+    render();
   }
-  const rows = Object.entries(engines).map(([iid, slice]) => {
-    const buttons = ENGINE_ACTIONS.map((action) => {
-      const button = el("button", { type: "button", textContent: action });
-      if (action === "stop" || action === "drain") button.className = "danger";
-      button.addEventListener("click", () => engineAction(button, iid, action));
-      return button;
-    });
-    return el("tr", {},
-      el("td", {}, el("code", {}, iid)),
-      el("td", {}, slice && slice.role),
-      el("td", {}, engineState(slice)),
-      el("td", { class: "actions" }, ...buttons));
-  });
-  $("engines").replaceChildren(...rows);
 }
 
-async function engineAction(button, iid, action) {
-  const body = {};
-  const deadline = $("drain-deadline").value;
-  if (action === "drain" && deadline !== "") body.deadline_s = Number(deadline);
-  const reply = await act(button, action + " " + iid, "engineAction", { iid, action }, body);
-  renderEngineChange(iid, action, actionEntry(reply.body));
-  await refreshEngines();
+async function refreshFleet() {
+  if (state.busy.fleet) return;
+  state.busy.fleet = true;
+  try {
+    const reply = await call("fleet", {});
+    state.fleet = reply.status === 200 ? reply.body : null;
+  } finally {
+    state.busy.fleet = false;
+    renderStatus();
+  }
 }
 
-function renderEngineChange(iid, action, entry) {
-  const result = entry && entry.result;
-  const message = [el("code", {}, action + " " + iid), " ",
-    el("span", { class: outcomeClass(entry && entry.outcome) }, text(entry && entry.outcome))];
-  const error = (entry && entry.error) || (!entry || !entry.outcome ? text(entry && entry.detail) : "");
-  if (error) message.push(" " + error);
-  $("engine-change-message").replaceChildren(...message);
-  if (!result || !result.before || !result.after) {
-    $("engine-change").replaceChildren();
+async function refreshAll(force) {
+  await refresh(force);
+  if (NEEDS.engines) await refreshEngines();
+  if (NEEDS.fleet) await refreshFleet();
+  if (NEEDS.live) await refreshLive();
+}
+
+function render() {
+  if (shows("status")) renderStatus();
+  if (!state.settings) return;
+  if (shows("engines")) renderEngines();
+  if (shows("activity")) renderActivity();
+  if (shows("load")) renderJob();
+  if (shows("results")) renderResults();
+  if (shows("config")) renderConfiguration();
+}
+
+// Engine state.
+function processStates() {
+  // Hook actions' engine states, from the run record.
+  const states = {};
+  for (const action of (state.record ? state.record.actions : [])) {
+    if (action.outcome !== "ok") continue;
+    if (action.action === "config.cold_restart") {
+      for (const iid of Object.keys(states)) delete states[iid];
+      continue;
+    }
+    const match = /^engine\.(pause|resume|stop|start)$/.exec(action.action);
+    if (!match) continue;
+    const iid = action.params && action.params.engine;
+    if (match[1] === "pause") states[iid] = { state: "paused", at: action.finished_at };
+    else if (match[1] === "stop") states[iid] = { state: "stopped", at: action.finished_at };
+    else delete states[iid];
+  }
+  return states;
+}
+
+function lastEngineActions() {
+  const last = {};
+  for (const action of (state.record ? state.record.actions : [])) {
+    if (action.action.startsWith("engine.") && action.params) last[action.params.engine] = action;
+  }
+  return last;
+}
+
+function lifecycleState(slice) {
+  return slice && !slice.error && slice.lifecycle ? slice.lifecycle.state : null;
+}
+
+function engineStatus(slice, process) {
+  if (!slice || slice.error) return { label: "unknown", tone: "muted" };
+  if (process) return { label: process.state, tone: "muted" };
+  const lifecycle = lifecycleState(slice);
+  if (lifecycle && lifecycle !== "active") return { label: lifecycle.replace("_", " "), tone: LIFECYCLE_TONES[lifecycle] || "muted" };
+  if (slice.ejected) return { label: needsProfiles(slice) ? "needs profiles" : "ejected", tone: "bad" };
+  if (slice.quarantined) return { label: "quarantined", tone: "orange" };
+  if (slice.probation) return { label: "probation", tone: "warn" };
+  if (!slice.known) return { label: "not in router", tone: "muted" };
+  return { label: "in service", tone: "ok" };
+}
+
+// Start and resume wait until the router returns the engine to service.
+function returningStatus(iid) {
+  const pending = state.pending.get("engine:" + iid);
+  const match = pending && /^(start|resume) /.exec(pending.label);
+  if (!match) return null;
+  return { label: (match[1] === "start" ? "starting" : "resuming") + " · " + wholeSeconds(Date.now() - pending.started) + " s", tone: "warn" };
+}
+
+// The router keeps a restarted engine ejected until its profiles match the new process.
+function needsProfiles(slice) {
+  return Boolean(slice && !slice.error && slice.event && slice.event.action === "profile_recovery_blocked");
+}
+
+function ejectedReason(iid, slice) {
+  if (needsProfiles(slice)) {
+    return iid + " needs fresh profiles before the router readmits it (" + text(slice.event.error)
+      + "). Profile the engine and restart the router with the new profiles.";
+  }
+  const event = slice.event ? " Latest router event: " + slice.event.action.replace(/_/g, " ") + "." : "";
+  return "The router readmits " + iid + " when its recovery checks pass." + event;
+}
+
+function engineTags(slice, status) {
+  if (!slice || slice.error) return [];
+  const tags = [];
+  for (const flag of ["ejected", "quarantined", "probation", "pinned"]) {
+    if (slice[flag] && status.label !== flag && !(flag === "ejected" && needsProfiles(slice))) tags.push(flag);
+  }
+  return tags;
+}
+
+function residentLabel(counts) {
+  if (!counts || typeof counts !== "object") return "-";
+  return "P" + amount(counts.prefill, 0) + "·D" + amount(counts.decode, 0);
+}
+
+function residentTotal(counts) {
+  return counts && typeof counts === "object" ? Number(counts.prefill || 0) + Number(counts.decode || 0) : null;
+}
+
+function activeDrain(iid, slice, recorded) {
+  if (lifecycleState(slice) !== "draining") return null;
+  if (!recorded || recorded.action !== "engine.drain" || recorded.outcome !== "ok") return { action: null };
+  const before = recorded.result && recorded.result.before;
+  return { action: recorded, deadline: recorded.params.deadline_s, start: before && !before.error ? before.resident : null };
+}
+
+function restartPending(slice) {
+  const record = slice && !slice.error ? slice.lifecycle : null;
+  if (!record || !record.restart_required || !record.old_process_start) return false;
+  return slice.process_start === record.old_process_start;
+}
+
+function primaryAction(slice, process) {
+  if (process) return process.state === "stopped" ? "start" : "resume";
+  const lifecycle = lifecycleState(slice);
+  if (lifecycle && lifecycle !== "active") return "readmit";
+  if (slice && !slice.error && slice.ejected) return "readmit";
+  return "drain";
+}
+
+function engineGate(iid, action, slice, process, others) {
+  const gate = sessionGate();
+  if (gate) return gate;
+  if (state.pending.has("engine:" + iid)) return "An action on " + iid + " is running.";
+  const hook = HOOK_ACTIONS[action];
+  if (hook && !hookConfigured(hook)) return "No " + hook + " hook is configured.";
+  const lifecycle = lifecycleState(slice);
+  const paused = process && process.state === "paused";
+  const stopped = process && process.state === "stopped";
+  if (action === "drain") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (lifecycle !== "active") return "Drain needs an active engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+    if (others) return others + "; the router runs one lifecycle action at a time.";
+  } else if (action === "readmit") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (lifecycle === "active" && slice.ejected) return ejectedReason(iid, slice);
+    if (restartPending(slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
+    if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+  } else if (action === "pause") {
+    if (paused) return iid + " is paused; resume it first.";
+    if (stopped) return iid + " is stopped; start it first.";
+  } else if (action === "resume") {
+    if (!paused) return "Resume follows a pause in this session.";
+  } else if (action === "stop") {
+    if (stopped) return iid + " is stopped; start it first.";
+  } else if (action === "start") {
+    if (!stopped && !(slice && slice.ejected)) return "Start follows a stop or an ejection.";
+  }
+  return "";
+}
+
+function engineContext() {
+  const engines = state.engines || {};
+  const ids = Object.keys(engines).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const processes = processStates();
+  const last = lastEngineActions();
+  const busy = ids.filter((iid) => { const lifecycle = lifecycleState(engines[iid]); return lifecycle && lifecycle !== "active"; });
+  return { engines, ids, processes, last, busy };
+}
+
+function inProgress() {
+  const items = new Set();
+  const health = state.health || {};
+  if (health.in_progress) {
+    const since = health.in_progress_since ? " · " + wholeSeconds(elapsedSince(health.in_progress_since)) + " s" : "";
+    items.add(shortName(health.in_progress) + since);
+  }
+  for (const [key, pending] of state.pending) if (key.startsWith("engine:")) items.add(pending.label);
+  const context = engineContext();
+  for (const iid of context.ids) {
+    if (lifecycleState(context.engines[iid]) === "draining") items.add("drain " + iid);
+  }
+  return [...items];
+}
+
+// Session strip.
+function renderStatus() {
+  const connected = Boolean(state.settings);
+  const conn = $("conn");
+  conn.classList.toggle("ok", connected && state.reachable);
+  conn.classList.toggle("bad", connected && !state.reachable);
+  $("conn-text").textContent = !connected ? "Not connected" : state.reachable ? "Connected" : "Service unreachable";
+  conn.title = $("conn-text").textContent;
+  const confirming = !$("strip-confirm").hidden;
+  $("forget").hidden = !connected || Boolean(PAGE_TOKEN);
+  const dashboard = connected && state.settings.grafana;
+  $("open-dashboard").hidden = !dashboard;
+  if (dashboard) $("open-dashboard").href = dashboard.dashboard_url;
+  $("strip-signals").hidden = !connected;
+  $("strip-state").hidden = !connected || confirming;
+  $("strip-actions").hidden = !connected || confirming;
+  if (!connected) return;
+  renderSignals();
+  const health = state.health || {};
+  const session = health.session;
+  $("strip-session").textContent = shortSession(session);
+  const started = session && state.record && state.record.started_at;
+  $("strip-session").title = session ? "Session " + session + (started ? ", started " + clock(started) + " UTC" : "") : "";
+  $("strip-started").textContent = started ? "started " + clock(started) + " UTC" : "";
+  const grafana = state.settings.grafana;
+  const link = $("from-session");
+  link.hidden = !(started && grafana);
+  if (started && grafana) link.href = grafana.dashboard_url + "?from=" + Date.parse(started) + "&to=now";
+  const job = health.job;
+  const progress = jobProgress(job);
+  $("strip-job").textContent = job ? job.id : "none";
+  $("strip-job").title = job ? "Benchmark " + job.id : "";
+  $("strip-job-state").textContent = job ? job.state : "";
+  $("strip-job-state").className = job && job.state === "running" ? "tone-ok" : job && job.state === "failed" ? "tone-bad" : "lbl";
+  $("strip-job-state").classList.toggle("strong-state", Boolean(job));
+  $("strip-job-progress").hidden = !(progress && progress.fraction !== null);
+  if (progress && progress.fraction !== null) $("strip-job-progress").value = progress.fraction;
+  $("strip-job-time").textContent = progress ? progress.label : "";
+  const busy = inProgress();
+  $("strip-busy").hidden = !busy.length;
+  $("strip-busy-text").textContent = busy.join(", ");
+  $("session-start").hidden = Boolean(session);
+  $("session-end").hidden = !session;
+  setControl($("session-start"), state.pending.has("session") ? "Starting the session." : busyGate());
+  setControl($("session-end"), state.pending.has("session") ? "Ending the session." : busyGate());
+  $("session-start").setAttribute("aria-busy", String(state.pending.has("session")));
+  renderFeedback($("fb-session"), "session");
+  fitStrip();
+}
+
+function fitStrip() {
+  const strip = $("view-status");
+  const content = $("strip-cells");
+  let level = 0;
+  strip.dataset.fit = "0";
+  while (document.body.classList.contains("framed") && level < 4 && content.scrollWidth > content.clientWidth) {
+    strip.dataset.fit = String(++level);
+  }
+}
+
+function renderSignals() {
+  const fleet = state.fleet;
+  const admission = $("admission");
+  if (!fleet) {
+    admission.textContent = "-";
+    admission.className = "pill";
+    admission.title = "The router readiness is unavailable.";
+  } else {
+    const router = fleet.router;
+    admission.textContent = router.ready ? "Ready" : router.status_code === null ? "Unreachable" : "Not ready";
+    admission.className = router.ready ? "pill ok" : "pill bad";
+    admission.title = router.reason || "";
+  }
+  const alerts = fleet && fleet.alerts;
+  $("alerts-signal").hidden = !alerts;
+  if (!alerts) return;
+  const node = $("alerts");
+  if (alerts.firing === null) {
+    node.textContent = "unknown";
+    node.className = "pill";
+    node.title = alerts.error || "";
+    $("alerts-names").textContent = "";
     return;
   }
-  const keys = [...new Set([...Object.keys(result.before), ...Object.keys(result.after)])];
-  const rows = keys.map((key) => {
-    const before = text(result.before[key]);
-    const after = text(result.after[key]);
-    return el("tr", { class: before === after ? "" : "changed" },
-      el("td", {}, key), el("td", {}, el("code", {}, before)), el("td", {}, el("code", {}, after)));
+  const count = alerts.firing.length;
+  const paging = alerts.firing.some((alert) => alert.labels.severity === "page");
+  node.textContent = count ? count + " firing" : "none firing";
+  node.className = !count ? "pill" : paging ? "pill bad" : "pill warn";
+  node.title = alerts.firing.map((alert) => alert.alertname + (alert.labels.iid ? " " + alert.labels.iid : "")).join(", ");
+  $("alerts-names").textContent = alerts.firing.map((alert) => alert.alertname + (alert.labels.iid ? " " + alert.labels.iid : "")).join(" · ");
+}
+
+// The changes the session leaves in the fleet.
+function changeList() {
+  const changes = state.record && state.record.changes;
+  if (!changes) return [];
+  const list = changes.configuration ? ["configuration differs from the baseline"] : [];
+  for (const [iid, change] of Object.entries(changes.engines || {})) list.push(iid + " " + [].concat(change).join(" and "));
+  return list;
+}
+
+function confirmEndSession(open) {
+  const session = state.health && state.health.session;
+  $("strip-confirm").hidden = !open;
+  $("strip-actions").hidden = open;
+  $("strip-state").hidden = open;
+  if (open) {
+    const changes = changeList();
+    $("strip-confirm-text").textContent = "End session " + shortSession(session) + "? The service stops any running load job and closes the session. "
+      + (changes.length ? "The fleet keeps the session's changes: " + changes.join(", ") + ". Restore baseline undoes them." : "The session changed nothing in the fleet.");
+    $("strip-confirm-cancel").focus();
+  } else {
+    $("session-end").focus();
+  }
+}
+
+// Engines.
+function engineRow(iid) {
+  let row = rows.get(iid);
+  if (row) return row;
+  const primary = el("button", { type: "button", class: "btn btn-sm" });
+  primary.addEventListener("click", () => engineAction(iid, primary.dataset.action));
+  const more = el("button", { type: "button", class: "btn btn-sm btn-icon", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "More actions for " + iid },
+    el("span", { class: "dots", "aria-hidden": "true" }, el("span"), el("span"), el("span")));
+  more.addEventListener("click", () => (menuFor === iid ? closeMenu(true) : openMenu(iid, more)));
+  const open = el("button", { type: "button", class: "link engine-id", "aria-controls": "engine-drawer", "aria-expanded": "false", title: "Show details for " + iid }, iid);
+  open.addEventListener("click", () => {
+    engineView.open = engineView.open === iid ? null : iid;
+    renderEngines();
   });
-  $("engine-change").replaceChildren(...rows);
+  const cells = {
+    id: el("td", {}, open),
+    role: el("td", {}),
+    state: el("td", {}),
+    resident: el("td", {}),
+    last: el("td", {}),
+    actions: el("td", { class: "end" }, el("span", { class: "cell-actions" }, primary, more)),
+  };
+  row = { tr: el("tr", {}, ...Object.values(cells)), cells, primary, more, open };
+  rows.set(iid, row);
+  return row;
+}
+
+function lastCell(iid, recorded, drain) {
+  const key = "engine:" + iid;
+  const pending = state.pending.get(key);
+  const mine = state.feedback.get(key);
+  if (pending) {
+    return [el("span", { class: "spin tone-warn", "aria-hidden": "true" }), el("span", { class: "mono" }, pending.label.split(" ")[0]),
+      el("span", { class: "lbl" }, "· " + wholeSeconds(elapsedSince(pending.started)) + " s")];
+  }
+  if (mine && mine.kind !== "ok" && (!recorded || Date.parse(recorded.finished_at) < Date.parse(mine.at))) {
+    return [el("span", { class: "mono" }, mine.label.split(" ")[0]), el("span", { class: "outcome tone-" + OUTCOME_TONES[mine.kind] }, mine.kind)];
+  }
+  if (drain && drain.action) {
+    const elapsed = wholeSeconds(elapsedSince(drain.action.started_at));
+    return [el("span", { class: "spin tone-warn", "aria-hidden": "true" }), el("span", { class: "mono" }, "drain"), el("span", { class: "lbl" }, "· " + elapsed + (drain.deadline ? "/" + amount(drain.deadline, 0) : "") + " s")];
+  }
+  if (recorded) {
+    const name = el("span", { class: "mono" }, recorded.action.slice(7));
+    if (recorded.outcome !== "ok") {
+      const outcome = el("span", { class: "outcome tone-" + (OUTCOME_TONES[recorded.outcome] || "bad") }, recorded.outcome);
+      outcome.title = recorded.error || "";
+      return [name, el("span", { class: "lbl" }, "·"), outcome];
+    }
+    return [name, el("span", { class: "lbl" }, "· " + clock(recorded.finished_at))];
+  }
+  return [el("span", { class: "lbl" }, "–")];
+}
+
+// Engine list filters, sort and page.
+const PAGE_SIZES = [10, 20, 50, 100];
+const PAGE_KEY = "narwhal-control-engines-per-page";
+const TONE_RANK = { bad: 0, orange: 1, magenta: 2, warn: 3, muted: 4, ok: 5 };
+const engineView = { status: "", query: "", role: "", sort: "state", descending: false, page: 0, perPage: 20, open: null };
+
+function engineEntries(context) {
+  return context.ids.map((iid) => {
+    const slice = context.engines[iid];
+    const process = context.processes[iid];
+    const status = returningStatus(iid) || engineStatus(slice, process);
+    return {
+      iid, slice, process, status,
+      group: status.label.split(" · ")[0],
+      role: slice && !slice.error ? slice.role : null,
+      counts: slice && !slice.error && !process ? slice.resident : null,
+    };
+  });
+}
+
+function rank(entry) {
+  return TONE_RANK[entry.status.tone] ?? TONE_RANK.muted;
+}
+
+function compareEngines(a, b) {
+  const byId = a.iid.localeCompare(b.iid, undefined, { numeric: true });
+  let order = 0;
+  if (engineView.sort === "id") order = byId;
+  else if (engineView.sort === "role") order = String(a.role).localeCompare(String(b.role));
+  else if (engineView.sort === "state") order = rank(a) - rank(b) || a.group.localeCompare(b.group);
+  else if (engineView.sort === "resident") order = (residentTotal(a.counts) ?? -1) - (residentTotal(b.counts) ?? -1);
+  return (engineView.descending ? -order : order) || byId;
+}
+
+function engineMatches(entry) {
+  if (engineView.status === "attention" ? entry.status.tone === "ok" : engineView.status && entry.group !== engineView.status) return false;
+  if (engineView.role && entry.role !== engineView.role) return false;
+  return !engineView.query || entry.iid.toLowerCase().includes(engineView.query.toLowerCase());
+}
+
+function filtersActive() {
+  return Boolean(engineView.status || engineView.query || engineView.role);
+}
+
+function renderEngineSummary(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.group) || { count: 0, entry };
+    group.count += 1;
+    groups.set(entry.group, group);
+  }
+  const attention = entries.filter((entry) => entry.status.tone !== "ok").length;
+  const chips = [["", "All", entries.length, null]];
+  if (attention) chips.push(["attention", "Needs attention", attention, "bad"]);
+  for (const [name, group] of [...groups].sort((x, y) => rank(x[1].entry) - rank(y[1].entry) || x[0].localeCompare(y[0]))) {
+    chips.push([name, capital(name), group.count, group.entry.status.tone]);
+  }
+  if (engineView.status && !chips.some(([value]) => value === engineView.status)) chips.push([engineView.status, capital(engineView.status), 0, "muted"]);
+  update("engine-summary", $("engine-summary"), () => [JSON.stringify([chips, engineView.status]), chips.map(([value, label, count, tone]) => {
+    const chip = el("button", { type: "button", class: "chip", "aria-pressed": String(engineView.status === value) },
+      el("span", { class: tone ? "state tone-" + tone : "" }, label), el("span", { class: "count" }, String(count)));
+    chip.addEventListener("click", () => {
+      engineView.status = engineView.status === value ? "" : value;
+      engineView.page = 0;
+      renderEngines();
+    });
+    return chip;
+  })]);
+}
+
+function renderEngineDrawer(context, entries) {
+  const drawer = $("engine-drawer");
+  const entry = entries.find((item) => item.iid === engineView.open);
+  if (!entry) engineView.open = null;
+  drawer.hidden = !entry;
+  $("engines-body").classList.toggle("with-drawer", Boolean(entry));
+  if (!entry) return;
+  const { iid, slice, status } = entry;
+  const usable = slice && !slice.error;
+  const history = (state.record ? state.record.actions : []).filter((action) => action.params && action.params.engine === iid).reverse();
+  const tags = engineTags(slice, status);
+  const facts = [
+    ["State", el("span", { class: "state tone-" + status.tone }, status.label)],
+    ["Role", entry.role ? el("span", { class: "role role-" + entry.role }, entry.role) : "–"],
+    ["Resident", el("span", { class: "mono" }, residentLabel(entry.counts))],
+    ["Lifecycle", el("span", { class: "mono" }, (lifecycleState(slice) || "–").replace("_", " "))],
+    ["Flags", tags.length ? el("span", { class: "tags" }, ...tags.map((tag) => el("span", { class: "tag" }, tag))) : "none"],
+  ];
+  if (!(usable && slice.ejected)) facts.push(["Router event", usable && slice.event ? el("span", { class: "mono" }, slice.event.action.replace(/_/g, " ")) : "–"]);
+  const parts = [
+    el("div", { class: "drawer-head" }, el("h3", { id: "drawer-title" }, iid),
+      el("button", { type: "button", class: "btn btn-sm btn-icon", "aria-label": "Close details for " + iid, "data-close": "drawer" }, "×")),
+    el("dl", { class: "facts" }, ...facts.flatMap(([label, value]) => [el("dt", {}, label), el("dd", {}, value)])),
+  ];
+  if (usable && slice.ejected) parts.push(el("p", { class: "reason" }, ejectedReason(iid, slice)));
+  if (slice && slice.error) parts.push(el("p", { class: "reason" }, text(slice.error)));
+  parts.push(el("span", { class: "k" }, "Actions in this session"));
+  parts.push(history.length
+    ? el("ol", { class: "history" }, ...history.map((action) => el("li", {},
+      el("span", { class: "mono lbl" }, clock(action.started_at)),
+      el("span", { class: "mono strong" }, shortName(action.action)),
+      el("span", { class: "state tone-" + (OUTCOME_TONES[action.outcome] || "bad") }, action.outcome),
+      ...(action.error ? [el("span", { class: "err" }, action.error)] : []))))
+    : el("p", { class: "reason" }, state.record ? "No actions on " + iid + " in this session." : "Start a session to record actions."));
+  update("engine-drawer", drawer, () => [JSON.stringify([iid, facts.map(([, value]) => (value instanceof Node ? value.textContent + value.className : value)),
+    history.map((action) => [action.seq, action.outcome, action.error]), Boolean(state.record), usable && slice.ejected]), parts]);
+}
+
+function renderEngines() {
+  const context = engineContext();
+  const { engines, ids, last, busy } = context;
+  const notice = $("engines-notice");
+  const gate = sessionGate();
+  if (state.enginesError) {
+    notice.textContent = state.enginesError;
+    notice.className = "notice bad";
+  } else if (gate) {
+    notice.textContent = "Engine actions are unavailable: " + gate;
+    notice.className = "notice";
+  }
+  notice.hidden = !state.enginesError && !gate;
+  const entries = engineEntries(context);
+  const serving = { prefill: 0, decode: 0 };
+  for (const entry of entries) if (entry.role in serving && !entry.process && !entry.slice.ejected) serving[entry.role] += 1;
+  const split = serving.prefill + serving.decode ? " · split " + serving.prefill + "P:" + serving.decode + "D" : "";
+  $("engines-state").textContent = ids.length ? ids.length + split : "";
+  renderEngineSummary(entries);
+  const matching = entries.filter(engineMatches).sort(compareEngines);
+  const perPage = engineView.perPage;
+  const pages = Math.max(1, Math.ceil(matching.length / perPage));
+  engineView.page = Math.min(engineView.page, pages - 1);
+  const first = engineView.page * perPage;
+  const shown = matching.slice(first, first + perPage);
+  $("engine-range").textContent = matching.length ? (first + 1) + "–" + (first + shown.length) + " of " + matching.length : "0 of " + entries.length;
+  $("engine-prev").hidden = $("engine-next").hidden = pages === 1;
+  $("engine-per-page").hidden = entries.length <= PAGE_SIZES[0];
+  $("engine-prev").disabled = engineView.page === 0;
+  $("engine-next").disabled = engineView.page >= pages - 1;
+  $("engine-clear").hidden = !filtersActive();
+  for (const th of document.querySelectorAll("#view-engines th[data-sort]")) {
+    if (th.dataset.sort === engineView.sort) th.setAttribute("aria-sort", engineView.descending ? "descending" : "ascending");
+    else th.removeAttribute("aria-sort");
+  }
+  const ordered = [];
+  for (const entry of shown) {
+    const { iid, slice, process, status, role, counts } = entry;
+    const row = engineRow(iid);
+    const drain = activeDrain(iid, slice, last[iid]);
+    row.tr.classList.toggle("active", Boolean(drain));
+    row.tr.classList.toggle("selected", engineView.open === iid);
+    row.open.setAttribute("aria-expanded", String(engineView.open === iid));
+    update("role:" + iid, row.cells.role, () => [String(role), [role ? el("span", { class: "role role-" + role }, role) : el("span", { class: "lbl" }, "-")]]);
+    const tags = engineTags(slice, status);
+    update("state:" + iid, row.cells.state, () => [status.label + status.tone + tags.join(","), [el("span", { class: "state-cell" },
+      el("span", { class: "state tone-" + status.tone }, status.label),
+      ...(tags.length ? [el("span", { class: "tags" }, ...tags.map((tag) => el("span", { class: "tag" }, tag)))] : []))]]);
+    const startTotal = drain ? residentTotal(drain.start) : null;
+    const fraction = startTotal ? Math.max(0, Math.min(1, 1 - residentTotal(counts) / startTotal)) : null;
+    update("resident:" + iid, row.cells.resident, () => [residentLabel(counts) + "|" + fraction, [el("div", { class: "resident" },
+      el("span", { class: "mono" + (counts ? "" : " faint"), title: "Resident prefill and decode requests" }, residentLabel(counts)),
+      ...(fraction === null ? [] : [el("progress", { class: "drain", max: 1, value: fraction, "aria-label": "Share of " + iid + "'s resident requests drained" })]))]]);
+    const lastParts = lastCell(iid, last[iid], drain);
+    update("last:" + iid, row.cells.last, () => [lastParts.map((part) => (part instanceof Node ? part.textContent : part)).join("") + "|" + lastParts.map((part) => (part instanceof Node ? part.className : "")).join(","), [el("span", { class: "last-cell" }, ...lastParts)]]);
+    const other = busy.find((name) => name !== iid);
+    const others = other ? other + " is " + lifecycleState(engines[other]).replace("_", " ") : "";
+    const action = primaryAction(slice, process);
+    const reason = engineGate(iid, action, slice, process, others);
+    row.primary.dataset.action = action;
+    row.primary.textContent = capital(action);
+    row.primary.className = "btn btn-sm" + (action === "drain" || reason ? "" : " btn-primary");
+    setControl(row.primary, reason);
+    row.primary.setAttribute("aria-label", capital(action) + " " + iid + (reason ? " (unavailable: " + reason + ")" : ""));
+    row.primary.setAttribute("aria-busy", String(state.pending.has("engine:" + iid)));
+    ordered.push(row.tr);
+  }
+  for (const iid of [...rows.keys()]) if (!(iid in engines)) rows.delete(iid);
+  const body = $("engines");
+  if (!ordered.length) {
+    const message = state.enginesError ? "Engine state is unavailable." : !ids.length ? "Reading engine state…" : "No engines match these filters.";
+    update("engines-empty", body, () => [message, [el("tr", {}, el("td", { colSpan: 6, class: "empty" }, message))]]);
+  } else if (ordered.length !== body.querySelectorAll("tr:not(.filler)").length || ordered.some((tr, index) => body.children[index] !== tr)) {
+    state.keys["engines-empty"] = "";
+    body.replaceChildren(...ordered);
+  }
+  padRows(body, 6, Math.min(perPage, entries.length));
+  renderEngineDrawer(context, entries);
+  if (menuFor) renderMenu();
+  renderLastAction(context);
+}
+
+function renderLastAction(context) {
+  const actions = state.record ? state.record.actions : [];
+  let action = null;
+  for (let index = actions.length - 1; index >= 0; index -= 1) {
+    if (actions[index].action.startsWith("engine.")) { action = actions[index]; break; }
+  }
+  const node = $("last-action");
+  node.hidden = !action;
+  if (!action) return;
+  const iid = action.params.engine;
+  const before = action.result && action.result.before;
+  const now = context.engines[iid];
+  const beforeStatus = before && !before.error ? engineStatus(before, null) : null;
+  const nowStatus = engineStatus(now, context.processes[iid]);
+  const parts = [el("span", { class: "k" }, "Last action"),
+    el("span", { class: "mono strong" }, shortName(action.action) + " " + iid),
+    action.outcome === "ok" ? el("span", { class: "mono lbl" }, clock(action.started_at)) : toned(OUTCOME_TONES[action.outcome] || "bad", action.outcome)];
+  if (beforeStatus) {
+    parts.push(el("span", { class: "lbl" }, "state"), el("span", {}, beforeStatus.label + " → ", toned(nowStatus.tone, nowStatus.label)));
+    parts.push(el("span", { class: "lbl" }, "resident"), el("span", { class: "mono" }, residentLabel(before.resident) + " → " + residentLabel(now && !now.error ? now.resident : null)));
+  }
+  if (action.error) parts.push(el("span", { class: "lbl" }, action.error));
+  update("last-action", node, () => [parts.map((part) => part.textContent).join("|"), parts]);
+}
+
+let menuFor = null;
+let menuButton = null;
+
+function openMenu(iid, button) {
+  if (menuFor) closeMenu(false);
+  menuFor = iid;
+  menuButton = button;
+  button.setAttribute("aria-expanded", "true");
+  $("engine-menu").setAttribute("aria-label", "Actions for " + iid);
+  renderMenu();
+  $("engine-menu").hidden = false;
+  placeMenu();
+  const first = $("engine-menu").querySelector('[role="menuitem"]:not([aria-disabled="true"])') || $("engine-menu").querySelector('[role="menuitem"]');
+  if (first) first.focus();
+}
+
+function renderMenu() {
+  const iid = menuFor;
+  const context = engineContext();
+  const slice = context.engines[iid];
+  const process = context.processes[iid];
+  const other = context.busy.find((name) => name !== iid);
+  const others = other ? other + " is " + lifecycleState(context.engines[other]).replace("_", " ") : "";
+  const primary = primaryAction(slice, process);
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.action : null;
+  const items = ENGINE_ACTIONS.filter((action) => action !== primary).map((action) => {
+    const reason = engineGate(iid, action, slice, process, others);
+    const item = el("button", { type: "button", role: "menuitem", class: "menu-item" + (CONFIRMED_ACTIONS.includes(action) ? " danger" : ""), "data-action": action },
+      el("span", {}, capital(action) + (CONFIRMED_ACTIONS.includes(action) ? "…" : "")));
+    if (reason) {
+      item.setAttribute("aria-disabled", "true");
+      item.append(el("span", { class: "menu-reason" }, reason));
+    }
+    item.addEventListener("click", () => {
+      if (item.getAttribute("aria-disabled") === "true") return;
+      closeMenu(true);
+      engineAction(iid, action);
+    });
+    return item;
+  });
+  const signature = items.map((item) => item.textContent + item.getAttribute("aria-disabled")).join("|");
+  if (state.keys.menu === iid + signature) return;
+  state.keys.menu = iid + signature;
+  $("engine-menu").replaceChildren(...items);
+  const again = focused && $("engine-menu").querySelector('[data-action="' + focused + '"]');
+  if (again) again.focus();
+}
+
+function placeMenu() {
+  const menu = $("engine-menu");
+  const anchor = menuButton.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+  let top = anchor.bottom + 4;
+  if (top + height > window.innerHeight - 8) top = Math.max(8, anchor.top - height - 4);
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+}
+
+function closeMenu(focusButton) {
+  if (!menuFor) return;
+  $("engine-menu").hidden = true;
+  state.keys.menu = "";
+  menuButton.setAttribute("aria-expanded", "false");
+  if (focusButton) menuButton.focus();
+  menuFor = null;
+  menuButton = null;
+}
+
+function moveMenuFocus(step) {
+  const items = [...$("engine-menu").querySelectorAll('[role="menuitem"]')];
+  if (!items.length) return;
+  const index = items.indexOf(document.activeElement);
+  const next = step === "first" ? 0 : step === "last" ? items.length - 1 : (index + step + items.length) % items.length;
+  items[next].focus();
+}
+
+function drainDeadline() {
+  return readStored(DEADLINE_KEY) || $("drain-deadline").value;
+}
+
+async function engineAction(iid, action) {
+  const body = {};
+  const deadline = drainDeadline();
+  // Zero, negative or unreadable deadlines leave the router's default.
+  const seconds = Number(deadline);
+  if (action === "drain" && deadline !== "" && Number.isFinite(seconds) && seconds > 0) body.deadline_s = seconds;
+  const effects = {
+    pause: "Runs the engine_pause hook for " + iid + ". The router ejects an engine that stops answering, so it leaves service until it resumes.",
+    stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering. "
+      + "Start runs the engine_start hook and waits until the router returns the engine to service.",
+    drain: "The router stops placing new requests on " + iid + " and waits for its resident requests to finish"
+      + (body.deadline_s ? ", for at most " + body.deadline_s + " s." : ", until the router's default deadline. Set Drain deadline in the session strip to limit it."),
+  };
+  if (effects[action]) {
+    const confirmed = await confirmAction(capital(action) + " engine " + iid + "?", effects[action], [], capital(action) + " " + iid);
+    if (!confirmed) return;
+  }
+  await act("engine:" + iid, action + " " + iid, "engineAction", { iid, action }, body);
 }
 
 // Load jobs.
 async function loadWorkloads(enabled) {
   if (!enabled) {
-    $("load-message").textContent = "Load jobs are not configured: the control configuration has no load section.";
+    $("load-notice").textContent = "Load jobs are not configured: the control configuration has no load section.";
+    $("load-notice").hidden = false;
     $("job-form").hidden = true;
     return;
   }
   const reply = await call("workloads", {});
   if (reply.status !== 200 || !reply.body) {
-    $("load-message").textContent = "Workloads unavailable: " + text(reply.body && reply.body.detail);
+    $("load-notice").textContent = "Workloads are unavailable: " + text(reply.body && reply.body.detail);
+    $("load-notice").hidden = false;
     return;
   }
-  workloads = {};
+  state.workloads = {};
   const options = reply.body.workloads.map((workload) => {
-    workloads[workload.name] = workload;
-    return el("option", { value: workload.name, textContent: workload.name + " (" + workload.kind + ")" });
+    state.workloads[workload.name] = workload;
+    return el("option", { value: workload.name, textContent: workload.label || workload.name });
   });
   $("job-workload").replaceChildren(...options);
+  state.limits = reply.body.limits || {};
+  for (const [key, id] of JOB_FIELDS) {
+    const limit = state.limits[key];
+    if (!limit) continue;
+    Object.assign($(id), { min: limit.min, max: limit.max, step: limit.integer ? 1 : "any", title: "From " + limit.min + " to " + limit.max });
+  }
+  jobDefaults();
   workloadHint();
 }
 
-function workloadHint() {
-  const workload = workloads[$("job-workload").value];
-  if (!workload) { $("workload-hint").textContent = ""; return; }
-  $("workload-hint").textContent = workload.kind === "timestamped_trace"
-    ? "Timestamped traces replay their recorded arrival times: leave Rate empty; Concurrency and Duration are optional caps."
-    : "Set Duration and a Rate, a Concurrency or both.";
+// Fill each input with its default.
+function jobDefaults() {
+  const workload = state.workloads[$("job-workload").value];
+  if (!workload) return;
+  const trace = workload.kind === "timestamped_trace";
+  if (trace) $("job-arrival").value = "";
+  for (const [key, id] of JOB_FIELDS) {
+    const limit = state.limits[key];
+    if (trace) $(id).value = "";
+    else if (limit && limit.default !== null && $(id).value === "") $(id).value = limit.default;
+  }
 }
+
+const CACHE_BUST_PLACES = {
+  system_prefix: "start of the system prompt",
+  system_suffix: "end of the system prompt",
+  first_turn_prefix: "start of the first message",
+  first_turn_suffix: "end of the first message",
+};
+
+const DATASET_NAMES = { sharegpt: "ShareGPT" };
+
+function tokens(value) {
+  return amount(value, 0) + " tokens";
+}
+
+function tokenSized(value) {
+  return amount(value, 0) + "-token";
+}
+
+function workloadShape(workload) {
+  // Without ignore_eos the model can end an answer before the requested length.
+  const answer = workload.ignore_eos ? "full-length answers of about " : "answers of up to about ";
+  if (workload.kind === "synthetic") {
+    return "Generated prompts of about " + tokens(workload.isl) + " with " + answer + tokens(workload.osl) + ".";
+  }
+  if (workload.kind === "mixed") {
+    const sizes = workload.mix.map((size) => amount(size.percent, 0) + "% " + amount(size.isl, 0) + " in, " + amount(size.osl, 0) + " out");
+    return "Generated prompts in " + workload.mix.length + " sizes (" + sizes.join("; ") + " tokens).";
+  }
+  if (workload.kind === "multi_turn") {
+    return "Generated conversations of about " + amount(workload.turns, 0) + " turns, " + amount(workload.turn_delay_s) + " s apart. Each turn adds about "
+      + tokens(workload.isl) + " and asks for " + answer + tokens(workload.osl) + ". Rate counts turns; Concurrency counts conversations.";
+  }
+  if (workload.kind === "public_dataset") return "Recorded chat prompts from the " + (DATASET_NAMES[workload.dataset] || workload.dataset) + " dataset, each answer up to its recorded length.";
+  if (workload.kind === "timestamped_trace") return "Replays a recorded trace at the times its requests originally arrived.";
+  return "Replays a recorded trace whose prompts share opening text, at the pace you set.";
+}
+
+function workloadExtras(workload) {
+  const extras = [];
+  if (workload.system_prompt_tokens) extras.push("Every request shares one " + tokenSized(workload.system_prompt_tokens) + " system prompt.");
+  if (workload.prefix_prompts) extras.push("Each request starts with one of " + amount(workload.prefix_prompts, 0) + " shared " + tokenSized(workload.prefix_tokens) + " prefixes.");
+  if (workload.cache_bust) extras.push("A unique marker at the " + CACHE_BUST_PLACES[workload.cache_bust] + " stops prefix reuse between conversations.");
+  if (workload.cancel_percent) extras.push(amount(workload.cancel_percent, 0) + "% of requests are cancelled " + amount(workload.cancel_after_s) + " s after sending.");
+  return extras;
+}
+
+function workloadHint() {
+  const workload = state.workloads[$("job-workload").value];
+  if (!workload) { $("workload-hint").textContent = ""; return; }
+  const pacing = workload.kind === "timestamped_trace"
+    ? "The trace sets arrival times: leave Rate, Arrival, Ramp-up and Warm-up empty. Concurrency, Duration and Requests are optional caps."
+    : "Set a Rate, a Concurrency or both, and a Duration, a Requests limit or both. Arrival applies to Rate.";
+  // The configuration's description replaces the summary built from the workload's settings.
+  const summary = workload.description ? [workload.description] : [workloadShape(workload), ...workloadExtras(workload)];
+  const parts = [...summary, pacing];
+  $("workload-hint").textContent = parts.filter(Boolean).join(" ");
+}
+
+const JOB_FIELDS = [
+  ["rate", "job-rate"], ["concurrency", "job-concurrency"], ["ramp_s", "job-ramp"],
+  ["duration_s", "job-duration"], ["requests", "job-requests"], ["warmup_requests", "job-warmup"],
+];
+const JOB_INPUTS = ["job-workload", "job-arrival", ...JOB_FIELDS.map(([, id]) => id)];
 
 function jobParams() {
   const params = { workload: $("job-workload").value };
-  const fields = [["rate", "job-rate"], ["concurrency", "job-concurrency"], ["duration_s", "job-duration"]];
-  for (const [key, id] of fields) {
+  for (const [key, id] of JOB_FIELDS) {
     const value = $(id).value;
     if (value !== "") params[key] = Number(value);
   }
+  if ($("job-arrival").value) params.arrival = $("job-arrival").value;
   return params;
 }
 
-function renderJob(job) {
+function jobProgress(job) {
+  if (!job) return null;
+  const limit = job.params && job.params.duration_s;
+  if (job.state !== "running") {
+    const took = between(job.started_at, job.finished_at);
+    return { fraction: null, label: took === null ? "" : "ran " + wholeSeconds(took) + " s" };
+  }
+  const elapsed = elapsedSince(job.started_at);
+  if (!limit) return { fraction: null, label: wholeSeconds(elapsed) + " s" };
+  const label = wholeSeconds(elapsed) + " / " + amount(limit, 0) + " s" + (elapsed > limit * 1000 ? " · finishing" : "");
+  return { fraction: Math.min(1, elapsed / (limit * 1000)), label };
+}
+
+// Live results.
+async function refreshLive() {
+  const job = state.health && state.health.job;
   if (!job) {
-    $("job-status").replaceChildren(el("dt", {}, "Job"), el("dd", {}, "none"));
-    $("job-results").replaceChildren();
-    $("job-document").textContent = "No load job has run.";
+    state.live = null;
     return;
   }
-  const status = [["Job", job.id], ["State", job.state], ["Parameters", job.params],
-    ["Started", job.started_at], ["Finished", job.finished_at], ["Error", job.error]];
-  $("job-status").replaceChildren(...status.flatMap(([key, value]) =>
-    [el("dt", {}, key), el("dd", {}, text(value))]));
-  $("job-document").textContent = pretty(job);
-  const result = job.result || {};
-  const rows = [];
-  const add = (label, value) => rows.push(el("tr", {}, el("td", {}, label), el("td", {}, text(value))));
-  if (result.requests) {
-    add("Requests", result.requests.total);
-    add("Completed", result.requests.completed);
-    add("Errors", result.requests.errors);
-    if (result.requests.errors) add("Errors by type", result.requests.errors_by_type);
+  const live = state.live;
+  const current = live && live.started_at === job.started_at;
+  if (current && live.state === job.state && job.state !== "running") return;
+  const reply = await call("jobLive", {});
+  if (reply.status === 200 && reply.body) {
+    state.live = { ...reply.body, started_at: job.started_at };
+    renderResults();
   }
-  if (result.throughput) {
-    add("Requests/s", result.throughput.requests_per_s);
-    add("Output tokens/s", result.throughput.output_tokens_per_s);
-  }
-  for (const [metric, label] of [["ttft", "TTFT"], ["itl", "ITL"], ["request", "Request latency"]]) {
-    const stats = result.latency && result.latency[metric];
-    if (stats) add(label + " p50 / p95 / p99 (" + stats.unit + ")", [stats.p50, stats.p95, stats.p99].map(text).join(" / "));
-  }
-  if (result.goodput) add("Goodput requests/s", result.goodput.requests_per_s);
-  if (result.exit_code !== undefined) add("AIPerf exit code", result.exit_code);
-  if (result.summary_error) add("Summary error", result.summary_error);
-  if (job.journal) {
-    add("Journal extract", job.journal.extract
-      ? job.journal.extract + " (" + job.journal.lines + " lines)" : job.journal.notes.join("; "));
-    if (job.journal.extract) add("Journal terminal rows", job.journal.terminal);
-    if (job.journal.extract && job.journal.notes.length) add("Journal notes", job.journal.notes.join("; "));
-  }
-  if (!rows.length) rows.push(el("tr", {}, el("td", { colSpan: 2, class: "muted" }, "No client results yet.")));
-  $("job-results").replaceChildren(...rows);
 }
+
+const LATENCY_ROWS = [["ttft", "Time to first token"], ["itl", "Inter-token latency"], ["request", "Request latency"]];
+
+function milliseconds(value) {
+  if (value === null || value === undefined) return "-";
+  return value >= 1000 ? amount(value / 1000, 2) + " s" : amount(value, value < 10 ? 1 : 0) + " ms";
+}
+
+// p95 tone against the target.
+function targetTone(value, target) {
+  if (!target || value === null || value === undefined) return "";
+  return value < 0.8 * target ? "tone-ok" : value < target ? "tone-warn" : "tone-bad";
+}
+
+function kpi(label, value, extra, tone) {
+  const dd = el("dd", { class: tone || "" }, value);
+  if (extra) dd.append(el("small", {}, extra));
+  return el("div", {}, el("dt", {}, label), dd);
+}
+
+function renderResults() {
+  const job = state.health && state.health.job;
+  const live = job && state.live && state.live.started_at === job.started_at ? state.live : null;
+  $("results-job").textContent = job ? job.id : "";
+  $("job-document").hidden = !job || job.state === "running";
+  $("job-document-later").hidden = !job || job.state !== "running";
+  $("job-error").hidden = !(job && job.error);
+  $("job-error").textContent = job && job.error ? job.error : "";
+  const progress = jobProgress(job);
+  $("results-progress").hidden = !progress || progress.fraction === null;
+  if (progress && progress.fraction !== null) $("results-progress").value = progress.fraction;
+  $("results-clock").textContent = !job ? "Start a benchmark to see its results here as they arrive."
+    : job.state + (progress && progress.label ? " · " + progress.label : "");
+  // Without a job's records, the figures stay blank.
+  const show = (text) => (live ? text : "\u00a0");
+  const requests = live ? live.requests : {};
+  const throughput = live ? live.throughput : {};
+  const kpis = [
+    kpi("Completed", show(amount(requests.completed, 0)), live && job.params.requests ? "of " + amount(job.params.requests, 0) : ""),
+    kpi("Errors", show(amount(requests.errors, 0)), "", requests.errors ? "tone-bad" : ""),
+    kpi("Requests/s", show(amount(throughput.requests_per_s))),
+    kpi("Output tok/s", show(amount(throughput.output_tokens_per_s, 0))),
+  ];
+  if (live && live.goodput && requests.completed) {
+    const share = 100 * live.goodput.good_requests / requests.completed;
+    kpis.push(kpi("Within SLO", amount(share, 1) + "%", "", share >= 95 ? "tone-ok" : share >= 90 ? "tone-warn" : "tone-bad"));
+  } else {
+    kpis.push(kpi("Within SLO", show("-")));
+  }
+  $("results-kpis").replaceChildren(...kpis);
+  const rows = LATENCY_ROWS.map(([name, label]) => {
+    const stats = (live && live.latency[name]) || {};
+    const target = live && live.slo[name];
+    return el("tr", {},
+      el("td", {}, label),
+      el("td", {}, show(milliseconds(stats.p50))),
+      el("td", { class: targetTone(stats.p95, target) }, show(milliseconds(stats.p95))),
+      el("td", {}, show(milliseconds(stats.p99))),
+      el("td", {}, show(target ? milliseconds(target) : "-")));
+  });
+  $("results-latency").replaceChildren(...rows);
+  const points = live ? live.series.points : [];
+  drawChart("chart-rate", points.map((point) => [point.t, point.requests_per_s]), null, (value) => amount(value, 1) + "/s");
+  drawChart("chart-ttft", points.map((point) => [point.t, point.ttft_p95]), live ? live.slo.ttft : null, milliseconds);
+  if (!live) $("chart-rate-meta").textContent = $("chart-ttft-meta").textContent = "";
+}
+
+// Draw one series and its target line.
+function drawChart(id, points, target, format) {
+  const svg = $(id);
+  const width = 300;
+  const height = 96;
+  const values = points.map(([, value]) => value).filter((value) => value !== null && value !== undefined);
+  const peak = values.length ? Math.max(...values) : 0;
+  const end = points.length ? points[points.length - 1][0] : 0;
+  const top = Math.max(peak, target || 0) * 1.15 || 1;
+  const x = (t) => (end ? width * t / end : 0);
+  const y = (value) => 6 + 84 * (1 - value / top);
+  const make = (tag, attributes) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+    return node;
+  };
+  const segments = [];
+  let segment = null;
+  for (const [t, value] of points) {
+    if (value === null || value === undefined) {
+      segment = null;
+      continue;
+    }
+    if (!segment) segments.push(segment = []);
+    segment.push([x(t), y(value)]);
+  }
+  const nodes = [];
+  for (const run of segments) {
+    const line = run.map(([px, py], index) => (index ? "L" : "M") + px.toFixed(1) + " " + py.toFixed(1)).join("");
+    nodes.push(make("path", { class: "area", d: line + "L" + run[run.length - 1][0].toFixed(1) + " " + height + "L" + run[0][0].toFixed(1) + " " + height + "Z" }));
+  }
+  nodes.push(make("line", { class: "axis", x1: 0, x2: width, y1: height - 0.5, y2: height - 0.5, "vector-effect": "non-scaling-stroke" }));
+  if (target) nodes.push(make("line", { class: "target", x1: 0, x2: width, y1: y(target).toFixed(1), y2: y(target).toFixed(1), "vector-effect": "non-scaling-stroke" }));
+  for (const run of segments) {
+    const line = run.map(([px, py], index) => (index ? "L" : "M") + px.toFixed(1) + " " + py.toFixed(1)).join("");
+    nodes.push(make("path", { class: "series", d: line, "vector-effect": "non-scaling-stroke" }));
+  }
+  svg.replaceChildren(...nodes);
+  $(id + "-meta").textContent = (values.length ? "peak " + format(peak) : "waiting for requests") + (target ? " · target " + format(target) : "");
+  $(id + "-axis").replaceChildren(el("span", {}, "0:00"), el("span", {}, end ? duration(end * 1000) : "\u00a0"));
+}
+
+function renderJob() {
+  const health = state.health || {};
+  const job = health.job;
+  const running = Boolean(job && job.state === "running");
+  const gate = sessionGate();
+  setControl($("job-start"), state.pending.has("job") ? "The job request is running." : gate || (running ? job.id + " is running." : ""));
+  setControl($("job-stop"), state.pending.has("job") ? "The job request is running." : !health.session ? "Start a session first." : running ? "" : "No benchmark is running.");
+  for (const id of JOB_INPUTS) $(id).disabled = running;
+  $("job-title").textContent = job ? job.id : "";
+  const progress = jobProgress(job);
+  $("job-state").textContent = job ? job.state : "No benchmark";
+  $("job-state").className = running ? "tone-ok strong-state" : job && job.state === "failed" ? "tone-bad strong-state" : "lbl";
+  $("job-time").textContent = progress && progress.label ? progress.label : "";
+  $("job-locked").hidden = !running;
+  $("job-locked").textContent = running ? "Inputs are locked while " + job.id + " runs." : "";
+  renderFeedback($("fb-job"), "job");
+  const key = job ? JSON.stringify([job.id, job.state, job.finished_at, job.error]) : "";
+  if (state.keys.job === key) return;
+  state.keys.job = key;
+  if (running) {
+    if (state.workloads[job.params.workload]) $("job-workload").value = job.params.workload;
+    for (const [field, id] of JOB_FIELDS) $(id).value = job.params[field] === undefined ? "" : job.params[field];
+    $("job-arrival").value = job.params.arrival || "";
+    workloadHint();
+  }
+}
+
+// Configuration and overlays.
+function currentConfiguration() {
+  return state.record && state.record.configuration;
+}
+
+function overlaySource() {
+  const source = $("overlay").value;
+  try {
+    const value = JSON.parse(source);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "The overlay must be a JSON object." };
+    return { source, value };
+  } catch (error) {
+    return { error: "The overlay is not valid JSON: " + error.message };
+  }
+}
+
+function flatten(value, prefix, out) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [key, child] of Object.entries(value)) flatten(child, prefix ? prefix + "." + key : key, out);
+  } else if (prefix) {
+    out[prefix] = JSON.stringify(value);
+  }
+  return out;
+}
+
+function changes(before, after) {
+  const old = flatten(before, "", {});
+  const next = flatten(after, "", {});
+  const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])].sort();
+  return keys.filter((key) => old[key] !== next[key]).map((key) => ({ key, from: old[key], to: next[key] }));
+}
+
+function changeGrid(list) {
+  return el("div", { class: "changes" }, ...list.flatMap((change) => [
+    el("span", { class: "mono key" }, change.key),
+    el("span", { class: "mono old" }, change.from === undefined ? "default" : change.from),
+    el("span", { class: "lbl", "aria-label": "becomes" }, "→"),
+    el("span", { class: "mono new" }, change.to === undefined ? "default" : change.to),
+  ]));
+}
+
+function overlayGate() {
+  const gate = sessionGate();
+  if (gate) return gate;
+  if (!hookConfigured("router_restart")) return "No router_restart hook is configured.";
+  return "";
+}
+
+function renderConfiguration() {
+  const current = currentConfiguration();
+  const record = state.record;
+  update("config-changes", $("config-changes"), () => {
+    if (!current) return ["none", [el("span", { class: "lbl" }, "Start a session to see and change the configuration.")]];
+    const configurations = record.configurations || [current];
+    const list = changes(configurations[0].document, current.document);
+    const head = el("span", { class: "k" }, "Changed from baseline");
+    return [current.digest, list.length ? [head, changeGrid(list)] : [head, el("p", { class: "hint" }, "No setting differs from the baseline.")]];
+  });
+  if (current) {
+    const configurations = record.configurations || [];
+    let overlays = 0;
+    for (const entry of configurations) overlays = entry.source === "overlay" ? overlays + 1 : entry.source === "baseline" ? 0 : overlays;
+    const source = record.baseline && record.baseline.source ? record.baseline.source.split("/").pop() : "";
+    $("config-state").replaceChildren("baseline ", el("span", { class: "mono" }, source), " · " + (overlays ? overlays + " overlay" + (overlays > 1 ? "s" : "") + " applied" : "no overlay applied"));
+  } else {
+    $("config-state").replaceChildren();
+  }
+  const parsed = overlaySource();
+  $("overlay").setAttribute("aria-invalid", String(Boolean(parsed.error)));
+  const check = state.overlayCheck;
+  const checked = check && !parsed.error && check.source === parsed.source && current && check.result.base_digest === current.digest;
+  const gate = overlayGate();
+  let status = parsed.error || "";
+  if (!status) {
+    if (state.checking) status = "Checking the overlay…";
+    else if (!checked) status = "Check the overlay to see the changes it makes before you apply it.";
+    else if (check.result.errors.length) status = "The overlay is invalid.";
+    else status = "The overlay is valid. Apply it to restart the router with these changes.";
+  }
+  $("overlay-status").textContent = status;
+  const invalid = Boolean(parsed.error) || Boolean(checked && check.result.errors.length);
+  const valid = Boolean(checked && !check.result.errors.length && !state.checking);
+  $("overlay-status").className = "overlay-status" + (invalid ? " bad" : valid ? " ok" : "");
+  $("overlay-check").hidden = !checked;
+  setControl($("overlay-check-button"), parsed.error || (state.checking ? "Checking the overlay." : sessionGate()));
+  setControl($("overlay-apply"), state.pending.has("config") ? "A configuration action is running." : gate
+    || parsed.error || (!checked ? "Check the overlay first." : check.result.errors.length ? "The overlay is invalid." : ""));
+  setControl($("cold-restart"), state.pending.has("config") ? "A configuration action is running." : sessionGate()
+    || (hookConfigured("cold_restart") ? "" : "No cold_restart hook is configured."));
+  setControl($("restore"), state.pending.has("config") ? "A configuration action is running." : sessionGate());
+  renderFeedback($("fb-config"), "config");
+}
+
+function renderCheck() {
+  const check = state.overlayCheck;
+  const node = $("overlay-check");
+  if (!check) { node.replaceChildren(); return; }
+  if (check.result.errors.length) {
+    node.replaceChildren(el("ul", {}, ...check.result.errors.map((error) => el("li", {}, error))));
+    return;
+  }
+  const current = currentConfiguration();
+  const list = changes(current ? current.document : {}, check.result.document);
+  check.changes = list;
+  node.replaceChildren(list.length
+    ? el("div", { class: "inset" }, el("span", { class: "k" }, "The overlay changes"), changeGrid(list))
+    : el("p", { class: "hint" }, "The overlay changes no setting."));
+}
+
+async function checkOverlay() {
+  const parsed = overlaySource();
+  if (parsed.error) return;
+  state.checking = true;
+  renderConfiguration();
+  const reply = await call("overlayCheck", {}, parsed.source);
+  state.checking = false;
+  if (reply.status === 200 && reply.body) {
+    state.overlayCheck = { source: parsed.source, result: reply.body };
+    renderCheck();
+    announce(reply.body.errors.length ? "The overlay is invalid." : "The overlay is valid.");
+  } else {
+    const outcome = outcomeOf(reply);
+    state.overlayCheck = null;
+    state.feedback.set("config", { kind: outcome.kind, label: "Overlay check " + outcome.kind, detail: outcome.detail, at: new Date().toISOString() });
+  }
+  renderConfiguration();
+}
+
+// Activity.
+function actionTarget(action) {
+  const params = action.params || {};
+  if (params.engine) return params.engine;
+  if (params.overlay) return Object.keys(params.overlay).join(", ");
+  if (params.workload) return params.workload;
+  if (params.job) return params.job;
+  return "-";
+}
+
+function renderActivity() {
+  const record = state.record;
+  const actions = record ? record.actions : [];
+  const context = engineContext();
+  $("activity-state").textContent = record ? "session " + shortSession(record.session) : "";
+  $("activity-state").title = record ? record.session : "";
+  $("run-record").hidden = !record;
+  const lines = actions.slice().reverse().map((action) => {
+    const iid = action.params && action.params.engine;
+    const drain = iid && context.last[iid] === action ? activeDrain(iid, context.engines[iid], action) : null;
+    const running = Boolean(drain && drain.action);
+    const outcome = el("span", { class: "state tone-" + (running ? "warn" : OUTCOME_TONES[action.outcome] || "bad") }, running ? "in progress" : action.outcome);
+    return [action.seq, clock(action.started_at), shortName(action.action), actionTarget(action),
+      running ? "running" : brief(between(action.started_at, action.finished_at)), outcome, action.error || ""];
+  });
+  update("activity", $("activity"), () => {
+    const signature = JSON.stringify(lines.map((line) => line.map((cell) => (cell instanceof Node ? cell.textContent : cell))));
+    const list = lines.map(([seq, started, name, target, took, outcome, error]) => el("tr", {},
+      el("td", { class: "mono lbl" }, seq),
+      el("td", { class: "mono" }, started),
+      el("td", { class: "mono strong" }, name),
+      el("td", { class: "mono" }, target),
+      el("td", { class: "mono end" }, took),
+      el("td", { class: "wrap" }, outcome, ...(error ? [el("span", { class: "err" }, error)] : []))));
+    if (!list.length) list.push(el("tr", {}, el("td", { colSpan: 6, class: "empty" }, record ? "No recorded actions." : "Start a session to record actions.")));
+    return [signature + !!record, list];
+  });
+  padActivity();
+}
+
+// Fill the Activity panel's visible height with rows.
+function padActivity() {
+  const body = $("activity");
+  const scroll = body.closest(".activity-scroll");
+  const row = body.querySelector("tr:not(.filler)");
+  const height = row ? row.offsetHeight : 0;
+  const room = scroll.clientHeight - body.parentElement.tHead.offsetHeight;
+  const real = body.querySelectorAll("tr:not(.filler)").length;
+  padRows(body, 6, height ? real + Math.max(0, Math.floor((room - real * height) / height)) : 0);
+}
+new ResizeObserver(padActivity).observe(document.querySelector(".activity-scroll"));
 
 // Dashboard panels.
 function renderDashboard(grafana) {
-  if (!grafana || !grafana.panels.length) {
-    $("dashboard-note").textContent = "No dashboard panels are configured. Add a console section to the control configuration to embed Grafana panels here.";
+  const panels = grafana ? grafana.panels : [];
+  $("dashboard").hidden = Boolean(VIEW) || !panels.length;
+  if (!panels.length) {
     $("panels").replaceChildren();
     return;
   }
@@ -624,90 +2383,242 @@ function renderDashboard(grafana) {
 }
 
 // Connection.
+function startPolling() {
+  stopPolling();
+  state.timers = [
+    window.setInterval(() => refresh(false), POLL_MS),
+    NEEDS.engines ? window.setInterval(refreshEngines, ENGINE_POLL_MS) : 0,
+    NEEDS.fleet ? window.setInterval(refreshFleet, FLEET_POLL_MS) : 0,
+    NEEDS.live ? window.setInterval(refreshLive, LIVE_POLL_MS) : 0,
+    window.setInterval(render, 1000),
+  ].filter(Boolean);
+}
+
+function stopPolling() {
+  for (const timer of state.timers) window.clearInterval(timer);
+  state.timers = [];
+}
+
 async function connect() {
   const reply = await call("console", {});
   if (reply.status !== 200 || !reply.body) {
     if (reply.status !== 401) $("connect-message").textContent = "Connection failed: " + text(reply.body && reply.body.detail);
+    $("connect").hidden = false;
+    renderStatus();
     return;
   }
-  storeToken(token);
+  const typed = !PAGE_TOKEN && readStoredToken() !== token;
+  if (!PAGE_TOKEN) storeToken(token);
+  state.settings = reply.body;
   $("connect-message").textContent = "";
-  $("token-form").hidden = true;
-  $("forget").hidden = false;
-  $("main").hidden = false;
-  renderDashboard(reply.body.grafana);
-  await loadWorkloads(reply.body.load);
-  await refreshStatus(true);
-  await refreshEngines();
-  if (poller === null) poller = window.setInterval(() => refreshStatus(false), POLL_MS);
+  $("connect").hidden = true;
+  $("board").hidden = Boolean(VIEW === "status");
+  if (!VIEW) renderDashboard(reply.body.grafana);
+  if (NEEDS.workloads) await loadWorkloads(reply.body.load);
+  await refreshAll(true);
+  startPolling();
+  if (typed) broadcast({ type: "token" });
 }
 
 function disconnect(message) {
   token = "";
   storeToken("");
-  lastStatus = "";
-  lastRecord = null;
-  if (poller !== null) { window.clearInterval(poller); poller = null; }
-  $("main").hidden = true;
+  stopPolling();
+  closeConfirm(false);
+  closeMenu(false);
+  Object.assign(state, { settings: null, health: null, record: null, recordKey: "", engines: null, enginesError: "", fleet: null, keys: {} });
+  state.pending.clear();
+  rows.clear();
+  $("engines").replaceChildren();
   $("panels").replaceChildren();
-  $("token-form").hidden = false;
-  $("forget").hidden = true;
-  $("status-line").textContent = "Not connected.";
+  $("board").hidden = true;
+  $("connect").hidden = false;
   $("connect-message").textContent = message || "";
+  renderStatus();
 }
 
+// Views.
+if (VIEW) {
+  document.body.classList.add("framed");
+  document.title = VIEWS[VIEW] + " · Narwhal fleet control";
+  for (const section of document.querySelectorAll(".view")) section.hidden = section.id !== "view-" + VIEW;
+  $("dashboard").hidden = true;
+} else if (FRAMED) {
+  document.body.classList.add("framed");
+}
+$("drain-deadline").value = readStored(DEADLINE_KEY);
+
+// Controls.
 $("token-form").addEventListener("submit", (event) => {
   event.preventDefault();
   token = $("token-input").value.trim();
   $("token-input").value = "";
   if (token) connect();
 });
-$("forget").addEventListener("click", () => disconnect("The token was removed from this tab."));
-
-$("session-start").addEventListener("click", async (event) => {
-  await act(event.currentTarget, "start session", "sessionStart");
-  await refreshEngines();
+$("forget").addEventListener("click", () => {
+  disconnect("The token was removed from this tab.");
+  broadcast({ type: "forget" });
 });
-$("session-end").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("End the session? The service stops any load job and runs the restore hook.",
-    async () => { await act(button, "end session", "sessionEnd"); await refreshEngines(); })();
-});
-$("session-refresh").addEventListener("click", () => refreshStatus(true));
-$("engines-refresh").addEventListener("click", refreshEngines);
+$("confirm-ok").addEventListener("click", () => closeConfirm(true));
+$("confirm-cancel").addEventListener("click", () => closeConfirm(false));
+$("confirm-dialog").addEventListener("cancel", (event) => { event.preventDefault(); closeConfirm(false); });
 
-$("job-workload").addEventListener("change", workloadHint);
+$("engine-search").addEventListener("input", () => {
+  engineView.query = $("engine-search").value.trim();
+  engineView.page = 0;
+  renderEngines();
+});
+$("engine-role").addEventListener("change", () => {
+  engineView.role = $("engine-role").value;
+  engineView.page = 0;
+  renderEngines();
+});
+$("engine-clear").addEventListener("click", () => {
+  Object.assign(engineView, { status: "", query: "", role: "", page: 0 });
+  $("engine-search").value = "";
+  $("engine-role").value = "";
+  renderEngines();
+});
+{
+  const stored = Number(readStored(PAGE_KEY));
+  engineView.perPage = PAGE_SIZES.includes(stored) ? stored : 20;
+  $("engine-per-page").value = String(engineView.perPage);
+}
+$("engine-per-page").addEventListener("change", () => {
+  engineView.perPage = Number($("engine-per-page").value);
+  engineView.page = 0;
+  try { sessionStorage.setItem(PAGE_KEY, String(engineView.perPage)); } catch (error) { /* Kept in memory only. */ }
+  renderEngines();
+});
+$("engine-prev").addEventListener("click", () => {
+  engineView.page = Math.max(0, engineView.page - 1);
+  renderEngines();
+});
+$("engine-next").addEventListener("click", () => {
+  engineView.page += 1;
+  renderEngines();
+});
+for (const th of document.querySelectorAll("#view-engines th[data-sort]")) {
+  th.querySelector("button").addEventListener("click", () => {
+    engineView.descending = engineView.sort === th.dataset.sort ? !engineView.descending : false;
+    engineView.sort = th.dataset.sort;
+    renderEngines();
+  });
+}
+$("engine-drawer").addEventListener("click", (event) => {
+  if (!event.target.closest("[data-close]")) return;
+  const iid = engineView.open;
+  engineView.open = null;
+  renderEngines();
+  const row = rows.get(iid);
+  if (row) row.open.focus();
+});
+$("engine-menu").addEventListener("keydown", (event) => {
+  const moves = { ArrowDown: 1, ArrowUp: -1, Home: "first", End: "last" };
+  if (event.key in moves) {
+    event.preventDefault();
+    moveMenuFocus(moves[event.key]);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeMenu(true);
+  } else if (event.key === "Tab") {
+    closeMenu(false);
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (menuFor && !$("engine-menu").contains(event.target) && !menuButton.contains(event.target)) closeMenu(false);
+});
+window.addEventListener("resize", () => { closeMenu(false); fitStrip(); });
+window.addEventListener("scroll", () => closeMenu(false), true);
+
+$("drain-deadline").addEventListener("input", () => {
+  const value = $("drain-deadline").value;
+  try { sessionStorage.setItem(DEADLINE_KEY, value); } catch (error) { /* The value applies to this view only. */ }
+  broadcast({ type: "deadline" });
+});
+$("session-start").addEventListener("click", () => act("session", "Start session", "sessionStart"));
+$("session-end").addEventListener("click", () => confirmEndSession(true));
+$("strip-confirm-cancel").addEventListener("click", () => confirmEndSession(false));
+$("strip-confirm").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") confirmEndSession(false);
+});
+$("strip-confirm-ok").addEventListener("click", async () => {
+  $("strip-confirm").hidden = true;
+  $("strip-actions").hidden = false;
+  $("strip-state").hidden = false;
+  await act("session", "End session", "sessionEnd");
+  $("session-start").focus();
+});
+$("run-record").addEventListener("click", (event) => {
+  event.preventDefault();
+  if (state.record) download("run-" + state.record.session + ".json", state.record);
+});
+
+$("job-workload").addEventListener("change", () => {
+  jobDefaults();
+  workloadHint();
+});
 $("job-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  act($("job-start"), "start load job", "jobStart", {}, jobParams());
+  if ($("job-start").disabled) return;
+  act("job", "Start load job", "jobStart", {}, jobParams());
 });
-$("job-stop").addEventListener("click", (event) => act(event.currentTarget, "stop load job", "jobStop"));
-$("job-refresh").addEventListener("click", async (event) => {
-  const reply = await act(event.currentTarget, "load job status", "jobCurrent");
-  if (reply.status === 200) renderJob(reply.body);
-});
-
-$("overlay-apply").addEventListener("click", (event) => {
-  const source = $("overlay").value;
-  try {
-    JSON.parse(source);
-  } catch (error) {
-    noteResponse("apply overlay", { status: 0, body: { detail: "the overlay is not valid JSON: " + error.message } });
-    return;
-  }
-  act(event.currentTarget, "apply overlay", "overlay", {}, source);
-});
-$("cold-restart").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("Restart every engine and the router from the current fleet configuration?",
-    () => act(button, "cold restart", "coldRestart"))();
-});
-$("restore").addEventListener("click", (event) => {
-  const button = event.currentTarget;
-  confirmThen("Restore the recorded baseline deployment?", () => act(button, "restore baseline", "restore"))();
+$("job-stop").addEventListener("click", () => act("job", "Stop load job", "jobStop"));
+$("job-document").addEventListener("click", async (event) => {
+  event.preventDefault();
+  const reply = await call("jobCurrent", {});
+  if (reply.status === 200 && reply.body) download(reply.body.id + ".json", reply.body);
 });
 
-token = readStoredToken();
+$("overlay").addEventListener("input", renderConfiguration);
+$("overlay-check-button").addEventListener("click", checkOverlay);
+$("overlay-apply").addEventListener("click", async () => {
+  const check = state.overlayCheck;
+  const parsed = overlaySource();
+  if (!check || parsed.error || check.source !== parsed.source) return;
+  const details = (check.changes || []).map((change) => change.key + ": " + (change.from === undefined ? "default" : change.from) + " → " + (change.to === undefined ? "default" : change.to));
+  const confirmed = await confirmAction("Apply the overlay?",
+    "The service writes the merged fleet configuration and restarts the router with it through the router_restart hook. The router serves no requests until it reports ready.",
+    details.length ? details : ["The overlay changes no setting."], "Apply and restart the router");
+  if (!confirmed) return;
+  await act("config", "Apply overlay", "overlay", {}, parsed.source);
+  state.overlayCheck = null;
+  renderCheck();
+  renderConfiguration();
+});
+$("cold-restart").addEventListener("click", async () => {
+  const confirmed = await confirmAction("Cold restart the fleet?",
+    "The cold_restart hook restarts every engine and the router from the current fleet configuration. The fleet serves no requests until the router reports ready.",
+    [], "Cold restart");
+  if (!confirmed) return;
+  await act("config", "Cold restart", "coldRestart");
+});
+$("restore").addEventListener("click", async () => {
+  const confirmed = await confirmAction("Restore the baseline?",
+    "The service undoes the session's changes. A changed configuration restarts the router with the baseline; each changed engine is resumed, started or readmitted.",
+    changeList().length ? changeList() : ["The session changed nothing."], "Restore baseline");
+  if (!confirmed) return;
+  await act("config", "Restore baseline", "restore");
+});
+
+if (channel) {
+  channel.addEventListener("message", (event) => {
+    const message = event.data || {};
+    if (message.type === "changed" && state.settings) refreshAll(true);
+    else if (message.type === "token" && !state.settings && !PAGE_TOKEN) {
+      token = readStoredToken();
+      if (token) connect();
+    } else if (message.type === "forget" && state.settings && !PAGE_TOKEN) {
+      disconnect("The token was removed from this tab.");
+    } else if (message.type === "deadline") {
+      $("drain-deadline").value = readStored(DEADLINE_KEY);
+    }
+  });
+}
+
+token = PAGE_TOKEN || readStoredToken();
+$("connect").hidden = Boolean(token);
+renderStatus();
 if (token) connect();
 </script>
 </body>

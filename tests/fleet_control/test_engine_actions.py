@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import sys
 import tempfile
@@ -26,7 +28,13 @@ from tools.fleet_control.config import (
     RouterEndpoint,
     load_config,
 )
-from tools.fleet_control.engines import EngineActions, engine_routes
+from tools.fleet_control.engines import (
+    EngineActions,
+    baseline_engines,
+    engine_routes,
+    engine_slice,
+)
+from tools.fleet_control.overlays import Overlays, overlay_routes
 from tools.fleet_control.service import ActionError, ControlService
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,6 +80,7 @@ class FakeRouter:
         self.down = False
         self.state_down = False
         self.state_body: Any = None
+        self.events: list[dict[str, Any]] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body: Any = json.loads(request.content) if request.content else None
@@ -128,7 +137,7 @@ class FakeRouter:
                 }
                 for iid, state in self.records.items()
             },
-            "events": [],
+            "events": list(self.events),
         }
 
     def state(self) -> dict[str, Any]:
@@ -160,24 +169,29 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         name: hook(name)
         for name in ("engine_pause", "engine_resume", "engine_stop", "engine_start")
     }
+    router_timeout_s = 5.0
 
     async def asyncSetUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.runs = Path(folder.name) / "runs"
-        stopped = Path(folder.name) / "stopped"
+        self.stopped = stopped = Path(folder.name) / "stopped"
         stopped.mkdir()
         self.router = FakeRouter(stopped)
         config = ControlConfig(
             FLEET,
-            {"restore": hook("restore", "print('restored')"), **self.hooks},
+            dict(self.hooks),
             runs_dir=self.runs,
-            router=RouterEndpoint(ROUTER, 5.0),
+            router=RouterEndpoint(ROUTER, self.router_timeout_s),
         )
         env = {"PATH": "/usr/bin:/bin", "NARWHAL_CONTROL_TOKEN": TOKEN, "STOPPED": str(stopped)}
         self.service = ControlService(config, env=env, now=lambda: NOW)
-        actions = EngineActions(self.service, httpx.MockTransport(self.router.handle))
-        app = create_app(self.service, TOKEN, routers=[engine_routes(actions)])
+        transport = httpx.MockTransport(self.router.handle)
+        actions = EngineActions(self.service, transport, 0.02)
+        overlays = Overlays(self.service, engines=actions, transport=transport)
+        app = create_app(
+            self.service, TOKEN, routers=[engine_routes(actions), overlay_routes(overlays)]
+        )
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://control",
@@ -248,10 +262,156 @@ class HookActionTests(EngineCase):
         result = response.json()["result"]
         self.assertTrue(result["before"]["ejected"])
         self.assertFalse(result["after"]["ejected"])
+        self.assertTrue(result["service"]["in_service"])
         self.assertEqual(
             [path for method, path, _ in self.router.requests],
-            ["/narwhal/state"] * 4,
+            ["/narwhal/state"] * 5,
         )
+
+
+class RestoreEngineTests(EngineCase):
+    async def test_restore_undoes_each_engine_change_and_nothing_else(self) -> None:
+        await self.start_session()
+        for path in ("/api/engines/e1/stop", "/api/engines/e2/pause", "/api/engines/e3/drain"):
+            response = await self.client.post(path)
+            self.assertEqual(response.status_code, 200, response.text)
+        changes = (await self.client.get("/api/session")).json()["changes"]
+        self.assertEqual(
+            changes,
+            {
+                "configuration": False,
+                "engines": {"e1": ["stopped"], "e2": ["paused"], "e3": ["drained"]},
+            },
+        )
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        steps = response.json()["result"]["steps"]
+        self.assertEqual(
+            [(step["engine"], step["action"]) for step in steps],
+            [("e1", "start"), ("e2", "resume"), ("e3", "readmit")],
+        )
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"], {"configuration": False, "engines": {}})
+        self.assertEqual(
+            [entry["action"] for entry in record["actions"][-4:]],
+            ["engine.start", "engine.resume", "engine.readmit", "config.restore"],
+        )
+        self.assertFalse(self.router.out("e1") or self.router.out("e2") or self.router.out("e3"))
+        self.assertNotIn("/ready", [path for _, path, _ in self.router.requests])
+
+    async def test_restore_undoes_a_pause_and_a_drain_on_one_engine(self) -> None:
+        await self.start_session()
+        for path in ("/api/engines/e3/drain", "/api/engines/e3/pause"):
+            response = await self.client.post(path)
+            self.assertEqual(response.status_code, 200, response.text)
+        changes = (await self.client.get("/api/session")).json()["changes"]
+        self.assertEqual(changes["engines"], {"e3": ["paused", "drained"]})
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        steps = response.json()["result"]["steps"]
+        self.assertEqual(
+            [(step["engine"], step["action"]) for step in steps],
+            [("e3", "resume"), ("e3", "readmit")],
+        )
+        self.assertFalse(self.router.out("e3"))
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {})
+
+    async def test_restore_clears_a_drain_the_router_already_ended(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e3/drain")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.router.records["e3"] = "active"
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        (step,) = response.json()["result"]["steps"]
+        self.assertEqual((step["engine"], step["action"], step["seq"]), ("e3", "readmit", None))
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {})
+
+    async def test_restore_fails_when_it_cannot_read_a_drained_engine(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e3/drain")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.router.state_down = True
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("readmit e3 failed: router state unavailable", response.text)
+        self.router.state_down = False
+        record = (await self.client.get("/api/session")).json()
+        self.assertEqual(record["changes"]["engines"], {"e3": ["drained"]})
+
+
+# This start hook exits 0 and leaves the engine stopped, as when the process fails to come up.
+SILENT_START = "print('started')"
+
+
+class ReturnToServiceTests(EngineCase):
+    hooks: ClassVar[dict[str, Hook]] = {
+        **EngineCase.hooks,
+        "engine_start": hook("engine_start", SILENT_START),
+    }
+    router_timeout_s = 0.3
+
+    async def stop_e1(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e1/stop")
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_start_fails_when_the_engine_does_not_return(self) -> None:
+        await self.stop_e1()
+        response = await self.client.post("/api/engines/e1/start")
+        self.assertEqual(response.status_code, 504, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            "e1 did not return to service within 0.3s: the router still ejects e1",
+        )
+        entry = self.last_action()
+        self.assertEqual((entry["action"], entry["outcome"]), ("engine.start", "failed"))
+        self.assertEqual(entry["result"]["hook"]["exit_code"], 0)
+        self.assertFalse(entry["result"]["service"]["in_service"])
+        self.assertGreaterEqual(entry["result"]["service"]["waited_s"], 0.3)
+        self.assertTrue(entry["result"]["after"]["ejected"])
+
+    async def test_start_reports_a_profile_mismatch_at_once(self) -> None:
+        await self.stop_e1()
+        error = "profile generation differs from the live engine; reprofile before admission"
+        self.router.events = [
+            {"action": "profile_recovery_blocked", "at": 1.0, "iid": "e1", "error": "old"}
+        ]
+        task = asyncio.create_task(self.client.post("/api/engines/e1/start"))
+        await asyncio.sleep(0.05)
+        self.router.events.append(
+            {"action": "profile_recovery_blocked", "at": 2.0, "iid": "e1", "error": error}
+        )
+        response = await task
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            f"e1 needs fresh profiles before the router readmits it: {error}",
+        )
+
+    async def test_start_reports_a_blocked_readmission(self) -> None:
+        await self.stop_e1()
+        self.router.records["e1"] = "blocked"
+        response = await self.client.post("/api/engines/e1/start")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("the router blocked readmission of e1", response.json()["detail"])
+
+    async def test_start_waits_until_the_router_readmits_the_engine(self) -> None:
+        await self.stop_e1()
+
+        async def recover() -> None:
+            await asyncio.sleep(0.1)
+            (self.stopped / "e1").unlink()
+
+        task = asyncio.create_task(recover())
+        response = await self.client.post("/api/engines/e1/start")
+        await task
+        self.assertEqual(response.status_code, 200, response.text)
+        service = response.json()["result"]["service"]
+        self.assertTrue(service["in_service"])
+        self.assertGreater(service["waited_s"], 0)
 
 
 class LifecycleActionTests(EngineCase):
@@ -361,8 +521,6 @@ class RefusalTests(EngineCase):
         self.assertEqual(
             (entry["action"], entry["outcome"], entry["session"]), ("engine.stop", "refused", None)
         )
-        response = await self.client.get("/api/engines")
-        self.assertEqual(response.status_code, 409)
         self.assertEqual(self.router.requests, [])
 
     async def test_an_engine_outside_the_baseline_is_refused(self) -> None:
@@ -412,6 +570,21 @@ class FleetStateTests(EngineCase):
         response = await self.client.get("/api/engines")
         self.assertEqual(response.status_code, 502)
         self.assertIn("router state unavailable", response.json()["detail"])
+
+    async def test_outside_a_session_the_engines_come_from_the_configured_fleet(self) -> None:
+        response = await self.client.get("/api/engines")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(sorted(response.json()["engines"]), sorted(self.router.roles))
+        self.assertEqual(self.router.requests, [("GET", "/narwhal/state", None)])
+        self.assertFalse((self.runs / "actions.jsonl").exists())
+
+    async def test_outside_a_session_an_unreadable_fleet_file_is_reported(self) -> None:
+        broken = self.runs.parent / "broken.json"
+        broken.write_text("{")
+        self.service.config = dataclasses.replace(self.service.config, fleet=broken)
+        response = await self.client.get("/api/engines")
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("baseline fleet configuration is unreadable", response.json()["detail"])
 
     async def test_an_unreadable_state_is_recorded_and_the_hook_still_runs(self) -> None:
         await self.start_session()
@@ -530,7 +703,7 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_baseline_engine_the_router_lacks_is_reported_unknown(self) -> None:
         assert self.service.session is not None
-        state = await self.actions.fleet_state(self.service.session)
+        state = await self.actions.fleet_state(list(baseline_engines(self.service.session)))
         self.assertEqual(state["e2"]["known"], False)
         self.assertIsNone(state["e2"]["lifecycle"])
         self.assertEqual(state["e3"]["role"], "decode")
@@ -579,6 +752,48 @@ class RouterConfigTests(unittest.TestCase):
         for name in ("engine_pause", "engine_resume", "engine_stop", "engine_start"):
             self.assertIn(name, config.hooks)
         self.assertEqual(config.router.url, DEFAULT_ROUTER_URL)
+
+
+class EngineSliceTests(unittest.TestCase):
+    def state(self, events: list[dict[str, Any]]) -> dict[str, Any]:
+        record = {"state": "active", "error": ""}
+        return {
+            "pools": {"prefill": ["p0"], "decode": ["d0"]},
+            "resident": {"p0": {"prefill": 0, "decode": 0}, "d0": {"prefill": 0, "decode": 0}},
+            "ejected": ["d0"],
+            "lifecycle": {
+                "engines": {"p0": record, "d0": record},
+                "router": {"controls_fleet": True, "ready": True},
+                "wave": {"id": "", "active": False, "ready_to_stop": False},
+                "events": events,
+            },
+        }
+
+    def test_the_slice_carries_the_engines_latest_lifecycle_event(self) -> None:
+        blocked = {
+            "event": "engine_lifecycle",
+            "action": "profile_recovery_blocked",
+            "at": 20.0,
+            "iid": "d0",
+            "error": "profile generation differs from the live engine; reprofile before admission",
+        }
+        events = [
+            {"event": "engine_lifecycle", "action": "drain_started", "at": 10.0, "iid": "d0"},
+            blocked,
+            {"event": "engine_lifecycle", "action": "drain_started", "at": 30.0, "iid": "p0"},
+            {"event": "engine_lifecycle", "action": "restart_required", "at": 40.0},
+        ]
+        slice_ = engine_slice(self.state(events), "d0")
+        self.assertTrue(slice_["ejected"])
+        self.assertEqual(
+            slice_["event"],
+            {"action": "profile_recovery_blocked", "at": 20.0, "error": blocked["error"]},
+        )
+        self.assertEqual(
+            engine_slice(self.state(events), "p0")["event"],
+            {"action": "drain_started", "at": 30.0, "error": None},
+        )
+        self.assertIsNone(engine_slice(self.state([]), "d0")["event"])
 
 
 if __name__ == "__main__":

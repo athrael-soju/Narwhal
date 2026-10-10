@@ -404,9 +404,26 @@ class ReadinessTests(unittest.TestCase):
                 {},
                 stack,
                 self.contract,
-                target_writer=lambda contract: calls.append("targets"),
+                target_writer=lambda contract, console, control: calls.append(f"targets {console}"),
             )
-        self.assertEqual(calls, ["listeners", "targets", "up"])
+        self.assertEqual(calls, ["listeners", "targets http://127.0.0.1:18020/console", "up"])
+
+    def test_start_refuses_an_unsafe_console_url_before_any_change(self) -> None:
+        stack = mock.Mock(spec=observe_stack.Stack)
+        writer = mock.Mock()
+        with (
+            mock.patch.object(observe_cli, "check_listeners") as listeners,
+            self.assertRaisesRegex(ValueError, "NARWHAL_CONTROL_CONSOLE_URL"),
+        ):
+            observe_cli.start(
+                {"NARWHAL_CONTROL_CONSOLE_URL": "javascript:alert(1)"},
+                stack,
+                self.contract,
+                target_writer=writer,
+            )
+        listeners.assert_not_called()
+        writer.assert_not_called()
+        stack.up.assert_not_called()
 
     def test_grafana_datasource_must_follow_the_prometheus_listener(self) -> None:
         stack = FakeStack(

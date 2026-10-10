@@ -14,7 +14,8 @@ from tools.observability.make_targets import TargetContract
 from .services import Container, Service, StartupError
 from .stack import Stack
 
-DASHBOARD_PATH = "/apis/dashboard.grafana.app/v2beta1/namespaces/default/dashboards/narwhal-router"
+DASHBOARDS = "/apis/dashboard.grafana.app/v2beta1/namespaces/default/dashboards"
+DASHBOARD_PATH = f"{DASHBOARDS}/narwhal-router"
 DEFAULT_READY_TIMEOUT_S = 60.0
 
 HttpGet = Callable[[str, float], tuple[int, str]]

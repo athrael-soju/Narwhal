@@ -70,6 +70,8 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
+`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 
 ```bash
@@ -80,6 +82,10 @@ curl -fsS http://127.0.0.1:3000/api/health
 Give every series a fixed colour from the [dashboard colour key](../../docs/observability/05-Dashboard.md#colours).
 
 Validate changed queries against traffic, idle engines, failed scrapes, router restart and the **Engine detail** selector before deploying the dashboard. Keep live addresses and captured responses under `runs/`.
+
+## Fleet control scrape job
+
+The `fleet-control` job in `tools/observability/prometheus.yml` scrapes the fleet control service's `/metrics` with the token in `/etc/prometheus/fleet-control-token`. `make observe` writes the target and token from `NARWHAL_CONTROL_METRICS_URL` and `NARWHAL_CONTROL_TOKEN`. Without `NARWHAL_CONTROL_METRICS_URL`, the job has no target. See [Dashboard annotations](../../docs/operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
 
 ## Alert rules
 

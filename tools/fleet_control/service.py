@@ -1,4 +1,4 @@
-"""Operator sessions, recorded actions, baseline restore and the load-job slot."""
+"""Operator sessions, recorded actions, the session's outstanding changes and the load-job slot."""
 
 from __future__ import annotations
 
@@ -12,13 +12,63 @@ from typing import Any
 from narwhal.config.loading import load as load_fleet
 from narwhal.contracts import canonical_digest
 
-from .config import RESTORE_HOOK, ControlConfig, Hook
+from .config import ControlConfig, Hook
 from .hooks import HookResult, run_hook
 from .jobs import Job, JobRunner, JobSlot
 from .journal import SESSION_EXTRACT, Mark, extract, mark
 from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
+
+# Engine change each action leaves, by axis: process or router lifecycle.
+ENGINE_CHANGES: dict[str, tuple[str, str | None]] = {
+    "pause": ("process", "paused"),
+    "stop": ("process", "stopped"),
+    "resume": ("process", None),
+    "start": ("process", None),
+    "drain": ("lifecycle", "drained"),
+    "readmit": ("lifecycle", None),
+}
+UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
+# Actions that clear the engine changes.
+CLEARING_ACTIONS = frozenset({"config.cold_restart"})
+RESTORE_ACTION = "config.restore"
+
+
+def session_changes(session: Session) -> dict[str, Any]:
+    """Return the configuration and engine changes the session leaves in place, in undo order."""
+    axes: dict[str, dict[str, str]] = {}
+    for action in session.actions:
+        if action.name == RESTORE_ACTION:
+            # A restore step with no seq found the engine already in service.
+            for step in (action.result or {}).get("steps", []):
+                if step.get("seq") is None:
+                    axes.get(str(step.get("engine")), {}).pop("lifecycle", None)
+            continue
+        if action.outcome != "ok":
+            continue
+        if action.name in CLEARING_ACTIONS:
+            axes.clear()
+            continue
+        verb = action.name.removeprefix("engine.")
+        if verb == action.name or verb not in ENGINE_CHANGES:
+            continue
+        iid = str(action.params.get("engine"))
+        axis, change = ENGINE_CHANGES[verb]
+        if change is None:
+            axes.get(iid, {}).pop(axis, None)
+        else:
+            axes.setdefault(iid, {})[axis] = change
+    engines = {
+        iid: [changes[axis] for axis in ("process", "lifecycle") if axis in changes]
+        for iid, changes in axes.items()
+        if changes
+    }
+    baseline = session.configurations[0]["digest"]
+    return {
+        "configuration": session.configurations[-1]["digest"] != baseline,
+        "engines": engines,
+    }
 
 
 class ActionError(Exception):
@@ -45,11 +95,7 @@ def refused(message: str, status: int = 409) -> ActionError:
 
 
 class ControlService:
-    """Run operator actions against the fleet and record each one.
-
-    Every action goes through `act`, which appends it to the action log and, inside a session,
-    to that session's run record. An exclusive action refuses every other action until it ends.
-    """
+    """Run operator actions against the fleet and record each one."""
 
     def __init__(
         self,
@@ -65,6 +111,7 @@ class ControlService:
         self._env = env
         self._now = now
         self._exclusive: str | None = None
+        self._exclusive_since: str | None = None
         self._job_count = 0
         # Router journal positions where the session and each load job began.
         self._session_mark: Mark | None = None
@@ -84,10 +131,7 @@ class ControlService:
         needs_session: bool = True,
         exclusive: bool = False,
     ) -> Action:
-        """Run and record one action, raising ActionError with its entry when it does not succeed.
-
-        `operation` receives the active session and returns the action's effect for the record.
-        """
+        """Run and record one action, raising ActionError when it does not succeed."""
         if self._exclusive is not None:
             error = refused(f"{self._exclusive} is in progress")
             error.action = self.store.record(
@@ -96,11 +140,13 @@ class ControlService:
             raise error
         if exclusive:
             self._exclusive = name
+            self._exclusive_since = self.stamp()
         try:
             return await self._perform(name, params, operation, needs_session)
         finally:
             if exclusive:
                 self._exclusive = None
+                self._exclusive_since = None
 
     async def _perform(
         self, name: str, params: Mapping[str, Any], operation: Operation, needs_session: bool
@@ -150,13 +196,12 @@ class ControlService:
         self.session = self.store.open_session(self._now(), str(source), baseline)
         self._session_mark = mark(self.config.router.journal)
         self._job_count = 0
+        if self.jobs is not None:
+            self.jobs.clear()
         return {"session": self.session.id, "baseline_digest": canonical_digest(baseline)}
 
     async def end_session(self) -> Action:
-        """Stop any load job, restore the baseline deployment and close the session.
-
-        When the restore fails, the session stays open so the operator can retry.
-        """
+        """Stop any load job, close the session and return the changes it leaves."""
         action = await self.act("session.end", {}, self._end, exclusive=True)
         self.session = None
         return action
@@ -165,47 +210,19 @@ class ControlService:
         assert session is not None
         if self.jobs is not None and self.jobs.busy:
             await self._perform("job.stop", {}, self._stop_job, True)
-        restore = await self._perform("baseline.restore", {}, self._restore, True)
         journal = self.journal_extract(session.directory, SESSION_EXTRACT, self._session_mark)
         session.ended_at = self.stamp()
-        return {"restore_seq": restore.seq, "journal": journal}
+        return {"changes": session_changes(session), "journal": journal}
 
     def journal_extract(self, directory: Path, name: str, start: Mark | None) -> dict[str, Any]:
         """Copy the router journal rows appended since `start` into the session directory."""
         router = self.config.router
         return extract(router.journal, start, directory, name, router.journal_max_bytes)
 
-    async def restore_baseline(self) -> Action:
-        """Run the restore hook against the session's recorded baseline."""
-        return await self.act("baseline.restore", {}, self._restore, exclusive=True)
-
-    async def _restore(self, session: Session | None) -> Mapping[str, Any]:
-        assert session is not None
-        hook = self.config.hook(RESTORE_HOOK)
-        try:
-            result = await self.run_hook(hook, session)
-        except OSError as exc:
-            raise ActionError(f"restore hook could not start: {exc}") from exc
-        effect = result.document(session.directory)
-        if not result.ok:
-            reason = (
-                f"timed out after {hook.timeout_s:g}s"
-                if result.timed_out
-                else f"exited {result.exit_code}"
-            )
-            raise ActionError(f"restore hook {reason}", result=effect)
-        session.apply_configuration(self.stamp(), "baseline", session.baseline)
-        return effect
-
     async def run_hook(
         self, hook: Hook, session: Session, extra_env: Mapping[str, str] | None = None
     ) -> HookResult:
-        """Run a configured hook with the session's identity in its environment.
-
-        The hook never receives the control token. It reads `NARWHAL_CONTROL_SESSION`,
-        `NARWHAL_CONTROL_RUN_DIR` and `NARWHAL_CONTROL_BASELINE`, the session's copy of the
-        baseline fleet configuration.
-        """
+        """Run a configured hook with the session's environment."""
         env = {key: value for key, value in self._env.items() if key != self.config.token_env}
         env.update(
             NARWHAL_CONTROL_SESSION=session.id,
@@ -272,6 +289,7 @@ class ControlService:
             "session": None if self.session is None else self.session.id,
             "job": None if job is None else job.document(),
             "in_progress": self._exclusive,
+            "in_progress_since": self._exclusive_since,
         }
 
     async def close(self) -> None:

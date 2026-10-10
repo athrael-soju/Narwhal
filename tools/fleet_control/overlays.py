@@ -1,12 +1,4 @@
-"""Configuration overlays, cold fleet restarts and baseline restores, each checked for readiness.
-
-An overlay is a partial fleet document merged onto the session's current fleet configuration
-as a JSON merge patch (RFC 7386): an object merges key by key, `null` removes a key so the
-field returns to its default, and any other value, arrays included, replaces the current one.
-An overlay may change only the router policy sections in `OVERLAY_SECTIONS`, plus `_`
-annotation keys. The merged document must pass the fleet configuration loader that
-`narwhal config validate` runs before any hook touches the fleet.
-"""
+"""Configuration overlays, cold restarts and baseline restores."""
 
 from __future__ import annotations
 
@@ -14,10 +6,11 @@ import asyncio
 import copy
 import json
 import os
+import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 from fastapi import APIRouter, Request
@@ -30,23 +23,27 @@ from .app import API, action_reply
 from .config import ConfigError, Hook
 from .hooks import HookResult
 from .records import Action, Session, write_private
-from .service import ActionError, ControlService, refused
+from .service import UNDO, ActionError, ControlService, refused, session_changes
+
+if TYPE_CHECKING:
+    from .engines import EngineActions
 
 ROUTER_RESTART_HOOK = "router_restart"
 COLD_RESTART_HOOK = "cold_restart"
-# The hook environment variable naming the fleet file the restarted processes must load.
+# Hook environment variable holding the fleet file to load.
 FLEET_ENV = "NARWHAL_CONTROL_FLEET"
-# Router policy read at startup. The other sections describe the engines' launch, model and
-# measured profiles, which a router restart cannot change.
+# Fleet sections a router restart can change.
 OVERLAY_SECTIONS = ("slo", "controller", "serving", "recovery")
 OVERLAYS = "overlays"
 READY_PATH = "/ready"
 READY_POLL_S = 1.0
 READY_PROBE_TIMEOUT_S = 5.0
+# Router lifecycle states a readmit applies to.
+READMITTABLE = frozenset({"draining", "drained", "deadline_exceeded", "blocked"})
 
 
 def merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
-    """Return `base` with `overlay` applied as a JSON merge patch, leaving both unchanged."""
+    """Return `base` with `overlay` applied as a JSON merge patch (RFC 7386)."""
     merged = dict(base)
     for key, value in overlay.items():
         if value is None:
@@ -60,7 +57,7 @@ def merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]
 
 
 def overlay_problems(overlay: Mapping[str, Any]) -> list[str]:
-    """Return every reason the overlay's shape is refused before it is merged."""
+    """Return the problems in the overlay's shape."""
     if not overlay:
         return ["the overlay changes no section"]
     allowed = ", ".join(OVERLAY_SECTIONS)
@@ -92,20 +89,18 @@ def reject_constant(name: str) -> NoReturn:
 
 
 class Overlays:
-    """Apply overlays through the router-restart hook, restart the fleet and restore the baseline.
-
-    Each operation is an exclusive action: the service refuses every other action until the
-    hook finishes and the router answers `GET /ready` with 200, or for at most `router.timeout_s`.
-    """
+    """Apply overlays, cold restarts and baseline restores as exclusive actions."""
 
     def __init__(
         self,
         service: ControlService,
         *,
+        engines: EngineActions | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         poll_s: float = READY_POLL_S,
     ) -> None:
         self.service = service
+        self.engines = engines
         self._transport = transport
         self._poll_s = poll_s
 
@@ -146,10 +141,37 @@ class Overlays:
             "base_digest": current["digest"],
         }
         effect["hook"] = await self._run(hook, session, fleet, effect)
-        # The router restarted with this file, so it governs the fleet even if readiness fails.
+        # The router now runs this file.
         session.apply_configuration(self.service.stamp(), "overlay", merged, fleet=fleet)
         effect["readiness"] = await self._ready(effect)
         return effect
+
+    def check(self, overlay: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the overlay's problems and merged document."""
+        session = self.service.session
+        if session is None:
+            raise refused("no session is active; start one with POST /api/session")
+        current = session.configurations[-1]
+        merged = merge(current["document"], overlay)
+        problems = overlay_problems(overlay)
+        if not problems:
+            directory = session.directory / OVERLAYS
+            directory.mkdir(mode=0o700, exist_ok=True)
+            # Resolve relative paths beside the applied overlays.
+            descriptor, name = tempfile.mkstemp(dir=directory, prefix=".check-", suffix=".json")
+            os.close(descriptor)
+            candidate = Path(name)
+            try:
+                write_private(candidate, merged)
+                problems = fleet_problems(candidate)
+            finally:
+                candidate.unlink(missing_ok=True)
+        return {
+            "errors": problems,
+            "base_digest": current["digest"],
+            "digest": None if problems else canonical_digest(merged),
+            "document": merged,
+        }
 
     async def cold_restart(self) -> Action:
         """Restart every engine and the router from the session's current fleet file."""
@@ -166,24 +188,44 @@ class Overlays:
         return await self.service.act("config.cold_restart", {}, restart, exclusive=True)
 
     async def restore(self) -> Action:
-        """Run the restore hook against the recorded baseline, then wait for the router."""
+        """Undo the session's configuration change, then each engine change."""
 
         async def restore(session: Session | None) -> Mapping[str, Any]:
             assert session is not None
-            # The nested restore is recorded as its own action, as when a session ends.
-            action = await self.service._perform(
-                "baseline.restore", {}, self.service._restore, True
-            )
-            current = session.configurations[-1]
-            effect: dict[str, Any] = {
-                "restore_seq": action.seq,
-                "fleet": current["fleet"],
-                "digest": current["digest"],
-            }
-            effect["readiness"] = await self._ready(effect)
+            changes = session_changes(session)
+            steps: list[dict[str, Any]] = []
+            effect: dict[str, Any] = {"changes": changes, "steps": steps}
+            if changes["configuration"]:
+                baseline = session.configurations[0]
+                hook = self._hook(ROUTER_RESTART_HOOK)
+                effect["hook"] = await self._run(hook, session, baseline["fleet"], effect)
+                session.apply_configuration(self.service.stamp(), "baseline", baseline["document"])
+                effect["readiness"] = await self._ready(effect)
+            undo = [(iid, change) for iid, each in changes["engines"].items() for change in each]
+            for iid, change in undo:
+                steps.append(await self._undo(iid, UNDO[change], effect))
             return effect
 
         return await self.service.act("config.restore", {}, restore, exclusive=True)
+
+    async def _undo(self, iid: str, action: str, effect: Mapping[str, Any]) -> dict[str, Any]:
+        if self.engines is None:
+            raise ActionError(f"engine actions are unavailable to {action} {iid}", result=effect)
+        if action == "readmit":
+            async with self.engines._client() as client:
+                state = await self.engines.engine_state(client, iid)
+            if "error" in state:
+                raise ActionError(f"readmit {iid} failed: {state['error']}", result=effect)
+            lifecycle = state.get("lifecycle") or {}
+            if not state.get("draining") and lifecycle.get("state") not in READMITTABLE:
+                return {"engine": iid, "action": action, "seq": None}
+        try:
+            done = await self.engines.within(iid, action)
+        except ActionError as exc:
+            raise ActionError(
+                f"{action} {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        return {"engine": iid, "action": action, "seq": done.seq}
 
     def _hook(self, name: str) -> Hook:
         try:
@@ -269,16 +311,27 @@ def overlay_routes(overlays: Overlays) -> APIRouter:
     """Return the configuration overlay, cold restart and baseline restore routes."""
     routes = APIRouter(prefix=f"{API}/config")
 
-    @routes.post("/overlay")
-    async def apply_overlay(request: Request) -> JSONResponse:
+    async def read_overlay(request: Request) -> dict[str, Any] | None:
         raw = await request.body()
         try:
             overlay = json.loads(raw, parse_constant=reject_constant) if raw else None
         except ValueError:
-            overlay = None
-        if not isinstance(overlay, dict):
+            return None
+        return overlay if isinstance(overlay, dict) else None
+
+    @routes.post("/overlay")
+    async def apply_overlay(request: Request) -> JSONResponse:
+        overlay = await read_overlay(request)
+        if overlay is None:
             return JSONResponse({"detail": "the overlay must be a JSON object"}, 422)
         return action_reply(await overlays.apply(overlay))
+
+    @routes.post("/overlay/check")
+    async def check_overlay(request: Request) -> JSONResponse:
+        overlay = await read_overlay(request)
+        if overlay is None:
+            return JSONResponse({"detail": "the overlay must be a JSON object"}, 422)
+        return JSONResponse(overlays.check(overlay))
 
     @routes.post("/cold-restart")
     async def cold_restart() -> JSONResponse:

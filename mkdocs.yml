@@ -104,7 +104,19 @@ nav:
           - Engine restart and process replacement: operate/03-Restart-Engines.md
           - Upgrade and rollback: operate/04-Upgrade-and-Validate.md
           - Release drills: operate/05-Release-Drills.md
-          - Controlling the fleet: operate/06-Controlling-the-Fleet.md
+          - Controlling the fleet:
+              - Overview: operate/06-Controlling-the-Fleet.md
+              - Setting up the control service: operate/fleet-control/01-Set-Up-the-Service.md
+              - Opening the console: operate/fleet-control/02-Open-the-Console.md
+              - Using the console from Grafana: operate/fleet-control/03-Grafana-Dashboard.md
+              - Running a test session: operate/fleet-control/04-Sessions.md
+              - Engine actions: operate/fleet-control/05-Engine-Actions.md
+              - Load jobs: operate/fleet-control/06-Load-Jobs.md
+              - Overlays, cold restarts and restores: operate/fleet-control/07-Configuration-Changes.md
+              - Troubleshooting the console: operate/fleet-control/08-Troubleshooting.md
+              - Configuration reference: operate/fleet-control/09-Configuration-Reference.md
+              - API reference: operate/fleet-control/10-API-Reference.md
+              - Run record: operate/fleet-control/11-Run-Record.md
           - Choosing admission, queue and retry settings: operate/07-Admission-Queue-and-Retry-Settings.md
       - Troubleshooting a fleet:
           - Overview: Troubleshoot.md
