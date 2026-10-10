@@ -1,5 +1,3 @@
-"""Exercise hybrid page budgeting and the isolated runtime probe with synthetic specs."""
-
 import contextlib
 import hashlib
 import io
@@ -13,8 +11,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
-from narwhal.deployment.launch_engine.captures import capture_cache, measure_cache, model_dimensions
-from narwhal.deployment.launch_engine.runtime import (
+from narwhal.backends.vllm.captures import capture_cache, measure_cache, model_dimensions
+from narwhal.backends.vllm.runtime import (
     cache_groups,
     digest,
     runtime_cache_probe,
@@ -74,7 +72,7 @@ class CacheSizingTests(unittest.TestCase):
                 with (
                     self.subTest(use_mla=use_mla),
                     patch(
-                        "narwhal.deployment.launch_engine.runtime.runtime_config",
+                        "narwhal.backends.vllm.runtime.runtime_config",
                         return_value=SimpleNamespace(model_config=model),
                     ),
                 ):
@@ -288,7 +286,7 @@ class CacheSizingTests(unittest.TestCase):
             with (
                 patch.dict(sys.modules, modules),
                 patch(
-                    "narwhal.deployment.launch_engine.runtime.digest",
+                    "narwhal.backends.vllm.runtime.digest",
                     side_effect=lambda path: (
                         plan["model_config_sha256"]
                         if str(path) == "/model/config.json"

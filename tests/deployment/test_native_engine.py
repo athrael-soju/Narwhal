@@ -31,9 +31,9 @@ class NativeEngineOwnershipTests(unittest.TestCase):
         ):
             run = Path(folder)
             (run / "engine.env").write_text("")
-            self.assertEqual(_environment(run)["VLLM_API_KEY"], "")
+            self.assertEqual(_environment(run, {})["VLLM_API_KEY"], "")
             (run / "engine.env").write_text("VLLM_API_KEY=prepared-key\n")
-            self.assertEqual(_environment(run)["VLLM_API_KEY"], "prepared-key")
+            self.assertEqual(_environment(run, {})["VLLM_API_KEY"], "prepared-key")
 
     def test_shutdown_escalates_workers_after_the_leader_exits(self):
         with process_group_with_worker() as (leader, worker):

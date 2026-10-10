@@ -1,5 +1,3 @@
-"""Validate the private per-engine allocation and device contract used during deployment."""
-
 from __future__ import annotations
 
 import copy
@@ -8,11 +6,11 @@ import math
 import re
 from pathlib import Path
 
-from narwhal.deployment.launch_engine.plan import validate_runtime
+from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.plan import check_shared_memory
 
 
 def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
-    """Resolve one engine's launch record and check allocation and transport declarations."""
     if document.get("schema") != "narwhal.engine-launch" or document.get("schema_version") != 1:
         raise ValueError("Launch config requires narwhal.engine-launch schema version 1")
     if role not in document.get("engines", {}):
@@ -79,8 +77,9 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
         for field in ("allocation", "devices", "transfer")
     ):
         raise ValueError(f"{role}: name the allocation, device and transfer sources")
+    engine = launcher(entry.get("runtime", {}).get("backend"))
     if "runtime" in entry:
-        validate_runtime(entry["runtime"])
+        engine.validate_runtime(entry["runtime"])
     shared = entry.get("shared_device")
     if shared is not None:
         if not isinstance(shared, dict) or set(shared) != {
@@ -106,27 +105,16 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
                 raise ValueError(f"{role}: shared_device.{name} must be above 0 and at most 1")
         if shared["gpu_memory_utilization"] > shared["device_allowance"]:
             raise ValueError(f"{role}: GPU memory budget exceeds device allowance")
-        args = entry["runtime"]["extra_args"]
-        positions = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
-        if len(positions) != 1 or positions[0] + 1 >= len(args):
-            raise ValueError(f"{role}: shared GPU launch requires one memory-utilization argument")
-        try:
-            matches = float(args[positions[0] + 1]) == shared["gpu_memory_utilization"]
-        except ValueError:
-            matches = False
-        if not matches:
-            raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
+        check_shared_memory(
+            engine, role, entry["runtime"]["extra_args"], shared["gpu_memory_utilization"]
+        )
     entry["transfer"] = transfer
     entry["environment"] = {visibility: ",".join(devices), "UCX_NET_DEVICES": net}
-    entry["vllm_args"] = ["--tensor-parallel-size", str(tp)]
+    entry[engine.args_field] = engine.tensor_parallel_args(tp)
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}
 
 
 def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> None:
-    """List each CUDA engine's host peers' GPUs after its own in CUDA_VISIBLE_DEVICES.
-
-    Shared-device engines keep their single GPU.
-    """
     for roles in hosts:
         cuda = [
             role
@@ -144,7 +132,6 @@ def expose_colocated_gpus(launches: dict[str, dict], hosts: list[list[str]]) -> 
 
 
 def load_launches(path: Path, roles: list[str], envs: dict[str, dict[str, str]]) -> dict[str, dict]:
-    """Select launch records for the deployment's engine roles from a checkout-local file."""
     if not path.is_file():
         raise ValueError("NARWHAL_LAUNCH_CONFIG must select the supplied per-engine launch file")
     document = json.loads(path.read_text())

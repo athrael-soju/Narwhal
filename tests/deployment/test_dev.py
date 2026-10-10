@@ -1,5 +1,3 @@
-"""Keep local lifecycle ownership and readiness tied to the selected instance."""
-
 import contextlib
 import hashlib
 import io
@@ -16,6 +14,7 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
 from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
@@ -26,7 +25,6 @@ from .fixtures import process_group_with_worker
 
 
 def synthetic_identity(pid=1):
-    """Return a complete identity for tests that substitute process inspection."""
     return {"pid": pid, "boot_id": "synthetic-boot", "start_ticks": 0}
 
 
@@ -79,7 +77,8 @@ class DevTests(unittest.TestCase):
             patch.object(
                 template, "gpu_memory", return_value={"total_mib": 32607, "used_mib": 2000}
             ),
-            patch.object(template, "_check_runtime"),
+            patch.object(template, "_check_packages"),
+            patch.object(vllm_dev, "check_imports"),
             patch.object(template, "_address", return_value="127.0.0.1"),
             patch.object(template, "_check_free_ports"),
         ):
@@ -134,7 +133,8 @@ class DevTests(unittest.TestCase):
                 return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
             ),
             patch.object(template, "gpu_memory", return_value={"total_mib": 8192, "used_mib": 0}),
-            patch.object(template, "_check_runtime"),
+            patch.object(template, "_check_packages"),
+            patch.object(vllm_dev, "check_imports"),
             patch.object(template, "_address", return_value="127.0.0.1"),
             patch.object(template, "_check_free_ports"),
         ):
@@ -255,7 +255,7 @@ class DevTests(unittest.TestCase):
     def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
         self.initialize()
         with (
-            patch.object(lifecycle, "check_plugin"),
+            patch.object(vllm_dev, "check_plugin"),
             patch.object(lifecycle, "_check_free_ports"),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "finalize_fleet"),

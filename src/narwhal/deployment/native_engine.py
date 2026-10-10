@@ -14,9 +14,10 @@ from urllib.request import urlopen
 import httpx
 
 from narwhal.engines.attestation import fetch_engine_identity
-from narwhal.runtime.listeners import check_engine_bind, check_http_bind
+from narwhal.runtime.listeners import check_http_bind
 
 from . import stages
+from .launch_engine.backend import engine_backend, plan_launcher
 from .launch_engine.plan import kv_events_directory, read_env, remove_kv_events_directory
 from .launch_engine.runtime import digest, write_private
 from .launch_engine.start import READY_SECONDS, gpu_memory, validate_shared_runs
@@ -108,10 +109,10 @@ def _checked_plan(run: Path, plan: dict) -> dict:
     return checked
 
 
-def _environment(run: Path) -> dict[str, str]:
+def _environment(run: Path, plan: dict) -> dict[str, str]:
     return {
         **os.environ,
-        "VLLM_API_KEY": "",
+        plan_launcher(plan).api_key_env: "",
         **read_env(run / "engine.env"),
         "NARWHAL_CAPTURE_CACHE": "1",
         "NARWHAL_CACHE_PLAN": str(run / "hook/launch.json"),
@@ -121,23 +122,24 @@ def _environment(run: Path) -> dict[str, str]:
 
 def _ports_free(selected: list[tuple[Path, dict]]) -> None:
     for run, plan in selected:
+        backend = engine_backend(plan.get("engine"))
+        engine = backend.launcher()
         endpoint = urlsplit(plan["endpoint"])
         host, port = endpoint.hostname, endpoint.port
         assert host is not None and port is not None
         try:
-            check_engine_bind(host, port)
+            backend.fabric.check_engine_bind(host, port)
         except OSError as error:
             raise ValueError(
                 f"{plan['role']}: engine port {port} is unavailable at {host}: {error}"
             ) from error
-        values = _environment(run)
-        host = values["VLLM_NIXL_SIDE_CHANNEL_HOST"]
-        port = int(values["VLLM_NIXL_SIDE_CHANNEL_PORT"])
+        host, port = engine.side_channel_address(_environment(run, plan))
         try:
-            check_engine_bind(host, port, dual_stack=True)
+            backend.fabric.check_engine_bind(host, port, fabric=True)
         except OSError as error:
             raise ValueError(
-                f"{plan['role']}: NIXL port {port} is unavailable at {host}: {error}"
+                f"{plan['role']}: {engine.side_channel} port {port} is unavailable at {host}: "
+                f"{error}"
             ) from error
         node = plan["role"].removeprefix("engine-")
         attestation = os.environ.get(
@@ -245,7 +247,7 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 "gpu_baseline_used_mib": baseline_used,
                 "budget_mib": float(budget),
                 "device_allowance_mib": float(allowance),
-                "vllm_args": plan["args"],
+                plan_launcher(plan).args_field: plan["args"],
                 "expected_packages": plan["expected_packages"],
                 "model_sha256": plan.get("model_sha256", plan["model_config_sha256"]),
             }
@@ -261,7 +263,7 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 with os.fdopen(log_fd, "w") as log:
                     process = subprocess.Popen(
                         [plan["python_executable"], *plan["args"]],
-                        env=_environment(run),
+                        env=_environment(run, plan),
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
@@ -269,17 +271,23 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 identity = process_identity(process.pid)
                 write_private(run / "native-process.json", json.dumps(identity, indent=2) + "\n")
                 _wait_ready(run, plan, identity, ready_seconds)
-                key = _environment(run).get("VLLM_API_KEY", "")
+                backend = engine_backend(plan.get("engine"))
+                engine = backend.launcher()
+                key = _environment(run, plan).get(engine.api_key_env, "")
                 headers = {"Authorization": f"Bearer {key}"} if key else None
-                live = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
-                if live.version != _checked_plan(run, plan)["vllm_api_version"]:
-                    raise ValueError("live vLLM version differs from the checked native runtime")
+                live = asyncio.run(
+                    fetch_engine_identity(
+                        plan["endpoint"], headers=headers, reader=backend.identity
+                    )
+                )
+                if live.version != _checked_plan(run, plan)[engine.checked_version_field]:
+                    raise ValueError("live engine version differs from the checked native runtime")
                 after = gpu_memory(gpu_uuid)
                 aggregate_delta = after["used_mib"] - baseline_used
                 record.update(
                     status="running",
                     process=identity,
-                    vllm_version=live.version,
+                    **{engine.version_field: live.version},
                     process_start_time_seconds=live.process_start_time_seconds,
                     model_revision=plan["model_revision"],
                     gpu_after=after,

@@ -1,5 +1,3 @@
-"""Derive private deployment records from the loaded environment and remote inspection."""
-
 from __future__ import annotations
 
 import argparse
@@ -17,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from narwhal.deployment.launch_engine.plan import (
+from narwhal.backends.vllm.plan import (
     ENV_PREFIXES,
     MANAGED_ENV,
     ds_conv_state_layout_required,
@@ -178,7 +176,6 @@ def value(env: dict[str, str], node: int, field: str, default: str = "") -> str:
 
 
 def fabric_address(env: dict[str, str], node: int, interfaces: list[dict]) -> str:
-    """Select the interface address used by NIXL and directed fabric measurements."""
     name = f"NARWHAL_NODE_{node}_IP"
     candidates = set()
     for interface in interfaces:
@@ -207,7 +204,6 @@ def fabric_address(env: dict[str, str], node: int, interfaces: list[dict]) -> st
 
 
 def service_url(env: dict[str, str], node: int, field: str) -> str:
-    """Resolve a node service URL from its explicit override or fabric address and port."""
     name = f"NARWHAL_NODE_{node}_{field}"
     supplied = env.get(name, "")
     suffix = "/v1/attestation" if field == "ATTESTATION_URL" else ""
@@ -247,7 +243,6 @@ def service_url(env: dict[str, str], node: int, field: str) -> str:
 
 
 def derive_hosts(env: dict[str, str]) -> list[Host]:
-    """Return one host per distinct SSH destination with the roles assigned to it."""
     nodes = sorted(
         int(match[1])
         for name in env
@@ -280,7 +275,6 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
 
 
 def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
-    """Bind detected devices and image metadata to environment-selected deployment policy."""
     launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
@@ -591,7 +585,10 @@ def discover(env: dict[str, str], out: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Derive private deployment records from the loaded environment and remote "
+        "inspection."
+    )
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:

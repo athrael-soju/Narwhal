@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from ...engines.attestation import fetch_engine_identity
+from ..launch_engine.backend import engine_backend
 from ..launch_engine.plan import read_env
 from ..launch_engine.runtime import digest, write_private
 from ..native_engine import process_identity
@@ -67,20 +68,24 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
             raise ValueError("Native serving process identity changed")
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Native serving process is no longer running") from error
+    backend = engine_backend(plan.get("engine"))
+    engine = backend.launcher()
     startup = read_json(run / "shared-start.json")
     if (
         startup.get("status") != "running"
         or startup.get("plan_sha256") != digest(run / "launch.json")
         or startup.get("process") != process
-        or startup.get("vllm_version") != checked["vllm_api_version"]
+        or startup.get(engine.version_field) != checked[engine.checked_version_field]
     ):
         raise ValueError("Native startup evidence differs from the live serving plan")
     values = read_env(run / "engine.env")
-    key = values.get("VLLM_API_KEY", "")
+    key = values.get(engine.api_key_env, "")
     headers = {"Authorization": f"Bearer {key}"} if key else None
-    identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
+    identity = asyncio.run(
+        fetch_engine_identity(plan["endpoint"], headers=headers, reader=backend.identity)
+    )
     if (
-        identity.version != startup["vllm_version"]
+        identity.version != startup[engine.version_field]
         or identity.process_start_time_seconds != startup["process_start_time_seconds"]
     ):
         raise ValueError("Native engine HTTP identity changed since launch")

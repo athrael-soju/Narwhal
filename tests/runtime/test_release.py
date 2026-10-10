@@ -66,7 +66,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
 
     def test_first_round_follows_the_launcher_engine_ttl(self):
-        from narwhal.deployment.launch_engine.plan import ENGINE_TTL_S
+        from narwhal.backends.vllm.plan import ENGINE_TTL_S
 
         self.assertGreater(RELEASE_AFTER_S[0], ENGINE_TTL_S)
         self.assertGreater(RELEASE_AFTER_S[-1], 3600.0)
@@ -75,7 +75,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
     def test_the_capture_hook_waits_through_two_release_rounds(self):
         with patch.dict(os.environ):
             os.environ.pop("NARWHAL_CAPTURE_CACHE", None)
-            hook = runpy.run_path(str(ROOT / "src/narwhal/deployment/cache_capture_hook.py"))
+            hook = runpy.run_path(str(ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"))
         self.assertGreater(hook["PEER_RELEASE_WAIT_S"], RELEASE_AFTER_S[1])
 
 

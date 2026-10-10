@@ -1,5 +1,3 @@
-"""Build and load pinned engine launch plans for container or native backends."""
-
 from __future__ import annotations
 
 import contextlib
@@ -12,124 +10,28 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .runtime import LAUNCHER, digest, write_private
+from .backend import EngineLauncher, launcher, plan_launcher
+from .runtime import digest, write_private
 
-VALUE_OPTIONS = {
-    "--max-model-len",
-    "--gpu-memory-utilization",
-    "--max-num-batched-tokens",
-    "--max-num-seqs",
-    "--reasoning-parser",
-    "--attention-backend",
-    "--tokenizer",
-    "--hf-config-path",
-    "--load-format",
-    "--kv-events-config",
-}
-FLAG_OPTIONS = {
-    "--trust-remote-code",
-    "--language-model-only",
-    "--enforce-eager",
-    "--async-scheduling",
-    "--no-disable-hybrid-kv-cache-manager",
-    "--disable-hybrid-kv-cache-manager",
-    "--enable-prefix-caching",
-    "--no-enable-prefix-caching",
-}
-# Short root for the per-plan sockets vLLM binds and host subscribers connect to;
-# launch directories can exceed the socket path limit.
+# Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
 KV_EVENTS_MOUNT = "/narwhal-kv-events"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
 MAX_SOCKET_PATH_BYTES = 107
-# vLLM's NIXL engine_ttl for CUDA IPC peers with the UCX IPC cache off; the router's first
-# peer release round follows it.
-ENGINE_TTL_S = 60
-# vLLM's default NIXL producer lease; the launcher always sets the lease explicitly so the
-# attested launch arguments record it. A consumer renews it every lease // 6 seconds.
-KV_LEASE_S = 30
-MIN_KV_LEASE_S = 6
-# First UCX release that unmaps CUDA IPC rkeys when NIXL removes a remote agent.
+# First UCX release that unmaps CUDA IPC rkeys when the transfer library removes a remote agent.
 UCX_PEER_RELEASE = (1, 22)
-MANAGED_ENV = {
-    "ROCR_VISIBLE_DEVICES",
-    "CUDA_VISIBLE_DEVICES",
-    "UCX_NET_DEVICES",
-    "UCX_TLS",
-    "UCX_TCP_PORT_RANGE",
-    "NIXL_HOST_IP",
-    "VLLM_NIXL_SIDE_CHANNEL_HOST",
-    "VLLM_NIXL_SIDE_CHANNEL_PORT",
-    "VLLM_API_KEY",
-}
-ENV_PREFIXES = (
-    "VLLM_",
-    "UCX_",
-    "NIXL_",
-    "ROCM_",
-    "HIP_",
-    "HSA_",
-    "AITER_",
-    "PYTORCH_",
-    "SAFETENSORS_",
-)
 
 
 def validate_runtime(runtime: dict) -> None:
-    packages = runtime.get("expected_packages", {})
-    if not packages.get("vllm") or not any(name in packages for name in ("nixl", "nixl-rocm")):
-        raise ValueError("runtime.expected_packages requires pinned vLLM and NIXL versions")
-    if any(not isinstance(v, str) or not v or "<" in v for v in packages.values()):
-        raise ValueError("runtime.expected_packages requires resolved version strings")
-    if (
-        runtime.get("model_dtype") not in ("bfloat16", "float16")
-        or runtime.get("kv_cache_dtype") != "auto"
-    ):
-        raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
-    if type(runtime.get("block_size")) is not int or runtime["block_size"] < 1:
-        raise ValueError("runtime.block_size must be positive")
-    lease = runtime.get("kv_lease_s", KV_LEASE_S)
-    if type(lease) is not int or lease < MIN_KV_LEASE_S:
-        raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
-    args = runtime.get("extra_args", [])
-    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
-        raise ValueError("runtime.extra_args must be an argument list")
-    index = 0
-    while index < len(args):
-        option = args[index]
-        if (
-            option in VALUE_OPTIONS
-            and index + 1 < len(args)
-            and not args[index + 1].startswith("--")
-        ):
-            index += 2
-        elif option in FLAG_OPTIONS:
-            index += 1
-        else:
-            raise ValueError(f"unsupported or incomplete runtime option: {option}")
-    for name, value in runtime.get("environment", {}).items():
-        if (
-            not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
-            or name in MANAGED_ENV
-            or not (name.startswith(ENV_PREFIXES) or name in ("LD_LIBRARY_PATH", "PYTHONPATH"))
-            or any(
-                word in name
-                for word in ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH", "SKIP_COMPAT")
-            )
-            or not isinstance(value, str)
-            or any(c in value for c in "\r\n\0")
-        ):
-            raise ValueError(f"unsupported runtime environment field: {name}")
+    launcher(runtime.get("backend")).validate_runtime(runtime)
 
 
 def ipc_cache_off(ipc_cache: str | None) -> bool:
-    """Return whether UCX reads this UCX_CUDA_IPC_CACHE value as false."""
     return ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
 
 
 def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
-    """Return whether UCX unmaps a removed peer's CUDA IPC memory with this cache setting."""
     try:
         version = tuple(int(part) for part in (ucx_version or "").split(".")[:2])
     except ValueError:
@@ -137,28 +39,10 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
     return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
 
 
-def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict | None:
-    """Select cache-event publication from the backend's own launch settings.
-
-    Publication follows prefix caching unless `--kv-events-config` disables it.
-    """
-    if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
-        raise ValueError("runtime.extra_args must select prefix caching at most once")
-    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
-    if len(supplied) > 1:
-        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
-    if supplied:
-        try:
-            value = json.loads(supplied[0])
-        except ValueError:
-            value = None
-        if value != {"enable_kv_cache_events": False}:
-            raise ValueError(
-                "runtime.extra_args --kv-events-config may only set "
-                '{"enable_kv_cache_events": false}; the launcher selects event endpoints'
-            )
-        return None
-    if "--no-enable-prefix-caching" in args:
+def kv_events_policy(
+    engine: EngineLauncher, args: list[str], socket_dir: Path, engine_dir: str
+) -> dict | None:
+    if not engine.publishes_kv_events(args):
         return None
     for name in KV_EVENTS_SOCKETS.values():
         if len(str(socket_dir / name).encode()) > MAX_SOCKET_PATH_BYTES:
@@ -173,7 +57,6 @@ def kv_events_policy(args: list[str], socket_dir: Path, engine_dir: str) -> dict
 
 
 def kv_events_directory(plan: dict) -> None:
-    """Create or reuse the plan's socket directory and its parent, private to this user."""
     if plan.get("kv_events") is None:
         return
     directory = Path(plan["kv_events"]["socket_dir"])
@@ -186,13 +69,11 @@ def kv_events_directory(plan: dict) -> None:
 
 
 def container_options(plan: dict) -> list[str]:
-    """Create the plan's socket directory and return its shared Docker options."""
     kv_events_directory(plan)
     return list(plan["common"])
 
 
 def remove_kv_events_directory(plan: dict) -> None:
-    """Remove the plan's socket directory once its engine process has stopped."""
     if plan.get("kv_events") is None:
         return
     directory = Path(plan["kv_events"]["socket_dir"])
@@ -218,31 +99,16 @@ def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> 
     return False
 
 
-def requires_ds_conv_state_layout(model_dir: Path) -> bool:
-    """Detect checkpoint metadata that uses convolutional SSM transfer state."""
-    return ds_conv_state_layout_required(json.loads((model_dir / "config.json").read_text()))
-
-
-def ds_conv_state_layout_required(model: dict) -> bool:
-    """Detect convolutional SSM transfer state in parsed checkpoint configuration."""
-    text_model = model.get("text_config", model)
-    linear = text_model.get("linear_attn_config", {})
-    if (
-        isinstance(linear, dict)
-        and linear.get("kda_layers")
-        and linear.get("short_conv_kernel_size")
-    ):
-        return True
-    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
-        return True
-    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
-        "layer_types", []
-    ):
-        return True
-    return any(
-        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
-        for layer in text_model.get("layer_types", [])
-    )
+def check_shared_memory(engine: EngineLauncher, role: str, args: list[str], budget: float) -> None:
+    value = engine.memory_fraction(args)
+    if value is None:
+        raise ValueError(f"{role}: shared GPU launch requires one memory-utilization argument")
+    try:
+        matches = float(value) == budget
+    except (ValueError, TypeError):
+        matches = False
+    if not matches:
+        raise ValueError(f"{role}: engine memory setting differs from shared GPU budget")
 
 
 def append_private(path: Path, data: str) -> None:
@@ -252,23 +118,21 @@ def append_private(path: Path, data: str) -> None:
 
 
 def env_file_name(plan: dict) -> str:
-    """Return the launch directory's environment file for the plan's backend."""
     return "engine.env" if plan.get("backend") == "native" else "container.env"
 
 
 def read_env(path: Path) -> dict[str, str]:
-    """Read a KEY=VALUE environment file."""
     return dict(line.split("=", 1) for line in path.read_text().splitlines())
 
 
 def build(
     record: dict, env: dict[str, str], output: Path, *, backend: str = "container"
 ) -> tuple[dict, dict[str, str]]:
-    """Resolve one engine record into the same vLLM contract for either launch backend."""
     if backend not in {"container", "native"}:
         raise ValueError(f"unsupported engine launch backend: {backend}")
     runtime = record["runtime"]
-    validate_runtime(runtime)
+    engine = launcher(runtime.get("backend"))
+    engine.validate_runtime(runtime)
     role = record["role"]
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("select an engine role")
@@ -279,13 +143,15 @@ def build(
     ):
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
-    side_port = int(env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"])
+    side_port = int(env[engine.side_channel_port_env])
     attest_port = int(env["NARWHAL_ATTEST_PORT"])
     if (
         any(not 1 <= p <= 65535 for p in (port, side_port, attest_port))
         or len({port, side_port, attest_port}) != 3
     ):
-        raise ValueError("engine, attestation and NIXL ports must be distinct valid TCP ports")
+        raise ValueError(
+            f"engine, attestation and {engine.side_channel} ports must be distinct valid TCP ports"
+        )
     source = env[f"NARWHAL_NODE_{node}_IP"]
     endpoint = urlsplit(env[f"NARWHAL_NODE_{node}_URL"])
     if endpoint.scheme != "http" or endpoint.port != port or not endpoint.hostname:
@@ -306,14 +172,10 @@ def build(
     values.update(
         {
             "UCX_TLS": f"{net_transport},sm,self,{gpu_transport}",
-            "NIXL_HOST_IP": source,
-            "VLLM_NIXL_SIDE_CHANNEL_HOST": source,
-            "VLLM_NIXL_SIDE_CHANNEL_PORT": str(side_port),
             "UCX_TCP_PORT_RANGE": env["NARWHAL_UCX_TCP_PORT_RANGE"],
+            **engine.engine_env(source, side_port, env.get("NARWHAL_ENGINE_API_KEY", "")),
         }
     )
-    if env.get("NARWHAL_ENGINE_API_KEY"):
-        values["VLLM_API_KEY"] = env["NARWHAL_ENGINE_API_KEY"]
     if any(any(c in value for c in "\r\n\0") for value in values.values()):
         raise ValueError("engine environment values must fit one line")
     hook_root = "/narwhal-hooks" if backend == "container" else str(output / "hook")
@@ -326,17 +188,14 @@ def build(
         if backend == "native"
         else "/model"
     )
-    if (
-        backend == "native"
-        and model_ref.endswith(".gguf")
-        and not runtime["expected_packages"].get("vllm-gguf-plugin")
-    ):
-        raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
+    if backend == "native":
+        engine.check_model(runtime, model_ref)
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
     socket_dir = KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
     kv_events = kv_events_policy(
+        engine,
         runtime.get("extra_args", []),
         socket_dir,
         KV_EVENTS_MOUNT if backend == "container" else str(socket_dir),
@@ -372,64 +231,24 @@ def build(
             common.extend(["--security-opt", "seccomp=unconfined"])
     else:
         common = []
-    # CUDA IPC peers keep this engine's KV memory mapped until vLLM evicts it.
+    # CUDA IPC peers keep this engine's KV memory mapped until the engine evicts it.
     ipc_peers = gpu_transport == "cuda" and (
         record.get("shared_device") is not None
         or len(values.get("CUDA_VISIBLE_DEVICES", "").split(",")) > len(record["gpu_ids"])
     )
-    # With the UCX IPC cache off, vLLM's eviction releases a stopped peer's memory.
+    # With the UCX IPC cache off, eviction releases a stopped peer's memory.
     evict_peers = ipc_peers and ipc_cache_off(values.get("UCX_CUDA_IPC_CACHE"))
-    connector = {
-        "kv_connector": "NixlConnector",
-        "kv_role": "kv_both",
-        "kv_load_failure_policy": "fail",
-        "kv_connector_extra_config": {
-            "backends": ["UCX"],
-            "enforce_handshake_compat": True,
-            "kv_lease_duration": runtime.get("kv_lease_s", KV_LEASE_S),
-            **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
-        },
-    }
-    args = [
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        model_ref,
-        "--served-model-name",
-        env["NARWHAL_ENGINE_MODEL_NAME"],
-        "--host",
-        endpoint.hostname
+    args, connector = engine.serve(
+        record,
+        model=model_ref,
+        served_name=env["NARWHAL_ENGINE_MODEL_NAME"],
+        host=endpoint.hostname
         if backend == "native"
         else ("::" if ":" in endpoint.hostname else "0.0.0.0"),
-        "--port",
-        str(port),
-        "--tensor-parallel-size",
-        str(record["tensor_parallel_size"]),
-        "--dtype",
-        runtime["model_dtype"],
-        "--kv-cache-dtype",
-        runtime["kv_cache_dtype"],
-        "--block-size",
-        str(runtime["block_size"]),
-        *(
-            []
-            if kv_events is None
-            else [
-                "--kv-events-config",
-                json.dumps(
-                    {
-                        "enable_kv_cache_events": True,
-                        "publisher": "zmq",
-                        "endpoint": kv_events["endpoint"],
-                        "replay_endpoint": kv_events["replay_endpoint"],
-                    }
-                ),
-            ]
-        ),
-        "--kv-transfer-config",
-        json.dumps(connector),
-        *runtime.get("extra_args", []),
-    ]
+        port=port,
+        kv_events=kv_events,
+        evict_peers=evict_peers,
+    )
     shared = record.get("shared_device")
     if shared is not None:
         if (
@@ -438,17 +257,10 @@ def build(
             or record["tensor_parallel_size"] != 1
         ):
             raise ValueError(f"{role}: shared allocation requires one CUDA GPU and TP=1")
-        memory_args = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
-        if len(memory_args) != 1 or memory_args[0] + 1 >= len(args):
-            raise ValueError(f"{role}: shared GPU launch requires one vLLM memory setting")
-        try:
-            budget_matches = float(args[memory_args[0] + 1]) == shared["gpu_memory_utilization"]
-        except (ValueError, TypeError):
-            budget_matches = False
-        if not budget_matches:
-            raise ValueError(f"{role}: vLLM memory setting differs from shared GPU budget")
+        check_shared_memory(engine, role, args, shared["gpu_memory_utilization"])
     plan = {
         "role": role,
+        **({"engine": runtime["backend"]} if "backend" in runtime else {}),
         "image": image,
         "model_dir": model_dir,
         "name": name,
@@ -484,7 +296,6 @@ def build(
 
 
 def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
-    """Pin model, hook and launch inputs before starting an engine."""
     source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
     record = json.loads(source.read_text())
     plan, values = build(record, env, output.resolve(), backend=backend)
@@ -494,18 +305,19 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
     if digest(hook_source) != hook_sha:
         raise ValueError("cache capture hook differs from its delivered hash")
+    script = plan_launcher(plan).runtime_script
     output.mkdir(mode=0o700, parents=True)
     (output / "cache").mkdir(mode=0o700)
     (output / "hook").mkdir(mode=0o700)
     kv_events_directory(plan)
     write_private(output / "hook/sitecustomize.py", hook_source.read_text())
-    write_private(output / "hook/launch_engine.py", LAUNCHER.read_text())
+    write_private(output / "hook/launch_engine.py", script.read_text())
     env_file = "container.env" if backend == "container" else "engine.env"
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
     plan.update(
         env_sha256=digest(output / env_file),
         launch_sha256=digest(source),
-        launcher_sha256=digest(LAUNCHER),
+        launcher_sha256=digest(script),
         cache_capture_sha256=hook_sha,
         model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
