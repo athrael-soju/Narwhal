@@ -13,6 +13,14 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table, **Engine role history** and **Expired KV by producer** to the engines you pick. Both selectors default to All.
 
+## Engine backends
+
+The engine panels query the series of the fleet's `engine.backend`. This page describes a vLLM fleet. On an SGLang fleet:
+
+- The engine table's **SGLang running** column reads `sglang:num_running_reqs`, **KV cache** reads `sglang:token_usage`, and **Prefix hits** divides `sglang:cached_tokens_total` by `sglang:prompt_tokens_total`. **Backlogged** means `sglang:num_queue_reqs` is above zero.
+- **Prefill/s** on **Token throughput** counts `sglang:prompt_tokens_total` on engines outside the decode role. The engine table's **Tokens/s** counts it on prefill engines, and counts `sglang:generation_tokens_total` on decode engines.
+- **KV handoff queue** takes the place of **Expired KV by producer**. It plots, per engine, the requests waiting in `sglang:num_prefill_bootstrap_queue_reqs` on prefill engines and in `sglang:num_decode_prealloc_queue_reqs` and `sglang:num_decode_transfer_queue_reqs` on decode engines, in amber.
+
 ## Colours
 
 Each colour keeps one meaning on every panel. In the headline row, cells that judge the service fill green, yellow or red, and count cells show plain values.

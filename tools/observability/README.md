@@ -23,6 +23,10 @@ The dashboard expects these label contracts:
   engine metrics endpoint.
 - Engines that run the vLLM NIXL connector expose
   `vllm:nixl_num_kv_expired_reqs_total` for **Expired KV by producer**.
+- SGLang exposes `sglang:num_running_reqs`, `sglang:num_queue_reqs`,
+  `sglang:token_usage`, `sglang:cached_tokens_total`, `sglang:prompt_tokens_total`,
+  `sglang:generation_tokens_total`, `sglang:num_prefill_bootstrap_queue_reqs`,
+  `sglang:num_decode_prealloc_queue_reqs` and `sglang:num_decode_transfer_queue_reqs`.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
 Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
@@ -70,7 +74,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It fills each `<<name>>` and `<<name{selector}>>` field from the `dashboard_text` and `dashboard_series` of the fleet's `engine.backend`, and leaves out a panel with a field the backend does not map. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 

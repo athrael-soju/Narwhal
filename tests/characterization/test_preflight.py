@@ -26,6 +26,7 @@ from tests.characterization.golden import assert_golden
 from tests.characterization.vllm_fake import ENGINES, FakeVllm, routed, untimed
 from tests.fixtures import ROOT, fleet, profile
 from tests.wire import EngineWire, engine_transports, vllm_engine
+from tools.observability.artifacts import render_dashboard
 
 SECONDS = re.compile(r"[0-9]+\.[0-9]+s\b")
 
@@ -224,7 +225,8 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             for line in text.splitlines()
             if line.startswith(("narwhal_kv_lease_seconds", "narwhal_handoff_bound_seconds"))
         ]
-        dashboard = (ROOT / "tools/observability/grafana-narwhal.json").read_text()
+        shipped = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+        dashboard = json.dumps(render_dashboard(shipped, "vllm"))
         series = sorted(set(re.findall(r"vllm:[A-Za-z0-9_:]+", dashboard)))
         assert_golden(
             self, "preflight_observability", {"lease_metrics": lines, "dashboard_series": series}

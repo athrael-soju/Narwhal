@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import names as backend_names
 from narwhal.config.environment import resolve_endpoint
 
 DEFAULT_TARGETS_DIR = (
@@ -23,6 +25,7 @@ class TargetContract:
 
     router: str
     engines: tuple[tuple[str, str], ...]
+    backend: str = DEFAULT_BACKEND
 
 
 def metrics_authority(url: str) -> str:
@@ -63,7 +66,13 @@ def build_targets(fleet: dict[str, object], router_url: str) -> TargetContract:
             raise ValueError(f"fleet engine {iid!r} requires url")
         seen.add(iid)
         engines.append((iid, metrics_authority(resolve_endpoint(url, f"engines[{index}].url"))))
-    return TargetContract(metrics_authority(router_url), tuple(engines))
+    engine = fleet.get("engine")
+    backend = (
+        engine.get("backend", DEFAULT_BACKEND) if isinstance(engine, dict) else DEFAULT_BACKEND
+    )
+    if not isinstance(backend, str) or backend not in backend_names():
+        raise ValueError(f"fleet engine.backend {backend!r} is not a registered engine backend")
+    return TargetContract(metrics_authority(router_url), tuple(engines), backend)
 
 
 def _write_json(path: Path, value: object) -> None:

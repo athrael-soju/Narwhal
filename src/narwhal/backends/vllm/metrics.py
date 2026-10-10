@@ -21,15 +21,30 @@ _TRANSFER = re.compile(
 class VllmMetrics(EngineMetrics):
     transfer_series: ClassVar[str | None] = TRANSFER_SERIES
     dashboard_series: ClassVar[Mapping[str, str]] = {
-        "running": "vllm:num_requests_running",
-        "waiting": "vllm:num_requests_waiting",
-        "kv_usage": "vllm:kv_cache_usage_perc",
-        "prompt_tokens": "vllm:prompt_tokens_total",
-        "prompt_tokens_by_source": "vllm:prompt_tokens_by_source_total",
-        "generation_tokens": "vllm:generation_tokens_total",
-        "prefix_cache_hits": "vllm:prefix_cache_hits_total",
-        "prefix_cache_queries": "vllm:prefix_cache_queries_total",
-        "kv_expired_requests": "vllm:nixl_num_kv_expired_reqs_total",
+        "running": "sum by(iid) (vllm:num_requests_running{@sel})",
+        "waiting": "sum by(iid) (vllm:num_requests_waiting{@sel})",
+        "kv_usage": "max by(iid) (vllm:kv_cache_usage_perc{@sel})",
+        "prefix_hit_ratio": (
+            "sum by(iid) (rate(vllm:prefix_cache_hits_total{@sel}[$__rate_interval])) / "
+            "sum by(iid) (rate(vllm:prefix_cache_queries_total{@sel}[$__rate_interval]))"
+        ),
+        # Prompt tokens computed or read from the local cache, not received from a producer.
+        "prompt_tokens": (
+            "sum by(iid) (rate(vllm:prompt_tokens_by_source_total"
+            '{@sel,source=~"local_compute|local_cache_hit"}[$__rate_interval])) or '
+            "sum by(iid) (rate(vllm:prompt_tokens_total{@sel}[$__rate_interval]))"
+        ),
+        "output_tokens": "sum by(iid) (rate(vllm:generation_tokens_total{@sel}[$__rate_interval]))",
+        "handoff": (
+            "sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{@sel}[$__rate_interval]))"
+        ),
+    }
+    dashboard_text: ClassVar[Mapping[str, str]] = {
+        "handoff_title": "Expired KV by producer",
+        "handoff_description": "Requests per second whose KV expired on each producer engine, "
+        "from the vLLM NIXL connector counter.",
+        "handoff_unit": "ops",
+        "handoff_color": "#C4162A",
     }
 
     def kv_capacity(self, metrics: str) -> int | None:

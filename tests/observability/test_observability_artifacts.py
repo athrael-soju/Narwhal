@@ -80,7 +80,9 @@ class MonitoringArtifactTests(unittest.TestCase):
 
 class OrchestratorDashboardTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.shipped = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
+        self.shipped = artifacts.render_dashboard(
+            json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
+        )
         self.console = "http://127.0.0.1:18020/console"
 
     def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):

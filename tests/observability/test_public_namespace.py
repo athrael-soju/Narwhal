@@ -16,6 +16,7 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tools.observability.artifacts import render_dashboard
 from tools.observability.start import readiness as observe_readiness
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +51,9 @@ DASHBOARD_PALETTE = {
 
 
 def dashboard():
-    return json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+    return render_dashboard(
+        json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
+    )
 
 
 def panel_queries(element):
@@ -347,7 +350,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         queried = {name for expr in expressions for name in re.findall(r"\bnarwhal_\w+", expr)}
         self.assertLessEqual(queried, exported)
         # The backend's dashboard mapping is the single source for the engine series.
-        series = set(load_backend("vllm").metrics.dashboard_series.values())
+        series = {
+            name
+            for template in load_backend("vllm").metrics.dashboard_series.values()
+            for name in re.findall(r"vllm:\w+", template)
+        }
         readme = (ROOT / "tools/observability/README.md").read_text()
         engine = {name for expr in expressions for name in re.findall(r"vllm:\w+", expr)}
         self.assertEqual(engine, series)
