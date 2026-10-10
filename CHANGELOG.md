@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/athrael-soju/Narwhal/compare/v0.5.0...v0.6.0) (2026-10-10)
+
+
+### Features
+
+* fleet control service ([#301](https://github.com/athrael-soju/Narwhal/issues/301)) ([f1f1164](https://github.com/athrael-soju/Narwhal/commit/f1f116473b9ff4c9e92a6a3bfbd23c699dfaf6a6))
+* qualified admission, queueing and retries ([#312](https://github.com/athrael-soju/Narwhal/issues/312)) ([05df12f](https://github.com/athrael-soju/Narwhal/commit/05df12f02ed113a2d661a2d8571fdb56557aa347))
+* redesign the fleet control console as a standalone page linked from Grafana ([#313](https://github.com/athrael-soju/Narwhal/issues/313)) ([4d7be2e](https://github.com/athrael-soju/Narwhal/commit/4d7be2e32c6523c4a9b6ab10470fcd017b5053d7))
+
+
+### Documentation
+
+* align the docs index with the README ([#284](https://github.com/athrael-soju/Narwhal/issues/284)) ([00a288e](https://github.com/athrael-soju/Narwhal/commit/00a288e901062182c7aa1cd6e14dc34111b29233))
+* remove the Recognition page ([#311](https://github.com/athrael-soju/Narwhal/issues/311)) ([690ad5e](https://github.com/athrael-soju/Narwhal/commit/690ad5ee9adf0ff3e642726770793b58566b7cd8))
+
 ## [0.5.0](https://github.com/athrael-soju/Narwhal/compare/v0.4.1...v0.5.0) (2026-10-05)
 
 
