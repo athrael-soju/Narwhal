@@ -18,6 +18,7 @@ def _gauge(name: str) -> re.Pattern[str]:
 _KV_CAPACITY = _gauge("sglang:max_total_num_tokens")
 _PAGE_SIZE = _gauge("sglang:page_size")
 _CACHED_TOKENS = _gauge("sglang:cached_tokens_total")
+_RUNNING = _gauge("sglang:num_running_reqs")
 _TRANSFER = re.compile(
     rf"^{TRANSFER_SERIES}_(count|sum)\{{([^}}]*)\}}\s+([0-9.eE+-]+)$", re.MULTILINE
 )
@@ -56,7 +57,10 @@ class SglangMetrics(EngineMetrics):
     def prefix_cache_hits(self, metrics: str) -> int | None:
         # One series per cache source: device, host and storage hits all skip prefill.
         values = [float(match) for match in _CACHED_TOKENS.findall(metrics)]
-        return round(sum(values)) if values else None
+        if values:
+            return round(sum(values))
+        # SGLang creates the hit series at the engine's first cache hit.
+        return 0 if _RUNNING.search(metrics) else None
 
     def transfer_totals(self, metrics: str) -> tuple[float, float] | None:
         totals = {"count": 0.0, "sum": 0.0}

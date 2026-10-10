@@ -305,6 +305,11 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 warm = {s["prefix_tokens"] for s in samples if s["state"] == "warm"}
                 self.assertEqual(warm, {96, 400})
 
+    async def test_one_token_blocks_accept_any_primer_past_the_prefix(self):
+        samples, reason = await self.run_probe(self.engine(), prefix_lens=(96,), block_tokens=1)
+        self.assertIsNone(reason)
+        self.assertEqual({s["prefix_tokens"] for s in samples if s["state"] == "warm"}, {96})
+
     async def test_a_primer_that_stays_on_a_block_boundary_stops_the_sweep(self):
         samples, reason = await self.run_probe(
             self.engine(hybrid=True), prefix_lens=(96,), short=20, block_tokens=16

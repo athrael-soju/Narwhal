@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 import math
 import multiprocessing
 import sys
 import tempfile
+import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
@@ -144,6 +146,13 @@ def _lane_worker(
     )
 
 
+def _stand_in(phases: Any) -> None:
+    # A finished lane keeps arriving at phase switches, so a lane with more switches goes on.
+    with contextlib.suppress(threading.BrokenBarrierError):
+        while True:
+            phases.wait(PHASE_WAIT_S)
+
+
 async def _run_lanes_apart(
     cfg: FleetConfig,
     lanes: list[list[EngineSpec]],
@@ -190,14 +199,20 @@ async def _run_lanes_apart(
                 for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
             ]
             outcomes: list[BaseException | int] = []
+            stand_ins: list[asyncio.Future[None]] = []
             for finished in asyncio.as_completed(futures):
                 try:
                     outcomes.append(await finished)
                 except Exception as error:
                     outcomes.append(error)
-                if outcomes[-1] != 0 and phases is not None:
+                if phases is None:
+                    continue
+                if outcomes[-1] != 0 or len(outcomes) == len(futures):
                     # The first failure stops the lanes waiting for it at a phase switch.
                     phases.abort()
+                else:
+                    stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
+            await asyncio.gather(*stand_ins)
         profiles: list[Profile] = []
         for lane_cfg in lane_cfgs:
             lane_evidence = lane_cfg.profiles_path.with_suffix(".samples.json")

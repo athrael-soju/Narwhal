@@ -74,7 +74,8 @@ async def probe_cached_prefill(
             boundary = prefix_target // block_tokens * block_tokens
             for _ in range(PRIMER_PAD_WORDS):
                 count = await count_tokens(client, url, model, primer, dialect, timeout)
-                if count > boundary and count % block_tokens:
+                # With one-token blocks, every prompt past the prefix ends on a boundary.
+                if count > boundary and (block_tokens == 1 or count % block_tokens):
                     break
                 primer += " context"
             else:

@@ -75,6 +75,16 @@ class ChatTokenTests(unittest.TestCase):
         )
 
 
+class PrefixHitTests(unittest.TestCase):
+    def test_an_engine_without_a_cache_hit_reads_zero_hits(self):
+        metrics = load("sglang").metrics
+        running = 'sglang:num_running_reqs{model_name="m"} 0.0\n'
+        self.assertEqual(metrics.prefix_cache_hits(running), 0)
+        hits = 'sglang:cached_tokens_total{cache_source="device",model_name="m"} 352.0\n'
+        self.assertEqual(metrics.prefix_cache_hits(running + hits), 352)
+        self.assertIsNone(metrics.prefix_cache_hits('vllm:num_requests_running{engine="0"} 0\n'))
+
+
 class ContextLimitTests(unittest.IsolatedAsyncioTestCase):
     async def test_context_limit_reads_the_served_model(self):
         paths = []

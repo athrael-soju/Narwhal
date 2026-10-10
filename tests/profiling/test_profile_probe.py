@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import asdict, replace
@@ -861,6 +862,16 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             status = 400
             with self.assertRaisesRegex(RuntimeError, r"cache reset failed .*\(400\)"):
                 await serve_as(Role.PREFILL)
+
+    def test_a_finished_lane_stands_in_at_later_phase_switches(self):
+        phases = threading.Barrier(2)
+        stand_in = threading.Thread(target=fleet_probe._stand_in, args=(phases,))
+        stand_in.start()
+        for _ in range(3):
+            phases.wait(5)
+        phases.abort()
+        stand_in.join(5)
+        self.assertFalse(stand_in.is_alive())
 
     def test_paired_profile_lanes_run_disjoint_pairs(self):
         with tempfile.TemporaryDirectory() as folder:
