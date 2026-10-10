@@ -36,6 +36,23 @@ def runtime_record(**changes):
     }
 
 
+ARGS = ["--max-running-requests", "64"]
+
+
+class RequestCapTests(unittest.TestCase):
+    def test_a_served_cap_below_the_request_is_rejected(self):
+        log = (
+            "max_running_requests is capped to 59 by the mamba state cache\n"
+            "max_total_num_tokens=777296, max_running_requests=59, context_len=32768\n"
+        )
+        with self.assertRaisesRegex(ValueError, "at most 59 running requests.*64"):
+            attestation.check_request_cap(ARGS, log)
+
+    def test_the_requested_cap_or_no_cap_line_passes(self):
+        attestation.check_request_cap(ARGS, "max_running_requests=64, context_len=32768\n")
+        attestation.check_request_cap(ARGS, "no scheduler summary\n")
+
+
 class ConnectorTests(unittest.TestCase):
     def test_both_legs_carry_the_producer_bootstrap_and_one_room(self):
         kv = BACKEND.connector("mooncake")

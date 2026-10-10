@@ -41,7 +41,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
 For a vLLM engine, `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.
 
-For an SGLang engine, the capture writes `server-info.json` from the live engine's `/server_info`. It supplies `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package.
+For an SGLang engine, the capture writes `server-info.json` from the live engine's `/server_info`. It supplies `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package. Generation rejects an SGLang engine whose startup log reports a lower `max_running_requests` than its `--max-running-requests`. Lower `--max-running-requests` to the logged value, or raise the capacity the log names, such as `--max-mamba-cache-size`, and relaunch.
 
 ### Capturing the model dimensions
 
