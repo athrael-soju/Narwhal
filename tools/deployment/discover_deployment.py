@@ -11,16 +11,13 @@ import shlex
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from narwhal.backends.vllm.plan import (
-    ENV_PREFIXES,
-    MANAGED_ENV,
-    ds_conv_state_layout_required,
-    validate_runtime,
-)
+from narwhal.backends.vllm.plan import ds_conv_state_layout_required
+from narwhal.deployment.launch_engine.backend import engine_backend
 from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
@@ -60,11 +57,11 @@ def has_custom_code(value):
 
 requires_trust_remote_code = has_custom_code(model) or has_custom_code(tokenizer)
 packages_code = """
-import json
+import json, re, sys
 from importlib.metadata import distributions
-wanted = {'vllm', 'torch', 'nixl', 'nixl-rocm'}
+wanted = re.compile(sys.argv[1])
 print(json.dumps({d.metadata['Name'].lower(): d.version for d in distributions()
-                  if d.metadata['Name'].lower() in wanted}))
+                  if wanted.fullmatch(d.metadata['Name'].lower())}))
 """
 packages = json.loads(
     command(
@@ -79,6 +76,7 @@ packages = json.loads(
             image["Id"],
             "-c",
             packages_code,
+            inputs["packages"],
         ]
     )
 )
@@ -276,6 +274,11 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
 
 def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
     launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
+    backend = engine_backend(env.get("NARWHAL_ENGINE_BACKEND"))
+    connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
+    backend.connector(connector)
+    engine = backend.launcher()
+    pin = backend.role_switcher(connector) is None
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()
@@ -303,55 +306,14 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 raise ValueError(f"{role}: allocated GPUs must share one product")
             product = products.pop()
             shapes.add((product, len(selected), tp))
-            dtype = value(env, node, "MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
-            if dtype not in {"bfloat16", "float16"}:
-                raise ValueError(f"{role}: set MODEL_DTYPE to bfloat16 or float16 in .env")
-            max_len = min(int(observed.get("max_model_len") or 16384), 16384)
-            args = json.loads(
-                value(
-                    env,
-                    node,
-                    "ENGINE_ARGS",
-                    json.dumps(
-                        [
-                            "--max-model-len",
-                            str(max_len),
-                            "--max-num-seqs",
-                            "8",
-                            "--gpu-memory-utilization",
-                            "0.9",
-                            "--enforce-eager",
-                        ]
-                    ),
+            initial = "decode" if engines else "prefill"
+            try:
+                runtime = engine.discovered_runtime(
+                    observed, partial(value, env, node), connector, initial
                 )
-            )
-            if not isinstance(args, list):
-                raise ValueError(f"{role}: ENGINE_ARGS must be a JSON array")
-            if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
-                args.append("--trust-remote-code")
-            environment = dict(observed["image_environment"])
-            overrides = json.loads(value(env, node, "ENGINE_ENV", "{}"))
-            if not isinstance(overrides, dict):
-                raise ValueError(f"{role}: ENGINE_ENV must be a JSON object")
-            environment.update(overrides)
-            if observed.get("requires_ds_conv_state_layout"):
-                if (
-                    "VLLM_SSM_CONV_STATE_LAYOUT" in overrides
-                    and overrides["VLLM_SSM_CONV_STATE_LAYOUT"] != "DS"
-                ):
-                    raise ValueError(
-                        f"{role}: convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS"
-                    )
-                environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
-            runtime = {
-                "expected_packages": observed["packages"],
-                "model_dtype": dtype,
-                "kv_cache_dtype": "auto",
-                "block_size": int(value(env, node, "BLOCK_SIZE", "128")),
-                "environment": environment,
-                "extra_args": args,
-            }
-            validate_runtime(runtime)
+            except ValueError as error:
+                raise ValueError(f"{role}: {error}") from None
+            engine.validate_runtime(runtime)
             transport = value(env, node, "TRANSFER_TRANSPORT", "ucx_tcp")
             net = value(env, node, "TRANSFER_NET_DEVICES", value(env, node, "FABRIC_INTERFACE"))
             devices = json.loads(value(env, node, "TRANSFER_DEVICES", "[]"))
@@ -392,6 +354,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                     "url": "${NARWHAL_NODE_" + str(node) + "_URL}",
                     "attestation_url": "${NARWHAL_NODE_" + str(node) + "_ATTESTATION_URL}",
                     "role": "decode",
+                    **({"pin": True} if pin else {}),
                 }
             )
     if len(shapes) != 1 or len(engines) < 2:
@@ -424,8 +387,18 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
         },
         "profiles": {"path": "runs/profiles.json"},
     }
+    section = {
+        field: env[name]
+        for field, name in (
+            ("backend", "NARWHAL_ENGINE_BACKEND"),
+            ("connector", "NARWHAL_ENGINE_CONNECTOR"),
+        )
+        if env.get(name)
+    }
     if env.get("NARWHAL_ENGINE_KEY"):
-        fleet["engine"] = {"engine_api_key_env": "NARWHAL_ENGINE_KEY"}
+        section["engine_api_key_env"] = "NARWHAL_ENGINE_KEY"
+    if section:
+        fleet["engine"] = section
     return (
         fleet,
         {"schema": "narwhal.engine-launch", "schema_version": 1, "engines": launches},
@@ -436,6 +409,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
 
 def discover(env: dict[str, str], out: Path) -> Path:
     hosts = derive_hosts(env)
+    engine = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).launcher()
     paths = {
         name: Path(env.get(name, default))
         for name, default in (
@@ -487,7 +461,9 @@ def discover(env: dict[str, str], out: Path) -> Path:
             if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", inputs["image"]):
                 raise ValueError(f"{role}: pin ENGINE_IMAGE to an image ID or registry digest")
             inputs.update(
-                environment_prefixes=ENV_PREFIXES, managed_environment=sorted(MANAGED_ENV)
+                environment_prefixes=engine.environment_prefixes,
+                managed_environment=sorted(engine.managed_environment),
+                packages=engine.image_packages,
             )
             payload = out / f"{role}-inputs.json"
             write_private(payload, json.dumps(inputs).encode())

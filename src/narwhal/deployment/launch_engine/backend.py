@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -20,9 +20,22 @@ class EngineLauncher(ABC):
     args_field: ClassVar[str]
     version_field: ClassVar[str]
     checked_version_field: ClassVar[str]
+    # Discovery pins the image distributions whose names fully match this pattern, and copies
+    # image variables with these prefixes except the launcher-managed ones.
+    image_packages: ClassVar[str]
+    environment_prefixes: ClassVar[tuple[str, ...]]
+    managed_environment: ClassVar[frozenset[str]]
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...
+
+    @abstractmethod
+    def discovered_runtime(
+        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+    ) -> dict: ...
+
+    @abstractmethod
+    def sequence_limit(self, runtime: dict) -> int: ...
 
     @abstractmethod
     def engine_env(self, host: str, side_channel_port: int, api_key: str) -> dict[str, str]: ...

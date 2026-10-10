@@ -24,6 +24,9 @@ class ContractFixtures:
     memory_fraction: str
     kv_event_args: list[str] = field(default_factory=list)
     no_kv_event_args: list[str] = field(default_factory=list)
+    # Distributions an engine image reports to discovery, and the .env fields discovery reads.
+    image_packages: dict[str, str] = field(default_factory=dict)
+    discovery_settings: dict[str, str] = field(default_factory=dict)
 
 
 def fixtures(backend: str) -> ContractFixtures:

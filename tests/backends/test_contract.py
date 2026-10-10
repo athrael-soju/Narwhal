@@ -1,6 +1,7 @@
 import itertools
 import json
 import math
+import re
 import socket
 import unittest
 from collections.abc import Mapping
@@ -224,6 +225,33 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(launcher.memory_fraction([]))
         self.assertTrue(launcher.publishes_kv_events(fixture.kv_event_args))
         self.assertFalse(launcher.publishes_kv_events(fixture.no_kv_event_args))
+
+    def test_launcher_discovers_a_valid_runtime_for_each_connector(self):
+        launcher, fixture = self.backend.launcher(), self.fixtures
+        self.assertTrue(
+            all(re.fullmatch(launcher.image_packages, name) for name in fixture.image_packages)
+        )
+        self.assertFalse(re.fullmatch(launcher.image_packages, "unrelated-package"))
+        self.assertTrue(launcher.environment_prefixes)
+        self.assertLessEqual(
+            set(launcher.engine_env("192.0.2.11", 5600, "key")), launcher.managed_environment
+        )
+        observed = {
+            "packages": fixture.image_packages,
+            "model_dtype": "bfloat16",
+            "max_model_len": 32768,
+            "image_environment": {},
+        }
+        for connector in self.backend.connectors:
+            with self.subTest(connector=connector):
+                runtime = launcher.discovered_runtime(
+                    observed,
+                    lambda name, default: fixture.discovery_settings.get(name, default),
+                    connector,
+                    "prefill",
+                )
+                launcher.validate_runtime(runtime)
+                self.assertGreater(launcher.sequence_limit(runtime), 0)
 
     async def test_role_switch_capability(self):
         switcher = self.backend.role_switch

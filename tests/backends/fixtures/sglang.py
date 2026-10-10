@@ -50,4 +50,11 @@ FIXTURES = ContractFixtures(
     memory_fraction="0.4",
     kv_event_args=[],
     no_kv_event_args=["--disable-radix-cache"],
+    image_packages={
+        "sglang": "0.5.0",
+        "mooncake-transfer-engine": "0.3.0",
+        "nixl": "1.0.0",
+        "torch": "2.12.0",
+    },
+    discovery_settings={"DECODE_CUDA_GRAPH_MEMORY_GB": "4"},
 )

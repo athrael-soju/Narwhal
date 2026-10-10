@@ -197,19 +197,19 @@ The image's NIXL connector must implement the fleet's required `kv_both` behavio
 
 ### SGLang runtime fields
 
-Discovery writes `vllm` runtime records. For an SGLang engine, set these `runtime` fields in the launch record:
+With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) writes these `runtime` fields:
 
-| Runtime field                 | Operator input                                                                                                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend`                     | `sglang`.                                                                                                                                                         |
-| `connector`                   | `mooncake`, the default, or `nixl`. Match the fleet's `engine.connector`.                                                                                         |
+| Runtime field                 | Value                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend`                     | `sglang`.                                                                                                                                                                       |
+| `connector`                   | `mooncake`, the default, or `nixl`, from `NARWHAL_ENGINE_CONNECTOR`.                                                                                                            |
 | `expected_packages`           | Exact installed versions for `sglang`, the connector's transfer package (`mooncake-transfer-engine` or `nixl`), and each image package that `narwhal-engine check` must verify. |
-| `model_dtype`                 | `bfloat16` or `float16`.                                                                                                                                          |
-| `kv_cache_dtype`              | `auto`.                                                                                                                                                           |
-| `role`                        | `prefill` or `decode`, required with `nixl` and rejected with `mooncake`.                                                                                        |
-| `decode_cuda_graph_memory_gb` | Positive GB of decode CUDA graph memory that the engine reserves when it switches to decode, required with `mooncake`.                                            |
-| `environment`                 | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_`, or `SAFETENSORS_` prefix. |
-| `extra_args`                  | SGLang options from the `extra_args` allowlist.                                                                                                                   |
+| `model_dtype`                 | `bfloat16` or `float16`.                                                                                                                                                        |
+| `kv_cache_dtype`              | `auto`.                                                                                                                                                                         |
+| `role`                        | The engine's initial pool, `prefill` or `decode`, required with `nixl` and rejected with `mooncake`.                                                                            |
+| `decode_cuda_graph_memory_gb` | Positive GB of decode CUDA graph memory that the engine reserves when it switches to decode, required with `mooncake`, from `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`.              |
+| `environment`                 | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_`, or `SAFETENSORS_` prefix.                |
+| `extra_args`                  | SGLang options from the `extra_args` allowlist.                                                                                                                                 |
 
 The model path names a checkpoint directory. The launcher rejects a GGUF file.
 

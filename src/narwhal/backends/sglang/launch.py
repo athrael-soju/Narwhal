@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...deployment.launch_engine.backend import EngineLauncher
-from . import attestation, dev
+from . import attestation, dev, discovery
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
@@ -25,9 +25,20 @@ class SglangLauncher(EngineLauncher):
     args_field = "sglang_args"
     version_field = "sglang_version"
     checked_version_field = "sglang_version"
+    image_packages = discovery.IMAGE_PACKAGES
+    environment_prefixes = policy.ENV_PREFIXES
+    managed_environment = frozenset(policy.MANAGED_ENV)
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
+
+    def discovered_runtime(
+        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+    ) -> dict:
+        return discovery.runtime(observed, setting, connector, role)
+
+    def sequence_limit(self, runtime: dict) -> int:
+        return discovery.sequence_limit(runtime.get("extra_args", []))
 
     def engine_env(self, host: str, side_channel_port: int, api_key: str) -> dict[str, str]:
         return {

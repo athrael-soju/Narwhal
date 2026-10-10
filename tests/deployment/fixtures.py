@@ -204,9 +204,9 @@ def launcher_inputs(root):
         "NARWHAL_MODEL_DIR": str(model),
         "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(b"{}").hexdigest(),
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
-        "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "tools/deployment/cache_capture_hook.py"),
+        "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"),
         "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(
-            ROOT / "tools/deployment/cache_capture_hook.py"
+            ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"
         ),
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",
