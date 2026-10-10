@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -34,6 +35,10 @@ from .sweep import Sweep, bounded_sweep, load_sequence_limits
 
 
 class _Unhealthy(Exception): ...
+
+
+# The longest profile phase, a full decode sweep, ends well inside this wait.
+PHASE_WAIT_S = 3600.0
 
 
 def device_key(spec: EngineSpec) -> str:
@@ -80,8 +85,12 @@ def _pair_roles(
     spec: EngineSpec,
     peer: EngineSpec,
     launches: dict[str, dict],
+    phases: Any = None,
 ) -> Callable[[Role], Awaitable[None]]:
     async def serve_as(role: Role) -> None:
+        if phases is not None:
+            # Lanes switch phase together; a lane's KV transfers slow another lane's prefill.
+            await asyncio.to_thread(phases.wait, PHASE_WAIT_S)
         own, other = (spec.url, launches.get(spec.iid)), (peer.url, launches.get(peer.iid))
         producer, consumer = (own, other) if role is Role.PREFILL else (other, own)
         async with httpx.AsyncClient(
@@ -99,6 +108,7 @@ def _lane_worker(
     sweep: Sweep | None,
     limits_path: Path | None,
     observation_timeout_s: float | None,
+    phases: Any,
 ) -> int:
     return asyncio.run(
         run(
@@ -109,6 +119,7 @@ def _lane_worker(
             limits_path=limits_path,
             observation_timeout_s=observation_timeout_s,
             split_lanes=False,
+            phases=phases,
         )
     )
 
@@ -137,7 +148,14 @@ async def _run_lanes_apart(
             lane_cfg.profiles_path = Path(folder) / f"lane-{index}.json"
             lane_cfgs.append(lane_cfg)
         context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=len(lanes), mp_context=context) as pool:
+        with (
+            context.Manager() as manager,
+            ProcessPoolExecutor(max_workers=len(lanes), mp_context=context) as pool,
+        ):
+            # Lanes of one length pass the same phase switches, so they can keep in step.
+            phases = (
+                manager.Barrier(len(lanes)) if len({len(lane) for lane in lanes}) == 1 else None
+            )
             futures = [
                 loop.run_in_executor(
                     pool,
@@ -147,15 +165,19 @@ async def _run_lanes_apart(
                     sweep,
                     limits_path,
                     observation_timeout_s,
+                    phases,
                 )
                 for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
             ]
-            _, pending = await asyncio.wait(futures, return_when=asyncio.FIRST_EXCEPTION)
-            if pending:
-                for worker in multiprocessing.active_children():
-                    worker.terminate()
-                await asyncio.wait(pending)
-        outcomes = [future.exception() or future.result() for future in futures]
+            outcomes: list[BaseException | int] = []
+            for finished in asyncio.as_completed(futures):
+                try:
+                    outcomes.append(await finished)
+                except Exception as error:
+                    outcomes.append(error)
+                if outcomes[-1] != 0 and phases is not None:
+                    # The first failure stops the lanes waiting for it at a phase switch.
+                    phases.abort()
         profiles: list[Profile] = []
         for lane_cfg in lane_cfgs:
             lane_evidence = lane_cfg.profiles_path.with_suffix(".samples.json")
@@ -193,6 +215,7 @@ async def run(
     colocated_workload: ColocatedWorkload | None = None,
     observation_timeout_s: float | None = None,
     split_lanes: bool = True,
+    phases: Any = None,
 ) -> int:
     if observation_timeout_s is not None and (
         not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
@@ -360,7 +383,7 @@ async def run(
                         else _lane_peer(spec, lane, cfg.engines)
                     )
                     engine_evidence["peer"] = peer.iid
-                    roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches)
+                    roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches, phases)
                 profile = await profile_instance(
                     client,
                     spec.iid,
