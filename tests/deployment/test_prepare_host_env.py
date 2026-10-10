@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values, write_environment
+from tools.deployment.prepare_host_env import engine_fields, select_values, write_environment
 
 
 class HostEnvironmentTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class HostEnvironmentTests(unittest.TestCase):
             "UNRELATED_TOKEN": "synthetic-unrelated-secret",
             "ENGINE_TOKEN": "synthetic-api-token",
         }
-        self.env.update({f"NARWHAL_{field}": "synthetic" for field in ENGINE_FIELDS})
+        self.env.update({f"NARWHAL_{field}": "synthetic" for field in engine_fields({})})
         self.fleet = {
             "engines": [
                 {
@@ -52,6 +52,18 @@ class HostEnvironmentTests(unittest.TestCase):
         engine = select_values("engine", 1, self.fleet, self.env)
         self.assertNotIn("NARWHAL_NODE_2_URL", engine)
         self.assertEqual(engine["NARWHAL_NODE_2_IP"], "192.0.2.2")
+
+    def test_engine_export_names_the_backend_side_channel_port(self):
+        self.assertIn(
+            "NARWHAL_NIXL_SIDE_CHANNEL_PORT", select_values("engine", 1, self.fleet, self.env)
+        )
+        self.fleet["engine"]["backend"] = "sglang"
+        with self.assertRaisesRegex(ValueError, "NARWHAL_SGLANG_BOOTSTRAP_PORT is unset"):
+            select_values("engine", 1, self.fleet, self.env)
+        self.env["NARWHAL_NODE_1_SGLANG_BOOTSTRAP_PORT"] = "5601"
+        engine = select_values("engine", 1, self.fleet, self.env)
+        self.assertEqual(engine["NARWHAL_SGLANG_BOOTSTRAP_PORT"], "5601")
+        self.assertNotIn("NARWHAL_NIXL_SIDE_CHANNEL_PORT", engine)
 
     def test_node_override_preserves_shared_defaults_for_other_hosts(self):
         self.env["NARWHAL_NODE_2_MODEL_DIR"] = "/synthetic/second-model"

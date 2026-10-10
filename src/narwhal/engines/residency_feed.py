@@ -1,9 +1,3 @@
-"""Keep a residency index current from one vLLM engine's cache-event sockets.
-
-History past vLLM's bounded replay buffer leaves the index unknown until the
-engine resets its cache.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -11,7 +5,7 @@ import threading
 
 import zmq
 
-from .kv_events import CacheEvent, decode_batch
+from .kv_events import CacheEvent, KvEventDecoder
 from .residency import ResidencyIndex
 
 _END = -1
@@ -19,33 +13,25 @@ log = logging.getLogger("narwhal.residency")
 
 
 def _frames(frames: list[bytes]) -> tuple[bytes, bytes, bytes]:
-    """Split one published message into topic, sequence and payload frames."""
     if len(frames) != 3 or len(frames[1]) != 8:
         raise ValueError(f"cache-event message has {len(frames)} frames; expected 3")
     return frames[0], frames[1], frames[2]
 
 
-def _decoded(payload: bytes) -> list[CacheEvent | None] | None:
-    try:
-        return decode_batch(payload)
-    except ValueError:
-        return None
-
-
 class ResidencyFeed:
-    """Subscribe to one engine's events and replay missed batches into an index."""
-
     def __init__(
         self,
         index: ResidencyIndex,
         endpoint: str,
         replay_endpoint: str | None,
         *,
+        decoder: KvEventDecoder,
         replay_timeout_s: float = 5.0,
         poll_s: float = 0.2,
         max_replay_rounds: int = 100,
     ) -> None:
         self.index = index
+        self.decoder = decoder
         self.endpoint = endpoint
         self.replay_endpoint = replay_endpoint
         self.replay_timeout_s = replay_timeout_s
@@ -55,21 +41,21 @@ class ResidencyFeed:
         self._thread = threading.Thread(target=self._run, name="residency-feed", daemon=True)
         self._context = zmq.Context()
 
+    def _decoded(self, payload: bytes) -> list[CacheEvent | None] | None:
+        try:
+            return self.decoder.decode_batch(payload)
+        except ValueError:
+            return None
+
     def start(self) -> None:
-        """Start the subscription thread."""
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop the subscription and release its sockets."""
         self._stop.set()
         self._thread.join(timeout=5)
         self._context.term()
 
     def _replay(self, start: int) -> tuple[list[tuple[int, bytes]], bool] | None:
-        """Return batches replayed from `start` and whether the end marker arrived.
-
-        None means no replay answered. A long replay can lose batches or its end marker.
-        """
         if self.replay_endpoint is None:
             return None
         dealer = self._context.socket(zmq.DEALER)
@@ -94,11 +80,6 @@ class ResidencyFeed:
             dealer.close()
 
     def _catch_up(self, start: int, until: int | None = None) -> bool | None:
-        """Apply buffered batches from `start` in replay rounds.
-
-        Return False when the buffer was empty, None when no replay answered, and
-        True otherwise.
-        """
         expected = start
         applied = False
         for _ in range(self.max_replay_rounds):
@@ -115,12 +96,12 @@ class ResidencyFeed:
             if batches[0][0] != expected:
                 # The buffer no longer holds `expected`; the index records the loss.
                 for sequence, payload in batches:
-                    self.index.apply(sequence, _decoded(payload))
+                    self.index.apply(sequence, self._decoded(payload))
                 return True
             for sequence, payload in batches:
                 if sequence != expected:
                     break
-                self.index.apply(sequence, _decoded(payload))
+                self.index.apply(sequence, self._decoded(payload))
                 expected += 1
                 applied = True
             if ended and expected > batches[-1][0]:
@@ -128,7 +109,6 @@ class ResidencyFeed:
         return True
 
     def _drain(self, subscriber: zmq.Socket) -> None:
-        """Apply batches that queued on the live socket during replay."""
         while subscriber.poll(0):
             _, raw, payload = _frames(subscriber.recv_multipart())
             self._receive(int.from_bytes(raw, "big"), payload)
@@ -144,7 +124,7 @@ class ResidencyFeed:
                 self._catch_up(start, until=sequence)
             finally:
                 self.index.set_current(current)
-        self.index.apply(sequence, _decoded(payload))
+        self.index.apply(sequence, self._decoded(payload))
 
     def _run(self) -> None:
         subscriber = self._context.socket(zmq.SUB)
@@ -157,7 +137,7 @@ class ResidencyFeed:
             self.index.set_current(False)
             history = self._catch_up(0)
             if history is False and not subscriber.poll(0):
-                # An empty replay buffer means vLLM has published no batch.
+                # An empty replay buffer means the engine has published no batch.
                 self.index.mark_empty()
             elif history is None:
                 self.index.lose("cache-event replay is unavailable")

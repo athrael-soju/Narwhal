@@ -1,5 +1,3 @@
-"""Reject stale engine evidence and derive the router contract from live sidecars."""
-
 import contextlib
 import hashlib
 import io
@@ -15,22 +13,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from narwhal.config import EngineContract
-from narwhal.deployment.attestation_contract import capture as attestation_capture
-from narwhal.deployment.attestation_contract import document as attestation_document
-from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
-from narwhal.deployment.attestation_contract.capture import (
+from narwhal.backends.vllm import attestation as attestation_capture
+from narwhal.backends.vllm.attestation import (
     MODEL_DIMENSIONS_CAPTURE,
     MODEL_DIMENSIONS_CAPTURE_TAG,
+    attention_backends,
     capture_model_dimensions,
     capture_nixl,
-)
-from narwhal.deployment.attestation_contract.document import (
-    attention_backends,
     engine_document,
-    generate,
     launch_args,
 )
+from narwhal.config import EngineContract
+from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
+from narwhal.deployment.attestation_contract.document import generate
 from narwhal.deployment.attestation_contract.evidence import live_native, read_json
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
@@ -40,12 +35,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 # Attestation modules that look up `live_container`.
-LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_document, attestation_sidecar)
+LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_sidecar)
 
 
 @contextlib.contextmanager
 def patched_live_container(**kwargs):
-    """Patch `live_container` in every attestation module that calls it; yield the shared mock."""
     mock = MagicMock(**kwargs)
     with contextlib.ExitStack() as stack:
         for module in LIVE_CONTAINER_CALLERS:
@@ -358,7 +352,7 @@ class AttestationContractTests(unittest.TestCase):
         )
 
     def test_nixl_capture_ignores_vllm_stdout_logs_and_rejects_ambiguous_output(self):
-        from narwhal.deployment.attestation_contract.capture import NIXL_CAPTURE_TAG
+        from narwhal.backends.vllm.attestation import NIXL_CAPTURE_TAG
 
         with tempfile.TemporaryDirectory() as folder:
             run, _ = self.engine_evidence(Path(folder))
@@ -379,7 +373,7 @@ class AttestationContractTests(unittest.TestCase):
             with (
                 patched_live_container(return_value="b" * 64),
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ),
             ):
@@ -429,7 +423,7 @@ class AttestationContractTests(unittest.TestCase):
             (run / "engine.env").write_text(f"PYTHONPATH={paths['engine']}\n")
             with (
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.live_native",
+                    "narwhal.backends.vllm.attestation.live_native",
                     return_value=process,
                 ),
                 patch.dict(
@@ -469,7 +463,7 @@ class AttestationContractTests(unittest.TestCase):
                     args=[], returncode=0, stdout=output, stderr=""
                 )
                 with patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ) as run_docker:
                     capture = capture_model_dimensions(run)
@@ -523,7 +517,7 @@ class AttestationContractTests(unittest.TestCase):
             with (
                 patched_live_container(return_value="b" * 64),
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ),
                 self.assertRaisesRegex(ValueError, "differ from the retained plan capture"),
@@ -582,7 +576,7 @@ class AttestationContractTests(unittest.TestCase):
             run, log = self.engine_evidence(Path(folder))
             with patched_live_container(return_value="b" * 64):
                 document = engine_document(run, log)
-                self.assertEqual(document["contract"]["nixl_connector_version"], 9)
+                self.assertEqual(document["contract"]["connector_version"], 9)
                 self.assertEqual(document["contract"]["attention_backend"], "ROCM_AITER_MLA")
                 self.assertIs(document["contract"]["hybrid_kv_cache_manager"], True)
                 self.assertFalse(EngineContract(**document["contract"]).missing())
@@ -664,7 +658,7 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             sources = dict.fromkeys(contract.fields(), "test evidence")
             first = make_attestation(AttestationDocument(contract, sources), identity)
             second = make_attestation(
@@ -695,7 +689,7 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             document = AttestationDocument(
                 contract, dict.fromkeys(contract.fields(), "test evidence")
             )

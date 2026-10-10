@@ -2,11 +2,14 @@
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
+from narwhal.backends.vllm import NixlConnector
 from narwhal.config import FleetConfig
 from narwhal.engines.attestation import EngineIdentity
+from narwhal.engines.client import EngineClient
 from narwhal.engines.prefix import block_identities
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
@@ -16,6 +19,16 @@ from narwhal.profiling.probe.fleet import device_key
 from narwhal.profiling.store import ProfileStore
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class DescriptorHandoffs:
+    # A fake client's prefill and decode run under the real handoff steps.
+    kv = NixlConnector()
+    start_handoff = EngineClient.start_handoff
+    decode_handoff = EngineClient.decode_handoff
+
+
+class HandoffClient(DescriptorHandoffs, SimpleNamespace): ...
 
 
 def profile(iid="e0", **changes):

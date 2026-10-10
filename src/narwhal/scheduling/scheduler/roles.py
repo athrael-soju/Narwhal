@@ -154,6 +154,10 @@ class RoleChanges:
         ]
         if not pool:
             return None, "pins or nominated engine exclude every source candidate"
+        if self.scheduler.switch_requires_idle:
+            pool = [inst for inst in pool if not inst.prefill and not inst.decode]
+            if not pool:
+                return None, "an engine-side role switch needs an idle source engine"
         if self.scheduler.th.dwell_s > 0.0 and not bypass_dwell:
             now = self.scheduler._clock()
             pool = [
@@ -311,6 +315,8 @@ class RoleChanges:
             len(chosen.prefill),
             len(chosen.decode),
         )
+        if self.scheduler.on_flip is not None:
+            self.scheduler.on_flip(chosen, target)
         self.scheduler.refresh_floor_state()
         return chosen
 

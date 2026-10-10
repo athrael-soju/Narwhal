@@ -1,17 +1,16 @@
-"""Process-bound directed KV transfer evidence."""
-
 from __future__ import annotations
 
 import json
 import math
 import os
-import re
 import time
 from hashlib import sha256
 from pathlib import Path
 
 import httpx
 
+from ...backends import load as load_backend
+from ...backends import renamed_fields
 from ...config import FleetConfig
 from ...engines.attestation import fetch_engine_identity, verify_attestation
 from ...engines.validation import validation_pairs
@@ -19,21 +18,19 @@ from ...profiling.generation import binding_digest, generation_problem
 from ...profiling.store import ProfileStore
 from .report import Report
 
-_NIXL_TRANSFER = re.compile(
-    r"^vllm:nixl_xfer_time_seconds_(count|sum)(?:\{[^}]*\})?\s+([0-9.eE+-]+)$",
-    re.MULTILINE,
-)
-
 
 async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
-    """Verify one current engine and retain the NIXL transfer counter."""
     if cfg.engine_contract is None:
         raise ValueError("directed KV evidence requires a declared engine contract")
     spec = next(spec for spec in cfg.engines if spec.iid == iid)
     if not spec.attestation_url:
         raise ValueError(f"{iid} has no attestation URL")
     identity = await fetch_engine_identity(
-        spec.url, timeout_s=cfg.health_timeout_s, headers=cfg.engine_headers()
+        spec.url,
+        timeout_s=cfg.health_timeout_s,
+        headers=cfg.engine_headers(),
+        reader=load_backend(cfg.backend).identity,
+        attestation_url=spec.attestation_url,
     )
     async with httpx.AsyncClient(timeout=cfg.health_timeout_s) as client:
         attestation = await client.get(spec.attestation_url)
@@ -44,43 +41,41 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
             raise ValueError(f"{iid} attestation: {'; '.join(failures)}")
         metrics = await client.get(spec.url.rstrip("/") + "/metrics", headers=cfg.engine_headers())
         metrics.raise_for_status()
-    transfer = {"count": 0.0, "sum": 0.0}
-    for name, value in _NIXL_TRANSFER.findall(metrics.text):
-        transfer[name] += float(value)
-    if not math.isfinite(transfer["count"]) or not math.isfinite(transfer["sum"]):
-        raise ValueError(f"{iid} returned non-finite NIXL transfer metrics")
-    if not _NIXL_TRANSFER.search(metrics.text):
-        raise ValueError(f"{iid} exposes no NIXL transfer metrics")
-    sources = payload["sources"]
+    totals = load_backend(cfg.backend).metrics.transfer_totals(metrics.text)
+    if totals is None:
+        raise ValueError(f"{iid} exposes no KV transfer metrics")
+    count, seconds = totals
+    if not math.isfinite(count) or not math.isfinite(seconds):
+        raise ValueError(f"{iid} returned non-finite KV transfer metrics")
+    renamed = renamed_fields("contract")
+    sources = {renamed.get(k, k): v for k, v in payload["sources"].items()}
     return {
         "iid": iid,
-        "vllm_version": identity.vllm_version,
+        "engine_version": identity.version,
         "process_start_time_seconds": identity.process_start_time_seconds,
         "attestation_digest": payload["attestation_digest"],
         **({"launch_digest": payload["launch_digest"]} if "launch_digest" in payload else {}),
         "contract_fingerprint": cfg.engine_contract.fingerprint(),
         "cache_layout_sources": {
-            name: sources[name] for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
+            name: sources.get(name) for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
         },
-        "connector_source": sources["nixl_connector_version"],
-        "transfer_mode_source": sources["transfer_mode"],
-        "nixl_transfer_count": transfer["count"],
-        "nixl_transfer_seconds_sum": transfer["sum"],
+        "connector_source": sources.get("connector_version"),
+        "transfer_mode_source": sources.get("transfer_mode"),
+        "transfer_count": count,
+        "transfer_seconds_sum": seconds,
     }
 
 
 def same_generation(before: dict[str, object], after: dict[str, object]) -> bool:
-    """Return whether two snapshots share vLLM version, process start and attestation."""
     return all(
         name in before and name in after and before[name] == after[name]
-        for name in ("vllm_version", "process_start_time_seconds", "attestation_digest")
+        for name in ("engine_version", "process_start_time_seconds", "attestation_digest")
     )
 
 
 async def verify_directed_kv_evidence(
     cfg: FleetConfig, fleet_path: Path, evidence_path: Path
 ) -> list[str]:
-    """Reject saved mesh results after a process, profile, or fleet change."""
     try:
         document = json.loads(evidence_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -136,10 +131,10 @@ async def verify_directed_kv_evidence(
             if (
                 not isinstance(row.get("output_tokens"), int)
                 or row["output_tokens"] < 1
-                or not isinstance(row.get("nixl_transfer_count_delta"), (int, float))
-                or row["nixl_transfer_count_delta"] < 1
-                or not isinstance(row.get("nixl_transfer_seconds"), (int, float))
-                or row["nixl_transfer_seconds"] <= 0
+                or not isinstance(row.get("transfer_count_delta"), (int, float))
+                or row["transfer_count_delta"] < 1
+                or not isinstance(row.get("transfer_seconds"), (int, float))
+                or row["transfer_seconds"] <= 0
             ):
                 problems.append(f"{src} -> {dst} lacks observed KV transfer and token evidence")
             for side, iid in (("producer", src), ("consumer", dst)):
@@ -173,7 +168,6 @@ async def check_directed_evidence(
     fleet_hash: str | None,
     profile_hash: str | None,
 ) -> None:
-    """Fail `rep` when fresh directed KV evidence misses a pair or its inputs changed."""
     expected = validation_pairs(cfg.engines, mesh=True)
     for src, dst in expected:
         passed = sum(
@@ -232,7 +226,6 @@ def write_directed_evidence(
     fleet_hash: str | None,
     profile_hash: str | None,
 ) -> None:
-    """Write the process-bound full-mesh KV evidence document to a fresh file."""
     contract = cfg.engine_contract
     if fleet_path is None or contract is None:
         raise ValueError("directed KV evidence has no fleet file or engine contract")

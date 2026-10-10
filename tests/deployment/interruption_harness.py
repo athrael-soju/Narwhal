@@ -1,5 +1,3 @@
-"""Synthetic lifecycle controller and workers for the Linux interruption matrix."""
-
 from __future__ import annotations
 
 import contextlib
@@ -14,6 +12,7 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.deployment import native_engine, stages
 from narwhal.dev import lifecycle
 
@@ -124,7 +123,7 @@ def controller(root: Path, selected: str) -> None:
     with (
         patch.object(lifecycle, "_launch", side_effect=launch),
         patch.object(lifecycle, "_run", side_effect=run_stage),
-        patch.object(lifecycle, "check_plugin"),
+        patch.object(vllm_dev, "check_plugin"),
         patch.object(lifecycle, "_check_free_ports"),
         patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
         patch.object(native_engine, "process_identity", side_effect=child_identity),

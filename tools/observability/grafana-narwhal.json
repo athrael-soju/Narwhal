@@ -294,7 +294,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "sum(sum by(iid) (rate(vllm:prompt_tokens_by_source_total{job=\"engines\",source=~\"local_compute|local_cache_hit\"}[$__rate_interval])) or sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\"}[$__rate_interval])))",
+                        "expr": "sum(<<prompt_tokens{job=\"engines\"}>>)",
                         "legendFormat": "Prefill/s"
                       }
                     },
@@ -389,7 +389,7 @@
         "spec": {
           "id": 7,
           "title": "",
-          "description": "One row per engine, in engine ID order. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (vLLM has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and vLLM running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
+          "description": "One row per engine, in engine ID order. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (<<engine>> has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and <<engine>> running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -419,7 +419,26 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(sum by(iid) (vllm:num_requests_waiting{job=\"engines\",iid=~\"$iid\"}), 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(10 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(11 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
+                        "expr": "max by(iid, backend) (up{job=\"engines\",iid=~\"$iid\"})",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(<<waiting{job=\"engines\",iid=~\"$iid\"}>>, 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(10 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(11 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -457,7 +476,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "sum by(iid) (vllm:num_requests_running{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                        "expr": "<<running{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -476,7 +495,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) (vllm:kv_cache_usage_perc{job=\"engines\",iid=~\"$iid\"}) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                        "expr": "<<kv_usage{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -495,7 +514,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "sum by(iid) (rate(vllm:prefix_cache_hits_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) / sum by(iid) (rate(vllm:prefix_cache_queries_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))",
+                        "expr": "<<prefix_hit_ratio{job=\"engines\",iid=~\"$iid\"}>>",
                         "instant": true,
                         "legendFormat": "",
                         "format": "table"
@@ -514,7 +533,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(sum by(iid) (rate(vllm:generation_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval])) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or ((sum by(iid) (rate(vllm:prompt_tokens_by_source_total{job=\"engines\",iid=~\"$iid\",source=~\"local_compute|local_cache_hit\"}[$__rate_interval])) or sum by(iid) (rate(vllm:prompt_tokens_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
+                        "expr": "(<<output_tokens{job=\"engines\",iid=~\"$iid\"}>> * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or ((<<prompt_tokens{job=\"engines\",iid=~\"$iid\"}>>) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
                         "instant": true,
                         "legendFormat": "",
                         "format": "table"
@@ -545,7 +564,7 @@
                     "id": "filterFieldsByName",
                     "options": {
                       "include": {
-                        "pattern": "^(iid|Value.*)$"
+                        "pattern": "^(iid|backend|Value #[^B]*)$"
                       }
                     }
                   }
@@ -557,20 +576,22 @@
                     "options": {
                       "indexByName": {
                         "iid": 0,
-                        "Value #A": 1,
-                        "Value #S": 2,
-                        "Value #R": 3,
-                        "Value #F": 4,
-                        "Value #H": 5,
-                        "Value #P": 6,
-                        "Value #T": 7
+                        "backend": 1,
+                        "Value #A": 2,
+                        "Value #S": 3,
+                        "Value #R": 4,
+                        "Value #F": 5,
+                        "Value #H": 6,
+                        "Value #P": 7,
+                        "Value #T": 8
                       },
                       "renameByName": {
                         "iid": "Engine",
+                        "backend": "Backend",
                         "Value #A": "Role",
                         "Value #S": "State",
                         "Value #R": "Resident",
-                        "Value #F": "vLLM running",
+                        "Value #F": "<<engine>> running",
                         "Value #H": "KV cache",
                         "Value #P": "Prefix hits",
                         "Value #T": "Tokens/s"
@@ -629,6 +650,34 @@
                       {
                         "id": "custom.width",
                         "value": 75
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Backend"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          "<<backend_badges>>"
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "image"
+                        }
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 70
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
                       }
                     ]
                   },
@@ -802,7 +851,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "vLLM running"
+                      "options": "<<engine>> running"
                     },
                     "properties": [
                       {
@@ -3131,375 +3180,6 @@
           }
         }
       },
-      "panel-54": {
-        "kind": "Panel",
-        "spec": {
-          "id": 54,
-          "title": "Dropped requests by reason",
-          "description": "Refused, rejected, failed and expired requests on the selected router over the displayed interval, by reason. Reasons with no requests are hidden.",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(cause) (increase(narwhal_refused_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "refused: {{cause}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "rejected: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "B"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_failed_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "failed: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "C"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(reason) (increase(narwhal_expired_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "expired: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "D"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "bargauge",
-            "spec": {
-              "options": {
-                "orientation": "horizontal",
-                "displayMode": "basic",
-                "valueMode": "color",
-                "namePlacement": "left",
-                "showUnfilled": true,
-                "sizing": "auto",
-                "minVizWidth": 8,
-                "minVizHeight": 16,
-                "maxVizHeight": 24,
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "legend": {
-                  "showLegend": false,
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "calcs": []
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "short",
-                  "decimals": 0,
-                  "min": 0,
-                  "noValue": "None"
-                },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^refused: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#F2CC0C"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^rejected: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#FF9830"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^failed: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#D44A3A"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^expired: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#C4162A"
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "panel-55": {
-        "kind": "Panel",
-        "spec": {
-          "id": 55,
-          "title": "Failed attempts by reason",
-          "description": "Failed attempts on the selected router over the displayed interval, by the phase the attempt reached and the failure reason. Reasons with no failures are hidden.",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "round(sum by(phase, reason) (increase(narwhal_attempt_failures_total{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) > 0",
-                        "instant": true,
-                        "legendFormat": "{{phase}}: {{reason}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "bargauge",
-            "spec": {
-              "options": {
-                "orientation": "horizontal",
-                "displayMode": "basic",
-                "valueMode": "color",
-                "namePlacement": "left",
-                "showUnfilled": true,
-                "sizing": "auto",
-                "minVizWidth": 8,
-                "minVizHeight": 16,
-                "maxVizHeight": 24,
-                "reduceOptions": {
-                  "calcs": [
-                    "lastNotNull"
-                  ],
-                  "fields": "",
-                  "values": false
-                },
-                "legend": {
-                  "showLegend": false,
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "calcs": []
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "short",
-                  "decimals": 0,
-                  "min": 0,
-                  "noValue": "None"
-                },
-                "overrides": [
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^(admission|queue): "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#A352CC"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^prefill: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#299E97"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byRegexp",
-                      "options": "^decode: "
-                    },
-                    "properties": [
-                      {
-                        "id": "color",
-                        "value": {
-                          "mode": "fixed",
-                          "fixedColor": "#336B9E"
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "panel-56": {
-        "kind": "Panel",
-        "spec": {
-          "id": 56,
-          "title": "Expired KV by producer",
-          "description": "Requests per second whose KV expired on each producer engine, from the vLLM NIXL connector counter.",
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "sum by(iid) (rate(vllm:nixl_num_kv_expired_reqs_total{job=\"engines\",iid=~\"$iid\"}[$__rate_interval]))",
-                        "legendFormat": "{{iid}}"
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "A"
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "timeseries",
-            "spec": {
-              "options": {
-                "tooltip": {
-                  "mode": "multi",
-                  "sort": "desc"
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "ops",
-                  "min": 0,
-                  "custom": {
-                    "fillOpacity": 9,
-                    "gradientMode": "opacity",
-                    "lineWidth": 2,
-                    "showPoints": "never"
-                  },
-                  "color": {
-                    "mode": "fixed",
-                    "fixedColor": "#C4162A"
-                  }
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "panel-57": {
         "kind": "Panel",
         "spec": {
@@ -3921,7 +3601,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 35,
+              "y": 27,
               "width": 24,
               "height": 8,
               "element": {
@@ -3960,7 +3640,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -3973,7 +3653,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 8,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -3986,7 +3666,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {
@@ -3999,7 +3679,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4012,7 +3692,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 8,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {
@@ -4025,7 +3705,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 43,
+              "y": 35,
               "width": 8,
               "height": 8,
               "element": {
@@ -4038,7 +3718,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 0,
-              "y": 67,
+              "y": 59,
               "width": 24,
               "height": 8,
               "element": {
@@ -4050,47 +3730,8 @@
           {
             "kind": "GridLayoutItem",
             "spec": {
-              "x": 0,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-54"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
               "x": 8,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-55"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 27,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-56"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 8,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4103,7 +3744,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 51,
+              "y": 43,
               "width": 8,
               "height": 8,
               "element": {
@@ -4116,7 +3757,7 @@
             "kind": "GridLayoutItem",
             "spec": {
               "x": 16,
-              "y": 59,
+              "y": 51,
               "width": 8,
               "height": 8,
               "element": {

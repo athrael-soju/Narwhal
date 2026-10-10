@@ -1,20 +1,22 @@
-"""Profile the selected engines of a fleet into its profile store."""
-
 from __future__ import annotations
 
 import asyncio
 import json
 import math
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
 
 from ... import command_results as results
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.dialect import lookup as lookup_dialect
+from ...engines.attestation import attested_launches
+from ...engines.connector import RendezvousConnector
 from ...provenance import stamp
+from ...runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from ...types import Role
 from ..generation import read_generation
 from ..model import decode_evidence_problems
@@ -23,26 +25,55 @@ from ..tasks import cancel_tasks
 from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
+from .pairing import PairedTransport, Pairing, origin
 from .sweep import Sweep, bounded_sweep, load_sequence_limits
 
 
-class _Unhealthy(Exception):
-    """An engine failed its health gate before profiling."""
+class _Unhealthy(Exception): ...
 
 
 def device_key(spec: EngineSpec) -> str:
-    """Return the engine's shared-device group, or `engine:<iid>` for a dedicated device."""
     return spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
 
 
 def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
-    """Group engines that share a device, or all engines under neighbour load, into one lane."""
     if colocated:
         return [list(targets)]
     lanes: dict[str, list[EngineSpec]] = {}
     for spec in targets:
         lanes.setdefault(device_key(spec), []).append(spec)
     return list(lanes.values())
+
+
+def _pool_size(sweep: Sweep, lanes: int, engines: int, *, paired: bool) -> int:
+    # A paired request holds a connection for each leg until both finish.
+    legs = 2 if paired else 1
+    return max(sweep.decode_concurrency) * legs * lanes + engines
+
+
+def _peer(spec: EngineSpec, engines: list[EngineSpec]) -> EngineSpec:
+    index = next(i for i, engine in enumerate(engines) if engine.iid == spec.iid)
+    return engines[(index + 1) % len(engines)]
+
+
+def _pair_roles(
+    cfg: FleetConfig,
+    pairing: PairedTransport,
+    switcher: RoleSwitcher,
+    spec: EngineSpec,
+    peer: EngineSpec,
+    launches: dict[str, dict],
+) -> Callable[[Role], Awaitable[None]]:
+    async def serve_as(role: Role) -> None:
+        own, other = (spec.url, launches.get(spec.iid)), (peer.url, launches.get(peer.iid))
+        producer, consumer = (own, other) if role is Role.PREFILL else (other, own)
+        async with httpx.AsyncClient(
+            timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+        ) as control:
+            await place_pair(switcher, control, producer, consumer)
+        pairing.pairs[origin(spec.url)] = Pairing(role, origin(peer.url), producer[1] or {})
+
+    return serve_as
 
 
 async def run(
@@ -55,7 +86,6 @@ async def run(
     colocated_workload: ColocatedWorkload | None = None,
     observation_timeout_s: float | None = None,
 ) -> int:
-    """Profile selected healthy engines and write the store."""
     if observation_timeout_s is not None and (
         not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
     ):
@@ -85,7 +115,21 @@ async def run(
     )
 
     print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
-    dialect = lookup_dialect(cfg.dialect)
+    backend = load_backend(cfg.backend)
+    dialect = backend.dialect
+    metrics = backend.metrics
+    kv = backend.connector(cfg.connector)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    paired = isinstance(kv, RendezvousConnector)
+    if paired and switcher is None:
+        raise ValueError(
+            f"profiling measures both roles of each engine, and engine.connector "
+            f"{cfg.connector} keeps {backend.label} engine roles fixed"
+        )
+    if paired and colocated_workload is not None:
+        raise ValueError(f"--colocated profiling needs a {backend.label} engine to serve alone")
+    if paired and len(cfg.engines) < 2:
+        raise ValueError(f"profiling a {backend.label} engine needs a peer engine")
     evidence_rows: dict[str, object] = {}
     measurement_record = {
         "method_version": 2,
@@ -95,15 +139,30 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    lanes = _profile_lanes(targets, colocated=colocated_workload is not None)
-    connections = max((sweep or Sweep()).decode_concurrency) * len(lanes) + len(cfg.engines)
+    # A paired engine borrows a peer for its other leg, so engines take turns.
+    lanes = _profile_lanes(targets, colocated=colocated_workload is not None or paired)
+    connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
+    pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
+    pairing = (
+        PairedTransport(httpx.AsyncHTTPTransport(limits=pool), kv, dialect)
+        if isinstance(kv, RendezvousConnector)
+        else None
+    )
+    launches = (
+        await attested_launches(
+            cfg.engines, timeout_s=observation_timeout_s or cfg.health_timeout_s
+        )
+        if pairing is not None
+        else {}
+    )
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(
             observation_timeout_s or 300.0,
             connect=min(10.0, observation_timeout_s or 300.0),
         ),
-        limits=httpx.Limits(max_connections=connections, max_keepalive_connections=connections),
+        limits=pool,
         headers=cfg.engine_headers(),
+        transport=pairing,
     ) as client:
 
         async def profile_engine(spec: EngineSpec) -> None:
@@ -169,19 +228,27 @@ async def run(
                     cfg.engine_contract,
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
+                    reader=load_backend(cfg.backend).identity,
                 )
                 engine_evidence["generation_evidence"] = generation.document
+                roles = None
+                if pairing is not None and switcher is not None:
+                    peer = _peer(spec, cfg.engines)
+                    engine_evidence["peer"] = peer.iid
+                    roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches)
                 profile = await profile_instance(
                     client,
                     spec.iid,
                     spec.url,
                     cfg.model,
-                    engine_sweep,
                     dialect,
+                    engine_sweep,
                     cfg.chars_per_token,
+                    metrics=metrics,
                     evidence=engine_evidence,
                     max_model_len=max_model_len,
                     observation_timeout_s=observation_timeout_s,
+                    roles=roles,
                 )
                 if neighbour_load is not None:
                     measured = await neighbour_load.stop()
@@ -212,6 +279,7 @@ async def run(
                     cfg.engine_contract,
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
+                    reader=load_backend(cfg.backend).identity,
                 )
                 if generation.process_digest != current.process_digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")
@@ -227,7 +295,7 @@ async def run(
                 if neighbour_load is not None and neighbour_load.tasks:
                     await cancel_tasks(neighbour_load.tasks)
                     engine_evidence["colocated_load"] = neighbour_load.evidence()
-                engine_evidence["error"] = str(exc)
+                engine_evidence["error"] = f"{type(exc).__name__}: {exc}"
                 evidence_rows[spec.iid] = engine_evidence
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 with evidence_path.open(

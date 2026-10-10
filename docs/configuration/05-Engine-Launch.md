@@ -134,6 +134,7 @@ Operator input for each `runtime` field:
 
 | Runtime field       | Operator input                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend`           | Optional registered engine backend that builds and checks the launch, default `vllm`. The fields below are the `vllm` backend's.                                    |
 | `expected_packages` | Exact installed versions for `vllm`, `nixl` or `nixl-rocm`, and each image package whose identity `narwhal-engine check` must verify.                                |
 | `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                             |
 | `kv_cache_dtype`    | `auto`.                                                                                                                                                              |
@@ -193,6 +194,34 @@ With `peer_release: false`, the check prints a warning that this engine keeps a 
 The [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the listening engine's `/version` response with `vllm_api_version`.
 
 The image's NIXL connector must implement the fleet's required `kv_both` behavior.
+
+### SGLang runtime fields
+
+With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) writes these `runtime` fields:
+
+| Runtime field                 | Value                                                                                                                                                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `backend`                     | `sglang`.                                                                                                                                                                                                                                  |
+| `connector`                   | `mooncake`, the default, or `nixl`, from `NARWHAL_ENGINE_CONNECTOR`.                                                                                                                                                                       |
+| `expected_packages`           | Exact installed versions for `sglang`, the connector's transfer package (`mooncake-transfer-engine` or `nixl`, or a CUDA build such as `mooncake-transfer-engine-cuda13`), and each image package that `narwhal-engine check` must verify. |
+| `model_dtype`                 | `bfloat16` or `float16`.                                                                                                                                                                                                                   |
+| `kv_cache_dtype`              | `auto`.                                                                                                                                                                                                                                    |
+| `role`                        | The engine's initial pool, `prefill` or `decode`, required with `nixl` and rejected with `mooncake`.                                                                                                                                       |
+| `decode_cuda_graph_memory_gb` | Positive GB of decode CUDA graph memory that the engine reserves when it switches to decode, required with `mooncake`, from `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`.                                                                         |
+| `environment`                 | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_`, or `SAFETENSORS_` prefix.                                                                           |
+| `extra_args`                  | SGLang options from the `extra_args` allowlist.                                                                                                                                                                                            |
+
+The model path names a checkpoint directory. The launcher rejects a GGUF file.
+
+A `mooncake` engine launches as prefill with `--enable-pd-role-switch`, and the router switches each decode engine through `POST /pd_role_switch` and swaps roles at runtime. A `nixl` engine serves the role in `runtime.role` for its lifetime, so the fleet sets `pin` on every engine.
+
+The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype` and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph` and `--enable-mixed-chunk`.
+
+The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-requests 256` unless `extra_args` sets it, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, the disaggregation mode and transfer backend, and `--kv-events-config` unless `--disable-radix-cache` is set. It passes `--disaggregation-bootstrap-port` from `NARWHAL_SGLANG_BOOTSTRAP_PORT` in the role environment, and the engine credential as `--api-key`.
+
+`runtime.environment` rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `SGLANG_HOST_IP`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT` and `NARWHAL_SGLANG_API_KEY`. It also rejects names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
+
+For an SGLang engine, `checked.json` records `sglang_version` in place of `vllm_api_version`, and has no `ucx_version` or `peer_release`.
 
 Launch directories, environment files, and runtime captures live under the Git-ignored `runs/`.
 

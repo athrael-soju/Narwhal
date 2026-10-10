@@ -1,5 +1,3 @@
-"""KV handoff production and directed transfer gates."""
-
 from __future__ import annotations
 
 import asyncio
@@ -7,12 +5,16 @@ import time
 from hashlib import sha256
 from typing import cast
 
+import httpx
+
+from ...backends import load as load_backend
 from ...config import FleetConfig
+from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, EngineError, first_output_timeout
-from ...engines.connector import PrefillResult
-from ...engines.dialect import lookup as lookup_dialect
+from ...engines.connector import PrefillResult, RendezvousConnector
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
+from ...runtime.role_switch import engine_side, place_pair
 from .engines import PROBE_PROMPT
 from .evidence import pair_snapshot, same_generation
 from .report import Report
@@ -20,10 +22,18 @@ from .report import Report
 
 async def gate_produce(
     cfg: FleetConfig, live: set[str], client: EngineClient, rep: Report
-) -> dict[str, PrefillResult]:
-    """Check that every live engine produces a KV handoff."""
+) -> dict[str, PrefillResult | None]:
     print("produce")
-    handoffs: dict[str, PrefillResult] = {}
+    handoffs: dict[str, PrefillResult | None] = {}
+    if isinstance(client.kv, RendezvousConnector):
+        # A rendezvous prefill leg completes only with its decode leg.
+        for spec in cfg.engines:
+            if spec.iid in live:
+                handoffs[spec.iid] = None
+                rep.ok(f"{spec.iid} hands off by rendezvous; its consume pairs check the transfer")
+            else:
+                rep.skip(f"{spec.iid} produce: unreachable")
+        return handoffs
     body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 1, "temperature": 0.0}
     for spec in cfg.engines:
         if spec.iid not in live:
@@ -35,25 +45,20 @@ async def gate_produce(
             rep.fail(f"{spec.iid} prefill leg: {exc}")
             continue
         handoffs[spec.iid] = params
-        rep.ok(f"{spec.iid} returned kv_transfer_params ({', '.join(sorted(params.parameters()))})")
+        rep.ok(f"{spec.iid} returned handoff parameters ({', '.join(sorted(params.parameters()))})")
     return handoffs
 
 
 async def gate_consume(
     cfg: FleetConfig,
     live: set[str],
-    handoffs: dict[str, PrefillResult],
+    handoffs: dict[str, PrefillResult | None],
     client: EngineClient,
     rep: Report,
     mesh: bool,
     repeats: int = 1,
     evidence: list[dict[str, object]] | None = None,
 ) -> None:
-    """Probe role-permitted transfers between distinct engines.
-
-    Ring mode covers each eligible producer and consumer with a peer; mesh mode covers
-    every eligible ordered pair.
-    """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
     if len(ids) < 2:
@@ -68,7 +73,7 @@ async def gate_consume(
         rep.ok(f"pairs excluded by role pins: {', '.join(excluded)} (never cross in production)")
     pairs = validation_pairs([by_id[i] for i in ids], mesh)
 
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     # A model may end the probe prompt at once.
     body = {
         "model": cfg.model,
@@ -78,6 +83,12 @@ async def gate_consume(
         **dialect.decode_probe_extras(4),
     }
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
+    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    launches = (
+        await attested_launches([by_id[iid] for iid in ids], timeout_s=cfg.health_timeout_s)
+        if switcher is not None or isinstance(client.kv, RendezvousConnector)
+        else {}
+    )
     seen: set[tuple[str, str]] = set()
     for src, dst in pairs:
         record: dict[str, object] = {"producer": src, "consumer": dst}
@@ -90,20 +101,30 @@ async def gate_consume(
                 before_dst = await pair_snapshot(cfg, dst)
                 record["producer_before"] = before_src
                 record["consumer_before"] = before_dst
+            if switcher is not None:
+                async with httpx.AsyncClient(
+                    timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                ) as control:
+                    await place_pair(
+                        switcher,
+                        control,
+                        (by_id[src].url, launches.get(src)),
+                        (by_id[dst].url, launches.get(dst)),
+                    )
             attempt = {**body, **dialect.cold_probe_extras()}
             deadline = asyncio.timeout(cfg.request_timeout_s)
             async with deadline:
-                started = time.monotonic()
-                params = await client.prefill(by_id[src].url, "/v1/completions", attempt, {})
-                prefill_seconds = time.monotonic() - started
+                handoff = await client.start_handoff(
+                    by_id[src].url, "/v1/completions", attempt, {}, producer=launches.get(src)
+                )
                 started = decode_started = time.monotonic()
                 tokens = 0
-                async for batch in client.decode(
+                async for batch in client.decode_handoff(
+                    handoff,
                     by_id[dst].url,
                     "/v1/completions",
                     attempt,
                     {},
-                    params,
                     first_token_timeout_s=cfg.first_token_timeout_s,
                 ):
                     for event in batch:
@@ -124,29 +145,29 @@ async def gate_consume(
                     raise ValueError(f"{src} process or attestation changed during transfer")
                 if not same_generation(before_dst, after_dst):
                     raise ValueError(f"{dst} process or attestation changed during transfer")
-                count_delta = cast(float, after_dst["nixl_transfer_count"]) - cast(
-                    float, before_dst["nixl_transfer_count"]
+                count_delta = cast(float, after_dst["transfer_count"]) - cast(
+                    float, before_dst["transfer_count"]
                 )
-                transfer_seconds = cast(float, after_dst["nixl_transfer_seconds_sum"]) - cast(
-                    float, before_dst["nixl_transfer_seconds_sum"]
+                transfer_seconds = cast(float, after_dst["transfer_seconds_sum"]) - cast(
+                    float, before_dst["transfer_seconds_sum"]
                 )
                 if count_delta < 1 or transfer_seconds <= 0:
-                    raise ValueError(f"{src} -> {dst} produced no observed consumer NIXL transfer")
-                descriptor = params.parameters()
+                    raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
+                descriptor = handoff.parameters
                 record.update(
                     status="passed",
-                    connector=params.connector,
-                    transfer_metric="vllm:nixl_xfer_time_seconds",
+                    connector=handoff.connector,
+                    transfer_metric=load_backend(cfg.backend).metrics.transfer_series,
                     transfer_mode=descriptor.get("transfer_mode"),
                     remote_engine_id=descriptor.get("remote_engine_id"),
                     remote_host=descriptor.get("remote_host"),
                     remote_port=descriptor.get("remote_port"),
-                    descriptor_sha256=sha256(params.descriptor_json.encode()).hexdigest(),
-                    prefill_seconds=prefill_seconds,
+                    descriptor_sha256=sha256(handoff.descriptor_json.encode()).hexdigest(),
+                    prefill_seconds=handoff.prefill_seconds,
                     decode_seconds=decode_seconds,
                     first_token_seconds=first_token_seconds,
-                    nixl_transfer_count_delta=count_delta,
-                    nixl_transfer_seconds=transfer_seconds,
+                    transfer_count_delta=count_delta,
+                    transfer_seconds=transfer_seconds,
                     output_tokens=tokens,
                 )
         except EngineError as exc:

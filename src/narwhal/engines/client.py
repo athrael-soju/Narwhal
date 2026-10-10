@@ -1,11 +1,12 @@
-"""HTTP client for split prefill and decode requests."""
-
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+import json
+import math
+import time
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeGuard
 from uuid import uuid4
 
@@ -19,15 +20,13 @@ from ..types import (
     LEG_STREAM,
     LEG_TIMEOUT,
 )
-from .connector import KvConnector, NixlConnector, PrefillResult
-from .dialect import EngineDialect, VllmDialect
+from .connector import KvConnector, KvHandoff, PrefillResult, RendezvousConnector
+from .dialect import EngineDialect
 from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
-from .wire import KEEPALIVE_EXPIRY_S, Dial, WireClient, dial_tcp
+from .wire import Dial, WireClient, WireResponse, dial_tcp
 
 
 class EngineError(RuntimeError):
-    """Report an engine failure with the failed leg and endpoint."""
-
     def __init__(self, leg: str, url: str, status: int, detail: str) -> None:
         super().__init__(f"{leg} leg against {url} failed ({status}): {detail[:240]}")
         self.leg = leg
@@ -37,8 +36,6 @@ class EngineError(RuntimeError):
 
 
 class _GapBoundStream(httpx.AsyncByteStream):
-    """Apply the current phase's timeout to raw transport reads."""
-
     def __init__(
         self,
         stream: httpx.AsyncByteStream | httpx.SyncByteStream,
@@ -81,14 +78,10 @@ _PROBE_PROMPT = "breaker verification"
 
 
 def first_output_timeout(exc: BaseException) -> TypeGuard[EngineError]:
-    """Return whether `exc` reports an expired first-token deadline."""
     return isinstance(exc, EngineError) and exc.detail.startswith(FIRST_OUTPUT_DETAIL)
 
 
 def leg_failure_class(exc: BaseException) -> str | None:
-    """Return the breaker failure class, or None for local pool timeouts
-    and non-overload 4xx responses.
-    """
     if isinstance(exc, httpx.PoolTimeout):
         return None
     if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
@@ -113,43 +106,54 @@ def leg_failure_class(exc: BaseException) -> str | None:
 
 @dataclass(frozen=True)
 class Tokenization:
-    """One engine tokenization: the exact count and, when reported, the prompt token IDs."""
-
     count: int
     token_ids: tuple[int, ...] | None
 
 
 @dataclass(frozen=True)
 class ProbeLeg:
-    """Result of one inference-probe leg.
-
-    `failed` is the failure class or None; `inconclusive` marks a local
-    control-pool timeout.
-    """
-
     failed: str | None = None
     inconclusive: bool = False
 
 
 @dataclass(frozen=True)
 class InferenceProbe:
-    """Outcome of the two-leg inference verification against one engine."""
-
     prefill: ProbeLeg
     decode: ProbeLeg
 
 
+@dataclass
+class PairedHandoff:
+    connector: str
+    result: PrefillResult | None = None
+    rendezvous: dict[str, Any] | None = None
+    decode_wait_s: float | None = None
+    prefill_seconds: float | None = None
+    # A rendezvous prefill leg runs while its decode leg streams.
+    prefill: asyncio.Task[None] | None = field(default=None, repr=False)
+
+    @property
+    def descriptor_json(self) -> str:
+        if self.result is not None:
+            return self.result.descriptor_json
+        return json.dumps(self.rendezvous or {}, sort_keys=True)
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return self.result.parameters() if self.result is not None else dict(self.rendezvous or {})
+
+
+def _prefill_failure(task: asyncio.Task[None]) -> BaseException | None:
+    if not task.done() or task.cancelled():
+        return None
+    return task.exception()
+
+
 def _status_class(status: int) -> str:
-    """Breaker class for a probe leg's non-200 answer."""
     return LEG_OVERLOAD if status in (408, 429) else LEG_INFERENCE_STATUS
 
 
 class EngineClient:
-    """Pooled HTTP client with separate request and control connections.
-
-    Health and recovery probes use the reserved control pool.
-    """
-
     def __init__(
         self,
         *,
@@ -162,14 +166,14 @@ class EngineClient:
         connect_timeout_s: float = 10.0,
         health_timeout_s: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
-        kv: KvConnector | None = None,
-        dialect: EngineDialect | None = None,
+        kv: KvHandoff,
+        dialect: EngineDialect,
         model: str = "",
         engine_api_key: str | None = None,
         dial: Dial = dial_tcp,
     ) -> None:
-        self.kv = kv or NixlConnector()
-        self.dialect = dialect or VllmDialect()
+        self.kv = kv
+        self.dialect = dialect
         # The served model name used in inference-probe requests.
         self.model = model
         # Bounds gaps between transport chunks; 0 disables the bound.
@@ -186,13 +190,14 @@ class EngineClient:
             connect_timeout_s=connect_timeout_s,
             pool_timeout_s=pool_timeout_s,
             dial=dial,
+            keepalive_expiry_s=dialect.keepalive_expiry_s,
         )
         self._control = httpx.AsyncClient(
             timeout=self._data_timeout,
             limits=httpx.Limits(
                 max_connections=control_connections,
                 max_keepalive_connections=max(1, control_connections // 2),
-                keepalive_expiry=KEEPALIVE_EXPIRY_S,
+                keepalive_expiry=dialect.keepalive_expiry_s,
             ),
             transport=transport,
         )
@@ -212,12 +217,10 @@ class EngineClient:
         return out
 
     async def aclose(self) -> None:
-        """Close all pooled connections."""
         await self._wire.aclose()
         await self._control.aclose()
 
     def _phase_timeout(self, budget_s: float) -> httpx.Timeout:
-        """Keep connection and pool limits when a leg sets its own budget."""
         return httpx.Timeout(
             budget_s,
             connect=min(self._connect_timeout, budget_s),
@@ -225,12 +228,6 @@ class EngineClient:
         )
 
     async def healthy(self, url: str) -> bool | None:
-        """Probe the engine through the control pool.
-
-        Return True on success, False on an endpoint-side failure, and None when
-        the control pool is exhausted or a timeout surfaces beyond
-        `LATE_TIMEOUT_FACTOR` times the health budget.
-        """
         loop = asyncio.get_running_loop()
         # Lateness counts from the first connection event, after any wait for the pool.
         started = [loop.time()]
@@ -259,21 +256,12 @@ class EngineClient:
     async def token_count(
         self, url: str, body: dict[str, Any], timeout_s: float, *, strict: bool = False
     ) -> int | None:
-        """Ask the engine for the exact input length within `timeout_s`.
-
-        Without `strict`, an unavailable count returns None; with it, the failure raises.
-        """
         result = await self.tokenize(url, body, timeout_s, strict=strict)
         return None if result is None else result.count
 
     async def tokenize(
         self, url: str, body: dict[str, Any], timeout_s: float, *, strict: bool = False
     ) -> Tokenization | None:
-        """Ask the engine for the exact input length and prompt token IDs.
-
-        Failures follow `token_count`; token IDs are None when absent or inconsistent
-        with the count.
-        """
         if self.dialect.tokenize_path is None:
             return None
         try:
@@ -312,23 +300,152 @@ class EngineClient:
         token_ids = self.dialect.tokenize_token_ids(payload)
         return Tokenization(count, None if token_ids is None else tuple(token_ids))
 
-    def _prefill_leg(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Build the forced one-token prefill leg out of a request body."""
-        leg = {
-            **body,
-            "max_tokens": 1,
-            "stream": False,
-            **self.kv.prefill_params(),
-        }
+    @property
+    def descriptor_kv(self) -> KvConnector:
+        if not isinstance(self.kv, KvConnector):
+            raise TypeError(f"connector {self.kv.name!r} has no prefill descriptor")
+        return self.kv
+
+    def _prefill_leg(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        leg = {**body, "max_tokens": 1, "stream": False}
+        if isinstance(self.kv, RendezvousConnector):
+            leg = self.kv.prefill_body(leg, rendezvous or {})
+        else:
+            leg.update(self.descriptor_kv.prefill_params())
         for name in self.dialect.prefill_incompatible:
             leg.pop(name, None)
         return leg
 
+    def _tag(
+        self, leg: dict[str, Any], headers: dict[str, str], request_id: str | None
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        if request_id is None:
+            return leg, headers
+        extra_headers, fields = self.dialect.request_id(request_id)
+        names = {name.lower() for name in extra_headers}
+        kept = {k: v for k, v in headers.items() if k.lower() not in names}
+        return {**leg, **fields}, {**kept, **extra_headers}
+
     async def prefill(
-        self, url: str, endpoint: str, body: dict[str, Any], headers: dict[str, str]
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        request_id: str | None = None,
     ) -> PrefillResult:
-        """Run prefill and bind the handoff to its producer and request ID."""
-        leg = self._prefill_leg(body)
+        r = await self._post_prefill(url, endpoint, self._prefill_leg(body), headers, request_id)
+        try:
+            return self.descriptor_kv.prefill_result(
+                r.json(), url=url, endpoint=endpoint, request_id=request_id
+            )
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+            raise EngineError(
+                "prefill",
+                url,
+                200,
+                f"{NO_HANDOFF_DETAIL}: invalid {self.kv.name} descriptor: {exc}",
+            ) from exc
+
+    async def start_handoff(
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        producer: Mapping[str, Any] | None = None,
+    ) -> PairedHandoff:
+        started = time.monotonic()
+        if isinstance(self.kv, RendezvousConnector):
+            rendezvous = self.kv.rendezvous(producer or {})
+            handoff = PairedHandoff(
+                self.kv.name, rendezvous=rendezvous, decode_wait_s=self.kv.decode_wait_s
+            )
+
+            async def run() -> None:
+                await self.rendezvous_prefill(url, endpoint, body, headers, rendezvous)
+                handoff.prefill_seconds = time.monotonic() - started
+
+            handoff.prefill = asyncio.create_task(run())
+            return handoff
+        result = await self.prefill(url, endpoint, body, headers)
+        return PairedHandoff(
+            self.kv.name, result=result, prefill_seconds=time.monotonic() - started
+        )
+
+    async def decode_handoff(
+        self,
+        handoff: PairedHandoff,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        first_token_timeout_s: float | None = None,
+    ) -> AsyncGenerator[list[SseEvent], None]:
+        task = handoff.prefill
+        if task is None:
+            async for batch in self.decode(
+                url,
+                endpoint,
+                body,
+                headers,
+                handoff.result,
+                first_token_timeout_s=first_token_timeout_s,
+            ):
+                yield batch
+            return
+        limit = min(first_token_timeout_s or math.inf, handoff.decode_wait_s or math.inf)
+        finished = False
+        try:
+            async for batch in self.decode(
+                url,
+                endpoint,
+                body,
+                headers,
+                None,
+                first_token_timeout_s=None if math.isinf(limit) else limit,
+                rendezvous=handoff.rendezvous,
+            ):
+                yield batch
+            finished = True
+        except EngineError as exc:
+            # A decode leg without its prefill only times out; the prefill error is the cause.
+            failure = _prefill_failure(task)
+            if failure is not None:
+                raise failure from exc
+            raise
+        finally:
+            if not finished and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await task
+
+    async def rendezvous_prefill(
+        self,
+        url: str,
+        endpoint: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        rendezvous: dict[str, Any],
+        *,
+        request_id: str | None = None,
+    ) -> None:
+        leg = self._prefill_leg(body, rendezvous)
+        await self._post_prefill(url, endpoint, leg, headers, request_id)
+
+    async def _post_prefill(
+        self,
+        url: str,
+        endpoint: str,
+        leg: dict[str, Any],
+        headers: dict[str, str],
+        request_id: str | None,
+    ) -> WireResponse:
+        leg, headers = self._tag(leg, headers, request_id)
         io_started = False
 
         def started() -> None:
@@ -355,23 +472,7 @@ class EngineClient:
             ) from exc
         if r.status_code != 200:
             raise EngineError("prefill", url, r.status_code, r.text)
-
-        try:
-            return self.kv.prefill_result(
-                r.json(),
-                url=url,
-                endpoint=endpoint,
-                request_id=next(
-                    (v for k, v in headers.items() if k.lower() == "x-request-id"), None
-                ),
-            )
-        except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
-            raise EngineError(
-                "prefill",
-                url,
-                200,
-                f"{NO_HANDOFF_DETAIL}: invalid {self.kv.name} descriptor: {exc}",
-            ) from exc
+        return r
 
     async def decode(
         self,
@@ -381,16 +482,18 @@ class EngineClient:
         headers: dict[str, str],
         kv_params: PrefillResult | None,
         first_token_timeout_s: float | None = None,
+        *,
+        request_id: str | None = None,
+        rendezvous: dict[str, Any] | None = None,
     ) -> AsyncGenerator[list[SseEvent], None]:
-        """Stream the decode leg's SSE events, one batch per transport read.
-
-        The first-token deadline covers opening the stream; the read timeout
-        bounds chunk gaps after the first token.
-        """
         try:
-            leg = self.kv.decode_body(body, kv_params, url=url, endpoint=endpoint)
+            if isinstance(self.kv, RendezvousConnector):
+                leg = self.kv.decode_body({**body, "stream": True}, rendezvous or {})
+            else:
+                leg = self.descriptor_kv.decode_body(body, kv_params, url=url, endpoint=endpoint)
         except (ValueError, TypeError) as exc:
             raise EngineError("decode", url, 502, f"invalid continuation: {exc}") from exc
+        leg, headers = self._tag(leg, headers, request_id)
 
         budget_s = first_token_timeout_s or 0.0
         deadline = asyncio.get_running_loop().time() + budget_s if budget_s > 0 else None
@@ -471,15 +574,20 @@ class EngineClient:
                 yield relayed
 
     async def probe_inference(
-        self, url: str, *, prefill_url: str | None = None, deadline_s: float | None = None
+        self,
+        url: str,
+        *,
+        prefill_url: str | None = None,
+        deadline_s: float | None = None,
+        producer: Mapping[str, Any] | None = None,
     ) -> InferenceProbe | None:
-        """Verify an engine's inference path, or return None without a model.
-
-        `prefill_url` selects the producer for a crossed transfer probe.
-        """
         if not self.model:
             return None
         prompt = f"{uuid4().hex} {_PROBE_PROMPT}"
+        if isinstance(self.kv, RendezvousConnector):
+            return await self._probe_rendezvous(
+                self.kv, url, prefill_url or url, producer or {}, prompt, deadline_s
+            )
         handoff: list[PrefillResult] = []
         try:
             async with asyncio.timeout(deadline_s):
@@ -500,11 +608,51 @@ class EngineClient:
             decode = ProbeLeg(failed=LEG_STREAM)
         return InferenceProbe(prefill=prefill, decode=decode)
 
+    async def _probe_rendezvous(
+        self,
+        kv: RendezvousConnector,
+        url: str,
+        prefill_url: str,
+        producer: Mapping[str, Any],
+        prompt: str,
+        deadline_s: float | None,
+    ) -> InferenceProbe:
+        rendezvous = kv.rendezvous(producer)
+
+        async def bounded(leg: Awaitable[ProbeLeg], limit: float | None, late: str) -> ProbeLeg:
+            try:
+                async with asyncio.timeout(limit):
+                    return await leg
+            except TimeoutError:
+                return ProbeLeg(failed=late)
+
+        decode_limit = min(deadline_s or math.inf, kv.decode_wait_s)
+        prefill, decode = await asyncio.gather(
+            bounded(
+                self._probe_prefill(prefill_url, prompt=prompt, rendezvous=rendezvous),
+                deadline_s,
+                LEG_TIMEOUT,
+            ),
+            bounded(
+                self._probe_decode(url, prompt=prompt, rendezvous=rendezvous),
+                decode_limit,
+                LEG_STREAM,
+            ),
+        )
+        if prefill.failed or prefill.inconclusive:
+            # Decode cannot finish without its prefill leg, so its result says nothing.
+            decode = ProbeLeg(inconclusive=True)
+        return InferenceProbe(prefill=prefill, decode=decode)
+
     async def _probe_prefill(
-        self, url: str, *, handoff: list[PrefillResult] | None = None, prompt: str = _PROBE_PROMPT
+        self,
+        url: str,
+        *,
+        handoff: list[PrefillResult] | None = None,
+        prompt: str = _PROBE_PROMPT,
+        rendezvous: dict[str, Any] | None = None,
     ) -> ProbeLeg:
-        """Run the prefill leg of the inference probe on the control pool."""
-        body = self._prefill_leg({"model": self.model, "prompt": prompt})
+        body = self._prefill_leg({"model": self.model, "prompt": prompt}, rendezvous)
         try:
             r = await self._control.post(
                 f"{url}{_PROBE_ENDPOINT}",
@@ -518,8 +666,10 @@ class EngineClient:
             return ProbeLeg(failed=leg_failure_class(exc))
         if r.status_code != 200:
             return ProbeLeg(failed=_status_class(r.status_code))
+        if rendezvous is not None:
+            return ProbeLeg()
         try:
-            result = self.kv.prefill_result(
+            result = self.descriptor_kv.prefill_result(
                 r.json(), url=url, endpoint=_PROBE_ENDPOINT, request_id=None
             )
         except (ValueError, TypeError, KeyError, IndexError, AttributeError):
@@ -530,9 +680,13 @@ class EngineClient:
         return ProbeLeg()
 
     async def _probe_decode(
-        self, url: str, *, kv_params: PrefillResult | None = None, prompt: str = _PROBE_PROMPT
+        self,
+        url: str,
+        *,
+        kv_params: PrefillResult | None = None,
+        prompt: str = _PROBE_PROMPT,
+        rendezvous: dict[str, Any] | None = None,
     ) -> ProbeLeg:
-        """Run the streamed decode leg of the inference probe on the control pool."""
         body = {
             "model": self.model,
             "prompt": prompt,
@@ -541,7 +695,12 @@ class EngineClient:
             # A model may end this prompt at once.
             **self.dialect.decode_probe_extras(1),
         }
-        body = self.kv.decode_body(body, kv_params, url=url, endpoint=_PROBE_ENDPOINT)
+        if rendezvous is not None and isinstance(self.kv, RendezvousConnector):
+            body = self.kv.decode_body(body, rendezvous)
+        else:
+            body = self.descriptor_kv.decode_body(
+                body, kv_params, url=url, endpoint=_PROBE_ENDPOINT
+            )
         timeouts = self._control.timeout.as_dict()
         # probe_inference's per-leg deadline bounds the wait for the first token.
         timeouts["read"] = None
@@ -574,7 +733,6 @@ class EngineClient:
 
 
 def _first_token_detail(budget_s: float, metadata: int) -> str:
-    """Name which pre-token phase spent the absolute first-token deadline."""
     if metadata:
         frames = f"{metadata} metadata frame" + ("s" if metadata != 1 else "")
         return f"{FIRST_OUTPUT_DETAIL} {budget_s:g}s: {frames} but no token"

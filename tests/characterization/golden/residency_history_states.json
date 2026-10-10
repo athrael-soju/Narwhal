@@ -1,0 +1,68 @@
+{
+  "empty": {
+    "block_size": null,
+    "groups": [],
+    "known": true,
+    "reason": "no cache events published",
+    "sequence": -1
+  },
+  "gap": {
+    "block_size": 4,
+    "groups": [],
+    "known": false,
+    "reason": "sequence gap after 0; waiting for a cache reset",
+    "sequence": 2
+  },
+  "late start": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "history before sequence 3 is unavailable; waiting for a cache reset",
+    "sequence": 3
+  },
+  "repeat": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 0
+  },
+  "replaying": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "replaying buffered history",
+    "sequence": -1
+  },
+  "reset after loss": {
+    "block_size": null,
+    "groups": [],
+    "known": true,
+    "reason": "cache reset",
+    "sequence": 4
+  },
+  "unknown type": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "unreadable cache event in sequence 0; waiting for a cache reset",
+    "sequence": 0
+  },
+  "unreadable": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "unreadable cache event in sequence 0; waiting for a cache reset",
+    "sequence": 0
+  }
+}

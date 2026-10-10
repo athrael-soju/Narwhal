@@ -6,7 +6,7 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 [Narwhal dev](../Dev-Runtime.md) runs the native NVIDIA CUDA backend on Ubuntu or Ubuntu under WSL2.
 
-A template selects the model, runtime, and memory budget. The installed template runs one prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) is a measured four-engine configuration.
+A template selects the model, runtime, and memory budget. The installed template runs one prefill and one decode engine on a selected NVIDIA GPU with 8 GB of VRAM or less. The optional [RTX 5090 reference](../dev/RTX-5090-Reference.md) is a measured four-engine configuration. The installed [SGLang template](../Dev-Runtime.md#running-sglang-engines) runs SGLang engines.
 
 ## Lifecycle
 
@@ -80,14 +80,14 @@ Print the installed distribution version with `narwhal --version`.
 | `--instance` | `runs/dev` | Private instance directory. | |
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). | |
 | `--template` | Installed small-GPU template | Template file with versioned model, tokenizer, runtime, profiling, and memory settings. | |
-| `--model` | Pinned Hugging Face cache file | GGUF file matching the template checksum. | |
+| `--model` | Pinned Hugging Face cache file or snapshot | GGUF file or checkpoint directory matching the template checksums. | |
 | `--model-dir` | Pinned tokenizer cache directory | Directory of tokenizer and configuration files. | |
 | `--gpu` | Single discovered GPU | Physical GPU UUID. | |
 | `--engine-count` | Template value, `2` | Number of independent engine processes. | 2 to 8 |
-| `--port-base` | Template ports (router 18000, engine 18101, attestation 18201, NIXL 5701) | Base port for the router, engine HTTP, attestation, and NIXL ports. | |
+| `--port-base` | Template ports (router 18000, engine 18101, attestation 18201, KV side channel 5701) | Base port for the router, engine HTTP, attestation, and KV side-channel ports. | |
 | `--gpu-memory-utilization` | Template value, `0.35` | Per-engine fraction of total GPU memory. | Finite, above zero, at most 1 |
 | `--device-allowance` | Template value, `0.8` | Fraction of total GPU memory bounding the sum of engine fractions and the observed startup memory increase. | Finite, at most 1 |
-| `--interface` | `eth0` | Local NIXL/UCX network interface. | |
+| `--interface` | `eth0` | Local KV transfer network interface. | |
 
 `--port-base P` port layout:
 

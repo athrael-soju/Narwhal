@@ -1,0 +1,212 @@
+{
+  "engine_requests": [
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://stub-0:8000/version"
+    }
+  ],
+  "responses": {
+    "attestation": {
+      "body": {
+        "attestation_digest": "sha256:ccab354b1094de49efb8edf1a74bcef766f8c8a823e3051bc786f31274ae38c4",
+        "contract": {
+          "attention_backend": "TEST",
+          "connector": "NixlConnector",
+          "connector_version": 1,
+          "cross_layers_blocks": false,
+          "enforce_handshake_compat": true,
+          "engine_version": "1.0.0",
+          "head_size": 1,
+          "hidden_layers": 1,
+          "hybrid_kv_cache_manager": false,
+          "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "kv_cache_dtype": "auto",
+          "kv_heads": 1,
+          "kv_role": "kv_both",
+          "model_architecture": "TestForCausalLM",
+          "model_dtype": "float32",
+          "speculative_config": "disabled",
+          "transfer_mode": "pull",
+          "transfer_version": "test"
+        },
+        "engine": {
+          "process_start_time_seconds": 100.0,
+          "version": "1.0.0"
+        },
+        "launch": {
+          "args": [
+            "--max-num-seqs",
+            "64",
+            "--kv-transfer-config",
+            "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_connector_extra_config\": {\"kv_lease_duration\": 30}}"
+          ]
+        },
+        "launch_digest": "sha256:fcb13a78440b26eefb5a694175a3d0d872a270f96c229abb1c9584b5b21b5c14",
+        "schema": "narwhal.attestation",
+        "schema_version": 1,
+        "sources": {
+          "attention_backend": "fixture-launch",
+          "connector": "fixture-launch",
+          "connector_version": "fixture-launch",
+          "cross_layers_blocks": "fixture-launch",
+          "enforce_handshake_compat": "fixture-launch",
+          "engine_version": "fixture-launch",
+          "head_size": "fixture-launch",
+          "hidden_layers": "fixture-launch",
+          "hybrid_kv_cache_manager": "fixture-launch",
+          "image_digest": "fixture-launch",
+          "kv_cache_dtype": "fixture-launch",
+          "kv_heads": "fixture-launch",
+          "kv_role": "fixture-launch",
+          "model_architecture": "fixture-launch",
+          "model_dtype": "fixture-launch",
+          "speculative_config": "fixture-launch",
+          "transfer_mode": "fixture-launch",
+          "transfer_version": "fixture-launch"
+        }
+      },
+      "status": 200
+    },
+    "attestation_after_restart": {
+      "body": {
+        "detail": "engine process changed; restart the attestation sidecar"
+      },
+      "status": 503
+    },
+    "health": {
+      "body": {
+        "status": "ok"
+      },
+      "status": 200
+    },
+    "health_while_unreachable": {
+      "status": 503
+    },
+    "residency": {
+      "body": {
+        "block_size": null,
+        "epoch": "<epoch>",
+        "groups": [],
+        "known": true,
+        "process_start_time_seconds": 100.0,
+        "reason": "complete event history",
+        "sequence": 1
+      },
+      "status": 200
+    },
+    "residency_events": {
+      "body": {
+        "block_size": null,
+        "changes": [
+          {
+            "cleared": false,
+            "groups": {},
+            "sequence": 1
+          }
+        ],
+        "epoch": "<epoch>",
+        "reason": "complete event history",
+        "sequence": 1
+      },
+      "status": 200
+    },
+    "residency_events_after_loss": {
+      "body": {
+        "detail": "resynchronise from the residency snapshot"
+      },
+      "status": 410
+    },
+    "residency_without_feed": {
+      "body": {
+        "detail": "engine publishes no cache events"
+      },
+      "status": 404
+    }
+  }
+}

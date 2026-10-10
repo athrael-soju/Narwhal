@@ -1,13 +1,13 @@
-"""Strict fleet JSON parsing."""
-
 from __future__ import annotations
 
 import json
 import math
 from dataclasses import fields
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
+from ..backends import DEFAULT_BACKEND
+from ..backends import load as load_backend
 from ..contracts import FLEET, ContractVersionError, validate_document
 from ..scheduling.control import SLO, Thresholds
 from ..serving.policy import ServingPolicy
@@ -20,11 +20,11 @@ from .model import (
     HardwareSpec,
     ProfileValidationPolicy,
     SharedDeviceAllocation,
+    current_contract_names,
 )
 
 
 def load(path: str | Path) -> FleetConfig:
-    """Load a fleet config and report all detectable schema errors."""
     raw = json.loads(Path(path).read_text(), parse_constant=_reject_constant)
     try:
         validate_document(raw, FLEET)
@@ -183,30 +183,40 @@ def load(path: str | Path) -> FleetConfig:
         contract_raw = None
     engine_contract: EngineContract | None = None
     if contract_raw is not None:
+        try:
+            contract_raw = current_contract_names(contract_raw)
+        except ValueError as exc:
+            problems.append(str(exc))
         _check_unknown(problems, "engine_contract", contract_raw, _ENGINE_CONTRACT_KEYS)
-        handshake = _read_bool(
-            problems,
-            "engine_contract.enforce_handshake_compat",
-            contract_raw.get("enforce_handshake_compat", True),
+        attested = _attested_fields(engine_raw)
+        # A backend without a handshake check leaves the field null.
+        checks_handshake = attested is None or "enforce_handshake_compat" in attested
+        handshake_raw = contract_raw.get("enforce_handshake_compat", checks_handshake or None)
+        handshake = (
+            None
+            if handshake_raw is None and not checks_handshake
+            else _read_bool(problems, "engine_contract.enforce_handshake_compat", handshake_raw)
         )
         for name in ("cross_layers_blocks", "hybrid_kv_cache_manager"):
             value = contract_raw.get(name)
             if value is not None and not isinstance(value, bool):
                 problems.append(f"engine_contract.{name} must be a boolean or null")
         engine_contract = EngineContract(
-            vllm_version=_read_str(
-                problems, "engine_contract.vllm_version", contract_raw.get("vllm_version", "")
+            engine_version=_read_str(
+                problems, "engine_contract.engine_version", contract_raw.get("engine_version", "")
             ),
             image_digest=_read_str(
                 problems, "engine_contract.image_digest", contract_raw.get("image_digest", "")
             ),
-            nixl_version=_read_str(
-                problems, "engine_contract.nixl_version", contract_raw.get("nixl_version", "")
-            ),
-            nixl_connector_version=_read_int(
+            transfer_version=_read_str(
                 problems,
-                "engine_contract.nixl_connector_version",
-                contract_raw.get("nixl_connector_version", 0),
+                "engine_contract.transfer_version",
+                contract_raw.get("transfer_version", ""),
+            ),
+            connector_version=_read_int(
+                problems,
+                "engine_contract.connector_version",
+                contract_raw.get("connector_version", 0),
             ),
             model_architecture=_read_str(
                 problems,
@@ -242,7 +252,7 @@ def load(path: str | Path) -> FleetConfig:
             connector=_read_str(
                 problems,
                 "engine_contract.connector",
-                contract_raw.get("connector", "NixlConnector"),
+                contract_raw.get("connector", _contract_connector(engine_raw)),
             ),
             kv_role=_read_str(problems, "engine_contract.kv_role", contract_raw.get("kv_role", "")),
             transfer_mode=_read_str(
@@ -481,8 +491,9 @@ def load(path: str | Path) -> FleetConfig:
         resume=_read_bool(problems, "recovery.resume", recovery_raw.get("resume", False)),
         min_prefill=min_prefill,
         min_decode=min_decode,
-        connector=_read_str(problems, "engine.connector", engine_raw.get("connector", "nixl")),
-        dialect=_read_str(problems, "engine.dialect", engine_raw.get("dialect", "vllm")),
+        backend=_read_str(problems, "engine.backend", engine_raw.get("backend", DEFAULT_BACKEND)),
+        connector=_read_str(problems, "engine.connector", engine_raw.get("connector", "")),
+        dialect=_read_str(problems, "engine.dialect", engine_raw.get("dialect", "")),
         engine_contract=engine_contract,
         hardware=hardware,
         profile_validation=profile_validation,
@@ -578,6 +589,7 @@ _SERVING_KEYS = {
     *(f.name for f in fields(ServingPolicy)),
 }
 _ENGINE_KEYS = {
+    "backend",
     "connector",
     "dialect",
     "tokenize",
@@ -617,10 +629,10 @@ _PROFILE_KEYS = {"path", "max_decode_fit_mape", "max_decode_cv_mape"}
 
 
 _ENGINE_CONTRACT_KEYS = {
-    "vllm_version",
+    "engine_version",
     "image_digest",
-    "nixl_version",
-    "nixl_connector_version",
+    "transfer_version",
+    "connector_version",
     "model_architecture",
     "model_dtype",
     "kv_heads",
@@ -641,13 +653,29 @@ _ENGINE_CONTRACT_KEYS = {
 _HARDWARE_KEYS = {"accelerator", "accelerators_per_engine", "tensor_parallel"}
 
 
+def _attested_fields(engine_raw: dict[str, Any]) -> frozenset[str] | None:
+    try:
+        backend = load_backend(str(engine_raw.get("backend", DEFAULT_BACKEND)))
+        return backend.identity.contract_fields
+    except ValueError:
+        return None
+
+
+def _contract_connector(engine_raw: dict[str, Any]) -> str:
+    try:
+        backend = load_backend(str(engine_raw.get("backend", DEFAULT_BACKEND)))
+        name = str(engine_raw.get("connector", backend.default_connector))
+        return backend.connector(name).contract_name
+    except ValueError:
+        return ""
+
+
 def _reject_constant(name: str) -> NoReturn:
     # Fleet values must be finite; NaN passes every range comparison.
     raise ValueError(f"non-finite JSON constant {name}")
 
 
 def _read_bool(problems: list[str], name: str, value: object) -> bool:
-    """Accept a JSON boolean; anything else is one named problem."""
     if not isinstance(value, bool):
         problems.append(f"{name} must be a boolean")
         return False
@@ -655,7 +683,6 @@ def _read_bool(problems: list[str], name: str, value: object) -> bool:
 
 
 def _read_str(problems: list[str], name: str, value: object) -> str:
-    """Accept a JSON string; anything else is one named problem."""
     if not isinstance(value, str):
         problems.append(f"{name} must be a string")
         return ""
@@ -663,7 +690,6 @@ def _read_str(problems: list[str], name: str, value: object) -> str:
 
 
 def _read_int(problems: list[str], name: str, value: object) -> int:
-    """Accept a JSON integer, excluding Python's bool subclass."""
     if not isinstance(value, int) or isinstance(value, bool):
         problems.append(f"{name} must be an integer")
         return 0
@@ -671,7 +697,6 @@ def _read_int(problems: list[str], name: str, value: object) -> int:
 
 
 def _read_float(problems: list[str], name: str, value: object) -> float:
-    """Accept a JSON number, widening integers to float and rejecting booleans."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         problems.append(f"{name} must be a number")
         return 0.0
@@ -686,7 +711,6 @@ def _read_float(problems: list[str], name: str, value: object) -> float:
 
 
 def _read_section(problems: list[str], raw: dict, name: str) -> dict:
-    """Return one top-level section object, or `{}` when absent or invalid."""
     value = raw.get(name)
     if value is None:
         return {}
@@ -697,7 +721,6 @@ def _read_section(problems: list[str], raw: dict, name: str) -> dict:
 
 
 def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) -> dict:
-    """Return one nested section object, reporting problems under path `name`."""
     value = raw.get(key)
     if value is None:
         return {}
@@ -708,7 +731,6 @@ def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) ->
 
 
 def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -> None:
-    """Report unknown keys in one section; underscore-prefixed keys are annotations."""
     unknown = sorted(key for key in raw if key not in known and not key.startswith("_"))
     problems.extend(
         f"unknown {name} key {key!r} (a typo falls back to the default silently)" for key in unknown
@@ -716,6 +738,5 @@ def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -
 
 
 def _unknown_keys(raw: dict) -> list[str]:
-    """Report unknown top-level keys; underscore-prefixed keys are annotations."""
     unknown = sorted(k for k in raw if k not in _KNOWN_KEYS and not k.startswith("_"))
     return [f"unknown key {k!r} (a typo falls back to the default silently)" for k in unknown]

@@ -1,11 +1,9 @@
-"""Check the KV handoff bound from attested producer leases and every handoff expiry."""
-
 import asyncio
 import json
 import time
 import unittest
 
-from narwhal.engines.attestation import attested_kv_lease
+from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.serving.handoff import handoff_bound
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.seats import decode_seats
@@ -45,15 +43,15 @@ class AttestedLeaseTests(unittest.TestCase):
             (None, None),
         ):
             with self.subTest(payload=payload):
-                self.assertEqual(attested_kv_lease(payload), lease)
+                self.assertEqual(VllmIdentity().kv_lease(payload), lease)
         other = json.loads(connector(kv_lease_duration=30))
         other["kv_connector"] = "LMCacheConnector"
-        self.assertIsNone(attested_kv_lease(attestation("--kv-transfer-config", json.dumps(other))))
+        self.assertIsNone(
+            VllmIdentity().kv_lease(attestation("--kv-transfer-config", json.dumps(other)))
+        )
 
 
 class HandoffExpiryTests(HttpHarness):
-    """Each handoff expiry returns 504 handoff_expired and counts as expired by `handoff`."""
-
     def lease(self, iid, seconds):
         self.router.attested(
             iid, attestation("--kv-transfer-config", connector(kv_lease_duration=seconds))

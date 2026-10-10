@@ -1,5 +1,3 @@
-"""Keep public parser help and operator reference tables aligned."""
-
 import argparse
 import importlib
 import io
@@ -10,8 +8,8 @@ from contextlib import redirect_stdout, suppress
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.backends.vllm import runtime as launch_runtime
 from narwhal.deployment.launch_engine import cli as engine_cli
-from narwhal.deployment.launch_engine import runtime as launch_runtime
 from tests.fixtures import ROOT
 
 REFERENCES = {

@@ -1,9 +1,3 @@
-"""Capture vLLM's resolved KV pages during a normal serving startup.
-
-The launcher installs this file as sitecustomize.py in a private, read-only
-container mount.
-"""
-
 import hashlib
 import json
 import os

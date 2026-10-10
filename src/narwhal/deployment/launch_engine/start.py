@@ -1,5 +1,3 @@
-"""Start checked serving containers, alone or several on one shared GPU."""
-
 from __future__ import annotations
 
 import json
@@ -14,6 +12,7 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 from .. import stages
+from .backend import plan_launcher
 from .check import require_checked
 from .docker import docker, run_runtime_script
 from .plan import container_options, env_file_name, load, read_env
@@ -66,7 +65,6 @@ def start(run: Path, plan: dict) -> None:
 
 
 def gpu_memory(gpu_uuid: str) -> dict[str, int]:
-    """Read live device pressure before advancing a shared-GPU startup."""
     executable = shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
     result = subprocess.run(
         [
@@ -91,7 +89,6 @@ def gpu_memory(gpu_uuid: str) -> dict[str, int]:
 
 
 def validate_shared_gpu(run: Path, plan: dict) -> None:
-    """Bind the serving CUDA selection to the UUID used for shared memory accounting."""
     values = read_env(run / env_file_name(plan))
     selected = values.get("CUDA_VISIBLE_DEVICES", "")
     expected = plan["shared_device"]["gpu_uuid"]
@@ -127,7 +124,6 @@ print('NARWHAL_SHARED_GPU=GPU-' + str(UUID(bytes=bytes(device.uuid.bytes))))
 def validate_shared_runs(
     runs: list[Path], *, backend: str = "container"
 ) -> list[tuple[Path, dict]]:
-    """Check every budget and port before starting a colocated engine."""
     if backend not in {"container", "native"}:
         raise ValueError(f"unsupported engine launch backend: {backend}")
     if not 2 <= len(runs) <= 8 or len(set(runs)) != len(runs):
@@ -169,7 +165,7 @@ def validate_shared_runs(
         for label, port in (
             ("engine", urlsplit(plan["endpoint"]).port),
             ("attestation", plan["attestation_port"]),
-            ("NIXL", plan["side_channel_port"]),
+            (plan_launcher(plan).side_channel, plan["side_channel_port"]),
         ):
             if port in ports:
                 raise ValueError(f"{role} {label} port {port} collides with {ports[port]}")
@@ -290,7 +286,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     status="running",
                     process_id=state["Pid"],
                     image_id=image_id,
-                    vllm_args=command,
+                    **{plan_launcher(plan).args_field: command},
                     gpu_after=after,
                     observed_delta_mib=after["used_mib"] - before["used_mib"],
                     aggregate_delta_mib=aggregate_delta,

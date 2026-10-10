@@ -113,7 +113,7 @@ The group's `gpu_memory_utilization` values sum to at most its `device_allowance
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` sets every [contract field](#contract-fields) to a nonempty string, positive integer or boolean. `image_digest` is optional.
+A complete `engine_contract` sets every [contract field](#contract-fields) that the engine backend attests to a nonempty string, positive integer or boolean. `image_digest` is optional. SGLang attests every field except `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat`, which stay `0`, `null` or `""`.
 
 With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
 
@@ -131,10 +131,10 @@ The optional `hardware` block needs all three fields when present.
 
 | Field                      | Default           | Requirement                                                                                    |
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `vllm_version`             | required          | The exact string each engine returns from `/version`.                                          |
+| `engine_version`           | required          | The exact string each engine returns from `/version`.                                          |
 | `image_digest`             | `""`              | The immutable `sha256:<64 hex>` container digest from engine-side attestation.                 |
-| `nixl_version`             | `""`              | The NIXL package version installed in the image.                                               |
-| `nixl_connector_version`   | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
+| `transfer_version`         | `""`              | The NIXL package version installed in the image.                                               |
+| `connector_version`        | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
 | `model_architecture`       | `""`              | The model implementation name.                                                                 |
 | `model_dtype`              | `""`              | The dtype the model runs in.                                                                   |
 | `kv_heads`                 | `0`               | Positive value of `ModelConfig.get_total_num_kv_heads()` for the whole model.                  |
@@ -144,17 +144,27 @@ The optional `hardware` block needs all three fields when present.
 | `kv_cache_dtype`           | `""`              | The KV-cache dtype.                                                                            |
 | `cross_layers_blocks`      | `null`            | Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API. |
 | `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager is part of the layout.                                  |
-| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name.                                                           |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. The default is the name of `engine.connector`'s connector. |
 | `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
-| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup.                |
+| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` for SGLang. |
+
+Earlier releases named three of these fields differently. The loader and `narwhal-attest` still read the earlier names, in the fleet file, the attestation document and its `sources`:
+
+| Earlier name             | Current name        |
+| ------------------------ | ------------------- |
+| `vllm_version`           | `engine_version`    |
+| `nixl_version`           | `transfer_version`  |
+| `nixl_connector_version` | `connector_version` |
+
+A section that sets both names of one field fails to load. The rename changes the contract fingerprint and the profile generation digests, so after upgrading follow [Upgrading across the contract field rename](../operate/04-Upgrade-and-Validate.md#upgrading-across-the-contract-field-rename).
 
 Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Values to check against the live engine:
 
-- `nixl_connector_version`
+- `connector_version`
 - the resolved `head_size` dimensions
 - `cross_layers_blocks`
 - the resolved `transfer_mode` class and mode
@@ -196,7 +206,7 @@ Sidecar identity values, read at startup:
 - the engine's `/version`
 - the `process_start_time_seconds` metric from the engine's `/metrics`
 
-When `/version` at startup differs from `vllm_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
+When `/version` at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
 
 Each sidecar response carries:
 

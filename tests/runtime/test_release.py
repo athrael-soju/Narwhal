@@ -1,5 +1,3 @@
-"""Check peer release rounds after an engine ejection or drain."""
-
 import asyncio
 import os
 import runpy
@@ -9,13 +7,12 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.engines.client import InferenceProbe, ProbeLeg
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.monitoring import monitor_once
 from narwhal.runtime.release import (
-    RELEASE_AFTER_S,
-    RETRY_AFTER_S,
     PeerRelease,
     release_peers,
     release_round,
@@ -24,13 +21,15 @@ from narwhal.runtime.release import (
 from narwhal.serving.app import create_app
 from tests.fixtures import ROOT, profile
 
+FABRIC = load_backend("vllm").fabric
+RELEASE_AFTER_S = FABRIC.release_after_s
+RETRY_AFTER_S = FABRIC.release_retry_s
+
 
 class PeerReleaseScheduleTests(unittest.TestCase):
-    """Rounds follow the ejection and stop with readmission."""
-
     def test_rounds_follow_ejection_until_readmission(self):
         now = [100.0]
-        release = PeerRelease(lambda: now[0])
+        release = PeerRelease(lambda: now[0], FABRIC)
         release.track({"e5": "ejected"})
         self.assertEqual(release.due(), [])
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
@@ -56,7 +55,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
 
     def test_a_state_change_restarts_the_schedule(self):
         now = [100.0]
-        release = PeerRelease(lambda: now[0])
+        release = PeerRelease(lambda: now[0], FABRIC)
         release.track({"e5": "ejected"})
         now[0] += RELEASE_AFTER_S[0]
         self.assertEqual(release.due(), ["e5"])
@@ -67,7 +66,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
 
     def test_first_round_follows_the_launcher_engine_ttl(self):
-        from narwhal.deployment.launch_engine.plan import ENGINE_TTL_S
+        from narwhal.backends.vllm.plan import ENGINE_TTL_S
 
         self.assertGreater(RELEASE_AFTER_S[0], ENGINE_TTL_S)
         self.assertGreater(RELEASE_AFTER_S[-1], 3600.0)
@@ -76,13 +75,11 @@ class PeerReleaseScheduleTests(unittest.TestCase):
     def test_the_capture_hook_waits_through_two_release_rounds(self):
         with patch.dict(os.environ):
             os.environ.pop("NARWHAL_CAPTURE_CACHE", None)
-            hook = runpy.run_path(str(ROOT / "src/narwhal/deployment/cache_capture_hook.py"))
+            hook = runpy.run_path(str(ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"))
         self.assertGreater(hook["PEER_RELEASE_WAIT_S"], RELEASE_AFTER_S[1])
 
 
 class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
-    """Each live consumer receives one transfer probe from another producer."""
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -98,11 +95,11 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
             self.router.profiles.put(profile(spec.iid))
         self.addAsyncCleanup(self.router.engines.aclose)
         self.now = [1000.0]
-        self.router.peer_release = PeerRelease(lambda: self.now[0])
+        self.router.peer_release = PeerRelease(lambda: self.now[0], FABRIC)
         self.urls = {spec.url: spec.iid for spec in cfg.engines}
         self.calls: list[tuple[str, str]] = []
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             self.calls.append((self.urls[prefill_url], self.urls[url]))
             return InferenceProbe(prefill=ProbeLeg(), decode=ProbeLeg())
 
@@ -130,7 +127,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e3", producers)
 
     async def test_failed_producer_and_lone_consumer_are_reported(self):
-        async def failing(url, *, prefill_url=None, deadline_s=None):
+        async def failing(url, *, prefill_url=None, deadline_s=None, producer=None):
             return InferenceProbe(prefill=ProbeLeg(failed="connection"), decode=ProbeLeg())
 
         self.router.engines.probe_inference = AsyncMock(side_effect=failing)
@@ -163,7 +160,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
     async def test_missed_consumers_retry_before_the_next_round(self):
         missed = {"e1", "e3"}
 
-        async def probe(url, *, prefill_url=None, deadline_s=None):
+        async def probe(url, *, prefill_url=None, deadline_s=None, producer=None):
             consumer = self.urls[url]
             self.calls.append((self.urls[prefill_url], consumer))
             if consumer in missed:
@@ -199,7 +196,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.peer_release.tasks, set())
 
     async def test_a_retry_runs_once_through_the_next_producer(self):
-        async def failing(url, *, prefill_url=None, deadline_s=None):
+        async def failing(url, *, prefill_url=None, deadline_s=None, producer=None):
             self.calls.append((self.urls[prefill_url], self.urls[url]))
             return InferenceProbe(prefill=ProbeLeg(failed="connection"), decode=ProbeLeg())
 

@@ -1,5 +1,3 @@
-"""Keep saved cost curves tied to the live engine process and contract."""
-
 import json
 import tempfile
 import unittest
@@ -27,7 +25,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(folder.name)
         self.cfg = fleet(self.root)
         self.starts = {"e0": 100.0, "e3": 100.0}
-        self.version = self.cfg.engine_contract.vllm_version
+        self.version = self.cfg.engine_contract.engine_version
         self.by_host = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
         contract = self.cfg.engine_contract
         document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "fixture"))
@@ -47,7 +45,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         iid = self.by_host[request.url.host]
         identity = EngineIdentity(self.version, self.starts[iid])
         if request.url.path == "/version":
-            return httpx.Response(200, json={"version": identity.vllm_version})
+            return httpx.Response(200, json={"version": identity.version})
         if request.url.path == "/metrics":
             return httpx.Response(
                 200, text=f"process_start_time_seconds {identity.process_start_time_seconds}\n"

@@ -1,0 +1,71 @@
+{
+  "client_body": [
+    "data: {\"id\":\"fixture-id\",\"choices\":[]}",
+    "",
+    "data: {\"id\":\"fixture-id\",\"created\":123,\"model\":\"stub\",\"choices\":[{\"index\":0,\"text\":\"Hi\"}]}",
+    "",
+    "data: {\"id\":\"fixture-id\",\"created\":123,\"model\":\"stub\",\"choices\":[{\"index\":0,\"text\":\"!\"}],\"finish_reason\":null}",
+    "",
+    "data: {\"id\":\"fixture-id\",\"created\":123,\"model\":\"stub\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"length\"}]}",
+    "",
+    "data: [DONE]",
+    "",
+    ""
+  ],
+  "client_status": 200,
+  "engine_calls": [
+    {
+      "body": {
+        "add_special_tokens": false,
+        "model": "stub",
+        "prompt": "hello"
+      },
+      "engine": "stub-1",
+      "method": "POST",
+      "path": "/tokenize",
+      "x-request-id": null
+    },
+    {
+      "body": {
+        "add_special_tokens": false,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "hello",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "method": "POST",
+      "path": "/v1/completions",
+      "x-request-id": "<rid>-a1-prefill"
+    },
+    {
+      "body": {
+        "add_special_tokens": false,
+        "best_of": 1,
+        "kv_transfer_params": {
+          "remote_block_ids": [
+            1,
+            2
+          ],
+          "remote_engine_id": "p"
+        },
+        "max_tokens": 4,
+        "model": "stub",
+        "prompt": "hello",
+        "return_token_ids": true,
+        "stream": true,
+        "stream_interval": 1,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "engine": "stub-1",
+      "method": "POST",
+      "path": "/v1/completions",
+      "x-request-id": "<rid>-a1-decode"
+    }
+  ]
+}

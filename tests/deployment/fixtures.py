@@ -1,5 +1,3 @@
-"""Reusable synthetic engine allocation and serving inputs."""
-
 import contextlib
 import ctypes
 import hashlib
@@ -14,8 +12,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from narwhal.deployment.launch_engine import captures as launch_captures
-from narwhal.deployment.launch_engine import check as launch_check
+from narwhal.backends.vllm import captures as launch_captures
+from narwhal.backends.vllm import check as launch_check
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import start as launch_start
 from narwhal.deployment.launch_engine.runtime import digest
@@ -28,7 +26,6 @@ DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start)
 
 @contextlib.contextmanager
 def patched_docker(**kwargs):
-    """Patch `docker` in every launcher module that calls it; yield the shared mock."""
     mock = MagicMock(**kwargs)
     with contextlib.ExitStack() as stack:
         for module in DOCKER_CALLERS:
@@ -37,7 +34,6 @@ def patched_docker(**kwargs):
 
 
 def cache_settings_line(plan, *, prefix_caching=True):
-    """Report the cache settings a runtime check resolves for `plan`."""
     events = plan.get("kv_events")
     return "NARWHAL_CACHE_SETTINGS=" + json.dumps(
         {
@@ -50,7 +46,6 @@ def cache_settings_line(plan, *, prefix_caching=True):
 
 
 def engine_config_modules():
-    """Stand in for vLLM argument resolution of prefix caching and cache events."""
 
     class FlexibleArgumentParser:
         def parse_args(self, arguments):
@@ -94,7 +89,6 @@ def engine_config_modules():
 
 @contextlib.contextmanager
 def process_group_with_worker():
-    """Reap a synthetic leader and its SIGTERM-ignoring worker after each test."""
     libc = ctypes.CDLL(None, use_errno=True)
     previous = ctypes.c_int()
     if libc.prctl(37, ctypes.byref(previous), 0, 0, 0) or libc.prctl(36, 1, 0, 0, 0):
@@ -174,7 +168,6 @@ def launch_document():
 
 
 def cuda_engine(entry, gpu="0", visible=None):
-    """Make `entry` a single-GPU CUDA engine; `visible` adds its CUDA transfer environment."""
     entry.update(
         gpu_ids=[gpu],
         tensor_parallel_size=1,
@@ -211,9 +204,9 @@ def launcher_inputs(root):
         "NARWHAL_MODEL_DIR": str(model),
         "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(b"{}").hexdigest(),
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
-        "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "tools/deployment/cache_capture_hook.py"),
+        "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"),
         "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(
-            ROOT / "tools/deployment/cache_capture_hook.py"
+            ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"
         ),
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",

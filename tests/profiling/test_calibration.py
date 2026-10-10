@@ -23,7 +23,7 @@ from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe.fleet import device_key
 from narwhal.types import Role
-from tests.fixtures import ROOT, calibration_document
+from tests.fixtures import ROOT, DescriptorHandoffs, calibration_document
 from tests.wire import engine_transports
 
 TOKEN = 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
@@ -42,7 +42,7 @@ def engines(count, shared=()):
     ]
 
 
-class RecordingClient:
+class RecordingClient(DescriptorHandoffs):
     """Fake engine client that records every prefill and decode call per device slot."""
 
     def __init__(
@@ -266,7 +266,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         generations=None,
         samples=2,
     ):
-        class FakeClient:
+        class FakeClient(DescriptorHandoffs):
             def __init__(self, **kwargs):
                 self.decode = decode
 

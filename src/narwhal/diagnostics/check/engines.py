@@ -1,5 +1,3 @@
-"""Preflight gates on live engine processes."""
-
 from __future__ import annotations
 
 import asyncio
@@ -9,14 +7,18 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...engines.attestation import attested_launches, fetch_engine_identity, verify_attestation
 from ...engines.client import EngineClient, EngineError
-from ...engines.dialect import lookup as lookup_dialect
+from ...engines.connector import RendezvousConnector
 from ...engines.validation import can_consume, can_produce
 from ...profiling.calibration import verify_calibration
 from ...profiling.probe.engine import engine_context_limit, make_prompt
+from ...profiling.probe.pairing import PairedTransport, Pairing, origin
 from ...profiling.store import ProfileStore
+from ...runtime.role_switch import engine_side, place_pair
+from ...types import Role
 from .report import Report
 
 PROBE_PROMPT = "benchmark " * 64
@@ -25,11 +27,6 @@ PROBE_PROMPT = "benchmark " * 64
 async def colocated_restart_risk(
     cfg: FleetConfig, transport: httpx.AsyncBaseTransport | None = None
 ) -> str:
-    """Name host-sharing KV producers whose host peers cannot release their GPU memory.
-
-    A stopped producer's memory frees once every host peer that consumes KV attests peer
-    release and has another producer for its release probe.
-    """
     contract = cfg.engine_contract
     if cfg.engine_restart_policy != "individual" or contract is None or not contract.connector:
         return ""
@@ -80,7 +77,6 @@ async def colocated_restart_risk(
 
 
 async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set[str]:
-    """Return engine IDs whose health endpoint answers successfully."""
     print("reach")
     live: set[str] = set()
     for spec in cfg.engines:
@@ -95,7 +91,6 @@ async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set
 async def gate_calibration(
     cfg: FleetConfig, rep: Report, transport: httpx.AsyncBaseTransport | None = None
 ) -> None:
-    """Check the first-token calibration against the running engines."""
     print("calibration")
     check = await verify_calibration(cfg, transport=transport)
     if check.status == "uncalibrated":
@@ -118,14 +113,15 @@ async def gate_contract(
     rep: Report,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
-    """Return engines whose live identity violates the fleet contract."""
     print("contract")
+    backend = load_backend(cfg.backend)
+    label = backend.label
     declared = cfg.engine_contract
     if declared is None:
-        rep.skip("no engine_contract declared; checking live vLLM versions only")
+        rep.skip(f"no engine_contract declared; checking live {label} versions only")
     else:
         rep.ok(f"declared engine contract {declared.fingerprint()}")
-        missing = declared.missing()
+        missing = declared.missing(backend.identity.contract_fields)
         if missing:
             rep.skip(f"contract {declared.fingerprint()} undeclared: {', '.join(missing)}")
 
@@ -138,11 +134,7 @@ async def gate_contract(
                 continue
             try:
                 if declared is None:
-                    response = await client.get(f"{spec.url}/version", headers=cfg.engine_headers())
-                    response.raise_for_status()
-                    version = response.json()["version"]
-                    if not isinstance(version, str) or not version.strip():
-                        raise ValueError("version is empty")
+                    version = await backend.identity.version(client, spec.url, cfg.engine_headers())
                     identity = None
                 else:
                     identity = await fetch_engine_identity(
@@ -150,11 +142,13 @@ async def gate_contract(
                         timeout_s=cfg.health_timeout_s,
                         transport=transport,
                         headers=cfg.engine_headers(),
+                        reader=backend.identity,
+                        attestation_url=spec.attestation_url,
                     )
-                    version = identity.vllm_version
+                    version = identity.version
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                route = "/version and /metrics" if declared is not None else "/version"
-                message = f"{spec.iid} {route} unreadable: {type(exc).__name__}"
+                subject = "identity" if declared is not None else "version"
+                message = f"{spec.iid} {label} {subject} unreadable: {type(exc).__name__}"
                 if declared is not None:
                     rep.fail(message)
                     unsafe.add(spec.iid)
@@ -162,10 +156,10 @@ async def gate_contract(
                     rep.skip(message)
                 continue
             observed[spec.iid] = version
-            rep.ok(f"{spec.iid} vLLM {version}")
-            if declared is not None and version != declared.vllm_version:
+            rep.ok(f"{spec.iid} {label} {version}")
+            if declared is not None and version != declared.engine_version:
                 rep.fail(
-                    f"{spec.iid} vLLM {version}, expected {declared.vllm_version} "
+                    f"{spec.iid} {label} {version}, expected {declared.engine_version} "
                     f"from contract {declared.fingerprint()}"
                 )
                 unsafe.add(spec.iid)
@@ -197,7 +191,7 @@ async def gate_contract(
     versions = set(observed.values())
     if len(versions) > 1:
         version_detail = ", ".join(f"{iid}={version}" for iid, version in sorted(observed.items()))
-        rep.fail(f"mixed vLLM versions before KV transfer: {version_detail}")
+        rep.fail(f"mixed {label} versions before KV transfer: {version_detail}")
         unsafe.update(observed)
     return unsafe
 
@@ -208,7 +202,6 @@ async def gate_model(
     rep: Report,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
-    """List live engines missing the configured model."""
     print("model")
     incompatible: set[str] = set()
     async with httpx.AsyncClient(
@@ -237,6 +230,21 @@ async def gate_model(
 PACE_PROMPT = "benchmark " * 4096
 
 
+def _pace_peer(
+    spec: EngineSpec, engines: list[EngineSpec], live: set[str], *, fixed_roles: bool
+) -> EngineSpec | None:
+    if fixed_roles and not can_produce(spec):
+        return None
+    peers = [
+        peer
+        for peer in engines
+        if peer.iid != spec.iid
+        and peer.iid in live
+        and (not fixed_roles or (peer.pin and peer.role is Role.DECODE))
+    ]
+    return peers[0] if peers else None
+
+
 async def gate_pace(
     cfg: FleetConfig,
     live: set[str],
@@ -246,13 +254,24 @@ async def gate_pace(
     repeats: int = 2,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
-    """Find live engines whose prefill pace exceeds the allowed tolerance.
-
-    Pace compares against the fleet median and any saved profile; fewer than three
-    engines require profiles.
-    """
     print("pace")
-    dialect = lookup_dialect(cfg.dialect)
+    backend = load_backend(cfg.backend)
+    dialect = backend.dialect
+    kv = backend.connector(cfg.connector)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    # A rendezvous engine prefills only beside a decode peer.
+    pairing = (
+        PairedTransport(transport or httpx.AsyncHTTPTransport(), kv, dialect)
+        if isinstance(kv, RendezvousConnector)
+        else None
+    )
+    launches = (
+        await attested_launches(
+            [spec for spec in cfg.engines if spec.iid in live], timeout_s=cfg.health_timeout_s
+        )
+        if pairing is not None
+        else {}
+    )
     base_body = {
         "model": cfg.model,
         "prompt": PACE_PROMPT,
@@ -264,12 +283,29 @@ async def gate_pace(
     lens: dict[str, int] = {}
     failed_probes: set[str] = set()
     async with httpx.AsyncClient(
-        timeout=cfg.prefill_timeout_s, transport=transport, headers=cfg.engine_headers()
+        timeout=cfg.prefill_timeout_s,
+        transport=pairing or transport,
+        headers=cfg.engine_headers(),
     ) as c:
         for spec in cfg.engines:
             if spec.iid not in live:
                 rep.skip(f"{spec.iid} pace: unreachable")
                 continue
+            if pairing is not None:
+                peer = _pace_peer(spec, cfg.engines, live, fixed_roles=switcher is None)
+                if peer is None:
+                    rep.skip(f"{spec.iid} pace: no live {backend.label} decode peer")
+                    continue
+                if switcher is not None:
+                    await place_pair(
+                        switcher,
+                        c,
+                        (spec.url, launches.get(spec.iid)),
+                        (peer.url, launches.get(peer.iid)),
+                    )
+                pairing.pairs[origin(spec.url)] = Pairing(
+                    Role.PREFILL, origin(peer.url), launches.get(spec.iid, {})
+                )
             body = base_body.copy()
             best = None
             for _ in range(repeats):
@@ -371,7 +407,6 @@ async def gate_pace(
 async def gate_tokenize(
     cfg: FleetConfig, live: set[str], client: EngineClient, rep: Report
 ) -> None:
-    """Check exact token counting with the router's configured timeout."""
     print("tokenize")
     if not cfg.tokenize:
         rep.skip("tokenize: engine.tokenize is disabled; prefill cost uses the character estimate")

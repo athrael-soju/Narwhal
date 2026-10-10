@@ -1,5 +1,3 @@
-"""Measure crossed-handoff first-token latency without the serving deadline."""
-
 from __future__ import annotations
 
 import asyncio
@@ -16,14 +14,15 @@ from uuid import uuid4
 
 import httpx
 
+from ..backends import load as load_backend
 from ..config import FleetConfig
-from ..engines.client import EngineClient, EngineError, first_output_timeout
-from ..engines.connector import PrefillResult
-from ..engines.connector import lookup as lookup_connector
+from ..engines.attestation import attested_launches
+from ..engines.client import EngineClient, EngineError, PairedHandoff, first_output_timeout
+from ..engines.connector import RendezvousConnector
 from ..engines.dialect import EngineDialect
-from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
+from ..runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from .generation import read_generation
 from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
@@ -54,7 +53,6 @@ def _finite(value: Any) -> TypeGuard[float]:
 
 
 def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
-    """Return nearest-rank p99, maximum, and the documented guarded candidate."""
     if not samples or any(not math.isfinite(value) or value < 0 for value in samples):
         raise ValueError("candidate deadline requires finite completed timings")
     ordered = sorted(samples)
@@ -64,11 +62,6 @@ def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
 
 
 def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[Pair]]:
-    """Split pairs into rounds in which each device slot produces and consumes at most once.
-
-    `slots` maps each engine to its device slot. The round count equals the largest number
-    of pairs one slot produces or consumes.
-    """
     produced: dict[str, dict[int, Pair]] = {}
     consumed: dict[str, dict[int, Pair]] = {}
     colour: dict[Pair, int] = {}
@@ -102,8 +95,33 @@ def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list
     return [rounds[index] for index in sorted(rounds)]
 
 
+def role_phases(pairs: list[Pair]) -> list[list[Pair]]:
+    # Each phase keeps every engine in one role, so engines that switch roles switch once per
+    # phase. A pair joins the phase of the lowest index bit where its engines differ.
+    index = {iid: n for n, iid in enumerate(sorted({iid for pair in pairs for iid in pair}))}
+    phases: dict[tuple[int, int], list[Pair]] = {}
+    for src, dst in pairs:
+        bit = (index[src] ^ index[dst]) & -(index[src] ^ index[dst])
+        phases.setdefault((bit, index[src] & bit), []).append((src, dst))
+    return [phases[key] for key in sorted(phases)]
+
+
+def exclusive_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[Pair]]:
+    # Engines that switch roles serve one leg per round, so no slot repeats in a round.
+    rounds: list[tuple[set[str], list[Pair]]] = []
+    for pair in pairs:
+        used = {slots[pair[0]], slots[pair[1]]}
+        for taken, members in rounds:
+            if not taken & used:
+                taken.update(used)
+                members.append(pair)
+                break
+        else:
+            rounds.append((used, [pair]))
+    return [members for _, members in rounds]
+
+
 def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
-    """Return mismatches between a calibration document and this fleet's configuration."""
     problems: list[str] = []
     if document.get("schema") != SCHEMA or document.get("schema_version") != 1:
         return ["first-token calibration has an unknown schema or version"]
@@ -262,12 +280,6 @@ def _status(engines: Mapping[str, EngineLabel]) -> EngineLabel:
 
 @dataclass(frozen=True)
 class CalibrationCheck:
-    """The configured first-token calibration checked against the live engines.
-
-    An engine is `measured` while it runs the process the calibration timed and `reused`
-    after a relaunch with an unchanged generation digest.
-    """
-
     status: Literal["uncalibrated", "rejected", "measured", "reused"]
     problems: tuple[str, ...] = ()
     path: Path | None = None
@@ -277,14 +289,12 @@ class CalibrationCheck:
     process_starts: dict[str, float] = field(default_factory=dict)
 
     def at_starts(self, starts: Mapping[str, float]) -> CalibrationCheck:
-        """Return the check with each engine in `starts` labelled by that process start."""
         if not self.engines:
             return self
         engines = {**self.engines, **_labels(self.process_starts, starts)}
         return replace(self, status=_status(engines), engines=engines)
 
     def view(self) -> dict[str, Any]:
-        """Return the status, capture time, candidate deadline and engine labels."""
         return {
             "status": self.status,
             "captured_at_unix": self.captured_at_unix,
@@ -293,7 +303,6 @@ class CalibrationCheck:
         }
 
     def summary(self, deadline_s: float) -> str:
-        """Describe a measured or reused calibration against the configured deadline."""
         limits = f"candidate {self.candidate_deadline_s:.3f}s, deadline {deadline_s:g}s"
         reused = [iid for iid, label in self.engines.items() if label == "reused"]
         if reused:
@@ -307,7 +316,6 @@ class CalibrationCheck:
 async def verify_calibration(
     cfg: FleetConfig, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> CalibrationCheck:
-    """Check saved timings against the live engine generations and label each engine."""
     path = cfg.first_token_calibration_path
     if path is None:
         return CalibrationCheck("uncalibrated")
@@ -334,6 +342,7 @@ async def verify_calibration(
                 cfg.engine_contract,
                 timeout_s=cfg.health_timeout_s,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
                 transport=transport,
             )
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -356,7 +365,6 @@ async def verify_calibration(
 
 
 async def _together(coroutines: list[Coroutine[Any, Any, T]]) -> list[T]:
-    """Await `coroutines` concurrently; cancel the rest and re-raise when one raises."""
     tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
     try:
         return await asyncio.gather(*tasks)
@@ -367,8 +375,6 @@ async def _together(coroutines: list[Coroutine[Any, Any, T]]) -> list[T]:
 
 @dataclass
 class _Attempt:
-    """One crossed handoff and its raw row."""
-
     src: str
     dst: str
     target: int
@@ -378,10 +384,9 @@ class _Attempt:
     phase: str = "sizing"
     elapsed: float = 0.0
     body: dict[str, Any] = field(default_factory=dict)
-    handoff: PrefillResult | None = None
+    handoff: PairedHandoff | None = None
 
     def fail(self, exc: Exception, deadline: asyncio.Timeout) -> None:
-        """Record the failure status of the current phase."""
         expired = first_output_timeout(exc) and exc.status == 504
         self.row.update(
             status=(
@@ -400,8 +405,6 @@ class _Attempt:
 
 
 class _Lockstep:
-    """Run calibration steps: every prefill, a barrier, every decode, a barrier."""
-
     def __init__(
         self,
         cfg: FleetConfig,
@@ -410,7 +413,11 @@ class _Lockstep:
         dialect: EngineDialect,
         observation_timeout_s: float,
         context_limits: dict[str, int],
+        launches: Mapping[str, Mapping[str, Any]] | None = None,
+        switcher: RoleSwitcher | None = None,
     ) -> None:
+        self.launches = launches or {}
+        self.switcher = switcher
         self.cfg = cfg
         self.client = client
         self.sizing = sizing
@@ -423,7 +430,6 @@ class _Lockstep:
     async def step(
         self, pairs: list[Pair], target: int, index: int, round_number: int | None
     ) -> None:
-        """Measure attempt `index` of each pair at `target` input tokens."""
         attempts = []
         for src, dst in pairs:
             context_limit = min(self.context_limits[src], self.context_limits[dst])
@@ -438,6 +444,17 @@ class _Lockstep:
             }
             self.rows[(src, dst, target, index)] = row
             attempts.append(_Attempt(src, dst, target, output_tokens, context_limit, row))
+        if self.switcher is not None:
+            async with httpx.AsyncClient(
+                timeout=self.cfg.health_timeout_s, headers=self.cfg.engine_headers()
+            ) as control:
+                for src, dst in pairs:
+                    await place_pair(
+                        self.switcher,
+                        control,
+                        (self.urls[src], self.launches.get(src)),
+                        (self.urls[dst], self.launches.get(dst)),
+                    )
         prefilled = await _together([self._prefill(attempt) for attempt in attempts])
         await _together(
             [
@@ -448,7 +465,6 @@ class _Lockstep:
         )
 
     async def _prefill(self, attempt: _Attempt) -> bool:
-        """Size a fresh prompt and prefill it on the producer; return whether it handed off."""
         began = time.monotonic()
         deadline = asyncio.timeout(self.cfg.request_timeout_s)
         try:
@@ -478,11 +494,15 @@ class _Lockstep:
                     **self.dialect.decode_probe_extras(attempt.output_tokens),
                 }
                 attempt.phase = "prefill"
-                started = time.monotonic()
-                attempt.handoff = await self.client.prefill(
-                    self.urls[attempt.src], "/v1/completions", attempt.body, {}
+                attempt.handoff = await self.client.start_handoff(
+                    self.urls[attempt.src],
+                    "/v1/completions",
+                    attempt.body,
+                    {},
+                    producer=self.launches.get(attempt.src),
                 )
-                attempt.row["prefill_seconds"] = time.monotonic() - started
+                if attempt.handoff.prefill_seconds is not None:
+                    attempt.row["prefill_seconds"] = attempt.handoff.prefill_seconds
         except _ATTEMPT_ERRORS as exc:
             attempt.fail(exc, deadline)
             return False
@@ -490,19 +510,21 @@ class _Lockstep:
         return True
 
     async def _decode(self, attempt: _Attempt) -> None:
-        """Time the first generated token on the consumer within the attempt's remaining budget."""
         attempt.phase = "decode"
+        handoff = attempt.handoff
+        if handoff is None:
+            return
         deadline = asyncio.timeout(self.cfg.request_timeout_s - attempt.elapsed)
         try:
             async with deadline:
                 began = time.monotonic()
                 first: float | None = None
-                async for batch in self.client.decode(
+                async for batch in self.client.decode_handoff(
+                    handoff,
                     self.urls[attempt.dst],
                     "/v1/completions",
                     attempt.body,
                     {},
-                    attempt.handoff,
                     first_token_timeout_s=self.observation_timeout_s,
                 ):
                     if first is None and any(
@@ -512,6 +534,8 @@ class _Lockstep:
                         attempt.row["first_token_seconds"] = first
                 if first is None:
                     raise ValueError("decode completed without a generated token")
+                if "prefill_seconds" not in attempt.row:
+                    attempt.row["prefill_seconds"] = handoff.prefill_seconds
                 attempt.row.update(status="completed", first_token_seconds=first)
         except _ATTEMPT_ERRORS as exc:
             attempt.fail(exc, deadline)
@@ -525,10 +549,6 @@ async def calibrate(
     observation_timeout_s: float,
     out: Path,
 ) -> int:
-    """Write fresh process-bound samples and return zero only for complete evidence.
-
-    Sweep 1 measures each group alone. Later sweeps run each round as one lockstep step.
-    """
     if not input_tokens or any(value < 1 for value in input_tokens):
         raise ValueError("--input-tokens requires positive token counts")
     if len(set(input_tokens)) != len(input_tokens):
@@ -545,7 +565,14 @@ async def calibrate(
     pairs = validation_pairs(cfg.engines, mesh=True)
     if not pairs:
         raise ValueError("first-token calibration requires a role-permitted engine pair")
-    rounds = calibration_rounds(pairs, {spec.iid: device_key(spec) for spec in cfg.engines})
+    backend = load_backend(cfg.backend)
+    switcher = engine_side(backend.role_switcher(cfg.connector))
+    slots = {spec.iid: device_key(spec) for spec in cfg.engines}
+    phases = (
+        [(pairs, calibration_rounds(pairs, slots))]
+        if switcher is None
+        else [(phase, exclusive_rounds(phase, slots)) for phase in role_phases(pairs)]
+    )
     groups = [
         (src, dst, target)
         for source in sorted({src for src, _ in pairs})
@@ -554,7 +581,7 @@ async def calibrate(
         if src == source
     ]
     by_id = {spec.iid: spec for spec in cfg.engines}
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     if dialect.tokenize_path is None:
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
     began = time.monotonic()
@@ -564,6 +591,7 @@ async def calibrate(
             cfg.engine_contract,
             timeout_s=observation_timeout_s,
             headers=cfg.engine_headers(),
+            reader=load_backend(cfg.backend).identity,
         )
         for spec in cfg.engines
     }
@@ -580,7 +608,7 @@ async def calibrate(
         pool_timeout_s=cfg.pool_timeout_s,
         connect_timeout_s=cfg.connect_timeout_s,
         health_timeout_s=cfg.health_timeout_s,
-        kv=lookup_connector(cfg.connector),
+        kv=load_backend(cfg.backend).connector(cfg.connector),
         dialect=dialect,
         model=cfg.model,
         engine_api_key=cfg.resolve_engine_key(),
@@ -603,19 +631,36 @@ async def calibrate(
                             f"exceed live context limit {context_limit}"
                         )
                 context_limits[iid] = context_limit
+            launches = (
+                await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
+                if switcher is not None or isinstance(client.kv, RendezvousConnector)
+                else {}
+            )
             lockstep = _Lockstep(
-                cfg, client, sizing, dialect, observation_timeout_s, context_limits
+                cfg,
+                client,
+                sizing,
+                dialect,
+                observation_timeout_s,
+                context_limits,
+                launches,
+                switcher,
             )
             print(
                 f"calibration groups: {len(groups)}; concurrent rounds per input length: "
-                f"{len(rounds)}; sweep 1 runs each group alone"
+                f"{sum(len(rounds) for _, rounds in phases)}; sweep 1 runs each group alone"
             )
-            for src, dst, target in groups:
-                await lockstep.step([(src, dst)], target, 1, None)
-            for index in range(2, samples_per_group + 1):
-                for target in input_tokens:
-                    for number, members in enumerate(rounds, 1):
-                        await lockstep.step(members, target, index, number)
+            first = 1
+            for phase, rounds in phases:
+                members_of = set(phase)
+                for src, dst, target in groups:
+                    if (src, dst) in members_of:
+                        await lockstep.step([(src, dst)], target, 1, None)
+                for index in range(2, samples_per_group + 1):
+                    for target in input_tokens:
+                        for number, members in enumerate(rounds, first):
+                            await lockstep.step(members, target, index, number)
+                first += len(rounds)
     finally:
         await client.aclose()
     rows: list[dict[str, Any]] = []
@@ -659,6 +704,7 @@ async def calibrate(
                 cfg.engine_contract,
                 timeout_s=observation_timeout_s,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
             )
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             generation_errors.append(f"{spec.iid}: {type(exc).__name__}: {exc}")

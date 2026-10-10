@@ -1,0 +1,86 @@
+{
+  "engine_env": [
+    "NIXL_HOST_IP=192.0.2.11",
+    "PYTHONPATH=<root>/launch/hook",
+    "ROCR_VISIBLE_DEVICES=0,1",
+    "UCX_NET_DEVICES=fabric0",
+    "UCX_TCP_PORT_RANGE=39000-39999",
+    "UCX_TLS=tcp,sm,self,rocm",
+    "VLLM_API_KEY=engine-only-secret",
+    "VLLM_NIXL_SIDE_CHANNEL_HOST=192.0.2.11",
+    "VLLM_NIXL_SIDE_CHANNEL_PORT=5600",
+    "VLLM_ROCM_USE_AITER=1"
+  ],
+  "plan": {
+    "args": [
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "<root>/model",
+      "--served-model-name",
+      "synthetic",
+      "--host",
+      "192.0.2.11",
+      "--port",
+      "8000",
+      "--tensor-parallel-size",
+      "2",
+      "--dtype",
+      "bfloat16",
+      "--kv-cache-dtype",
+      "auto",
+      "--block-size",
+      "128",
+      "--kv-events-config",
+      "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
+      "--kv-transfer-config",
+      "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+      "--max-model-len",
+      "4096",
+      "--enforce-eager"
+    ],
+    "attestation_port": 8010,
+    "attestation_url": "http://192.0.2.11:8010/v1/attestation",
+    "backend": "native",
+    "cache_capture_sha256": "<sha256>",
+    "common": [],
+    "connector": {
+      "kv_connector": "NixlConnector",
+      "kv_connector_extra_config": {
+        "backends": [
+          "UCX"
+        ],
+        "enforce_handshake_compat": true,
+        "kv_lease_duration": 30
+      },
+      "kv_load_failure_policy": "fail",
+      "kv_role": "kv_both"
+    },
+    "cuda_ipc_peers": false,
+    "endpoint": "http://192.0.2.11:8000",
+    "env_sha256": "<sha256>",
+    "expected_packages": {
+      "nixl": "1.0.0",
+      "vllm": "0.29.0"
+    },
+    "image": "",
+    "kv_events": {
+      "endpoint": "ipc://<kv-events-root>/<name>/events.sock",
+      "replay_endpoint": "ipc://<kv-events-root>/<name>/replay.sock",
+      "socket_dir": "<kv-events-root>/<name>"
+    },
+    "launch_sha256": "<sha256>",
+    "launcher_sha256": "<sha256>",
+    "model_config_path": "<root>/model/config.json",
+    "model_config_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "model_dir": "<root>/model",
+    "model_path": "<root>/model",
+    "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "name": "<name>",
+    "python_executable": "<python>",
+    "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "role": "engine-1",
+    "side_channel_port": 5600,
+    "ucx_tls": "tcp,sm,self,rocm"
+  }
+}

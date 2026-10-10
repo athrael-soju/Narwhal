@@ -1,24 +1,17 @@
-"""KV handoff adapters for split serving."""
-
 from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 
-class HandoffExpired(Exception):
-    """The router can no longer trust a producer's KV ownership lease."""
+class HandoffExpired(Exception): ...
 
 
 @dataclass(frozen=True)
 class PrefillResult:
-    """Producer-owned KV descriptor with immutable serialized parameters.
-
-    The original request lifecycle enforces handoff expiry.
-    """
-
     connector: str
     producer_url: str
     endpoint: str
@@ -33,36 +26,37 @@ class PrefillResult:
     continuation: Literal["original_prompt"] = field(default="original_prompt", init=False)
 
     def parameters(self) -> dict[str, Any]:
-        """Return an isolated copy of transport parameters."""
         params = json.loads(self.descriptor_json)
         if not isinstance(params, dict) or not params:
             raise ValueError("handoff parameters must be a nonempty object")
         return params
 
 
-class KvConnector(ABC):
-    """Adapt the prefill and decode bodies to one KV transport."""
-
+class KvHandoff(ABC):
     name: str
+    # The connector name an engine contract records for this handoff.
+    contract_name: str
+
+    @abstractmethod
+    def handoff_bound(self, lease_s: int) -> float: ...
+
+
+class KvConnector(KvHandoff):
     # Same-engine decode must remove this client-supplied field.
-    param_key: str = "kv_transfer_params"
+    param_key: ClassVar[str]
 
     @abstractmethod
-    def prefill_params(self) -> dict[str, Any]:
-        """Return fields added to the prefill request."""
+    def prefill_params(self) -> dict[str, Any]: ...
 
     @abstractmethod
-    def extract(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Extract the handoff from a prefill response."""
+    def extract(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
     @abstractmethod
-    def attach(self, body: dict[str, Any], params: dict[str, Any]) -> None:
-        """Add the handoff to a decode request."""
+    def attach(self, body: dict[str, Any], params: dict[str, Any]) -> None: ...
 
     def prefill_result(
         self, payload: dict[str, Any], *, url: str, endpoint: str, request_id: str | None
     ) -> PrefillResult:
-        """Bind a readable descriptor to the producer leg that returned it."""
         params = self.extract(payload)
         if not params:
             raise ValueError("missing handoff parameters")
@@ -73,10 +67,6 @@ class KvConnector(ABC):
     def decode_body(
         self, body: dict[str, Any], result: PrefillResult | None, *, url: str, endpoint: str
     ) -> dict[str, Any]:
-        """Continue the original prompt, without exposing producer output.
-
-        Same-worker decode and a None `result` omit transfer parameters.
-        """
         leg = {**body, "stream": True}
         leg.pop(self.param_key, None)
         if result is not None:
@@ -90,68 +80,15 @@ class KvConnector(ABC):
         return leg
 
 
-class NixlConnector(KvConnector):
-    """Adapt vLLM's NixlConnector protocol."""
+class RendezvousConnector(KvHandoff):
+    # The engine never times out a decode leg whose prefill is lost.
+    decode_wait_s: ClassVar[float]
 
-    name = "nixl"
+    @abstractmethod
+    def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]: ...
 
-    def prefill_params(self) -> dict[str, Any]:
-        """Request a remote decode handoff."""
-        return {"kv_transfer_params": {"do_remote_decode": True}}
+    @abstractmethod
+    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]: ...
 
-    def extract(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Return KV transfer parameters from a prefill response."""
-        if not isinstance(payload, dict):
-            raise ValueError("prefill response must be an object")
-        choices = payload.get("choices") or []
-        if not isinstance(choices, list) or (choices and not isinstance(choices[0], dict)):
-            raise ValueError("prefill choices must contain objects")
-        params = (
-            (choices[0].get("kv_transfer_params") if choices else None)
-            or payload.get("kv_transfer_params")
-            or {}
-        )
-        if not isinstance(params, dict):
-            raise ValueError("handoff parameters must be an object")
-        if params:
-            self._validate(params)
-        return params
-
-    @staticmethod
-    def _validate(params: dict[str, Any]) -> None:
-        """Check transport shape without asserting a cache-position convention."""
-        engine = params.get("remote_engine_id")
-        blocks = params.get("remote_block_ids")
-        if not isinstance(engine, str) or not engine:
-            raise ValueError("handoff requires remote_engine_id")
-
-        def block_list(values: object) -> bool:
-            return isinstance(values, list) and all(
-                isinstance(block, int) and not isinstance(block, bool) and block >= 0
-                for block in values
-            )
-
-        # Hybrid models export separate block lists per KV cache group.
-        if not block_list(blocks) and not (
-            isinstance(blocks, list) and all(block_list(group) for group in blocks)
-        ):
-            raise ValueError("handoff requires flat or grouped nonnegative remote_block_ids")
-
-    def attach(self, body: dict[str, Any], params: dict[str, Any]) -> None:
-        """Attach KV transfer parameters to a decode request."""
-        self._validate(params)
-        body["kv_transfer_params"] = params
-
-
-# Each registered connector has passed the fleet checks for every engine pair.
-_REGISTRY: dict[str, KvConnector] = {c.name: c for c in (NixlConnector(),)}
-
-
-def lookup(name: str) -> KvConnector:
-    """Return the registered connector named by the fleet config."""
-    try:
-        return _REGISTRY[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown connector {name!r}: known ones are {', '.join(sorted(_REGISTRY))}"
-        ) from None
+    @abstractmethod
+    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]: ...

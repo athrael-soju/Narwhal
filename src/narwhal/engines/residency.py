@@ -1,9 +1,3 @@
-"""Bounded record of the prefix blocks one engine process holds on its GPU.
-
-Residency is known only while every batch since the engine's first batch or its
-last cache reset has applied.
-"""
-
 from __future__ import annotations
 
 import threading
@@ -25,7 +19,7 @@ from .kv_events import (
 MAX_RESIDENT_BLOCKS = 1_000_000
 MAX_RETAINED_CHANGES = 10_000
 MAX_RETAINED_CHANGE_BLOCKS = 1_000_000
-# vLLM KV cache group kinds by what a prefix hit needs from the group:
+# KV cache group kinds by what a prefix hit needs from the group:
 # every leading block, the trailing attention window, or boundary state only.
 FULL_KINDS = frozenset({None, "full_attention", "mla_attention", "sink_full_attention"})
 WINDOW_KINDS = frozenset({"sliding_window", "sliding_window_mla"})
@@ -65,8 +59,6 @@ class _Group:
 
 @dataclass(frozen=True)
 class ResidencyChanges:
-    """Batch changes after a sequence and the index state read with them."""
-
     sequence: int
     block_size: int | None
     reason: str
@@ -74,8 +66,6 @@ class ResidencyChanges:
 
 
 class ResidencyIndex:
-    """Apply one engine process's cache events and serve its named resident blocks."""
-
     def __init__(
         self,
         model: str,
@@ -105,12 +95,10 @@ class ResidencyIndex:
         self.current = True
 
     def set_current(self, current: bool) -> None:
-        """Record whether applied batches have reached the engine's live stream."""
         with self._lock:
             self.current = current
 
     def apply(self, sequence: int, events: Sequence[CacheEvent | None] | None) -> None:
-        """Apply the batch numbered `sequence`; None marks a batch that failed to decode."""
         with self._lock:
             if self.sequence is not None and sequence <= self.sequence:
                 return
@@ -130,7 +118,7 @@ class ResidencyIndex:
             cleared = False
             self._touched = {}
             # A partial group's blocks take names from complete groups stored in the same run,
-            # which vLLM can list after it.
+            # which the engine can list after it.
             deferred: list[StoredBlocks] = []
             for event in events:
                 if isinstance(event, StoredBlocks) and not event.complete:
@@ -156,7 +144,6 @@ class ResidencyIndex:
                 self._record(sequence, cleared)
 
     def _record(self, sequence: int, cleared: bool) -> None:
-        """Retain the batch's net change per group, which followers apply in any order."""
         groups: dict[str, dict[str, Any]] = {}
         size = 0
         for key, touched in self._touched.items():
@@ -182,14 +169,12 @@ class ResidencyIndex:
             self._change_blocks -= self._changes.popleft()["size"]
 
     def mark_empty(self) -> None:
-        """Record an engine that has published no batch as holding no cached block."""
         with self._lock:
             if self.sequence is None:
                 self._reset("no cache events published")
                 self.sequence = -1
 
     def lose(self, reason: str) -> None:
-        """Mark residency unknown after a feed failure outside the event stream."""
         with self._lock:
             self._lose(reason)
 
@@ -265,7 +250,6 @@ class ResidencyIndex:
                 self._named.pop(block_hash, None)
 
     def snapshot(self) -> dict[str, Any]:
-        """Return the named resident blocks with the last applied sequence."""
         with self._lock:
             groups = []
             if self.known:
@@ -298,7 +282,6 @@ class ResidencyIndex:
             }
 
     def changes_after(self, sequence: int) -> ResidencyChanges | None:
-        """Return the batch changes after `sequence`, or None when a snapshot is required."""
         with self._lock:
             if not self.known or not self.current or self.sequence is None:
                 return None
@@ -328,7 +311,6 @@ class ResidencyIndex:
             return ResidencyChanges(self.sequence, self.block_size, self.reason, changes)
 
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
-        """Return how many leading prompt blocks this engine can reuse."""
         with self._lock:
             if not self.known or not self.current:
                 return 0
@@ -342,10 +324,6 @@ def cached_prefix_blocks(
     identities: Sequence[bytes],
     block_size: int | None,
 ) -> int:
-    """Return how many leading prompt blocks the engine can reuse from every KV cache group.
-
-    `identities` exclude the prompt's final token; vLLM always computes it.
-    """
     groups = list(groups)
     if not groups or any(
         kind not in FULL_KINDS | WINDOW_KINDS | BOUNDARY_KINDS

@@ -69,3 +69,12 @@ Incompatible handoff versions need a maintenance window.
 12. Send one completion request and confirm it succeeds.
 13. Return the router to service.
 14. Restore its standby.
+
+### Upgrading across the contract field rename
+
+The release that renames `vllm_version`, `nixl_version` and `nixl_connector_version` to `engine_version`, `transfer_version` and `connector_version` changes the contract fingerprint and the profile generation digests. Existing fleet files, attestation documents and dev templates still load. The same release renames the contract tool's `capture-nixl` action to `capture-connector`, the preflight transfer evidence fields `nixl_transfer_*` to `transfer_*`, and the dev template port `ports.nixl_first` to `ports.side_channel_first`.
+
+1. Upgrade the routers as in [Rolling upgrade with compatible handoff versions](#rolling-upgrade-with-compatible-handoff-versions).
+2. Restart every `narwhal-attest` sidecar on the upgraded build.
+3. Regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+4. Run preflight.

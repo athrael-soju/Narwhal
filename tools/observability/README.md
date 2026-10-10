@@ -21,15 +21,16 @@ The dashboard expects these label contracts:
   `vllm:prefix_cache_queries_total`, `vllm:generation_tokens_total` and
   `vllm:prompt_tokens_by_source_total` or `vllm:prompt_tokens_total` on each
   engine metrics endpoint.
-- Engines that run the vLLM NIXL connector expose
-  `vllm:nixl_num_kv_expired_reqs_total` for **Expired KV by producer**.
+- SGLang exposes `sglang:num_running_reqs`, `sglang:num_queue_reqs`,
+  `sglang:token_usage`, `sglang:cached_tokens_total`, `sglang:prompt_tokens_total`
+  and `sglang:generation_tokens_total`.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
 Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
 
 ### Metric boundaries
 
-The headline **Requests** and **Latency** tables, **Dropped requests by reason** and **Failed attempts by reason** sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
+The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
 
 **Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance`, `slo` and `le`. **Request waiting time** uses the same `instance`, `slo` and `le` grouping to calculate seat-time p95, and one queue-wait p95 for each `stage` it selects. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
 
@@ -70,7 +71,7 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It fills each `<<name>>` and `<<name{selector}>>` field from the `dashboard_text` and `dashboard_series` of the fleet's `engine.backend`, and leaves out a panel with a field the backend does not map. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 
@@ -93,4 +94,4 @@ Alert rules in `tools/observability/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
-- Target relabelling keeps the `job` and `iid` labels for engine reachability and scoped alert rows.
+- Target relabelling keeps the `job`, `iid` and `backend` labels for engine reachability, scoped alert rows and the engine table's **Backend** column.

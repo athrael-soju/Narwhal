@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...profiling.generation import generation_problem, read_generation
 from ...profiling.model import decode_evidence_problems
@@ -93,6 +94,7 @@ async def gate_profile_generation(
                 cfg.engine_contract,
                 timeout_s=cfg.health_timeout_s,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
                 transport=transport,
             )
         except (httpx.HTTPError, ValueError, KeyError) as exc:

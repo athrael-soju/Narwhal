@@ -1,0 +1,823 @@
+{
+  "evidence": {
+    "captured_at_unix": "<seconds>",
+    "contract_fingerprint": "f5e095959e161d2d",
+    "expected_pairs": [
+      [
+        "e0",
+        "e3"
+      ],
+      [
+        "e3",
+        "e0"
+      ]
+    ],
+    "failed": [],
+    "fleet_sha256": "<sha256>",
+    "model": "test-model",
+    "pairs": [
+      {
+        "connector": "nixl",
+        "consumer": "e3",
+        "consumer_after": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e3",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
+        },
+        "consumer_before": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e3",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
+        },
+        "decode_seconds": "<seconds>",
+        "descriptor_sha256": "db9dd50839f3c7fe440a789702dedcd8487159dd2914e6a8b2f1af41f54a1906",
+        "first_token_seconds": "<seconds>",
+        "output_tokens": 4,
+        "prefill_seconds": "<seconds>",
+        "producer": "e0",
+        "producer_after": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e0",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
+        },
+        "producer_before": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e0",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
+        },
+        "remote_engine_id": "e0-engine",
+        "remote_host": "127.0.0.1",
+        "remote_port": 5600,
+        "status": "passed",
+        "transfer_count_delta": 1.0,
+        "transfer_metric": "vllm:nixl_xfer_time_seconds",
+        "transfer_mode": null,
+        "transfer_seconds": 0.01
+      },
+      {
+        "connector": "nixl",
+        "consumer": "e0",
+        "consumer_after": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e0",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
+        },
+        "consumer_before": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e0",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 0.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.0
+        },
+        "decode_seconds": "<seconds>",
+        "descriptor_sha256": "90885f2f6bd4e4ba25398a0c900a3bd29e0fb9336e207a444e066d6381f5eb27",
+        "first_token_seconds": "<seconds>",
+        "output_tokens": 4,
+        "prefill_seconds": "<seconds>",
+        "producer": "e3",
+        "producer_after": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e3",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
+        },
+        "producer_before": {
+          "attestation_digest": "sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+          "cache_layout_sources": {
+            "cross_layers_blocks": "fixture",
+            "hybrid_kv_cache_manager": "fixture"
+          },
+          "connector_source": "fixture",
+          "contract_fingerprint": "f5e095959e161d2d",
+          "engine_version": "1.0.0",
+          "iid": "e3",
+          "process_start_time_seconds": 100.0,
+          "transfer_count": 1.0,
+          "transfer_mode_source": "fixture",
+          "transfer_seconds_sum": 0.01
+        },
+        "remote_engine_id": "e3-engine",
+        "remote_host": "127.0.0.1",
+        "remote_port": 5601,
+        "status": "passed",
+        "transfer_count_delta": 1.0,
+        "transfer_metric": "vllm:nixl_xfer_time_seconds",
+        "transfer_mode": null,
+        "transfer_seconds": 0.01
+      }
+    ],
+    "profile_sha256": "<sha256>",
+    "repeats": 1,
+    "schema": "narwhal.directed-kv-evidence",
+    "schema_version": 1,
+    "skipped": [],
+    "status": "passed"
+  },
+  "exit_code": 0,
+  "output": [
+    "fleet: 2 engines, model test-model",
+    "slo:   ttft <= <seconds>, tpot <= <seconds>",
+    "reach",
+    "  ok    e0 /health",
+    "  ok    e3 /health",
+    "calibration",
+    "  WARN  first-token deadline has no calibration evidence; run narwhal-check --calibrate-first-token and set engine.first_token_calibration_path",
+    "contract",
+    "  ok    declared engine contract f5e095959e161d2d",
+    "  ok    e0 vLLM 1.0.0",
+    "  ok    e0 contract f5e095959e161d2d attested for process 100.000000",
+    "  ok    e3 vLLM 1.0.0",
+    "  ok    e3 contract f5e095959e161d2d attested for process 100.000000",
+    "profile",
+    "  ok    e0 ttft=0.00e+00n^2+1.00e-03n+0.0100 tpot=1.00e-03q+1.00e-06b+0.0010 decode_fit_mape=0.0100 decode_cv_mape=0.0200 within the 0.05/0.13 limits",
+    "  ok    e3 ttft=0.00e+00n^2+1.00e-03n+0.0100 tpot=1.00e-03q+1.00e-06b+0.0010 decode_fit_mape=0.0100 decode_cv_mape=0.0200 within the 0.05/0.13 limits",
+    "  ok    e0 profile generation sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+    "  ok    e3 profile generation sha256:3d7030079a58f82186c0fdc71d51b2c3691a9c06840f085a8928d112a9a0b920",
+    "model",
+    "  ok    e0 serves test-model",
+    "  ok    e3 serves test-model",
+    "pace",
+    "  ok    e0 pace <seconds> (own profile <seconds>)",
+    "  ok    e3 pace <seconds> (own profile <seconds>)",
+    "tokenize",
+    "  ok    e0 /tokenize -> 64 tokens",
+    "  ok    e3 /tokenize -> 64 tokens",
+    "produce",
+    "  ok    e0 returned handoff parameters (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
+    "  ok    e3 returned handoff parameters (do_remote_decode, do_remote_prefill, remote_block_ids, remote_engine_id, remote_host, remote_port, tp_size)",
+    "consume (mesh, 1x)",
+    "  ok    e0 -> e3 moved KV and produced 4 tokens, first token <seconds>",
+    "  ok    e3 -> e0 moved KV and produced 4 tokens, first token <seconds>",
+    "slo",
+    "  ok    e0 holds 100000 batch tokens across 1 requests at the TPOT target",
+    "  ok    e3 holds 100000 batch tokens across 1 requests at the TPOT target",
+    "directed KV evidence: <root>/kv-evidence.json",
+    "",
+    "all gates pass"
+  ],
+  "requests": [
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/models"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/models"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #1>",
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<4096 words sha256:d48d3330ac68e97e>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #2>",
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<4096 words sha256:d48d3330ac68e97e>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #3>",
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<4096 words sha256:d48d3330ac68e97e>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #4>",
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<4096 words sha256:d48d3330ac68e97e>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>"
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #5>",
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #5>",
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            [
+              0,
+              1
+            ]
+          ],
+          "remote_engine_id": "e0-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5600,
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "min_tokens": 4,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #6>",
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "engine": "e3",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": {
+        "cache_salt": "<salt 43 chars #6>",
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            [
+              0,
+              1
+            ]
+          ],
+          "remote_engine_id": "e3-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5601,
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "min_tokens": 4,
+        "model": "test-model",
+        "prompt": "<64 words sha256:e451f8d8c9657e82>",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/v1/attestation"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    }
+  ]
+}

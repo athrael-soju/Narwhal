@@ -1,5 +1,3 @@
-"""Start deployment preparation from environment values and fresh host observations."""
-
 import copy
 import inspect
 import io
@@ -12,7 +10,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment.launch_engine.plan import build, ds_conv_state_layout_required
+from narwhal.backends.vllm.plan import ds_conv_state_layout_required
+from narwhal.deployment.launch_engine.plan import build
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -46,6 +45,36 @@ def observation(runtime="rocm", address="10.0.0.1"):
         "image_environment": {"VLLM_ROCM_USE_AITER": "1"},
         "interfaces": [{"ifname": "fabric0", "addr_info": [{"local": address, "scope": "global"}]}],
     }
+
+
+def sglang_observation(address="10.0.0.1"):
+    observed = observation(runtime="cuda", address=address)
+    observed.update(
+        packages={
+            "sglang": "0.5.0+test",
+            "mooncake-transfer-engine-cuda13": "0.3.0",
+            "nixl": "1.0.0",
+            "torch": "2.12.0",
+        },
+        gpus=[
+            {"id": str(i), "name": "test GPU", "uuid": f"GPU-{i}", "device": f"/dev/nvidia{i}"}
+            for i in range(8)
+        ],
+        common_devices=["/dev/nvidiactl", "/dev/nvidia-uvm"],
+        image_environment={"SGLANG_ENABLE_JIT_DEEPGEMM": "0"},
+    )
+    return observed
+
+
+def sglang_environment(root):
+    env = environment(root)
+    del env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"]
+    env.update(
+        NARWHAL_ENGINE_BACKEND="sglang",
+        NARWHAL_SGLANG_BOOTSTRAP_PORT="5557",
+        NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB="4",
+    )
+    return env
 
 
 def environment(root):
@@ -155,6 +184,81 @@ class DiscoveryTests(unittest.TestCase):
                     discover(env, root / "another-discovery")
                 ssh.assert_not_called()
             self.assertEqual(Path(env["NARWHAL_FLEET"]).read_bytes(), old)
+
+    def test_sglang_discovery_feeds_real_preparation_and_launcher(self):
+        class SglangInspectionSSH(FakeInspectionSSH):
+            def run(self, host, gate, script, payload=None):
+                result = super().run(host, gate, script, payload)
+                if gate == "inspect GPU and image":
+                    return json.dumps(sglang_observation("10.0.0." + host.id.split("-")[-1]))
+                return result
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = sglang_environment(root)
+            with (
+                patch("tools.deployment.discover_deployment.SSH", SglangInspectionSSH),
+                redirect_stdout(io.StringIO()),
+            ):
+                discover(env, root / "discovery")
+            for line in (root / "config/deployment.env").read_text().splitlines():
+                name, quoted = line.removeprefix("export ").split("=", 1)
+                env[name] = shlex.split(quoted)[0]
+            inputs = json.loads((root / "discovery/engine-1-inputs.json").read_text())
+            self.assertIn("SGLANG_", inputs["environment_prefixes"])
+            self.assertIn("NARWHAL_SGLANG_BOOTSTRAP_PORT", inputs["managed_environment"])
+            fleet = json.loads(Path(env["NARWHAL_FLEET"]).read_text())
+            self.assertEqual(fleet["engine"], {"backend": "sglang"})
+            self.assertNotIn("pin", fleet["engines"][0])
+            launches = json.loads(Path(env["NARWHAL_LAUNCH_CONFIG"]).read_text())
+            serving = launches["engines"]["engine-1"]["runtime"]
+            self.assertEqual(serving["backend"], "sglang")
+            self.assertEqual(serving["connector"], "mooncake")
+            self.assertEqual(serving["decode_cuda_graph_memory_gb"], 4.0)
+            self.assertNotIn("role", serving)
+            self.assertEqual(serving["extra_args"], ["--context-length", "16384"])
+            hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
+            run = root / "prepared"
+            prepare(hosts, env, run, ROOT)
+            limits = json.loads((run / "node-1/profiling-limits.json").read_text())
+            self.assertEqual(limits["engines"], {"n1": 256, "n2": 256})
+            self.assertEqual(
+                (run / "node-1/cache_capture_hook.py").read_bytes(),
+                (ROOT / "src/narwhal/backends/sglang/cache_capture_hook.py").read_bytes(),
+            )
+            for node in (1, 2):
+                role = f"engine-{node}"
+                role_env = select_values("engine", node, fleet, env)
+                self.assertEqual(role_env["NARWHAL_SGLANG_BOOTSTRAP_PORT"], "5557")
+                self.assertNotIn("NARWHAL_NIXL_SIDE_CHANNEL_PORT", role_env)
+                records = load_launches(
+                    Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
+                )
+                plan, _ = build(records[role], role_env, root / role)
+                self.assertEqual(plan["engine"], "sglang")
+                self.assertIn("--tp-size", plan["args"])
+
+    def test_fixed_role_connector_pins_each_engine_to_its_launch_role(self):
+        env = sglang_environment(Path("/synthetic"))
+        env["NARWHAL_ENGINE_CONNECTOR"] = "nixl"
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": sglang_observation(f"10.0.0.{i}") for i in (1, 2)}
+        fleet, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+        self.assertEqual(fleet["engine"], {"backend": "sglang", "connector": "nixl"})
+        self.assertEqual([e["role"] for e in fleet["engines"]], ["prefill", "decode"])
+        self.assertTrue(all(e["pin"] for e in fleet["engines"]))
+        self.assertEqual(
+            [launches["engines"][f"engine-{i}"]["runtime"]["role"] for i in (1, 2)],
+            ["prefill", "decode"],
+        )
+        self.assertNotIn("decode_cuda_graph_memory_gb", launches["engines"]["engine-1"]["runtime"])
+        env["NARWHAL_ENGINE_CONNECTOR"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "no connector 'unknown'"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+        env["NARWHAL_ENGINE_CONNECTOR"] = "mooncake"
+        del env["NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB"]
+        with self.assertRaisesRegex(ValueError, "engine-1: set DECODE_CUDA_GRAPH_MEMORY_GB"):
+            build_records(hosts, env, observations, Path("/synthetic"))
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
@@ -310,7 +414,6 @@ class DiscoveryTests(unittest.TestCase):
         compile(PROBE, "remote discovery probe", "exec")
 
     def test_probe_applies_the_launcher_convolutional_state_rule(self):
-        """Discovery and the launch check agree on gated-delta linear attention."""
         rule = inspect.getsource(ds_conv_state_layout_required)
         self.assertTrue(PROBE.startswith(rule))
         namespace = {}
@@ -332,6 +435,7 @@ class DiscoveryTests(unittest.TestCase):
             "interface": "fabric0",
             "environment_prefixes": ["VLLM_", "NIXL_"],
             "managed_environment": ["VLLM_API_KEY"],
+            "packages": "vllm|nixl-rocm",
         }
         model = (
             b'{"torch_dtype":"bfloat16","max_position_embeddings":32768,'
@@ -363,6 +467,7 @@ class DiscoveryTests(unittest.TestCase):
                 output = json.dumps(image)
             elif args[:2] == ["docker", "run"]:
                 output = '{"vllm":"1.0","nixl-rocm":"1.0"}'
+                self.assertEqual(args[-1], inputs["packages"])
                 self.assertIn("--rm", args)
                 self.assertNotIn("--gpus", args)
             elif args == ["rocminfo"]:

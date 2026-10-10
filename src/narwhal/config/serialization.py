@@ -69,6 +69,7 @@ def document(config: FleetConfig) -> dict[str, Any]:
             **asdict(config.serving),
         },
         "engine": {
+            "backend": config.backend,
             "connector": config.connector,
             "dialect": config.dialect,
             "tokenize": config.tokenize,

@@ -1,5 +1,3 @@
-"""Check control-pool inference probes and malformed engine responses."""
-
 import asyncio
 import json
 import time
@@ -24,16 +22,16 @@ from narwhal.types import (
     LEG_STREAM,
     LEG_TIMEOUT,
 )
-from tests.wire import engine_transports
+from tests.serving.test_rendezvous import FakeRendezvous
+from tests.wire import engine_transports, vllm_engine
 
 
 class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
-    """A local transport distinguishes each producer, consumer and control-pool failure."""
-
     def setUp(self):
         self.responses = {}
         self.calls = []
         self.client = EngineClient(
+            **vllm_engine(),
             model="stub",
             engine_api_key="synthetic-engine-key",
             **engine_transports(self.handle),
@@ -42,7 +40,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.client.aclose)
 
     def handle(self, request):
-        """Select a synthetic response by request phase and record the actual dispatch."""
         body = json.loads(request.content) if request.content else {}
         kind = (
             "health"
@@ -71,7 +68,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_control_health_distinguishes_pool_exhaustion_from_engine_failure(self):
-        """Health results distinguish local pool pressure from engine failure."""
         for response, expected in (
             (httpx.PoolTimeout("pool"), None),
             (httpx.ConnectError("engine"), False),
@@ -84,14 +80,15 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.control_connections, 2)
 
     async def test_a_health_timeout_that_surfaces_late_is_inconclusive(self):
-        """A prompt timeout blames the engine; one surfacing past its budget measured the router."""
         delay = {"s": 0.0}
 
         def handle(request):
             time.sleep(delay["s"])
             raise httpx.ReadTimeout("health")
 
-        client = EngineClient(transport=httpx.MockTransport(handle), health_timeout_s=0.05)
+        client = EngineClient(
+            **vllm_engine(), transport=httpx.MockTransport(handle), health_timeout_s=0.05
+        )
         self.addAsyncCleanup(client.aclose)
         for late_s, expected in ((0.0, False), (0.05 * LATE_TIMEOUT_FACTOR + 0.05, None)):
             delay["s"] = late_s
@@ -99,7 +96,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(await client.healthy("http://engine"), expected)
 
     async def test_tokenizer_failures_preserve_the_unknown_length_result(self):
-        """Transport, status and malformed JSON failures leave exact length unavailable."""
         self.assertEqual(
             await self.client.token_count("http://engine", {"model": "stub", "prompt": "x"}, 1), 12
         )
@@ -116,7 +112,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.calls), before)
 
     async def test_tokenization_retains_prompt_ids_and_forwards_special_token_setting(self):
-        """Completion counts use the request's own special-token setting and keep exact IDs."""
         self.responses["tokenize"] = httpx.Response(
             200, json={"count": 3, "max_model_len": 64, "tokens": [1, 7, 9]}
         )
@@ -147,6 +142,7 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             )
 
         client = EngineClient(
+            **vllm_engine(),
             **engine_transports(handle),
             connect_timeout_s=0.2,
             pool_timeout_s=0.1,
@@ -165,7 +161,7 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.3)
             return httpx.Response(200, json={"count": 12})
 
-        client = EngineClient(**engine_transports(slow))
+        client = EngineClient(**vllm_engine(), **engine_transports(slow))
         self.addAsyncCleanup(client.aclose)
         with self.assertRaisesRegex(EngineError, "exact count exceeded 0.05s"):
             await client.token_count("http://engine", {"prompt": "x"}, 0.05, strict=True)
@@ -175,13 +171,12 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.08)
             return httpx.Response(200, json={})
 
-        client = EngineClient(**engine_transports(slow), prefill_timeout_s=0.02)
+        client = EngineClient(**vllm_engine(), **engine_transports(slow), prefill_timeout_s=0.02)
         self.addAsyncCleanup(client.aclose)
         with self.assertRaisesRegex(httpx.ReadTimeout, "prefill exceeded its 0.02s"):
             await client.prefill("http://engine", "/v1/completions", {"prompt": "x"}, {})
 
     async def test_cross_engine_probe_binds_one_fresh_prompt_and_producer_descriptor(self):
-        """Both legs share a unique prompt and the consumer receives the fresh handoff."""
         result = await self.client.probe_inference("http://decode", prefill_url="http://prefill")
         self.assertEqual((result.prefill, result.decode), (ProbeLeg(), ProbeLeg()))
         producer, consumer = self.calls
@@ -199,7 +194,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.calls[0][1]["prompt"], self.calls[2][1]["prompt"])
 
     async def test_prefill_probe_failures_leave_cross_engine_consumers_inconclusive(self):
-        """The decode probe requires a successful prefill."""
         for response, expected in (
             (httpx.PoolTimeout("pool"), ProbeLeg(inconclusive=True)),
             (httpx.ConnectError("connection"), ProbeLeg(failed=LEG_CONNECTION)),
@@ -220,7 +214,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([kind for kind, _, _ in self.calls], ["prefill"])
 
     async def test_decode_probe_requires_output_followed_by_a_terminator(self):
-        """Consumer probes distinguish pool starvation, overload and incomplete streams."""
         for response, expected in (
             (httpx.PoolTimeout("pool"), ProbeLeg(inconclusive=True)),
             (httpx.ConnectError("connection"), ProbeLeg(failed=LEG_CONNECTION)),
@@ -238,7 +231,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.decode, expected)
 
     async def test_probe_leg_deadlines_cancel_blocked_work(self):
-        """An absolute leg deadline cancels blocked work and returns the phase's failure class."""
 
         async def blocked(*args, **kwargs):
             await asyncio.Event().wait()
@@ -257,7 +249,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.client.probe_inference("http://engine"))
 
     async def test_invalid_prefill_payload_and_decode_continuation_raise_typed_errors(self):
-        """Malformed handoffs surface as phase-specific errors before continuation dispatch."""
         self.responses["prefill"] = httpx.Response(200, json={})
         with self.assertRaisesRegex(EngineError, "no handoff") as caught:
             await self.client.prefill("http://engine", "/v1/completions", {}, {})
@@ -269,7 +260,6 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
             await anext(self.client.decode("http://engine", "/v1/completions", {}, {}, None))
 
     async def test_error_stream_shapes_preserve_status_and_message(self):
-        """SSE errors default to HTTP 500 when their status code is invalid."""
         for payload, status, text in (
             ({"code": 429, "message": " busy "}, 429, "busy"),
             ({"code": True, "message": "failed"}, 500, "failed"),
@@ -296,7 +286,59 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("max_completion_tokens", leg)
 
     def test_explicit_auth_headers_take_precedence_case_insensitively(self):
-        """An explicit authorization header takes precedence over the engine credential."""
         headers = {"Authorization": "Bearer forwarded", "x-request-id": "r"}
         self.assertEqual(self.client._auth(headers), headers)
         self.assertEqual(self.client._auth({})["authorization"], "Bearer synthetic-engine-key")
+
+
+class RendezvousProbeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.calls = []
+        self.prefill_status = 200
+        self.prefill_seen = asyncio.Event()
+        self.decode_seen = asyncio.Event()
+        self.client = EngineClient(
+            kv=FakeRendezvous(),
+            dialect=vllm_engine()["dialect"],
+            model="stub",
+            **engine_transports(self.handle),
+        )
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def handle(self, request):
+        body = json.loads(request.content)
+        self.calls.append((str(request.url), body))
+        if body["leg"] == "prefill":
+            self.prefill_seen.set()
+            # Each leg waits for the other, so only concurrent legs complete.
+            await asyncio.wait_for(self.decode_seen.wait(), 5)
+            return httpx.Response(self.prefill_status, json={})
+        self.decode_seen.set()
+        if self.prefill_status != 200:
+            await asyncio.Event().wait()
+        await asyncio.wait_for(self.prefill_seen.wait(), 5)
+        return httpx.Response(
+            200, text='data: {"choices":[{"text":"x","token_ids":[1]}]}\n\ndata: [DONE]\n\n'
+        )
+
+    async def test_directed_probe_runs_both_legs_concurrently_with_one_rendezvous(self):
+        result = await self.client.probe_inference(
+            "http://decode", prefill_url="http://prefill", deadline_s=2
+        )
+        self.assertEqual((result.prefill, result.decode), (ProbeLeg(), ProbeLeg()))
+        legs = {body["leg"]: (url, body) for url, body in self.calls}
+        self.assertTrue(legs["prefill"][0].startswith("http://prefill/"))
+        self.assertTrue(legs["decode"][0].startswith("http://decode/"))
+        self.assertEqual(legs["prefill"][1]["room"], legs["decode"][1]["room"])
+        self.assertEqual(legs["prefill"][1]["prompt"], legs["decode"][1]["prompt"])
+        self.assertEqual(legs["prefill"][1]["max_tokens"], 1)
+
+    async def test_failed_prefill_leaves_decode_inconclusive_within_the_wait_bound(self):
+        self.prefill_status = 500
+        began = time.monotonic()
+        result = await self.client.probe_inference(
+            "http://decode", prefill_url="http://prefill", deadline_s=5
+        )
+        self.assertLess(time.monotonic() - began, 2)
+        self.assertEqual(result.prefill, ProbeLeg(failed=LEG_INFERENCE_STATUS))
+        self.assertEqual(result.decode, ProbeLeg(inconclusive=True))

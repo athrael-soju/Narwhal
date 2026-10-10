@@ -1,5 +1,3 @@
-"""Run Docker commands for a launch directory and reconcile interrupted ones."""
-
 from __future__ import annotations
 
 import contextlib
@@ -34,7 +32,6 @@ def reconcile_docker(
     operation: str | None = None,
     targets: tuple[str, ...] = (),
 ) -> dict:
-    """Inspect launch resources and remove only the interrupted operation's containers."""
     budget = stages.seconds("NARWHAL_DOCKER_RECONCILE_SECONDS", 30)
     started = time.monotonic()
     report: dict = {
@@ -164,7 +161,6 @@ def docker(command: list[str], run: Path, log: str, *, include_stderr: bool = Fa
 
 
 def run_runtime_script(run: Path, plan: dict, script: str, arguments: list[str], log: str) -> str:
-    """Inspect the checked vLLM environment through its selected backend."""
     if plan.get("backend") != "native":
         return docker(
             [

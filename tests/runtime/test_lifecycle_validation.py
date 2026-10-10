@@ -1,5 +1,3 @@
-"""Check persisted drain state and the gates that return engines to service."""
-
 import copy
 import tempfile
 import unittest
@@ -22,8 +20,6 @@ from tests.fixtures import fleet
 
 
 class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
-    """Real lifecycle and scheduler state use local identity and engine responses."""
-
     launch: ClassVar[dict | None] = None
 
     def setUp(self):
@@ -53,10 +49,9 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.drain("e0")
 
     def bind_profiles(self):
-        """Bind each engine's profile to its current generation, as the profiler does."""
         for iid, start in self.starts.items():
             payload = make_attestation(
-                self.document, EngineIdentity(self.cfg.engine_contract.vllm_version, start)
+                self.document, EngineIdentity(self.cfg.engine_contract.engine_version, start)
             )
             digest = payload.get("launch_digest") or payload["attestation_digest"]
             self.router.profiles.put(
@@ -64,22 +59,19 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def identity(self, url, **kwargs):
-        """Read an engine's current process identity from the test's explicit state."""
         iid = next(spec.iid for spec in self.cfg.engines if spec.url == url)
-        return EngineIdentity(self.cfg.engine_contract.vllm_version, self.starts[iid])
+        return EngineIdentity(self.cfg.engine_contract.engine_version, self.starts[iid])
 
     async def decode(self, *args, **kwargs):
-        """Return token evidence for the requested fabric pair."""
         yield [parse_event('data: {"choices":[{"token_ids":[1,2],"text":"ok"}]}')]
 
     def http(self, request):
-        """Serve attestation, model and local generation gates with per-engine overrides."""
         for spec in self.cfg.engines:
             if str(request.url) == spec.attestation_url:
                 iid, route = spec.iid, "attestation"
                 default = make_attestation(
                     self.document,
-                    EngineIdentity(self.cfg.engine_contract.vllm_version, self.starts[iid]),
+                    EngineIdentity(self.cfg.engine_contract.engine_version, self.starts[iid]),
                 )
                 break
             if str(request.url).startswith(spec.url + "/"):
@@ -101,14 +93,12 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         return httpx.Response(200, json=response)
 
     async def validate(self, *, wave=False, engines=None):
-        """Run the complete readmission pipeline under a controlled identity source."""
         with patch.object(readmission, "fetch_engine_identity", self.identities):
             return await readmission.validate_readmission(
                 self.router, engines or ["e0"], wave=wave, transport=self.transport
             )
 
     def test_restore_rejects_malformed_records_before_changing_holds(self):
-        """Invalid record fields preserve the manager's existing hold set."""
         base = self.manager.handoff()
         original = copy.deepcopy(self.manager.records)
         for name, value in (
@@ -137,7 +127,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.manager.restore({**base, "records": records})
 
     def test_restore_requires_coherent_wave_membership_and_process_identity(self):
-        """Restored wave membership covers the configured fleet and valid process times."""
         base = self.manager.handoff()
         for starts in (
             [],
@@ -163,7 +152,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
             self.manager.restore([])
 
     def test_restore_interrupted_validation_holds_engines_and_bounds_events(self):
-        """Restoring interrupted validation blocks the engine and loads the latest 200 events."""
         base = self.manager.handoff()
         base["events"] = [None, *({"n": n} for n in range(205))]
         base["records"].append(asdict(DrainRecord("e3", "active", 1, 2)))
@@ -177,7 +165,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.events, [])
 
     def test_recovery_requires_ejection_and_exact_selection(self):
-        """Recovery validation takes ownership only after an engine has been ejected."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
@@ -191,7 +178,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
 
     def test_failed_automatic_recovery_holds_only_its_own_engine(self):
-        """A blocked recovery leaves other engines recoverable; drains and waves still hold."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.router.scheduler.eject("e0", "liveness")
@@ -213,7 +199,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.manager.start_recovery_validation(["e3"]))
 
     def test_wave_recovery_and_validation_failure_preserve_all_holds(self):
-        """One engine's validation failure keeps the entire restart wave blocked."""
         self.manager.records.clear()
         for iid in ("e0", "e3"):
             self.router.scheduler.eject(iid, "liveness")
@@ -228,7 +213,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.router.scheduler.draining, {"e0", "e3"})
 
     def test_managed_wave_recovery_requires_a_new_operator_restart(self):
-        """Whole-wave policy converts automatic recovery into a fleet-wide restart hold."""
         self.cfg.engine_restart_policy = "whole_wave"
         self.assertFalse(self.manager.start_recovery_validation(["e0"]))
         first = self.manager.wave_id
@@ -239,7 +223,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.manager.wave_id, first)
 
     def test_validation_transition_requires_drained_state_and_old_identity(self):
-        """Validation starts from a recorded drain and clears stale check results."""
         for iid in ("e3", "e0"):
             with self.subTest(iid=iid), self.assertRaisesRegex(LifecycleError, "expected drained"):
                 self.manager.mark_validating([iid])
@@ -252,7 +235,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((record.state, record.error, record.checks), ("validating", "", []))
 
     def test_resident_deadline_retains_hold_until_the_last_request_drains(self):
-        """Resident work keeps the drain at deadline_exceeded until the last request finishes."""
         record = self.manager.records["e0"]
         record.state = "draining"
         instance = self.router.monitor.instances["e0"]
@@ -268,7 +250,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e0", self.router.scheduler.draining)
 
     async def test_successful_readmission_checks_both_fabric_directions(self):
-        """Validation probes both transfer directions before the engine returns to service."""
         outcome = await self.validate()
         self.assertTrue(outcome.passed, outcome.failures)
         self.assertEqual(outcome.starts, {"e0": 101})
@@ -281,7 +262,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e0", self.router.scheduler.draining)
 
     async def test_stale_missing_and_unbound_loaded_profiles_reject_readmission(self):
-        """A successful engine probe cannot replace a missing or stale measurement binding."""
         original = self.router.profiles.get("e0")
         for value, detail in (
             (None, "has no loaded profile"),
@@ -302,7 +282,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.validate()).passed)
 
     async def test_inactive_profile_variant_must_match_the_verified_generation(self):
-        """Readmission rejects a stale colocated variant beside a current selected row."""
         original = self.router.profiles.get("e0")
         variant = replace(
             original,
@@ -322,7 +301,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.validate()).passed)
 
     async def test_one_stale_wave_member_prevents_every_member_from_returning(self):
-        """Whole-wave readmission remains atomic when only one loaded profile is stale."""
         self.cfg.engine_restart_policy = "whole_wave"
         self.starts["e3"] = 102
         self.bind_profiles()
@@ -350,7 +328,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.wave_id)
 
     async def test_final_attestation_change_invalidates_profile_binding(self):
-        """A valid new attestation digest after fabric must still match loaded measurements."""
         original_health = self.router.engines.healthy
 
         async def healthy(url):
@@ -370,7 +347,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e0", self.router.scheduler.draining)
 
     async def test_unchanged_generation_automatic_validation_retains_measured_profile(self):
-        """Recovery without process replacement accepts the profile already loaded."""
         self.manager.records["e0"].restart_required = False
         self.starts["e0"] = 100
         self.bind_profiles()
@@ -379,7 +355,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("profile generation", outcome.checks["e0"])
 
     async def test_contracted_automatic_readmission_blocks_stale_loaded_measurements(self):
-        """The monitoring entry point retains a held record when profile binding fails."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.router.scheduler.eject("e0", "liveness")
@@ -405,7 +380,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("profile generation", self.manager.records["e0"].checks)
 
     async def test_identity_sweep_rejects_stale_profiles_even_when_accepted_identity_matches(self):
-        """An accepted handoff identity cannot authorize a standby's old in-memory profile."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.manager.process_starts["e0"] = 101
@@ -416,7 +390,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("has no generation evidence", self.manager.events[-1]["reason"])
 
     async def test_readmission_rejects_gate_failures_before_fabric_dispatch(self):
-        """Failed identity, model or generation evidence stops fabric probes."""
         for route, response, expected in (
             ("attestation", httpx.Response(503), "attestation unreadable"),
             ("attestation", {}, "attestation:"),
@@ -432,7 +405,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.router.engines.prefill.assert_not_awaited()
 
     async def test_readmission_rejects_unchanged_target_and_changed_peer(self):
-        """A restart must advance the target identity and preserve its peer's identity."""
         self.starts["e0"] = 100
         outcome = await self.validate()
         self.assertIn("did not restart", " ".join(outcome.failures["e0"]))
@@ -443,7 +415,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_readmission_health_identity_and_missing_attestation_fail_closed(self):
-        """Unavailable identity evidence leaves the target held out of scheduling."""
         self.router.engines.healthy.return_value = False
         outcome = await self.validate()
         self.assertIn("health did not answer 200", outcome.failures["e0"])
@@ -458,7 +429,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_mid_validation_identity_change_ejects_before_decode(self):
-        """A producer restart after prefill invalidates its descriptor before decode."""
 
         async def restart(*args, **kwargs):
             self.starts["e0"] += 1
@@ -473,7 +443,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         decode.assert_not_called()
 
     async def test_fabric_empty_stream_and_transport_failure_block_both_ends(self):
-        """Each failed transfer identifies both its producer and consumer."""
 
         async def empty(*args, **kwargs):
             yield [parse_event('data: {"choices": []}')]
@@ -488,14 +457,12 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ReadTimeout", " ".join(outcome.failures["e0"]))
 
     async def test_final_health_failure_retains_target_hold(self):
-        """The target must remain healthy after successful fabric transfers."""
         self.router.engines.healthy.side_effect = [True, True, False]
         outcome = await self.validate()
         self.assertIn("final health failed after fabric validation", outcome.failures["e0"])
         self.assertIn("e0", self.router.scheduler.draining)
 
     async def test_readmission_requires_complete_contract_and_eligible_peers(self):
-        """Policy and topology rejection precede engine health probes."""
         contract = self.cfg.engine_contract
         self.cfg.engine_contract = None
         outcome = await self.validate()
@@ -513,7 +480,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.engines.healthy.assert_not_awaited()
 
     def test_pinned_topologies_require_compatible_transfer_peers(self):
-        """Fabric pairs respect producer and consumer pins and cover every eligible consumer."""
         a, b = self.cfg.engines
         producer = replace(a, pin=True, role=Role.PREFILL)
         consumer = replace(b, pin=True, role=Role.DECODE)
@@ -531,12 +497,11 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_capture_identity_reports_each_unreadable_engine(self):
-        """Identity capture reports each engine's process start time or connection error."""
         with patch.object(
             identity,
             "fetch_engine_identity",
             side_effect=[
-                EngineIdentity(self.cfg.engine_contract.vllm_version, 100),
+                EngineIdentity(self.cfg.engine_contract.engine_version, 100),
                 httpx.ReadTimeout("identity"),
             ],
         ):
@@ -549,7 +514,6 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(failures), {"e0", "e3"})
 
     async def test_identity_monitor_ejects_unverified_engines_and_honours_fencing(self):
-        """Identity monitoring mutates holds only while this router owns fleet control."""
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.starts["e0"] = 100
@@ -566,6 +530,4 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LaunchBoundLifecycleValidationTests(LifecycleValidationTests):
-    """The same gates with attestations that carry launch evidence, as deployed engines do."""
-
     launch: ClassVar[dict | None] = {"args": ["--max-num-seqs", "64"]}

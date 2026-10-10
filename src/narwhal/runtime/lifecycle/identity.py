@@ -1,5 +1,3 @@
-"""Bind, capture and verify engine process identities."""
-
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import fetch_engine_identity, verify_attestation
 from ...profiling.generation import binding_digest, profile_generation_problems, read_generation
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
 async def check_process_identities(
     router: NarwhalRouter, engines: list[str] | None = None
 ) -> list[str]:
-    """Bind initial identities and exclude changed or unverifiable processes."""
     from ..standby import controls_fleet
 
     cfg: FleetConfig = router.cfg
@@ -52,6 +50,8 @@ async def check_process_identities(
                     timeout_s=cfg.health_timeout_s,
                     transport=router.lifecycle_transport,
                     headers=router.engines._auth(None),
+                    reader=load_backend(cfg.backend).identity,
+                    attestation_url=spec.attestation_url,
                 )
                 if not spec.attestation_url:
                     return None, "attestation_url is not configured"
@@ -71,6 +71,12 @@ async def check_process_identities(
                 if problems:
                     return None, "; ".join(problems)
                 router.attested(spec.iid, payload)
+                # Engines that switch roles themselves start in their launch role.
+                switched = await router.switch_role(
+                    spec.iid, router.monitor.instances[spec.iid].role
+                )
+                if switched is not None:
+                    return None, f"role switch failed: {switched}"
                 return identity.process_start_time_seconds, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 return None, f"process identity unavailable: {type(exc).__name__}"
@@ -106,11 +112,10 @@ async def capture_process_identities(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
-    """Read the live process identity before an external supervisor stops it."""
     specs = {spec.iid: spec for spec in cfg.engines}
     starts: dict[str, float] = {}
     failures: dict[str, str] = {}
-    if cfg.engine_contract is None or cfg.engine_contract.missing():
+    if cfg.engine_contract is None or cfg.contract_missing():
         detail = "lifecycle drain requires a complete engine_contract"
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
@@ -120,6 +125,8 @@ async def capture_process_identities(
                 timeout_s=cfg.health_timeout_s,
                 transport=transport,
                 headers=cfg.engine_headers(),
+                reader=load_backend(cfg.backend).identity,
+                attestation_url=specs[iid].attestation_url,
             )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"
@@ -129,7 +136,6 @@ async def capture_process_identities(
 
 
 async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
-    """Keep health and inference probes from restoring stale or operator-held engines."""
     from ..standby import controls_fleet
 
     manager = router.lifecycle
@@ -151,6 +157,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
                 timeout_s=router.cfg.health_timeout_s,
                 headers=router.cfg.engine_headers(),
                 transport=router.lifecycle_transport,
+                reader=load_backend(router.cfg.backend).identity,
             )
             problems = profile_generation_problems(router.profiles, iid, generation.digest)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:

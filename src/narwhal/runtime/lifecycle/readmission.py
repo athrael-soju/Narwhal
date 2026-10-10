@@ -1,17 +1,18 @@
-"""Validate drained or recovered engines before readmission."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
 from ...engines.client import EngineError
+from ...engines.connector import RendezvousConnector
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
 from ...profiling.generation import binding_digest, profile_generation_problems
+from ...types import Role
 from .records import LifecycleError, ValidationOutcome
 
 if TYPE_CHECKING:
@@ -32,7 +33,6 @@ async def validate_readmission(
     wave: bool,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ValidationOutcome:
-    """Run health, attestation, generation, and fabric gates before readmission."""
     outcome = ValidationOutcome()
     cfg: FleetConfig = router.cfg
     contract = cfg.engine_contract
@@ -49,7 +49,7 @@ async def validate_readmission(
             for iid in engines:
                 outcome.fail(iid, "whole-wave recovery requires recorded pre-restart identities")
             return outcome
-    if contract is None or contract.missing():
+    if contract is None or cfg.contract_missing():
         for iid in engines:
             outcome.fail(iid, "readmission requires a complete engine_contract")
         return outcome
@@ -94,6 +94,8 @@ async def validate_readmission(
                     timeout_s=timeout,
                     transport=transport,
                     headers=router.engines._auth(None),
+                    reader=load_backend(cfg.backend).identity,
+                    attestation_url=spec.attestation_url,
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"process identity unreadable: {type(exc).__name__}")
@@ -123,6 +125,12 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 router.attested(spec.iid, payload)
+                if spec.iid in engines and (
+                    switched := await router.switch_role(
+                        spec.iid, router.monitor.instances[spec.iid].role
+                    )
+                ):
+                    outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
                 )
@@ -159,6 +167,9 @@ async def validate_readmission(
                 spec.iid,
                 "new process identity" if record.restart_required else "process identity",
             )
+            if isinstance(router.engines.kv, RendezvousConnector):
+                # A rendezvous engine serves only paired legs; the fabric pairs generate.
+                continue
             try:
                 response = await client.post(
                     f"{spec.url}/v1/completions",
@@ -193,6 +204,8 @@ async def validate_readmission(
                     timeout_s=timeout,
                     transport=transport,
                     headers=router.engines._auth(None),
+                    reader=load_backend(cfg.backend).identity,
+                    attestation_url=spec.attestation_url,
                 )
                 if live != identities[spec.iid]:
                     raise ValueError("process changed during validation")
@@ -229,20 +242,38 @@ async def validate_readmission(
         "temperature": 0.0,
         **router.engines.dialect.decode_probe_extras(2),
     }
+    if router.scheduler.availability.roles_bound:
+        # Each engine serves only its live role, so a pair runs from prefill to decode.
+        roles = {iid: inst.role for iid, inst in router.monitor.instances.items()}
+        pairs = [
+            (source, target)
+            for source, target in pairs
+            if roles.get(source) is Role.PREFILL and roles.get(target) is Role.DECODE
+        ]
+        if not pairs:
+            for iid in engines:
+                outcome.fail(iid, "fabric validation requires a peer in the opposite role")
+            return outcome
     for source, target in pairs:
         if not await identities_unchanged():
             return outcome
         try:
-            params = await router.engines.prefill(by_id[source].url, "/v1/completions", body, {})
+            handoff = await router.engines.start_handoff(
+                by_id[source].url,
+                "/v1/completions",
+                body,
+                {},
+                producer=router.launches.get(source),
+            )
             if not await identities_unchanged():
                 return outcome
             tokens = 0
-            async for batch in router.engines.decode(
+            async for batch in router.engines.decode_handoff(
+                handoff,
                 by_id[target].url,
                 "/v1/completions",
                 body,
                 {},
-                params,
                 first_token_timeout_s=cfg.first_token_timeout_s,
             ):
                 tokens += sum(sse_token_count(event) for event in batch)

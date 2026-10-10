@@ -1,5 +1,3 @@
-"""Installed commands for a local shared-GPU development fleet."""
-
 from __future__ import annotations
 
 import argparse
@@ -18,7 +16,6 @@ from . import lifecycle, template
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Dispatch finite development and offline configuration operations."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     selected, _ = results.output_arguments(arguments)
     return results.invoke(
@@ -31,7 +28,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(argv: list[str]) -> int:
-    """Dispatch the local development lifecycle."""
     parser = argparse.ArgumentParser(
         prog="narwhal",
         description="Manage a local shared-GPU development fleet",
@@ -41,7 +37,7 @@ def _main(argv: list[str]) -> int:
             "  narwhal          Initialize, launch, verify and stop a local development fleet\n"
             "  narwhal-engine   Prepare and launch checked engine processes\n"
             "  narwhal-check    Run deployment preflight gates\n"
-            "  narwhal-attest   Serve engine identity and attestation for one vLLM engine\n"
+            "  narwhal-attest   Serve engine identity and attestation for one engine\n"
             "  narwhal-serve    Run a Narwhal router\n"
             "  narwhal-profile  Measure engine service curves and write router profiles"
         ),
@@ -97,7 +93,8 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--model",
                 type=Path,
-                help="local GGUF matching the template checksum (default: pinned HF cache file)",
+                help="local GGUF file or model directory matching the template checksums "
+                "(default: pinned HF cache snapshot)",
             )
             action.add_argument(
                 "--model-dir",
@@ -113,8 +110,8 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--port-base",
                 type=int,
-                help="router TCP port; engine HTTP, attestation and NIXL ranges start at "
-                "+1, +101 and +201; all ports must fit 1..65535 and be distinct "
+                help="router TCP port; engine HTTP, attestation and KV side-channel ranges "
+                "start at +1, +101 and +201; all ports must fit 1..65535 and be distinct "
                 "(default: template ports, installed router 18000)",
             )
             action.add_argument(
@@ -131,7 +128,9 @@ def _main(argv: list[str]) -> int:
                 "engine fractions; bounds startup memory increase "
                 "(default: template value, installed 0.8)",
             )
-            action.add_argument("--interface", help="Local NIXL/UCX interface (default: eth0)")
+            action.add_argument(
+                "--interface", help="Local KV transfer network interface (default: eth0)"
+            )
     args = parser.parse_args(argv)
     if args.command == "config":
         return config_cli.run(args)

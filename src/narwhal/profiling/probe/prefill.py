@@ -1,5 +1,3 @@
-"""Cold prefill latency probe."""
-
 from __future__ import annotations
 
 import statistics
@@ -7,7 +5,7 @@ import time
 
 import httpx
 
-from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect
 from .engine import completion_body, make_prompt
 from .sweep import PREFILL_LENS, PREFILL_REPEATS
 
@@ -16,15 +14,13 @@ async def probe_prefill(
     client: httpx.AsyncClient,
     url: str,
     model: str,
+    dialect: EngineDialect,
     lens: tuple[int, ...] = PREFILL_LENS,
     repeats: int = PREFILL_REPEATS,
-    dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
     max_model_len: int | None = None,
     observation_timeout_s: float | None = None,
 ) -> list[tuple[float, float]]:
-    """Measure one-token request latency across the input-length sweep."""
-    dialect = dialect or VllmDialect()
     samples: list[tuple[float, float]] = []
     for target in lens:
         prompt, n = await make_prompt(

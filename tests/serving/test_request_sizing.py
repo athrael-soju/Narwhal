@@ -1,5 +1,3 @@
-"""Check request sizing's token ID checks, contract fingerprints and threaded hashing."""
-
 import asyncio
 import tempfile
 import unittest
@@ -28,7 +26,6 @@ class RequestSizingTests(unittest.TestCase):
         self.prompt = list(range(18))
 
     def hold(self, tokens, contract=None):
-        """Make the first engine hold every full block of `tokens` under `contract`."""
         contract = contract or self.cfg.engine_contract
         namespace = CacheNamespace(self.cfg.model, contract.fingerprint())
         hold_prefix(self.router.residency.view(self.iid), namespace, tokens, BLOCK)
@@ -40,7 +37,7 @@ class RequestSizingTests(unittest.TestCase):
 
     def test_each_contract_is_fingerprinted_once(self):
         contract = self.cfg.engine_contract
-        other = replace(contract, vllm_version=f"{contract.vllm_version}-other")
+        other = replace(contract, engine_version=f"{contract.engine_version}-other")
         self.assertNotEqual(other.fingerprint(), contract.fingerprint())
         self.hold(self.prompt)
         with self.fingerprints() as spy:
@@ -62,7 +59,6 @@ class RequestSizingTests(unittest.TestCase):
             spy.assert_not_called()
 
     def test_only_hashed_token_ids_must_fit_an_identity(self):
-        """Eighteen tokens reuse seventeen; blocks of four hash positions 0-15."""
         self.hold(self.prompt)
         expected = self.sizer.prefix_cache_evidence({}, self.prompt)
         self.assertEqual(expected[0], {self.iid: 16})

@@ -17,11 +17,14 @@ At startup, the sidecar exits with status 1 when the engine's vLLM version diffe
 | `--version` | | Print the installed distribution version. |
 | `--document PATH` | required | Attestation document holding contract values and a source per field. |
 | `--engine-base URL` | required | vLLM base URL that serves `/version` and `/metrics`. |
+| `--backend NAME` | `vllm` | Engine backend that reads the engine's identity and cache events. |
 | `--host HOST` | `127.0.0.1` | Address to bind. |
 | `--port PORT` | `8010` | Port to listen on. |
 | `--timeout-s SECONDS` | `5.0` | Timeout for reading the engine's identity. |
 | `--kv-events DIR` | optional | Engine cache-event socket directory that turns on the residency routes. |
 | `--model NAME` | optional | Served model name for block identities, required with `--kv-events`. |
+| `--engine-container ID` | | Engine container whose start time identifies the engine process. Required for SGLang unless `--engine-pid` is set. |
+| `--engine-pid PID` | | Native engine process whose start time identifies the engine process. |
 
 The contract tool's `serve` action passes `--kv-events` and `--model` when both hold:
 
@@ -29,6 +32,10 @@ The contract tool's `serve` action passes `--kv-events` and `--model` when both 
 - the checked launch publishes cache events
 
 The contract tool command is `python -m narwhal.deployment.attestation_contract.cli serve`.
+
+## Process route
+
+With `--engine-container` or `--engine-pid` set, `GET /v1/process` returns `process_start_time_seconds`, the engine process start time read on the host. The router reads an SGLang engine's process start from this route, because SGLang publishes none over HTTP.
 
 ## Residency
 

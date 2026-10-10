@@ -1,4 +1,4 @@
-"""Serve one simulated vLLM engine for router-only benchmarks."""
+"""Serve one simulated engine for router-only benchmarks."""
 
 from __future__ import annotations
 
@@ -151,6 +151,159 @@ def handoff(params: object) -> bool:
     )
 
 
+class VllmWire:
+    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+        if (method, path) == ("GET", "/version"):
+            return Reply(200, body=compact({"version": SIMULATED_VERSION}))
+        return None
+
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
+        return (
+            "# HELP process_start_time_seconds Start time of the process since unix epoch in "
+            "seconds.\n"
+            "# TYPE process_start_time_seconds gauge\n"
+            f"process_start_time_seconds {engine.process_start_time_seconds!r}\n"
+        )
+
+    def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
+        return headers.get("x-request-id")
+
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        return None
+
+    def decode_error(self, payload: dict[str, Any]) -> Reply | None:
+        params = payload.get("kv_transfer_params")
+        if params is not None and not handoff(params):
+            return error(400, "invalid kv_transfer_params", "BadRequestError")
+        return None
+
+    def prefill_fields(
+        self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
+    ) -> dict[str, Any]:
+        params = payload.get("kv_transfer_params")
+        if not isinstance(params, dict) or not params.get("do_remote_decode"):
+            return {}
+        return {
+            "kv_transfer_params": {
+                "do_remote_prefill": True,
+                "do_remote_decode": False,
+                "remote_block_ids": list(range(math.ceil(prompt / BLOCK_TOKENS))),
+                "remote_engine_id": f"sim-{engine.iid}",
+                "remote_request_id": rid,
+                "remote_host": "127.0.0.1",
+                "remote_port": engine.port,
+                "tp_size": 1,
+            }
+        }
+
+
+class SglangWire:
+    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+        if (method, path) == ("GET", "/server_info"):
+            state = {"disaggregation_mode": engine.role, "decode_cuda_graph_memory_gb": 0.0}
+            return Reply(
+                200,
+                body=compact(
+                    {
+                        "version": SIMULATED_VERSION,
+                        "disaggregation_mode": "prefill",
+                        "api_key": None,
+                        "internal_states": [state],
+                    }
+                ),
+            )
+        if (method, path) in (("GET", "/flush_cache"), ("POST", "/flush_cache")):
+            return Reply(200, "text/plain", b"Cache flushed.")
+        if (method, path) == ("POST", "/pd_role_switch"):
+            try:
+                role = json.loads(body).get("new_role")
+            except (ValueError, AttributeError):
+                role = None
+            if role not in ("prefill", "decode"):
+                return error(400, "new_role must be prefill or decode", "BadRequestError")
+            old, engine.role = engine.role, role
+            return Reply(
+                200,
+                body=compact({"success": True, "message": "ok", "old_role": old, "new_role": role}),
+            )
+        return None
+
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
+        stage = 'stage="decode_transferred"'
+        return (
+            f"sglang:max_total_num_tokens {MAX_MODEL_LEN}\n"
+            "sglang:page_size 1\n"
+            'sglang:cached_tokens_total{cache_source="device"} 0\n'
+            f"sglang:per_stage_req_latency_seconds_count{{{stage}}} {engine.transfers}\n"
+            f"sglang:per_stage_req_latency_seconds_sum{{{stage}}} {engine.transfer_seconds!r}\n"
+        )
+
+    def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
+        rid = payload.get("rid")
+        return rid if isinstance(rid, str) else None
+
+    def decode_error(self, payload: dict[str, Any]) -> Reply | None:
+        if type(payload.get("bootstrap_room")) is not int:
+            return error(
+                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
+            )
+        return None
+
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        if engine.rooms is None:
+            return None
+        room = payload.get("bootstrap_room")
+        if type(room) is not int:
+            return error(
+                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
+            )
+        if engine.role == "prefill" and payload.get("stream"):
+            return error(400, "a prefill instance returns no stream", "BadRequestError")
+        started = time.monotonic()
+        if not await engine.rooms.meet(room, bounded=engine.role == "prefill"):
+            return error(500, f"Prefill bootstrap failed for room {room}", "InternalServerError")
+        if engine.role == "decode":
+            engine.transfers += 1
+            engine.transfer_seconds += max(time.monotonic() - started, 1e-6)
+        return None
+
+    def prefill_fields(
+        self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
+    ) -> dict[str, Any]:
+        return {}
+
+
+class Rooms:
+    """Pair SGLang prefill and decode legs by bootstrap room across in-process engines."""
+
+    def __init__(self, bootstrap_timeout_s: float = 30.0) -> None:
+        self.bootstrap_timeout_s = bootstrap_timeout_s
+        self.waiting: dict[int, asyncio.Future[None]] = {}
+
+    async def meet(self, room: int, *, bounded: bool) -> bool:
+        peer = self.waiting.pop(room, None)
+        if peer is not None:
+            if not peer.done():
+                peer.set_result(None)
+            return True
+        arrived = asyncio.get_running_loop().create_future()
+        self.waiting[room] = arrived
+        try:
+            # Prefill gives up on an absent decode leg; decode waits for its prefill.
+            async with asyncio.timeout(self.bootstrap_timeout_s if bounded else None):
+                await arrived
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            if self.waiting.get(room) is arrived:
+                del self.waiting[room]
+
+
+# One wire protocol per engine backend name.
+PROTOCOLS = {"sglang": SglangWire(), "vllm": VllmWire()}
+
+
 class SimulatedEngine:
     """Answer engine routes and pace decode frames over the active streams."""
 
@@ -161,12 +314,20 @@ class SimulatedEngine:
         token_interval_s: float = 0.02,
         frames_per_write: int = 1,
         prefill_s: float = 0.005,
+        backend: str = "vllm",
+        rooms: Rooms | None = None,
     ) -> None:
         self.iid = iid
+        self.wire = PROTOCOLS[backend]
+        # Shared rooms make engines serve only their live role and pair the two legs.
+        self.rooms = rooms
+        self.transfers = 0
+        self.transfer_seconds = 0.0
         self.token_interval_s = token_interval_s
         self.frames_per_write = frames_per_write
         self.prefill_s = prefill_s
         self.process_start_time_seconds = time.time()
+        self.role = "prefill"
         self.late_ticks = 0
         self.prefilling = 0
         self.peak = {"prefill": 0, "decode": 0}
@@ -188,8 +349,9 @@ class SimulatedEngine:
         route = (method, path)
         if route == ("GET", "/health"):
             return Reply(200)
-        if route == ("GET", "/version"):
-            return Reply(200, body=compact({"version": SIMULATED_VERSION}))
+        identity = self.wire.route(self, method, path, body)
+        if identity is not None:
+            return identity
         if route == ("GET", "/metrics"):
             return Reply(200, METRICS_TYPE, self.metrics())
         if route not in (("POST", "/tokenize"), ("POST", "/v1/completions")):
@@ -213,15 +375,18 @@ class SimulatedEngine:
                     }
                 ),
             )
-        rid = headers.get("x-request-id") or uuid.uuid4().hex
+        refused = await self.wire.admit(self, payload)
+        if refused is not None:
+            return refused
+        rid = self.wire.request_id(headers, payload) or uuid.uuid4().hex
         if payload.get("stream"):
             return self.decode(rid, payload)
         return await self.prefill(rid, payload)
 
     def decode(self, rid: str, payload: dict[str, Any]) -> Reply:
-        params = payload.get("kv_transfer_params")
-        if params is not None and not handoff(params):
-            return error(400, "invalid kv_transfer_params", "BadRequestError")
+        refused = self.wire.decode_error(payload)
+        if refused is not None:
+            return refused
         max_tokens = payload.get("max_tokens", 16)
         if type(max_tokens) is not int or max_tokens < 1:
             return error(400, "max_tokens must be a positive integer", "BadRequestError")
@@ -264,28 +429,14 @@ class SimulatedEngine:
                 }
             ],
             "usage": {"prompt_tokens": prompt, "total_tokens": prompt + 1, "completion_tokens": 1},
+            **self.wire.prefill_fields(self, rid, payload, prompt),
         }
-        params = payload.get("kv_transfer_params")
-        if isinstance(params, dict) and params.get("do_remote_decode"):
-            reply["kv_transfer_params"] = {
-                "do_remote_prefill": True,
-                "do_remote_decode": False,
-                "remote_block_ids": list(range(math.ceil(prompt / BLOCK_TOKENS))),
-                "remote_engine_id": f"sim-{self.iid}",
-                "remote_request_id": rid,
-                "remote_host": "127.0.0.1",
-                "remote_port": self.port,
-                "tp_size": 1,
-            }
         return Reply(200, body=compact(reply))
 
     def metrics(self) -> bytes:
         return (
-            "# HELP process_start_time_seconds Start time of the process since unix epoch in "
-            "seconds.\n"
-            "# TYPE process_start_time_seconds gauge\n"
-            f"process_start_time_seconds {self.process_start_time_seconds!r}\n"
-            f"# HELP {LATE_TICKS_METRIC} Pacing ticks that started one tick period or more "
+            self.wire.engine_metrics(self)
+            + f"# HELP {LATE_TICKS_METRIC} Pacing ticks that started one tick period or more "
             "after their scheduled time.\n"
             f"# TYPE {LATE_TICKS_METRIC} counter\n"
             f"{LATE_TICKS_METRIC} {self.late_ticks}\n"
@@ -478,6 +629,7 @@ class EngineProtocol(asyncio.Protocol):
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     options = argparse.ArgumentParser(description=__doc__)
     options.add_argument("--iid", required=True)
+    options.add_argument("--backend", choices=sorted(PROTOCOLS), default="vllm")
     options.add_argument("--host", default="127.0.0.1")
     options.add_argument("--port", type=int, default=0)
     options.add_argument("--token-interval", type=float, default=0.02)
@@ -502,6 +654,7 @@ async def serve(args: argparse.Namespace) -> int:
         token_interval_s=args.token_interval,
         frames_per_write=args.frames_per_write,
         prefill_s=args.prefill_seconds,
+        backend=args.backend,
     )
     stop = asyncio.Event()
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)

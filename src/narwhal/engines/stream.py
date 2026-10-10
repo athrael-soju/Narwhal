@@ -1,5 +1,3 @@
-"""Decode SSE events and validate generated token identity."""
-
 from __future__ import annotations
 
 import codecs
@@ -17,8 +15,6 @@ _LINE_END = re.compile(r"\r\n|\r|\n")
 
 @dataclass(slots=True)
 class SseEvent:
-    """One SSE line and its data object, parsed once."""
-
     line: str
     data: dict[str, Any] | None = None
     done: bool = False
@@ -26,7 +22,6 @@ class SseEvent:
 
 
 def parse_event(line: str) -> SseEvent:
-    """Parse one line; comments, empty data, terminators and malformed data carry no object."""
     if not line.startswith("data:"):
         return SseEvent(line)
     payload = line[5:].strip()
@@ -44,19 +39,15 @@ def parse_event(line: str) -> SseEvent:
 
 
 class SseSplitter:
-    """Split UTF-8 transport chunks into SSE lines."""
-
     def __init__(self) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._partial = ""
         self._cr = False
 
     def feed(self, chunk: bytes) -> list[str]:
-        """Return the lines that `chunk` completes."""
         return self._split(self._decoder.decode(chunk))
 
     def finish(self) -> list[str]:
-        """Return the lines left at the end of the stream."""
         lines = self._split(self._decoder.decode(b"", final=True))
         if self._partial:
             lines.append(self._partial)
@@ -75,7 +66,6 @@ class SseSplitter:
 
 
 async def sse_batches(chunks: AsyncIterator[bytes]) -> AsyncGenerator[list[SseEvent], None]:
-    """Yield the non-empty lines each transport chunk completes, parsed once."""
     splitter = SseSplitter()
     async for chunk in chunks:
         batch = [parse_event(line) for line in splitter.feed(chunk) if line]
@@ -87,14 +77,12 @@ async def sse_batches(chunks: AsyncIterator[bytes]) -> AsyncGenerator[list[SseEv
 
 
 async def sse_events(chunks: AsyncIterator[bytes]) -> AsyncGenerator[SseEvent, None]:
-    """Yield each non-empty SSE line of a byte stream, parsed once."""
     async for batch in sse_batches(chunks):
         for event in batch:
             yield event
 
 
 def event_object(line: str) -> dict[str, Any] | None:
-    """Decode a data object; return None for comments, empty data and terminators."""
     if not line.startswith("data:"):
         return None
     payload = line[5:].strip()
@@ -107,7 +95,6 @@ def event_object(line: str) -> dict[str, Any] | None:
 
 
 def event_choices(obj: dict[str, Any]) -> list[dict[str, Any]]:
-    """Read the event's choice array and validate each chat delta."""
     choices = obj.get("choices", [])
     if not isinstance(choices, list) or any(not isinstance(choice, dict) for choice in choices):
         raise ValueError("SSE choices must be an array of objects")
@@ -119,7 +106,6 @@ def event_choices(obj: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def token_ids(choices: list[dict[str, Any]]) -> tuple[int, ...] | None:
-    """Collect nonnegative integer IDs; return None for invalid or unidentified output."""
     tokens: list[int] = []
     for choice in choices:
         delta = choice.get("delta") or {}
@@ -163,12 +149,10 @@ def _text_parts(event: SseEvent) -> list[str]:
 
 
 def sse_token_count(event: SseEvent) -> int:
-    """Count choices carrying completion text or chat content."""
     return len(_text_parts(event))
 
 
 def sse_token_ids(event: SseEvent) -> tuple[int, ...] | None:
-    """Read event token IDs; return None for invalid identity or choice structure."""
     if event.data is None:
         return ()
     try:
@@ -178,30 +162,25 @@ def sse_token_ids(event: SseEvent) -> tuple[int, ...] | None:
 
 
 def sse_token_bearing(event: SseEvent, dialect: EngineDialect) -> bool:
-    """Detect generated output for the first-token deadline."""
     if dialect.token_ids:
         ids = sse_token_ids(event)
         return ids is None or bool(ids)
     return sse_token_count(event) > 0
 
 
-def rewrite_sse(event: SseEvent, *, expose_token_ids: bool) -> str:
-    """Hide internal token fields unless the client requested them."""
+def rewrite_sse(event: SseEvent, *, strip: tuple[str, ...]) -> str:
     obj = event.data
     if obj is None:
         return event.line
-    if not expose_token_ids:
-        obj.pop("prompt_token_ids", None)
-        obj.pop("token_ids", None)
-        for choice in obj.get("choices", []) or []:
-            if isinstance(choice, dict):
-                choice.pop("prompt_token_ids", None)
-                choice.pop("token_ids", None)
+    choices = [c for c in obj.get("choices", []) or [] if isinstance(c, dict)]
+    for name in strip:
+        obj.pop(name, None)
+        for choice in choices:
+            choice.pop(name, None)
     return "data: " + json.dumps(obj, separators=(",", ":"))
 
 
 def sse_error(event: SseEvent) -> tuple[int, str] | None:
-    """Return an upstream error carried inside an HTTP 200 SSE stream."""
     obj = event.data
     if obj is None or obj.get("error") is None:
         return None

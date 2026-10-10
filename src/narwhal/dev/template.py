@@ -1,5 +1,3 @@
-"""Materialize the installed native workstation reference using Narwhal contracts."""
-
 from __future__ import annotations
 
 import copy
@@ -16,22 +14,29 @@ from importlib import metadata, resources
 from pathlib import Path
 from typing import Any
 
+from narwhal.backends import renamed_fields
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine.plan import validate_runtime
+from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.launch_engine.runtime import write_private
 from narwhal.deployment.launch_engine.start import gpu_memory
 from narwhal.runtime.listeners import check_engine_bind
 
 
 def reference() -> dict:
-    """Read the measured four-engine reference from the installed distribution."""
     return _read_template("reference-v1.json")
 
 
 def default_template() -> dict:
-    """Read the installed small-GPU starting template."""
     return _read_template("small-cuda-v1.json")
+
+
+def current_ports(document: dict) -> dict:
+    ports = document.get("ports")
+    if isinstance(ports, dict):
+        renamed = renamed_fields("dev_ports")
+        document["ports"] = {renamed.get(key, key): value for key, value in ports.items()}
+    return document
 
 
 def _read_template(filename: str) -> dict:
@@ -91,7 +96,7 @@ def _address(interface: str) -> str:
     return str(addresses[0])
 
 
-def _check_runtime(packages: dict[str, str]) -> None:
+def _check_packages(packages: dict[str, str]) -> None:
     for name, expected in packages.items():
         try:
             found = metadata.version(name)
@@ -99,43 +104,12 @@ def _check_runtime(packages: dict[str, str]) -> None:
             raise ValueError(f"native runtime requires installed {name}=={expected}") from exc
         if found != expected:
             raise ValueError(f"native runtime requires {name}=={expected}; found {found}")
-    # The same vLLM connector API check as narwhal-engine.
-    script = """from vllm.config import KVTransferConfig
-from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
-config = KVTransferConfig(
-    kv_connector='NixlConnector', kv_role='kv_both',
-    kv_connector_extra_config={'backends': ['UCX'], 'enforce_handshake_compat': True},
-)
-KVConnectorFactory.get_connector_class(config)
-"""
-    try:
-        result = subprocess.run(  # noqa: S603 - this interpreter runs a fixed import check
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        detail = exc.stderr[-800:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        raise ValueError(f"native vLLM/NIXL connector import failed: {detail}") from exc
-    if result.stderr and "Traceback" in result.stderr:
-        raise ValueError(f"native vLLM/NIXL connector import reported: {result.stderr[-800:]}")
 
 
-def check_plugin(runtime: dict) -> None:
-    """Bind the GGUF Python overlay and compiled extension to the qualified runtime."""
-    if "gguf_plugin_python_sha256" not in runtime:
-        return
-    package = Path(str(metadata.distribution("vllm-gguf-plugin").locate_file("vllm_gguf_plugin")))
-    digest = hashlib.sha256()
-    for source in sorted(package.rglob("*.py")):
-        digest.update(source.relative_to(package).as_posix().encode() + b"\0")
-        digest.update(source.read_bytes() + b"\0")
-    if digest.hexdigest() != runtime["gguf_plugin_python_sha256"]:
-        raise ValueError("GGUF plugin Python sources differ from the qualified revision")
-    if _sha256(package / "_C_gguf.abi3.so") != runtime["gguf_plugin_extension_sha256"]:
-        raise ValueError("GGUF plugin CUDA extension differs from the qualified wheel")
+def model_files(model: dict, model_path: Path) -> dict[Path, str]:
+    if "filename" in model:
+        return {model_path: model["sha256"]}
+    return {model_path / name: expected for name, expected in model["files_sha256"].items()}
 
 
 def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
@@ -145,7 +119,7 @@ def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
     used = {ports["router"]}
     if not 1 <= ports["router"] <= 65535:
         raise ValueError("router port is invalid")
-    for key in ("engine_first", "attestation_first", "nixl_first"):
+    for key in ("engine_first", "attestation_first", "side_channel_first"):
         first = ports[key]
         if type(first) is not int or not 1 <= first <= 65536 - count:
             raise ValueError(f"{key} cannot fit {count} engine ports")
@@ -198,17 +172,16 @@ def materialize(
     gpu_memory_utilization: float | None = None,
     device_allowance: float | None = None,
 ) -> Path:
-    """Reuse matching explicit settings, or check the host and write a private instance."""
     output = output.expanduser().resolve()
     existing = None
     saved = None
     if output.exists():
-        existing = json.loads((output / "instance.json").read_text())
+        existing = current_ports(json.loads((output / "instance.json").read_text()))
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
-        saved = json.loads((output / "template.json").read_text())
+        saved = current_ports(json.loads((output / "template.json").read_text()))
     source = template if template is not None else saved
-    spec = copy.deepcopy(source if source is not None else default_template())
+    spec = current_ports(copy.deepcopy(source if source is not None else default_template()))
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
         raise ValueError("Narwhal dev template requires schema version 1")
     allocation = {
@@ -224,7 +197,7 @@ def materialize(
             router=port_base,
             engine_first=port_base + 1,
             attestation_first=port_base + 101,
-            nixl_first=port_base + 201,
+            side_channel_first=port_base + 201,
         )
     if existing is not None and saved is not None:
         conflicts = []
@@ -252,7 +225,7 @@ def materialize(
         )
         if port_base is not None and any(
             spec["ports"][field] != existing["ports"][field]
-            for field in ("router", "engine_first", "attestation_first", "nixl_first")
+            for field in ("router", "engine_first", "attestation_first", "side_channel_first")
         ):
             conflicts.append("--port-base")
         if template is not None:
@@ -266,14 +239,8 @@ def materialize(
         return output
     hub = Path.home() / ".cache/huggingface/hub"
     model = spec["model"]
-    model_path = (
-        model_path
-        or hub
-        / ("models--" + model["repository"].replace("/", "--"))
-        / "snapshots"
-        / model["revision"]
-        / model["filename"]
-    )
+    snapshot = hub / ("models--" + model["repository"].replace("/", "--")) / "snapshots"
+    model_path = model_path or snapshot / model["revision"] / model.get("filename", "")
     model_dir = (
         model_dir
         or hub
@@ -285,11 +252,17 @@ def materialize(
     model_dir = model_dir.expanduser().resolve(strict=True)
     # Hugging Face snapshot files are often symlinks to blobs.
     model_path = model_path.expanduser().absolute()
-    if not model_path.is_file():
+    if "filename" not in model:
+        if not model_path.is_dir():
+            raise ValueError("model path must name a checkpoint directory")
+        for path, expected in model_files(model, model_path).items():
+            if _sha256(path) != expected:
+                raise ValueError(f"model file {path.name} differs from the pinned revision")
+    elif not model_path.is_file():
         raise ValueError("GGUF model path must name a file")
-    if model_path.name != spec["model"]["filename"]:
-        raise ValueError(f"template requires {spec['model']['filename']}")
-    if _sha256(model_path) != spec["model"]["sha256"]:
+    elif model_path.name != model["filename"]:
+        raise ValueError(f"template requires {model['filename']}")
+    elif _sha256(model_path) != model["sha256"]:
         raise ValueError("GGUF file SHA-256 differs from the pinned model revision")
     config_path = model_dir / "config.json"
     if not config_path.is_file():
@@ -325,8 +298,10 @@ def materialize(
     required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
     if available < required:
         raise ValueError(f"GPU VRAM reserve failed: {available} MiB free, {required} MiB required")
-    _check_runtime(spec["runtime"]["expected_packages"])
-    check_plugin(spec["runtime"])
+    engine = launcher(spec["runtime"].get("backend"))
+    _check_packages(spec["runtime"]["expected_packages"])
+    engine.check_dev_imports(spec["runtime"])
+    engine.check_dev_files(spec["runtime"])
     address = _address(fabric_interface)
     _check_free_ports(used_ports, "127.0.0.1")
     hostname = socket.gethostname()
@@ -337,30 +312,8 @@ def materialize(
         "device_allowance": allowance,
         "gpu_memory_utilization": fraction,
     }
-    runtime = {
-        "expected_packages": spec["runtime"]["expected_packages"],
-        "model_dtype": spec["runtime"]["model_dtype"],
-        "kv_cache_dtype": spec["runtime"]["kv_cache_dtype"],
-        "block_size": spec["runtime"]["block_size"],
-        "environment": spec["runtime"]["environment"],
-        "extra_args": [
-            "--tokenizer",
-            str(model_dir),
-            "--hf-config-path",
-            str(model_dir),
-            "--load-format",
-            "gguf",
-            "--language-model-only",
-            "--max-model-len",
-            str(spec["runtime"]["max_model_len"]),
-            "--gpu-memory-utilization",
-            str(fraction),
-            "--max-num-seqs",
-            str(spec["runtime"]["max_num_seqs"]),
-            "--enforce-eager",
-        ],
-    }
-    validate_runtime(runtime)
+    runtime = engine.dev_runtime(spec["runtime"], model_dir, fraction)
+    engine.validate_runtime(runtime)
     launch: dict[str, Any] = {
         "schema": "narwhal.engine-launch",
         "schema_version": 1,
@@ -386,6 +339,11 @@ def materialize(
         "recovery": {"state_path": str(output / "router-state.json")},
         "engine": {
             "first_token_timeout_s": 10.0,
+            **(
+                {"backend": runtime["backend"], "connector": runtime["connector"]}
+                if "backend" in runtime
+                else {}
+            ),
             **(
                 {"engine_api_key_env": "NARWHAL_ENGINE_API_KEY"}
                 if os.environ.get("NARWHAL_ENGINE_API_KEY")
