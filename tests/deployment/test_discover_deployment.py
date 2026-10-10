@@ -1,5 +1,3 @@
-"""Start deployment preparation from environment values and fresh host observations."""
-
 import copy
 import inspect
 import io
@@ -12,7 +10,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.deployment.launch_engine.plan import build, ds_conv_state_layout_required
+from narwhal.backends.vllm.plan import ds_conv_state_layout_required
+from narwhal.deployment.launch_engine.plan import build
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -310,7 +309,6 @@ class DiscoveryTests(unittest.TestCase):
         compile(PROBE, "remote discovery probe", "exec")
 
     def test_probe_applies_the_launcher_convolutional_state_rule(self):
-        """Discovery and the launch check agree on gated-delta linear attention."""
         rule = inspect.getsource(ds_conv_state_layout_required)
         self.assertTrue(PROBE.startswith(rule))
         namespace = {}

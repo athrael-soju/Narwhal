@@ -12,13 +12,13 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
+from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.backends.vllm.identity import VllmIdentity
+from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
-from narwhal.deployment.launch_engine.captures import handshake_policy
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import (
-    ENGINE_TTL_S,
     build,
     load,
     prepare,
@@ -133,7 +133,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
 
     def test_qwen_linear_convolution_requires_ds_layout(self):
-        from narwhal.deployment.launch_engine.plan import requires_ds_conv_state_layout
+        from narwhal.backends.vllm.plan import requires_ds_conv_state_layout
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -166,6 +166,17 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(values["VLLM_API_KEY"], "engine-only-secret")
             self.assertNotIn("management-only-secret", json.dumps([plan, values]))
             self.assertNotIn("engine-only-secret", json.dumps(plan))
+
+    def test_runtime_backend_selects_the_engine_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            self.assertNotIn("engine", build(record, env, Path(folder) / "default")[0])
+            record["runtime"]["backend"] = "vllm"
+            plan, _ = build(record, env, Path(folder) / "named")
+            self.assertEqual(plan["engine"], "vllm")
+            record["runtime"]["backend"] = "missing"
+            with self.assertRaisesRegex(ValueError, "unknown engine backend 'missing'"):
+                build(record, env, Path(folder) / "missing")
 
     def test_colocated_cuda_engines_share_the_host_pid_namespace(self):
         for visible, shared, gpu_tls, cache in (

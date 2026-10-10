@@ -1,5 +1,3 @@
-"""Prepare, inspect and launch pinned vLLM/NIXL engines with container or native backends."""
-
 from __future__ import annotations
 
 import argparse
@@ -10,25 +8,21 @@ from pathlib import Path
 from ... import command_results as results
 from ...cli_support import add_version_argument
 from .. import native_engine
-from .captures import (
-    capture_cache,
-    handshake_policy,
-    measure_cache,
-    model_dimensions,
-    registration_layout,
-)
+from .backend import plan_launcher
 from .check import check
 from .plan import load, prepare
 from .start import READY_SECONDS, start, start_shared
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the narwhal-engine CLI."""
     return results.invoke("narwhal-engine", argv, _main, operation="engine")
 
 
 def _main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Prepare, inspect and launch pinned vLLM/NIXL engines with container or "
+        "native backends."
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="output format")
     add_version_argument(parser)
     descriptions = {
@@ -165,8 +159,9 @@ def _main(argv: list[str]) -> int:
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )
+            engine = plan_launcher(plan)
             if args.command == "cache-registration":
-                registration_layout(
+                engine.registration_layout(
                     run,
                     plan,
                     args.runtime_layout or args.startup_log,
@@ -175,10 +170,10 @@ def _main(argv: list[str]) -> int:
                 return 0
             {
                 "check": check,
-                "measure-cache": measure_cache,
-                "capture-cache": capture_cache,
-                "model-dimensions": model_dimensions,
-                "handshake-policy": handshake_policy,
+                "measure-cache": engine.measure_cache,
+                "capture-cache": engine.capture_cache,
+                "model-dimensions": engine.model_dimensions,
+                "handshake-policy": engine.handshake_policy,
                 "start": start,
             }[args.command](run, plan)
     except (

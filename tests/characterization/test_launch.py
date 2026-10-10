@@ -13,8 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from narwhal.deployment.attestation_contract import document as attestation_document
-from narwhal.deployment.attestation_contract.document import engine_document
+from narwhal.backends.vllm import attestation as attestation_document
+from narwhal.backends.vllm import dev as vllm_dev
+from narwhal.backends.vllm import plan as vllm_plan
+from narwhal.backends.vllm.attestation import engine_document
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import build, load, prepare
@@ -205,7 +207,7 @@ class LaunchPlanTests(unittest.TestCase):
             "shared_ports": lambda r, e: e.update(NARWHAL_NIXL_SIDE_CHANNEL_PORT="8000"),
         }
         prefixes = {
-            f"{prefix}FIXTURE": None for prefix in (*launch_plan.ENV_PREFIXES, "LD_", "OTHER_")
+            f"{prefix}FIXTURE": None for prefix in (*vllm_plan.ENV_PREFIXES, "LD_", "OTHER_")
         }
         results = {}
         with tempfile.TemporaryDirectory() as folder:
@@ -248,13 +250,13 @@ class LaunchPlanTests(unittest.TestCase):
                 else:
                     results[f"gguf_plugin_{pinned}"] = {"model": plan["model_path"]}
         constants = {
-            "value_options": sorted(launch_plan.VALUE_OPTIONS),
-            "flag_options": sorted(launch_plan.FLAG_OPTIONS),
-            "managed_env": sorted(launch_plan.MANAGED_ENV),
-            "env_prefixes": list(launch_plan.ENV_PREFIXES),
-            "engine_ttl_s": launch_plan.ENGINE_TTL_S,
-            "kv_lease_s": launch_plan.KV_LEASE_S,
-            "min_kv_lease_s": launch_plan.MIN_KV_LEASE_S,
+            "value_options": sorted(vllm_plan.VALUE_OPTIONS),
+            "flag_options": sorted(vllm_plan.FLAG_OPTIONS),
+            "managed_env": sorted(vllm_plan.MANAGED_ENV),
+            "env_prefixes": list(vllm_plan.ENV_PREFIXES),
+            "engine_ttl_s": vllm_plan.ENGINE_TTL_S,
+            "kv_lease_s": vllm_plan.KV_LEASE_S,
+            "min_kv_lease_s": vllm_plan.MIN_KV_LEASE_S,
             "kv_events_mount": launch_plan.KV_EVENTS_MOUNT,
             "kv_events_sockets": launch_plan.KV_EVENTS_SOCKETS,
         }
@@ -478,7 +480,7 @@ class DevTemplateTests(unittest.TestCase):
             ),
             patch.object(template.metadata, "version", side_effect=packages.__getitem__),
             patch.object(
-                template.subprocess,
+                vllm_dev.subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess([], 0, "", ""),
             ) as run,

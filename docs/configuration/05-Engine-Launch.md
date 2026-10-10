@@ -136,6 +136,7 @@ Operator input for each `runtime` field:
 
 | Runtime field       | Operator input                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend`           | Optional registered engine backend that builds and checks the launch, default `vllm`. The fields below are the `vllm` backend's.                                    |
 | `expected_packages` | Exact installed versions for `vllm`, `nixl` or `nixl-rocm`, and each image package whose identity `narwhal-engine check` must verify.                                |
 | `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                             |
 | `kv_cache_dtype`    | `auto`.                                                                                                                                                              |

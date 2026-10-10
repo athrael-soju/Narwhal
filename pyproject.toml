@@ -91,8 +91,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "PERF", "RUF", "S"]
 # Harnesses use assertions, fixed seeds, and fake credentials.
 "tools/*.py" = ["E402", "E731", "S"]
 "tests/*.py" = ["E731", "S"]
-# Preserve the existing deployment scripts' lint baseline during packaging.
+# Preserve the deployment scripts' lint baseline, including those moved to the vLLM backend.
 "src/narwhal/deployment/*.py" = ["S"]
+"src/narwhal/backends/vllm/*.py" = ["S"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -1,5 +1,3 @@
-"""Installed command discovery and environment-specific version reporting."""
-
 import contextlib
 import importlib
 import io
@@ -21,9 +19,7 @@ class CLIIdentityTests(unittest.TestCase):
     def test_copied_engine_launcher_runs_with_only_the_standard_library(self):
         with tempfile.TemporaryDirectory() as folder:
             launcher = Path(folder) / "launch_engine.py"
-            launcher.write_bytes(
-                (ROOT / "src/narwhal/deployment/launch_engine/runtime.py").read_bytes()
-            )
+            launcher.write_bytes((ROOT / "src/narwhal/backends/vllm/runtime.py").read_bytes())
             for arguments in (["--help"], ["_cache-probe", "--help"]):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(

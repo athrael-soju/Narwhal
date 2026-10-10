@@ -1,5 +1,3 @@
-"""Derive engine attestation and the router contract from checked deployment evidence."""
-
 from __future__ import annotations
 
 import argparse
@@ -8,14 +6,22 @@ from pathlib import Path
 
 import httpx
 
-from .capture import capture_model_dimensions, capture_native, capture_nixl
+from ..launch_engine.backend import EngineLauncher, plan_launcher
 from .document import generate
+from .evidence import read_json
 from .fleet import finalize_fleet
 from .sidecar import serve
 
 
+def _launcher(run: Path) -> EngineLauncher:
+    return plan_launcher(read_json(run / "launch.json"))
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Derive engine attestation and the router contract from checked "
+        "deployment evidence."
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     capture = commands.add_parser("capture-nixl")
     capture.add_argument("--run", required=True, type=Path)
@@ -33,13 +39,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "capture-nixl":
-            result = capture_nixl(args.run)
+            result = _launcher(args.run).capture_connector(args.run)
             print(f"Captured pinned NIXL protocol in {result}")
         elif args.command == "native-capture":
-            result = capture_native(args.run)
+            result = _launcher(args.run).capture_native(args.run)
             print(f"Captured native engine attestation in {result}")
         elif args.command == "capture-model-dimensions":
-            result = capture_model_dimensions(args.run)
+            result = _launcher(args.run).capture_model_dimensions(args.run)
             print(f"Captured live model dimensions in {result}")
         elif args.command == "generate":
             result = generate(args.run, args.startup_log)

@@ -1,5 +1,3 @@
-"""Materialize the installed native workstation reference using Narwhal contracts."""
-
 from __future__ import annotations
 
 import copy
@@ -18,19 +16,17 @@ from typing import Any
 
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine.plan import validate_runtime
+from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.launch_engine.runtime import write_private
 from narwhal.deployment.launch_engine.start import gpu_memory
 from narwhal.runtime.listeners import check_engine_bind
 
 
 def reference() -> dict:
-    """Read the measured four-engine reference from the installed distribution."""
     return _read_template("reference-v1.json")
 
 
 def default_template() -> dict:
-    """Read the installed small-GPU starting template."""
     return _read_template("small-cuda-v1.json")
 
 
@@ -91,7 +87,7 @@ def _address(interface: str) -> str:
     return str(addresses[0])
 
 
-def _check_runtime(packages: dict[str, str]) -> None:
+def _check_packages(packages: dict[str, str]) -> None:
     for name, expected in packages.items():
         try:
             found = metadata.version(name)
@@ -99,43 +95,6 @@ def _check_runtime(packages: dict[str, str]) -> None:
             raise ValueError(f"native runtime requires installed {name}=={expected}") from exc
         if found != expected:
             raise ValueError(f"native runtime requires {name}=={expected}; found {found}")
-    # The same vLLM connector API check as narwhal-engine.
-    script = """from vllm.config import KVTransferConfig
-from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
-config = KVTransferConfig(
-    kv_connector='NixlConnector', kv_role='kv_both',
-    kv_connector_extra_config={'backends': ['UCX'], 'enforce_handshake_compat': True},
-)
-KVConnectorFactory.get_connector_class(config)
-"""
-    try:
-        result = subprocess.run(  # noqa: S603 - this interpreter runs a fixed import check
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        detail = exc.stderr[-800:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        raise ValueError(f"native vLLM/NIXL connector import failed: {detail}") from exc
-    if result.stderr and "Traceback" in result.stderr:
-        raise ValueError(f"native vLLM/NIXL connector import reported: {result.stderr[-800:]}")
-
-
-def check_plugin(runtime: dict) -> None:
-    """Bind the GGUF Python overlay and compiled extension to the qualified runtime."""
-    if "gguf_plugin_python_sha256" not in runtime:
-        return
-    package = Path(str(metadata.distribution("vllm-gguf-plugin").locate_file("vllm_gguf_plugin")))
-    digest = hashlib.sha256()
-    for source in sorted(package.rglob("*.py")):
-        digest.update(source.relative_to(package).as_posix().encode() + b"\0")
-        digest.update(source.read_bytes() + b"\0")
-    if digest.hexdigest() != runtime["gguf_plugin_python_sha256"]:
-        raise ValueError("GGUF plugin Python sources differ from the qualified revision")
-    if _sha256(package / "_C_gguf.abi3.so") != runtime["gguf_plugin_extension_sha256"]:
-        raise ValueError("GGUF plugin CUDA extension differs from the qualified wheel")
 
 
 def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
@@ -198,7 +157,6 @@ def materialize(
     gpu_memory_utilization: float | None = None,
     device_allowance: float | None = None,
 ) -> Path:
-    """Reuse matching explicit settings, or check the host and write a private instance."""
     output = output.expanduser().resolve()
     existing = None
     saved = None
@@ -325,8 +283,10 @@ def materialize(
     required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
     if available < required:
         raise ValueError(f"GPU VRAM reserve failed: {available} MiB free, {required} MiB required")
-    _check_runtime(spec["runtime"]["expected_packages"])
-    check_plugin(spec["runtime"])
+    engine = launcher(spec["runtime"].get("backend"))
+    _check_packages(spec["runtime"]["expected_packages"])
+    engine.check_dev_imports(spec["runtime"])
+    engine.check_dev_files(spec["runtime"])
     address = _address(fabric_interface)
     _check_free_ports(used_ports, "127.0.0.1")
     hostname = socket.gethostname()
@@ -337,30 +297,8 @@ def materialize(
         "device_allowance": allowance,
         "gpu_memory_utilization": fraction,
     }
-    runtime = {
-        "expected_packages": spec["runtime"]["expected_packages"],
-        "model_dtype": spec["runtime"]["model_dtype"],
-        "kv_cache_dtype": spec["runtime"]["kv_cache_dtype"],
-        "block_size": spec["runtime"]["block_size"],
-        "environment": spec["runtime"]["environment"],
-        "extra_args": [
-            "--tokenizer",
-            str(model_dir),
-            "--hf-config-path",
-            str(model_dir),
-            "--load-format",
-            "gguf",
-            "--language-model-only",
-            "--max-model-len",
-            str(spec["runtime"]["max_model_len"]),
-            "--gpu-memory-utilization",
-            str(fraction),
-            "--max-num-seqs",
-            str(spec["runtime"]["max_num_seqs"]),
-            "--enforce-eager",
-        ],
-    }
-    validate_runtime(runtime)
+    runtime = engine.dev_runtime(spec["runtime"], model_dir, fraction)
+    engine.validate_runtime(runtime)
     launch: dict[str, Any] = {
         "schema": "narwhal.engine-launch",
         "schema_version": 1,
