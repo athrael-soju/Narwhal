@@ -271,7 +271,8 @@
 }
 
 /* overrides/hooks/panel_rows.py sets each item's flex-grow (plain rows) or
-   flex-basis (stats rows) from image pixel widths. */
+   flex-basis (stats rows) from image pixel widths, and caps each item at its
+   image's pixel width. */
 .md-typeset .narwhal-panel-row > p {
   flex: 1 1 0;
   margin: 0;
