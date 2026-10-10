@@ -1,6 +1,5 @@
 ---
 description: Run engine actions, configuration overlays, and AIPerf load jobs from the fleet control service.
-glightbox: true
 ---
 
 # Controlling the fleet
@@ -22,7 +21,28 @@ Work happens in sessions. Starting a session copies the baseline fleet configura
 
 ## Walkthrough
 
-[![Fleet control walkthrough title frame.](../assets/fleet-control/walkthrough/thumbnail.png)](../assets/fleet-control/walkthrough/index.html){ .glightbox data-type="external" data-width="1600px" data-height="956px" }
+[![Fleet control walkthrough title frame.](../assets/fleet-control/walkthrough/thumbnail.png)](../assets/fleet-control/walkthrough/index.html){ .narwhal-walkthrough-trigger }
+
+<dialog id="fleet-control-walkthrough" class="narwhal-walkthrough-dialog" aria-label="Fleet control walkthrough"><button type="button" class="narwhal-walkthrough-close" aria-label="Close walkthrough">×</button><iframe title="Fleet control walkthrough"></iframe></dialog>
+
+<script>
+(() => {
+  const trigger = document.querySelector(".narwhal-walkthrough-trigger");
+  const dialog = document.querySelector("#fleet-control-walkthrough");
+  const frame = dialog.querySelector("iframe");
+
+  trigger.addEventListener("click", (event) => {
+    event.preventDefault();
+    frame.src = trigger.href;
+    dialog.showModal();
+  });
+  dialog.querySelector("button").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => { frame.src = "about:blank"; });
+})();
+</script>
 
 ## Pages
 
