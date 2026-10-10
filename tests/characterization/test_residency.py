@@ -285,13 +285,13 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         contract = FleetConfig.load(ROOT / "tests/data/fleet.json").engine_contract
         self.document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "test"))
-        self.identity = EngineIdentity(contract.vllm_version, 100.0)
+        self.identity = EngineIdentity(contract.engine_version, 100.0)
         self.index = ResidencyIndex(MODEL, TOKENIZER)
         self.requests = []
 
     def engine(self, request):
         if request.url.path == "/version":
-            return httpx.Response(200, json={"version": self.identity.vllm_version})
+            return httpx.Response(200, json={"version": self.identity.version})
         return httpx.Response(200, text="process_start_time_seconds 100.0\n")
 
     def sidecar(self, index):

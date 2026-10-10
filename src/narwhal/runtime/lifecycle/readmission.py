@@ -1,11 +1,10 @@
-"""Validate drained or recovered engines before readmission."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
 from ...engines.client import EngineError
@@ -32,7 +31,6 @@ async def validate_readmission(
     wave: bool,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ValidationOutcome:
-    """Run health, attestation, generation, and fabric gates before readmission."""
     outcome = ValidationOutcome()
     cfg: FleetConfig = router.cfg
     contract = cfg.engine_contract
@@ -94,6 +92,7 @@ async def validate_readmission(
                     timeout_s=timeout,
                     transport=transport,
                     headers=router.engines._auth(None),
+                    reader=load_backend(cfg.backend).identity,
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"process identity unreadable: {type(exc).__name__}")
@@ -193,6 +192,7 @@ async def validate_readmission(
                     timeout_s=timeout,
                     transport=transport,
                     headers=router.engines._auth(None),
+                    reader=load_backend(cfg.backend).identity,
                 )
                 if live != identities[spec.iid]:
                     raise ValueError("process changed during validation")

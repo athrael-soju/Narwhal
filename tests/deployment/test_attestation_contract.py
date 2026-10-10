@@ -1,5 +1,3 @@
-"""Reject stale engine evidence and derive the router contract from live sidecars."""
-
 import contextlib
 import hashlib
 import io
@@ -45,7 +43,6 @@ LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_document, attestation
 
 @contextlib.contextmanager
 def patched_live_container(**kwargs):
-    """Patch `live_container` in every attestation module that calls it; yield the shared mock."""
     mock = MagicMock(**kwargs)
     with contextlib.ExitStack() as stack:
         for module in LIVE_CONTAINER_CALLERS:
@@ -582,7 +579,7 @@ class AttestationContractTests(unittest.TestCase):
             run, log = self.engine_evidence(Path(folder))
             with patched_live_container(return_value="b" * 64):
                 document = engine_document(run, log)
-                self.assertEqual(document["contract"]["nixl_connector_version"], 9)
+                self.assertEqual(document["contract"]["connector_version"], 9)
                 self.assertEqual(document["contract"]["attention_backend"], "ROCM_AITER_MLA")
                 self.assertIs(document["contract"]["hybrid_kv_cache_manager"], True)
                 self.assertFalse(EngineContract(**document["contract"]).missing())
@@ -664,7 +661,7 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             sources = dict.fromkeys(contract.fields(), "test evidence")
             first = make_attestation(AttestationDocument(contract, sources), identity)
             second = make_attestation(
@@ -695,7 +692,7 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             document = AttestationDocument(
                 contract, dict.fromkeys(contract.fields(), "test evidence")
             )

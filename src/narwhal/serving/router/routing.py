@@ -1,5 +1,3 @@
-"""Router construction, request admission, and live state."""
-
 from __future__ import annotations
 
 import asyncio
@@ -12,9 +10,9 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
-from ...engines.attestation import attested_kv_lease, attested_sequence_limit
 from ...engines.client import EngineClient
 from ...engines.connector import lookup as lookup_connector
 from ...engines.dialect import lookup as lookup_dialect
@@ -65,8 +63,6 @@ if TYPE_CHECKING:
 
 
 class NarwhalRouter:
-    """Serve split requests against one configured fleet."""
-
     def __init__(
         self,
         cfg: FleetConfig,
@@ -270,7 +266,6 @@ class NarwhalRouter:
 
     @property
     def failover_blocked(self) -> str:
-        """Why a lost or unclaimed lease fences prefill placement, empty while serving."""
         return self._failover_blocked
 
     @failover_blocked.setter
@@ -281,7 +276,6 @@ class NarwhalRouter:
 
     @property
     def lifecycle_blocked(self) -> str:
-        """The whole-wave hold reason while a lifecycle hold withdraws readiness."""
         return self._lifecycle_blocked
 
     @lifecycle_blocked.setter
@@ -291,12 +285,10 @@ class NarwhalRouter:
             self.wake_waiters()
 
     def wake_waiters(self) -> None:
-        """Wake every queued request to recheck its hold, as when a hold begins."""
         self.admission_queue.wake_all()
         self.dispatcher.wake_all()
 
     def _holds(self) -> dict[str, list[dict[str, Any]]]:
-        """Return current holds by kind, with each inference hold's recorded producers."""
         holds = self.scheduler.holds_snapshot()
         for row in holds["inference"]:
             row["recorded_producers"] = sorted(
@@ -306,22 +298,19 @@ class NarwhalRouter:
 
     @property
     def monitoring_degraded(self) -> str:
-        """`<class>:<stage>` while repeated failed passes fence admissions."""
         return self.monitoring.degraded
 
     def profile_set_diff(self) -> tuple[list[str], list[str]]:
-        """Return (missing, extra) engine IDs between the fleet and profile store."""
         return self.profiles.engine_set_diff(self.monitor.instances)
 
     def _admission_mode(self) -> dict[str, Any]:
-        """Return the admission mode and the TTFT budget margin it applies."""
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
 
     def attested(self, iid: str, payload: Any) -> None:
-        """Record the sequence limit and KV lease from an engine's verified attestation."""
+        identity = load_backend(self.cfg.backend).identity
         for values, value in (
-            (self.sequence_limits, attested_sequence_limit(payload)),
-            (self.kv_leases, attested_kv_lease(payload)),
+            (self.sequence_limits, identity.sequence_limit(payload)),
+            (self.kv_leases, identity.kv_lease(payload)),
         ):
             if value is None:
                 values.pop(iid, None)
@@ -329,7 +318,6 @@ class NarwhalRouter:
                 values[iid] = value
 
     def _token_accounting(self) -> str:
-        """Return the decode token-accounting mode the fleet's dialect guarantees."""
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
 
     async def serve(
@@ -341,7 +329,6 @@ class NarwhalRouter:
         arrived: float | None = None,
         lifecycle: RequestLifecycle | None = None,
     ) -> StreamingResponse | JSONResponse:
-        """Own admission, deadline and terminal accounting for one offered request."""
         state = lifecycle or RequestLifecycle.offered(self, headers, arrived=arrived)
         rid, arrived = state.rid, state.arrived
         req = state.request
@@ -429,7 +416,6 @@ class NarwhalRouter:
         return response
 
     def _release_seat(self, rid: str) -> None:
-        """Release admission capacity and measure its occupancy."""
         admitted_at = self._seat_since.pop(rid, None)
         if admitted_at is not None:
             self.inflight -= 1
@@ -437,7 +423,6 @@ class NarwhalRouter:
             self.admission_queue.notify()
 
     def state(self) -> dict[str, Any]:
-        """Return the live state exposed by `/narwhal/state`."""
         out = {
             "journal_run": self.journal.run,
             "served": self.served,

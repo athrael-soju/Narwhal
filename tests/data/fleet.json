@@ -46,10 +46,10 @@
     }
   ],
   "engine_contract": {
-    "vllm_version": "1.0.0",
+    "engine_version": "1.0.0",
     "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "nixl_version": "test",
-    "nixl_connector_version": 1,
+    "transfer_version": "test",
+    "connector_version": 1,
     "model_architecture": "TestForCausalLM",
     "model_dtype": "float32",
     "kv_heads": 1,

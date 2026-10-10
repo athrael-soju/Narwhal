@@ -2,8 +2,10 @@
   "minimal_contract": {
     "attention_backend": "",
     "connector": "NixlConnector",
+    "connector_version": 0,
     "cross_layers_blocks": null,
     "enforce_handshake_compat": true,
+    "engine_version": "1.0.0",
     "head_size": 0,
     "hidden_layers": 0,
     "hybrid_kv_cache_manager": null,
@@ -13,11 +15,9 @@
     "kv_role": "",
     "model_architecture": "",
     "model_dtype": "",
-    "nixl_connector_version": 0,
-    "nixl_version": "",
     "speculative_config": "",
     "transfer_mode": "",
-    "vllm_version": "1.0.0"
+    "transfer_version": ""
   },
   "serialized": {
     "engine": {
@@ -39,8 +39,10 @@
     "engine_contract": {
       "attention_backend": "TEST",
       "connector": "NixlConnector",
+      "connector_version": 1,
       "cross_layers_blocks": false,
       "enforce_handshake_compat": true,
+      "engine_version": "1.0.0",
       "head_size": 1,
       "hidden_layers": 1,
       "hybrid_kv_cache_manager": false,
@@ -50,11 +52,9 @@
       "kv_role": "kv_both",
       "model_architecture": "TestForCausalLM",
       "model_dtype": "float32",
-      "nixl_connector_version": 1,
-      "nixl_version": "test",
       "speculative_config": "disabled",
       "transfer_mode": "pull",
-      "vllm_version": "1.0.0"
+      "transfer_version": "test"
     },
     "schema": "narwhal.fleet",
     "schema_version": 2
@@ -66,15 +66,17 @@
     "handshake_disabled": {
       "error": "<tmp>/fleet.json: engine_contract.enforce_handshake_compat must stay true; disabling vLLM's NIXL compatibility hash permits silent corruption"
     },
-    "missing_vllm_version": {
-      "error": "<tmp>/fleet.json: engine_contract.vllm_version is required"
+    "missing_engine_version": {
+      "error": "<tmp>/fleet.json: engine_contract.engine_version is required"
     },
     "other_connector": {
       "accepted": {
         "attention_backend": "TEST",
         "connector": "OtherConnector",
+        "connector_version": 1,
         "cross_layers_blocks": false,
         "enforce_handshake_compat": true,
+        "engine_version": "1.0.0",
         "head_size": 1,
         "hidden_layers": 1,
         "hybrid_kv_cache_manager": false,
@@ -84,11 +86,9 @@
         "kv_role": "kv_both",
         "model_architecture": "TestForCausalLM",
         "model_dtype": "float32",
-        "nixl_connector_version": 1,
-        "nixl_version": "test",
         "speculative_config": "disabled",
         "transfer_mode": "pull",
-        "vllm_version": "1.0.0"
+        "transfer_version": "test"
       },
       "engine": [
         "nixl",
@@ -99,8 +99,10 @@
       "accepted": {
         "attention_backend": "TEST",
         "connector": "NixlConnector",
+        "connector_version": 1,
         "cross_layers_blocks": false,
         "enforce_handshake_compat": true,
+        "engine_version": "1.0.0",
         "head_size": 1,
         "hidden_layers": 1,
         "hybrid_kv_cache_manager": false,
@@ -110,11 +112,9 @@
         "kv_role": "kv_producer",
         "model_architecture": "TestForCausalLM",
         "model_dtype": "float32",
-        "nixl_connector_version": 1,
-        "nixl_version": "test",
         "speculative_config": "disabled",
         "transfer_mode": "pull",
-        "vllm_version": "1.0.0"
+        "transfer_version": "test"
       },
       "engine": [
         "nixl",
@@ -122,7 +122,7 @@
       ]
     },
     "unknown_contract_field": {
-      "error": "<tmp>/fleet.json: unknown engine_contract key 'engine_version' (a typo falls back to the default silently)"
+      "error": "<tmp>/fleet.json: unknown engine_contract key 'version' (a typo falls back to the default silently)"
     },
     "unknown_engine_connector": {
       "error": "<tmp>/fleet.json: backend 'vllm' has no connector 'unknown': known ones are nixl"

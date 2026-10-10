@@ -1,5 +1,3 @@
-"""Read checked launch evidence and bind it to the live serving engine."""
-
 from __future__ import annotations
 
 import asyncio
@@ -63,7 +61,6 @@ def live_container(run: Path, checked: dict) -> str:
 
 
 def live_native(run: Path, plan: dict, checked: dict) -> dict:
-    """Bind checked native evidence to its current Linux process and vLLM instance."""
     process = read_json(run / "native-process.json")
     try:
         if process_identity(process["pid"]) != process:
@@ -83,7 +80,7 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
     headers = {"Authorization": f"Bearer {key}"} if key else None
     identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
     if (
-        identity.vllm_version != startup["vllm_version"]
+        identity.version != startup["vllm_version"]
         or identity.process_start_time_seconds != startup["process_start_time_seconds"]
     ):
         raise ValueError("Native engine HTTP identity changed since launch")
@@ -110,7 +107,6 @@ def require_binding(record: dict, label: str, **expected: object) -> None:
 
 
 def require_prior_dimensions(run: Path, plan: dict, plan_hash: str, contract: object) -> None:
-    """Require retained plan dimensions, when present, to match the plan and `contract`."""
     original = run / "model-dimensions.json"
     if original.exists():
         previous = read_json(original)

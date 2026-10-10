@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..runtime.role_switch import RoleSwitcher
 
 GROUP = "narwhal.backends"
+DEFAULT_BACKEND = "vllm"
 
 
 @dataclass(frozen=True)

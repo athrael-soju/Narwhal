@@ -1,5 +1,3 @@
-"""Capture live NIXL, model, transfer and HTTP evidence from a serving engine."""
-
 from __future__ import annotations
 
 import json
@@ -10,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from ...engines.attestation import parse_process_start
+from ...backends.vllm.identity import parse_process_start
 from ..launch_engine.captures import handshake_policy, registration_layout
 from ..launch_engine.docker import run_runtime_script
 from ..launch_engine.plan import read_env
@@ -197,7 +195,6 @@ def capture_nixl(run: Path) -> Path:
 
 
 def capture_native_transfer_mode(run: Path) -> Path:
-    """Resolve the installed connector class and its NIXL transfer direction."""
     plan, checked, plan_hash = checked_plan(run)
     if plan.get("backend") != "native":
         raise ValueError("native transfer capture requires a native launch plan")
@@ -232,7 +229,6 @@ print('NARWHAL_TRANSFER_MODE=' + json.dumps({
 
 
 def capture_native_http(run: Path) -> None:
-    """Retain the HTTP identity and metrics for the checked native process."""
     plan, checked, _ = checked_plan(run)
     if plan.get("backend") != "native":
         raise ValueError("native HTTP capture requires a native launch plan")
@@ -258,7 +254,6 @@ def capture_native_http(run: Path) -> None:
 
 
 def capture_native(run: Path) -> Path:
-    """Capture native engine evidence and return the engine attestation path."""
     plan, checked, _ = checked_plan(run)
     if plan.get("backend") != "native":
         raise ValueError("native capture requires a native launch plan")

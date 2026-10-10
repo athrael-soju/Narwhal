@@ -1,5 +1,3 @@
-"""Cross-field fleet constraints, including derived connection budgets."""
-
 from __future__ import annotations
 
 import math
@@ -13,7 +11,6 @@ if TYPE_CHECKING:
 
 
 def validate(config: FleetConfig, source: str = "config") -> None:
-    """Validate cross-field constraints and report all failures together."""
     problems = []
     try:
         config.serving.validate()
@@ -269,8 +266,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             )
     if config.engine_contract is not None:
         contract = config.engine_contract
-        if not contract.vllm_version:
-            problems.append("engine_contract.vllm_version is required")
+        if not contract.engine_version:
+            problems.append("engine_contract.engine_version is required")
         if not contract.connector:
             problems.append("engine_contract.connector is required")
         if not contract.enforce_handshake_compat:
@@ -287,7 +284,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         problems.extend(
             f"engine_contract.{name} must be nonnegative"
             for name in (
-                "nixl_connector_version",
+                "connector_version",
                 "kv_heads",
                 "head_size",
                 "hidden_layers",

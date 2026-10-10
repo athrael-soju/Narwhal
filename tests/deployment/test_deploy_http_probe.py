@@ -1,5 +1,3 @@
-"""Execute the documented HTTP gate with distinct distribution and API versions."""
-
 import contextlib
 import hashlib
 import io
@@ -18,7 +16,6 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 
 
 def heredoc(guide: str, marker: str) -> str:
-    """Return a documented heredoc body, including one indented inside a list step."""
     body = re.search(rf"<<'{marker}'\n(.*?)\n[ \t]*{marker}\n", guide, re.S)
     assert body is not None, marker
     return textwrap.dedent(body.group(1))
@@ -31,8 +28,8 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
         script = heredoc(guide, "PY_ATTEST_CHECK")
         document_path = root / "config/engine-attestation.example.json"
         document = AttestationDocument.load(document_path)
-        live = EngineIdentity(document.contract.vllm_version, 200.0)
-        stale = EngineIdentity(document.contract.vllm_version, 100.0)
+        live = EngineIdentity(document.contract.engine_version, 200.0)
+        stale = EngineIdentity(document.contract.engine_version, 100.0)
         for status, attested, passes in (
             (200, live, True),
             (200, stale, False),

@@ -1,5 +1,3 @@
-"""Strict fleet JSON parsing."""
-
 from __future__ import annotations
 
 import json
@@ -20,11 +18,11 @@ from .model import (
     HardwareSpec,
     ProfileValidationPolicy,
     SharedDeviceAllocation,
+    current_contract_names,
 )
 
 
 def load(path: str | Path) -> FleetConfig:
-    """Load a fleet config and report all detectable schema errors."""
     raw = json.loads(Path(path).read_text(), parse_constant=_reject_constant)
     try:
         validate_document(raw, FLEET)
@@ -183,6 +181,10 @@ def load(path: str | Path) -> FleetConfig:
         contract_raw = None
     engine_contract: EngineContract | None = None
     if contract_raw is not None:
+        try:
+            contract_raw = current_contract_names(contract_raw)
+        except ValueError as exc:
+            problems.append(str(exc))
         _check_unknown(problems, "engine_contract", contract_raw, _ENGINE_CONTRACT_KEYS)
         handshake = _read_bool(
             problems,
@@ -194,19 +196,21 @@ def load(path: str | Path) -> FleetConfig:
             if value is not None and not isinstance(value, bool):
                 problems.append(f"engine_contract.{name} must be a boolean or null")
         engine_contract = EngineContract(
-            vllm_version=_read_str(
-                problems, "engine_contract.vllm_version", contract_raw.get("vllm_version", "")
+            engine_version=_read_str(
+                problems, "engine_contract.engine_version", contract_raw.get("engine_version", "")
             ),
             image_digest=_read_str(
                 problems, "engine_contract.image_digest", contract_raw.get("image_digest", "")
             ),
-            nixl_version=_read_str(
-                problems, "engine_contract.nixl_version", contract_raw.get("nixl_version", "")
-            ),
-            nixl_connector_version=_read_int(
+            transfer_version=_read_str(
                 problems,
-                "engine_contract.nixl_connector_version",
-                contract_raw.get("nixl_connector_version", 0),
+                "engine_contract.transfer_version",
+                contract_raw.get("transfer_version", ""),
+            ),
+            connector_version=_read_int(
+                problems,
+                "engine_contract.connector_version",
+                contract_raw.get("connector_version", 0),
             ),
             model_architecture=_read_str(
                 problems,
@@ -619,10 +623,10 @@ _PROFILE_KEYS = {"path", "max_decode_fit_mape", "max_decode_cv_mape"}
 
 
 _ENGINE_CONTRACT_KEYS = {
-    "vllm_version",
+    "engine_version",
     "image_digest",
-    "nixl_version",
-    "nixl_connector_version",
+    "transfer_version",
+    "connector_version",
     "model_architecture",
     "model_dtype",
     "kv_heads",
@@ -649,7 +653,6 @@ def _reject_constant(name: str) -> NoReturn:
 
 
 def _read_bool(problems: list[str], name: str, value: object) -> bool:
-    """Accept a JSON boolean; anything else is one named problem."""
     if not isinstance(value, bool):
         problems.append(f"{name} must be a boolean")
         return False
@@ -657,7 +660,6 @@ def _read_bool(problems: list[str], name: str, value: object) -> bool:
 
 
 def _read_str(problems: list[str], name: str, value: object) -> str:
-    """Accept a JSON string; anything else is one named problem."""
     if not isinstance(value, str):
         problems.append(f"{name} must be a string")
         return ""
@@ -665,7 +667,6 @@ def _read_str(problems: list[str], name: str, value: object) -> str:
 
 
 def _read_int(problems: list[str], name: str, value: object) -> int:
-    """Accept a JSON integer, excluding Python's bool subclass."""
     if not isinstance(value, int) or isinstance(value, bool):
         problems.append(f"{name} must be an integer")
         return 0
@@ -673,7 +674,6 @@ def _read_int(problems: list[str], name: str, value: object) -> int:
 
 
 def _read_float(problems: list[str], name: str, value: object) -> float:
-    """Accept a JSON number, widening integers to float and rejecting booleans."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         problems.append(f"{name} must be a number")
         return 0.0
@@ -688,7 +688,6 @@ def _read_float(problems: list[str], name: str, value: object) -> float:
 
 
 def _read_section(problems: list[str], raw: dict, name: str) -> dict:
-    """Return one top-level section object, or `{}` when absent or invalid."""
     value = raw.get(name)
     if value is None:
         return {}
@@ -699,7 +698,6 @@ def _read_section(problems: list[str], raw: dict, name: str) -> dict:
 
 
 def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) -> dict:
-    """Return one nested section object, reporting problems under path `name`."""
     value = raw.get(key)
     if value is None:
         return {}
@@ -710,7 +708,6 @@ def _read_nested_section(problems: list[str], raw: dict, key: str, name: str) ->
 
 
 def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -> None:
-    """Report unknown keys in one section; underscore-prefixed keys are annotations."""
     unknown = sorted(key for key in raw if key not in known and not key.startswith("_"))
     problems.extend(
         f"unknown {name} key {key!r} (a typo falls back to the default silently)" for key in unknown
@@ -718,6 +715,5 @@ def _check_unknown(problems: list[str], name: str, raw: dict, known: set[str]) -
 
 
 def _unknown_keys(raw: dict) -> list[str]:
-    """Report unknown top-level keys; underscore-prefixed keys are annotations."""
     unknown = sorted(k for k in raw if k not in _KNOWN_KEYS and not k.startswith("_"))
     return [f"unknown key {k!r} (a typo falls back to the default silently)" for k in unknown]
