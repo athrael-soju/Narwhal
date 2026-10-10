@@ -513,6 +513,24 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(starts, {})
         self.assertEqual(set(failures), {"e0", "e3"})
 
+    async def test_identity_monitor_switches_only_new_engine_processes(self):
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.starts["e0"] = 100
+        self.manager.process_starts.pop("e0", None)
+        self.bind_profiles()
+        with (
+            patch.object(identity, "fetch_engine_identity", self.identities),
+            patch.object(self.router, "switch_role", AsyncMock(return_value=None)) as switch,
+        ):
+            await identity.check_process_identities(self.router)
+            switched = {call.args[0] for call in switch.await_args_list}
+            switch.reset_mock()
+            await identity.check_process_identities(self.router)
+        # A known process keeps its role, so a repeat sweep leaves it in placement.
+        self.assertIn("e0", switched)
+        switch.assert_not_awaited()
+
     async def test_identity_monitor_ejects_unverified_engines_and_honours_fencing(self):
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")

@@ -13,7 +13,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..engines.client import EngineError, first_output_timeout
 from ..engines.connector import HandoffExpired, PrefillResult, RendezvousConnector
-from ..engines.stream import SseEvent, rewrite_sse, sse_token_bearing, sse_token_ids
+from ..engines.stream import (
+    SseEvent,
+    rewrite_sse,
+    sse_token_bearing,
+    sse_token_count,
+    sse_token_ids,
+)
 from ..scheduling.prefill import prefill_seconds
 from ..scheduling.scheduler.occupancy import decode_refusal
 from ..types import Instance, Phase, Role
@@ -508,7 +514,8 @@ async def _decode_attempt(
     router.decode_attempts += 1
     dialect = router.engines.dialect
     strip = () if body.get("return_token_ids") else dialect.engine_output_fields
-    engine_body = {**body, **dialect.token_id_fields()} if dialect.token_ids else body
+    streams_ids = dialect.token_ids and dialect.streams_token_ids(endpoint)
+    engine_body = {**body, **dialect.token_id_fields()} if streams_ids else body
     first_token_timeout_s = router.cfg.first_token_timeout_s
     kv = router.engines.kv
     if prepared.rendezvous is not None and isinstance(kv, RendezvousConnector):
@@ -537,16 +544,17 @@ async def _decode_attempt(
             events: list[SseEvent] = []
             try:
                 for event in batch:
-                    ids = sse_token_ids(event) if dialect.token_ids else None
-                    if dialect.token_ids and ids is None:
+                    ids = sse_token_ids(event) if streams_ids else None
+                    if streams_ids and ids is None:
                         raise EngineError(
                             "decode",
                             prepared.decode.url,
                             502,
                             "decode output lacks valid token_ids",
                         )
-                    n = len(ids) if ids is not None else 0
-                    if sse_token_bearing(event, dialect):
+                    # Without token IDs, each streamed chunk carries one token.
+                    n = len(ids) if ids is not None else sse_token_count(event)
+                    if sse_token_bearing(event, dialect, endpoint):
                         now = router._clock()
                         if state.first_at is None:
                             state.first_at = now

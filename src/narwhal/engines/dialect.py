@@ -27,6 +27,10 @@ class EngineDialect(ABC):
     @abstractmethod
     def token_id_fields(self) -> dict[str, Any]: ...
 
+    def streams_token_ids(self, endpoint: str) -> bool:
+        """Whether streamed decode on `endpoint` carries token IDs."""
+        return self.token_ids
+
     @abstractmethod
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]: ...
 

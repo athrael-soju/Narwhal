@@ -142,7 +142,8 @@ def _text_parts(event: SseEvent) -> list[str]:
     for choice in event.data.get("choices", []) or []:
         text = choice.get("text")
         if text is None:
-            text = (choice.get("delta") or {}).get("content")
+            delta = choice.get("delta") or {}
+            text = delta.get("content") or delta.get("reasoning_content") or delta.get("tool_calls")
         if text:
             parts.append(text)
     return parts
@@ -161,8 +162,8 @@ def sse_token_ids(event: SseEvent) -> tuple[int, ...] | None:
         return None
 
 
-def sse_token_bearing(event: SseEvent, dialect: EngineDialect) -> bool:
-    if dialect.token_ids:
+def sse_token_bearing(event: SseEvent, dialect: EngineDialect, endpoint: str | None = None) -> bool:
+    if dialect.token_ids if endpoint is None else dialect.streams_token_ids(endpoint):
         ids = sse_token_ids(event)
         return ids is None or bool(ids)
     return sse_token_count(event) > 0

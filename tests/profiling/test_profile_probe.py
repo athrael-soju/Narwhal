@@ -564,8 +564,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 evidence=evidence,
                 max_model_len=4096,
             )
-        self.assertEqual(calls, [64] * 4 + [192] * 4)
-        self.assertEqual(evidence[0]["tokens"], 192)
+        # One unmeasured warmup stream precedes the sweep.
+        self.assertEqual(calls, [64] + [64] * 4 + [192] * 4)
+        self.assertEqual([row["tokens"] for row in evidence], [192])
         calls.clear()
         with (
             patch.object(decode_probe, "make_prompt", AsyncMock(return_value=("p", 100))),
@@ -582,7 +583,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 tokens=64,
                 max_model_len=250,
             )
-        self.assertEqual(calls, [64] * 4)
+        self.assertEqual(calls, [64] + [64] * 4)
 
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
 
@@ -821,6 +822,29 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
         )
+
+    def test_paired_profile_lanes_run_disjoint_pairs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            engines = fleet(Path(folder)).engines
+        specs = [replace(engines[0], iid=f"n{i}") for i in range(1, 6)]
+
+        def lanes(targets):
+            return [
+                [spec.iid for spec in lane]
+                for lane in fleet_probe._profile_lanes(targets, colocated=False, paired=True)
+            ]
+
+        self.assertEqual(lanes(specs[:4]), [["n1", "n2"], ["n3", "n4"]])
+        self.assertEqual(lanes(specs), [["n1", "n2"], ["n3", "n4", "n5"]])
+        self.assertEqual(lanes(specs[:1]), [["n1"]])
+        pair = lanes(specs[:4])[0]
+        lane = [spec for spec in specs if spec.iid in pair]
+        self.assertEqual(fleet_probe._lane_peer(lane[0], lane, specs).iid, "n2")
+        self.assertEqual(fleet_probe._lane_peer(lane[1], lane, specs).iid, "n1")
+        self.assertEqual(fleet_probe._lane_peer(specs[0], specs[:1], specs).iid, "n2")
+        shared = SharedDeviceAllocation("gpu-0", "uuid", 0.5, 0.1)
+        specs[0] = replace(specs[0], shared_device=shared)
+        self.assertEqual(lanes(specs[:4]), [["n1", "n2", "n3", "n4"]])
 
     async def test_run_profiles_engines_on_separate_devices_concurrently(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
@@ -34,6 +35,8 @@ from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import HandoffClient, calibration_document, fleet, profile
 from tests.wire import engine_transports, vllm_engine
+
+VLLM_IDENTITY = load_backend("vllm").identity
 
 UNCALIBRATED = (
     "first-token deadline has no calibration evidence; run narwhal-check "
@@ -439,7 +442,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         transport = httpx.MockTransport(handle)
         live = {
-            spec.iid: await read_generation(spec, contract, timeout_s=1, transport=transport)
+            spec.iid: await read_generation(
+                spec, contract, timeout_s=1, transport=transport, reader=VLLM_IDENTITY
+            )
             for spec in self.cfg.engines
         }
         path = self.cfg.profiles_path.parent / "calibration.json"

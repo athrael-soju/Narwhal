@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -156,8 +157,24 @@ def launch_args(args: list[str]) -> list[str]:
     return kept
 
 
+# The scheduler logs the request cap it serves with, which can sit below the requested one.
+_STARTUP_CAP = re.compile(r"\bmax_running_requests=(\d+)")
+
+
+def check_request_cap(args: list[str], startup_log: str) -> None:
+    requested = option(args, "--max-running-requests")
+    served = {int(value) for value in _STARTUP_CAP.findall(startup_log)}
+    if requested is not None and served and served != {int(requested)}:
+        raise ValueError(
+            f"The engine serves at most {min(served)} running requests, below its "
+            f"--max-running-requests {requested}. Lower --max-running-requests to "
+            f"{min(served)}, or raise the capacity the startup log names."
+        )
+
+
 def engine_document(run: Path, startup_log: Path) -> dict:
     plan, checked, plan_hash = checked_plan(run)
+    check_request_cap(plan["args"], startup_log.read_text())
     native = plan.get("backend") == "native"
     identity = _live(run, plan, checked)
     dimensions = read_json(run / "model-dimensions.json")

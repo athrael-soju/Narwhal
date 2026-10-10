@@ -33,6 +33,11 @@ class SglangDialect(EngineDialect):
     def token_id_fields(self) -> dict[str, Any]:
         return {"return_token_ids": True}
 
+    def streams_token_ids(self, endpoint: str) -> bool:
+        # SGLang rejects return_token_ids on streamed chat, where each chunk still carries one
+        # token under the pinned --stream-interval 1.
+        return endpoint != "/v1/chat/completions"
+
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": model}
         if "messages" in body:

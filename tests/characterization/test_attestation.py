@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document as config_document
 from narwhal.engines.attestation import (
@@ -28,6 +29,8 @@ from narwhal.serving.router.routing import NarwhalRouter
 from tests.characterization.golden import assert_golden
 from tests.fixtures import ROOT, fleet
 from tests.wire import EngineWire
+
+VLLM_IDENTITY = load_backend("vllm").identity
 
 ENGINE = "http://stub-0:8000"
 # Headers that carry engine protocol; transport headers vary with the HTTP library.
@@ -236,6 +239,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
                     timeout_s=1.0,
                     headers=self.cfg.engine_headers(),
                     transport=transport,
+                    reader=VLLM_IDENTITY,
                 )
                 records[name] = {
                     "digest": generation.digest,

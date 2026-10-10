@@ -30,6 +30,7 @@ VALUE_OPTIONS = {
     "--load-format",
     "--disaggregation-ib-device",
     "--mamba-ssm-dtype",
+    "--max-mamba-cache-size",
     "--max-running-requests",
 }
 FLAG_OPTIONS = {
@@ -199,6 +200,13 @@ def serve_args(
         "--disaggregation-transfer-backend",
         name,
         *(["--enable-pd-role-switch"] if switches else []),
+        # A switched decode engine keeps the prefill launch's radix cache. Without this flag,
+        # decode admission neither counts nor evicts its finished requests and stops admitting.
+        *(
+            ["--disaggregation-decode-enable-radix-cache"]
+            if switches and publishes_kv_events(extra)
+            else []
+        ),
         *(
             []
             if kv_events is None

@@ -13,6 +13,7 @@ from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.engines.attestation import fetch_engine_identity
 from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
+from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
@@ -34,6 +35,42 @@ def runtime_record(**changes):
         "decode_cuda_graph_memory_gb": 4.0,
         **changes,
     }
+
+
+ARGS = ["--max-running-requests", "64"]
+
+
+class RequestCapTests(unittest.TestCase):
+    def test_a_served_cap_below_the_request_is_rejected(self):
+        log = (
+            "max_running_requests is capped to 59 by the mamba state cache\n"
+            "max_total_num_tokens=777296, max_running_requests=59, context_len=32768\n"
+        )
+        with self.assertRaisesRegex(ValueError, "at most 59 running requests.*64"):
+            attestation.check_request_cap(ARGS, log)
+
+    def test_the_requested_cap_or_no_cap_line_passes(self):
+        attestation.check_request_cap(ARGS, "max_running_requests=64, context_len=32768\n")
+        attestation.check_request_cap(ARGS, "no scheduler summary\n")
+
+
+class ChatTokenTests(unittest.TestCase):
+    def test_streamed_chat_counts_chunks_without_token_ids(self):
+        dialect = load("sglang").dialect
+        self.assertTrue(dialect.streams_token_ids("/v1/completions"))
+        self.assertFalse(dialect.streams_token_ids("/v1/chat/completions"))
+        self.assertTrue(load("vllm").dialect.streams_token_ids("/v1/chat/completions"))
+        chunks = [
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            {"choices": [{"delta": {"reasoning_content": "Think"}}]},
+            {"choices": [{"delta": {"content": "Red"}}]},
+        ]
+        events = [SseEvent("data: " + json.dumps(chunk), chunk) for chunk in chunks]
+        self.assertEqual([sse_token_count(event) for event in events], [0, 1, 1])
+        self.assertEqual(
+            [sse_token_bearing(event, dialect, "/v1/chat/completions") for event in events],
+            [False, True, True],
+        )
 
 
 class ConnectorTests(unittest.TestCase):
@@ -208,6 +245,19 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn("--enable-pd-role-switch", args)
         self.assertEqual((transfer["launch_role"], transfer["role_switch"]), ("decode", False))
 
+    def test_a_switching_engine_without_the_radix_cache_needs_no_decode_radix_flag(self):
+        runtime = runtime_record(extra_args=["--disable-radix-cache"])
+        args, _ = plan.serve_args(
+            {"runtime": runtime, "tensor_parallel_size": 1},
+            model="/model",
+            served_name="m",
+            host="0.0.0.0",
+            port=8000,
+            kv_events=None,
+        )
+        self.assertIn("--enable-pd-role-switch", args)
+        self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
+
     def test_every_engine_launches_as_prefill_with_the_pins(self):
         record = {"runtime": runtime_record(), "tensor_parallel_size": 2}
         events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
@@ -226,6 +276,7 @@ class LaunchTests(unittest.TestCase):
         ):
             self.assertEqual(plan.option(args, name), value, name)
         self.assertIn("--enable-pd-role-switch", args)
+        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
         self.assertEqual(json.loads(plan.option(args, "--kv-events-config"))["publisher"], "zmq")
         self.assertEqual(
             transfer,
