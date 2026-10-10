@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.backends import load as load_backend
-from narwhal.engines.dialect import VllmDialect
+from narwhal.backends.vllm import VllmDialect
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS, Profile
 from narwhal.profiling.probe import warm as warm_probe
@@ -350,7 +350,14 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
             prefill, decode, hits=7, block=block, warm=sweep_result
         ) as sweep:
             row = await profile_instance(
-                None, "e0", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence, **kwargs
+                None,
+                "e0",
+                "http://e",
+                "stub",
+                VllmDialect(),
+                metrics=VLLM_METRICS,
+                evidence=evidence,
+                **kwargs,
             )
         self.warm_sweeps = sweep.await_count
         return row, evidence

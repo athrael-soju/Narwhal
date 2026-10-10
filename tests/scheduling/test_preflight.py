@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends.vllm import NixlConnector, VllmDialect
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
 from narwhal.diagnostics.check.engines import (
@@ -26,15 +27,13 @@ from narwhal.diagnostics.check.report import Report
 from narwhal.diagnostics.check.transfer import gate_consume, gate_produce
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.engines.client import EngineClient, EngineError
-from narwhal.engines.connector import NixlConnector
-from narwhal.engines.dialect import VllmDialect
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import calibration_document, fleet, profile
-from tests.wire import engine_transports
+from tests.wire import engine_transports, vllm_engine
 
 UNCALIBRATED = (
     "first-token deadline has no calibration evidence; run narwhal-check "
@@ -743,6 +742,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json=payload)
 
         client = EngineClient(
+            **vllm_engine(),
             read_timeout_s=self.cfg.decode_read_timeout_s,
             **engine_transports(answer),
         )

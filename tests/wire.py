@@ -1,5 +1,3 @@
-"""Serve HTTPX-style engine handlers to the wire client over socket pairs."""
-
 import asyncio
 import inspect
 import socket
@@ -8,15 +6,12 @@ from collections.abc import Callable
 import h11
 import httpx
 
+from narwhal.backends import load
+
 Handler = Callable[[httpx.Request], object]
 
 
 class EngineWire:
-    """Engine fake: each dial gets a socket pair whose far end runs `handler`.
-
-    A handler that raises drops the connection without a response.
-    """
-
     def __init__(self, handler: Handler) -> None:
         self.handler = handler
         self.dials: list[tuple[str, int]] = []
@@ -92,7 +87,6 @@ class EngineWire:
         writer: asyncio.StreamWriter,
         response: httpx.Response,
     ) -> bool:
-        """Send `response`; return False when the client closed the connection first."""
         length = response.headers.get("content-length")
         headers = [
             (name, value)
@@ -139,5 +133,9 @@ class EngineWire:
 
 
 def engine_transports(handler: Handler) -> dict:
-    """Control-pool transport and data-leg dial for one engine handler."""
     return {"transport": httpx.MockTransport(handler), "dial": EngineWire(handler).dial}
+
+
+def vllm_engine() -> dict:
+    backend = load("vllm")
+    return {"kv": backend.connector("nixl"), "dialect": backend.dialect}

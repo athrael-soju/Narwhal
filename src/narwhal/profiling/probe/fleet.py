@@ -12,7 +12,6 @@ import httpx
 from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.dialect import lookup as lookup_dialect
 from ...provenance import stamp
 from ...types import Role
 from ..generation import read_generation
@@ -80,7 +79,7 @@ async def run(
     )
 
     print(f"profiling {len(targets)} instance(s) against model {cfg.model}")
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     metrics = load_backend(cfg.backend).metrics
     evidence_rows: dict[str, object] = {}
     measurement_record = {
@@ -172,8 +171,8 @@ async def run(
                     spec.iid,
                     spec.url,
                     cfg.model,
-                    engine_sweep,
                     dialect,
+                    engine_sweep,
                     cfg.chars_per_token,
                     metrics=metrics,
                     evidence=engine_evidence,

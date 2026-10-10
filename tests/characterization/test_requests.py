@@ -213,7 +213,6 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
     async def test_prefill_descriptors_and_decode_continuations(self):
         engines = self.router.engines
         body = {"model": "stub", "prompt": "hello", "max_tokens": 4, "stream": False}
-        headers = {"x-request-id": "fixture-a1-prefill"}
         record = {}
         for name, payload in (
             ("flat", {"kv_transfer_params": {"remote_engine_id": "p", "remote_block_ids": [1]}}),
@@ -232,15 +231,18 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.prefill_payload = payload
             self.calls.clear()
-            result = await engines.prefill("http://stub-0", "/v1/completions", body, headers)
+            result = await engines.prefill(
+                "http://stub-0", "/v1/completions", body, {}, request_id="fixture-a1-prefill"
+            )
             legs = {}
             for target in ("http://stub-1", "http://stub-0"):
                 stream = engines.decode(
                     target,
                     "/v1/completions",
                     {**body, "kv_transfer_params": {"spoofed": True}},
-                    {"x-request-id": "fixture-a1-decode"},
+                    {},
                     result,
+                    request_id="fixture-a1-decode",
                 )
                 async for _ in stream:
                     pass

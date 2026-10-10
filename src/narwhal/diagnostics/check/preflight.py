@@ -1,15 +1,12 @@
-"""Run the preflight gates against a fleet in order."""
-
 from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
 
 from ... import command_results as results
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.client import EngineClient
-from ...engines.connector import lookup as lookup_connector
-from ...engines.dialect import lookup as lookup_dialect
 from .engines import (
     colocated_restart_risk,
     gate_calibration,
@@ -35,7 +32,6 @@ async def run(
     evidence_out: Path | None = None,
     fleet_path: Path | None = None,
 ) -> int:
-    """Run every preflight gate and return a process exit code."""
     if evidence_out is not None:
         if not mesh or skip_kv or cfg.engine_contract is None or fleet_path is None:
             raise ValueError(
@@ -62,8 +58,8 @@ async def run(
         pool_timeout_s=cfg.pool_timeout_s,
         connect_timeout_s=cfg.connect_timeout_s,
         health_timeout_s=cfg.health_timeout_s,
-        kv=lookup_connector(cfg.connector),
-        dialect=lookup_dialect(cfg.dialect),
+        kv=load_backend(cfg.backend).connector(cfg.connector),
+        dialect=load_backend(cfg.backend).dialect,
         model=cfg.model,
         engine_api_key=cfg.resolve_engine_key(),
     )

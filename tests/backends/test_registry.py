@@ -17,7 +17,6 @@ from narwhal.engines.kv_events import KvEventDecoder
 from narwhal.engines.metrics import EngineMetrics
 from narwhal.runtime.fabric import FabricLifecycle
 from narwhal.runtime.role_switch import RoleSwitcher
-from narwhal.serving.handoff import renewal_interval
 from narwhal.types import Role
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,7 +75,7 @@ class VllmBackendTests(unittest.TestCase):
     def test_handoff_bound_leaves_one_renewal_interval(self):
         nixl = self.backend.connector("nixl")
         for lease in (6, 7, 30, 60):
-            self.assertEqual(nixl.handoff_bound(lease), lease - renewal_interval(lease))
+            self.assertEqual(nixl.handoff_bound(lease), lease - lease // 6)
 
     def test_transfer_totals_sum_ranks(self):
         text = (

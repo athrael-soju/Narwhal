@@ -1,5 +1,3 @@
-"""FastAPI routes and process lifespan."""
-
 from __future__ import annotations
 
 import asyncio
@@ -71,7 +69,6 @@ def create_app(
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
-    """Build the API and bind router resources to its lifespan."""
     cfg = cfg or FleetConfig.from_env()
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
@@ -116,7 +113,6 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Open and close router resources around the ASGI lifespan."""
         calibration = await verify_calibration(cfg, transport=lifecycle_transport)
         if calibration.status == "uncalibrated":
             log.warning(
@@ -264,7 +260,6 @@ def create_app(
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
     async def models() -> dict[str, Any]:
-        """Return the configured model in OpenAI list format."""
         return {
             "object": "list",
             "data": [{"id": cfg.model, "object": "model", "owned_by": "narwhal"}],
@@ -317,7 +312,6 @@ def create_app(
 
     @app.get("/narwhal/handoff", summary="The live control-plane handoff document")
     async def handoff() -> dict[str, Any]:
-        """Return a fresh handoff for resume or standby polling."""
         return handoff_state.snapshot(router)
 
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
@@ -452,7 +446,6 @@ def create_app(
 async def _completion_body(
     router: NarwhalRouter, request: HTTPRequest
 ) -> dict[str, Any] | JSONResponse:
-    """Parse a bounded body before reserving active or engine capacity."""
     state: RequestLifecycle | None = request.scope.get(LIFECYCLE)
     try:
         raw = json.loads(await bounded_body(request, router.cfg.serving.max_request_bytes))
@@ -467,7 +460,7 @@ async def _completion_body(
         return error_response(413, "request_too_large", "request body exceeds max_request_bytes")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _invalid_refusal(state, "the request body is not valid JSON", None)
-    problem = completion_body_error(raw)
+    problem = completion_body_error(raw, router.engines.dialect.reserved_fields)
     if problem is not None:
         return _invalid_refusal(state, *problem)
     return raw
@@ -476,7 +469,6 @@ async def _completion_body(
 def _invalid_refusal(
     state: RequestLifecycle | None, message: str, param: str | None
 ) -> JSONResponse:
-    """Record and return the stable malformed-request 400."""
     if state is not None:
         state.finish("invalid", error=message, status=400, error_type="invalid_request_error")
     return error_response(400, "invalid_request_error", message, param=param, code=None)

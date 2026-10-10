@@ -1,5 +1,3 @@
-"""Decode token-gap probe across input lengths and concurrency."""
-
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +8,7 @@ from contextlib import aclosing
 
 import httpx
 
-from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect
 from ...engines.stream import event_choices, sse_events, token_ids
 from ..tasks import cancel_tasks
 from .engine import make_prompt
@@ -25,14 +23,9 @@ async def _one_decode_stream(
     input_len: int,
     state: dict[str, float],
     samples: list[tuple[float, float, float]],
+    dialect: EngineDialect,
     tokens: int = DECODE_TOKENS,
-    dialect: EngineDialect | None = None,
 ) -> None:
-    """Append exact-token gaps measured while the complete cohort decodes to `samples`.
-
-    Intervals crossing a cohort arrival or departure are excluded.
-    """
-    dialect = dialect or VllmDialect()
     if not dialect.token_ids:
         raise RuntimeError("decode profiling requires exact output token IDs")
     body = {
@@ -136,13 +129,12 @@ async def _decode_cohort(
     tokens: int,
     dialect: EngineDialect,
 ) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
-    """Run one decode cohort and return its complete-cohort intervals and timing state."""
     state: dict[str, float] = {"resident": 0, "requests": 0, "epoch": 0, "cohort": cohort}
     observed: list[tuple[float, float, float]] = []
     tasks = [
         asyncio.create_task(
             _one_decode_stream(
-                client, url, model, prompt, input_len, state, observed, tokens, dialect
+                client, url, model, prompt, input_len, state, observed, dialect, tokens
             )
         )
         for _ in range(cohort)
@@ -155,10 +147,6 @@ async def _decode_cohort(
 
 
 def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
-    """Size a retry so the first member still decodes when the last member joins.
-
-    Return None when the cohort already overlapped or the size exceeds `limit`.
-    """
     first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
     if first is None or joined is None or left is None or joined < left or left <= first:
         return None
@@ -172,9 +160,9 @@ async def probe_decode(
     client: httpx.AsyncClient,
     url: str,
     model: str,
+    dialect: EngineDialect,
     concurrency: tuple[int, ...] = DECODE_CONCURRENCY,
     tokens: int = DECODE_TOKENS,
-    dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
     input_lens: tuple[int, ...] = DECODE_INPUT_LENS,
     *,
@@ -183,8 +171,6 @@ async def probe_decode(
     repeats: int = 1,
     observation_timeout_s: float | None = None,
 ) -> list[tuple[float, float, float]]:
-    """Measure decode gaps across input-length and concurrency combinations."""
-    dialect = dialect or VllmDialect()
     samples: list[tuple[float, float, float]] = []
     for target in input_lens:
         prompt, input_len = await make_prompt(

@@ -11,7 +11,6 @@ from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import fetch_engine_identity, verify_attestation
 from ...engines.client import EngineClient, EngineError
-from ...engines.dialect import lookup as lookup_dialect
 from ...engines.validation import can_consume, can_produce
 from ...profiling.calibration import verify_calibration
 from ...profiling.probe.engine import engine_context_limit, make_prompt
@@ -238,7 +237,7 @@ async def gate_pace(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
     print("pace")
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     base_body = {
         "model": cfg.model,
         "prompt": PACE_PROMPT,

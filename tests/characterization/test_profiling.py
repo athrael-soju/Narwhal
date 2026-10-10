@@ -13,7 +13,6 @@ import httpx
 from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.engines.client import EngineClient
-from narwhal.engines.dialect import lookup
 from narwhal.profiling import calibration
 from narwhal.profiling.probe.decode import probe_decode
 from narwhal.profiling.probe.engine import (
@@ -51,7 +50,7 @@ def distinct(requests):
 class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.engine = FakeVllm(ENGINES)
-        self.dialect = lookup("vllm")
+        self.dialect = load_backend("vllm").dialect
         output = redirect_stdout(io.StringIO())
         output.__enter__()
         self.addCleanup(output.__exit__, None, None, None)
@@ -105,10 +104,10 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_requests(self):
         client = self.client()
         probes = {}
-        await probe_prefill(client, E0, "test-model", (32, 48), 2, self.dialect)
+        await probe_prefill(client, E0, "test-model", self.dialect, (32, 48), 2)
         probes["prefill"] = self.engine.requests
         self.engine.requests, self.engine.salts = [], {}
-        await probe_decode(client, E0, "test-model", (1, 2), 8, self.dialect, input_lens=(32,))
+        await probe_decode(client, E0, "test-model", self.dialect, (1, 2), 8, input_lens=(32,))
         probes["decode"] = distinct(self.engine.requests)
         self.engine.requests, self.engine.salts = [], {}
         samples, stopped = await probe_cached_prefill(

@@ -8,8 +8,8 @@ from contextlib import redirect_stderr
 
 import h11
 
+from narwhal.backends.vllm import NixlConnector
 from narwhal.backends.vllm.identity import parse_process_start
-from narwhal.engines.connector import NixlConnector
 from narwhal.engines.stream import event_choices, event_object, token_ids
 from tools.measurement import simulated_engine as sim
 

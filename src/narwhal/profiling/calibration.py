@@ -1,5 +1,3 @@
-"""Measure crossed-handoff first-token latency without the serving deadline."""
-
 from __future__ import annotations
 
 import asyncio
@@ -16,12 +14,11 @@ from uuid import uuid4
 
 import httpx
 
+from ..backends import load as load_backend
 from ..config import FleetConfig
 from ..engines.client import EngineClient, EngineError, first_output_timeout
 from ..engines.connector import PrefillResult
-from ..engines.connector import lookup as lookup_connector
 from ..engines.dialect import EngineDialect
-from ..engines.dialect import lookup as lookup_dialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
 from .generation import read_generation
@@ -54,7 +51,6 @@ def _finite(value: Any) -> TypeGuard[float]:
 
 
 def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
-    """Return nearest-rank p99, maximum, and the documented guarded candidate."""
     if not samples or any(not math.isfinite(value) or value < 0 for value in samples):
         raise ValueError("candidate deadline requires finite completed timings")
     ordered = sorted(samples)
@@ -64,11 +60,6 @@ def candidate_deadline(samples: list[float]) -> tuple[float, float, float]:
 
 
 def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[Pair]]:
-    """Split pairs into rounds in which each device slot produces and consumes at most once.
-
-    `slots` maps each engine to its device slot. The round count equals the largest number
-    of pairs one slot produces or consumes.
-    """
     produced: dict[str, dict[int, Pair]] = {}
     consumed: dict[str, dict[int, Pair]] = {}
     colour: dict[Pair, int] = {}
@@ -103,7 +94,6 @@ def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list
 
 
 def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
-    """Return mismatches between a calibration document and this fleet's configuration."""
     problems: list[str] = []
     if document.get("schema") != SCHEMA or document.get("schema_version") != 1:
         return ["first-token calibration has an unknown schema or version"]
@@ -262,12 +252,6 @@ def _status(engines: Mapping[str, EngineLabel]) -> EngineLabel:
 
 @dataclass(frozen=True)
 class CalibrationCheck:
-    """The configured first-token calibration checked against the live engines.
-
-    An engine is `measured` while it runs the process the calibration timed and `reused`
-    after a relaunch with an unchanged generation digest.
-    """
-
     status: Literal["uncalibrated", "rejected", "measured", "reused"]
     problems: tuple[str, ...] = ()
     path: Path | None = None
@@ -277,14 +261,12 @@ class CalibrationCheck:
     process_starts: dict[str, float] = field(default_factory=dict)
 
     def at_starts(self, starts: Mapping[str, float]) -> CalibrationCheck:
-        """Return the check with each engine in `starts` labelled by that process start."""
         if not self.engines:
             return self
         engines = {**self.engines, **_labels(self.process_starts, starts)}
         return replace(self, status=_status(engines), engines=engines)
 
     def view(self) -> dict[str, Any]:
-        """Return the status, capture time, candidate deadline and engine labels."""
         return {
             "status": self.status,
             "captured_at_unix": self.captured_at_unix,
@@ -293,7 +275,6 @@ class CalibrationCheck:
         }
 
     def summary(self, deadline_s: float) -> str:
-        """Describe a measured or reused calibration against the configured deadline."""
         limits = f"candidate {self.candidate_deadline_s:.3f}s, deadline {deadline_s:g}s"
         reused = [iid for iid, label in self.engines.items() if label == "reused"]
         if reused:
@@ -307,7 +288,6 @@ class CalibrationCheck:
 async def verify_calibration(
     cfg: FleetConfig, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> CalibrationCheck:
-    """Check saved timings against the live engine generations and label each engine."""
     path = cfg.first_token_calibration_path
     if path is None:
         return CalibrationCheck("uncalibrated")
@@ -356,7 +336,6 @@ async def verify_calibration(
 
 
 async def _together(coroutines: list[Coroutine[Any, Any, T]]) -> list[T]:
-    """Await `coroutines` concurrently; cancel the rest and re-raise when one raises."""
     tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
     try:
         return await asyncio.gather(*tasks)
@@ -367,8 +346,6 @@ async def _together(coroutines: list[Coroutine[Any, Any, T]]) -> list[T]:
 
 @dataclass
 class _Attempt:
-    """One crossed handoff and its raw row."""
-
     src: str
     dst: str
     target: int
@@ -381,7 +358,6 @@ class _Attempt:
     handoff: PrefillResult | None = None
 
     def fail(self, exc: Exception, deadline: asyncio.Timeout) -> None:
-        """Record the failure status of the current phase."""
         expired = first_output_timeout(exc) and exc.status == 504
         self.row.update(
             status=(
@@ -400,8 +376,6 @@ class _Attempt:
 
 
 class _Lockstep:
-    """Run calibration steps: every prefill, a barrier, every decode, a barrier."""
-
     def __init__(
         self,
         cfg: FleetConfig,
@@ -423,7 +397,6 @@ class _Lockstep:
     async def step(
         self, pairs: list[Pair], target: int, index: int, round_number: int | None
     ) -> None:
-        """Measure attempt `index` of each pair at `target` input tokens."""
         attempts = []
         for src, dst in pairs:
             context_limit = min(self.context_limits[src], self.context_limits[dst])
@@ -448,7 +421,6 @@ class _Lockstep:
         )
 
     async def _prefill(self, attempt: _Attempt) -> bool:
-        """Size a fresh prompt and prefill it on the producer; return whether it handed off."""
         began = time.monotonic()
         deadline = asyncio.timeout(self.cfg.request_timeout_s)
         try:
@@ -490,7 +462,6 @@ class _Lockstep:
         return True
 
     async def _decode(self, attempt: _Attempt) -> None:
-        """Time the first generated token on the consumer within the attempt's remaining budget."""
         attempt.phase = "decode"
         deadline = asyncio.timeout(self.cfg.request_timeout_s - attempt.elapsed)
         try:
@@ -525,10 +496,6 @@ async def calibrate(
     observation_timeout_s: float,
     out: Path,
 ) -> int:
-    """Write fresh process-bound samples and return zero only for complete evidence.
-
-    Sweep 1 measures each group alone. Later sweeps run each round as one lockstep step.
-    """
     if not input_tokens or any(value < 1 for value in input_tokens):
         raise ValueError("--input-tokens requires positive token counts")
     if len(set(input_tokens)) != len(input_tokens):
@@ -554,7 +521,7 @@ async def calibrate(
         if src == source
     ]
     by_id = {spec.iid: spec for spec in cfg.engines}
-    dialect = lookup_dialect(cfg.dialect)
+    dialect = load_backend(cfg.backend).dialect
     if dialect.tokenize_path is None:
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
     began = time.monotonic()
@@ -580,7 +547,7 @@ async def calibrate(
         pool_timeout_s=cfg.pool_timeout_s,
         connect_timeout_s=cfg.connect_timeout_s,
         health_timeout_s=cfg.health_timeout_s,
-        kv=lookup_connector(cfg.connector),
+        kv=load_backend(cfg.backend).connector(cfg.connector),
         dialect=dialect,
         model=cfg.model,
         engine_api_key=cfg.resolve_engine_key(),

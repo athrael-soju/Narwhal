@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
 from ..fitting import (
     CACHED_FIT_MIN_CASES,
@@ -61,8 +61,8 @@ async def profile_instance(
     iid: str,
     url: str,
     model: str,
+    dialect: EngineDialect,
     sweep: Sweep | None = None,
-    dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
     *,
     metrics: EngineMetrics,
@@ -71,7 +71,6 @@ async def profile_instance(
     observation_timeout_s: float | None = None,
 ) -> Profile:
     s = sweep or Sweep()
-    dialect = dialect or VllmDialect()
     print(f"  {iid}")
     hits_before = await prefix_cache_hits(client, url, metrics, observation_timeout_s or 30.0)
     block_tokens = await cache_block_tokens(client, url, metrics, observation_timeout_s or 30.0)
@@ -79,9 +78,9 @@ async def profile_instance(
         client,
         url,
         model,
+        dialect,
         s.prefill_lens,
         s.prefill_repeats,
-        dialect,
         chars_per_token,
         max_model_len,
         observation_timeout_s,
@@ -106,9 +105,9 @@ async def profile_instance(
         client,
         url,
         model,
+        dialect,
         s.decode_concurrency,
         s.decode_tokens,
-        dialect,
         chars_per_token,
         s.decode_input_lens,
         evidence=decode_intervals,

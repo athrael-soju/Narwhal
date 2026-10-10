@@ -25,7 +25,7 @@ from narwhal.serving.app import create_app
 from tests.characterization.golden import assert_golden
 from tests.characterization.vllm_fake import ENGINES, FakeVllm, routed, untimed
 from tests.fixtures import ROOT, fleet, profile
-from tests.wire import EngineWire, engine_transports
+from tests.wire import EngineWire, engine_transports, vllm_engine
 
 SECONDS = re.compile(r"[0-9]+\.[0-9]+s\b")
 
@@ -192,7 +192,7 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_keep_alive_expiry(self):
         engine = FakeVllm(ENGINES)
         wire = EngineWire(engine)
-        client = EngineClient(dial=wire.dial)
+        client = EngineClient(**vllm_engine(), dial=wire.dial)
         self.addAsyncCleanup(client.aclose)
         self.addAsyncCleanup(wire.aclose)
         loop = asyncio.get_running_loop()
