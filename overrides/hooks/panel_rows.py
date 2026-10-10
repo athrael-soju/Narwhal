@@ -22,7 +22,8 @@ def _png_width(path: Path) -> int:
 def on_page_content(html: str, page: Page, config: MkDocsConfig, files: Files) -> str:
     """Give each row image a flex share equal to its pixel width.
 
-    Stats rows on a page share one scale, set by the widest stats row.
+    Stats rows on a page share one scale, set by the widest stats row. No image
+    grows past its pixel width.
     """
     base = page.url
 
@@ -45,8 +46,8 @@ def on_page_content(html: str, page: Page, config: MkDocsConfig, files: Files) -
         def size(item: re.Match[str]) -> str:
             pixels = width(item.group(1))
             if stats and widest:
-                return f'<p style="flex: 0 1 {100 * pixels / widest:.3f}%">'
-            return f'<p style="flex-grow: {pixels}">'
+                return f'<p style="flex: 0 1 {100 * pixels / widest:.3f}%; max-width: {pixels}px">'
+            return f'<p style="flex-grow: {pixels}; max-width: {pixels}px">'
 
         return match.group(1) + _ITEM.sub(size, match.group(3)) + match.group(4)
 
