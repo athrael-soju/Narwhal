@@ -2,7 +2,6 @@
   "dashboard_series": [
     "vllm:generation_tokens_total",
     "vllm:kv_cache_usage_perc",
-    "vllm:nixl_num_kv_expired_reqs_total",
     "vllm:num_requests_running",
     "vllm:num_requests_waiting",
     "vllm:prefix_cache_hits_total",

@@ -42,18 +42,8 @@ class SglangMetrics(EngineMetrics):
         "output_tokens": (
             "sum by(iid) (rate(sglang:generation_tokens_total{@sel}[$__rate_interval]))"
         ),
-        "handoff": (
-            'sum by(iid) ({__name__=~"sglang:num_prefill_bootstrap_queue_reqs|'
-            'sglang:num_decode_prealloc_queue_reqs|sglang:num_decode_transfer_queue_reqs",@sel})'
-        ),
     }
-    dashboard_text: ClassVar[Mapping[str, str]] = {
-        "handoff_title": "KV handoff queue",
-        "handoff_description": "Requests waiting for a KV handoff on each engine: bootstrap on "
-        "prefill engines, preallocation and transfer on decode engines.",
-        "handoff_unit": "short",
-        "handoff_color": "#F2CC0C",
-    }
+    dashboard_text: ClassVar[Mapping[str, str]] = {}
 
     def kv_capacity(self, metrics: str) -> int | None:
         values = [int(float(match)) for match in _KV_CAPACITY.findall(metrics)]

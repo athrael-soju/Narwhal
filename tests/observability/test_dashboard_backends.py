@@ -13,8 +13,8 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-# The dashboard as shipped before its engine panels came from the backend.
-VLLM_SHA256 = "1533485b2812c6b5a9aaffaf4ca192aaa32319f96b49b81af5bf0819672bedb3"
+# The vLLM rendering, pinned so a dashboard change is deliberate.
+VLLM_SHA256 = "23417a1f3583f0ef12e775e73a6f81d33bfe33962afc5bd6161e5a9cf274ae5e"
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
@@ -26,7 +26,7 @@ def engine_prefixes(dashboard: dict) -> set[str]:
 
 
 class BackendDashboardTests(unittest.TestCase):
-    def test_vllm_renders_the_dashboard_unchanged(self):
+    def test_vllm_rendering_is_pinned(self):
         text = json.dumps(artifacts.render_dashboard(SHIPPED, "vllm"), indent=2) + "\n"
         self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), VLLM_SHA256)
 
@@ -50,19 +50,19 @@ class BackendDashboardTests(unittest.TestCase):
                 dashboard_series={
                     key: value
                     for key, value in metrics.dashboard_series.items()
-                    if key != "handoff"
+                    if key != "output_tokens"
                 },
                 dashboard_text=metrics.dashboard_text,
             ),
         )
         with mock.patch.object(artifacts, "load_backend", return_value=partial):
             rendered = artifacts.render_dashboard(SHIPPED, "partial")
-        expired = next(
+        dropped = next(
             name
             for name, element in SHIPPED["spec"]["elements"].items()
-            if "<<handoff{" in json.dumps(element)
+            if "<<output_tokens{" in json.dumps(element)
         )
-        self.assertNotIn(expired, rendered["spec"]["elements"])
+        self.assertNotIn(dropped, rendered["spec"]["elements"])
         placed = {
             item["spec"]["element"]["name"] for item in rendered["spec"]["layout"]["spec"]["items"]
         }
