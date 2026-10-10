@@ -36,9 +36,18 @@ def device_key(spec: EngineSpec) -> str:
     return spec.shared_device.group if spec.shared_device is not None else f"engine:{spec.iid}"
 
 
-def _profile_lanes(targets: list[EngineSpec], *, colocated: bool) -> list[list[EngineSpec]]:
-    if colocated:
+def _profile_lanes(
+    targets: list[EngineSpec], *, colocated: bool, paired: bool = False
+) -> list[list[EngineSpec]]:
+    # Engines that share a device, or a pair across one, take turns.
+    if colocated or (paired and any(spec.shared_device is not None for spec in targets)):
         return [list(targets)]
+    if paired:
+        # Each pair lends its engines to each other, so disjoint pairs run side by side.
+        pairs = [list(targets[i : i + 2]) for i in range(0, len(targets), 2)]
+        if len(pairs) > 1 and len(pairs[-1]) == 1:
+            pairs[-2].extend(pairs.pop())
+        return pairs
     lanes: dict[str, list[EngineSpec]] = {}
     for spec in targets:
         lanes.setdefault(device_key(spec), []).append(spec)
@@ -54,6 +63,10 @@ def _pool_size(sweep: Sweep, lanes: int, engines: int, *, paired: bool) -> int:
 def _peer(spec: EngineSpec, engines: list[EngineSpec]) -> EngineSpec:
     index = next(i for i, engine in enumerate(engines) if engine.iid == spec.iid)
     return engines[(index + 1) % len(engines)]
+
+
+def _lane_peer(spec: EngineSpec, lane: list[EngineSpec], engines: list[EngineSpec]) -> EngineSpec:
+    return _peer(spec, lane) if len(lane) > 1 else _peer(spec, engines)
 
 
 def _pair_roles(
@@ -139,8 +152,8 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    # A paired engine borrows a peer for its other leg, so engines take turns.
-    lanes = _profile_lanes(targets, colocated=colocated_workload is not None or paired)
+    # A paired engine borrows a peer from its lane for its other leg.
+    lanes = _profile_lanes(targets, colocated=colocated_workload is not None, paired=paired)
     connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     pairing = (
@@ -165,7 +178,7 @@ async def run(
         transport=pairing,
     ) as client:
 
-        async def profile_engine(spec: EngineSpec) -> None:
+        async def profile_engine(spec: EngineSpec, lane: list[EngineSpec]) -> None:
             r = await client.get(
                 f"{spec.url}{dialect.health_path}", timeout=observation_timeout_s or 10.0
             )
@@ -233,7 +246,11 @@ async def run(
                 engine_evidence["generation_evidence"] = generation.document
                 roles = None
                 if pairing is not None and switcher is not None:
-                    peer = _peer(spec, cfg.engines)
+                    peer = (
+                        _peer(spec, cfg.engines)
+                        if colocated_workload is not None
+                        else _lane_peer(spec, lane, cfg.engines)
+                    )
                     engine_evidence["peer"] = peer.iid
                     roles = _pair_roles(cfg, pairing, switcher, spec, peer, launches)
                 profile = await profile_instance(
@@ -335,7 +352,7 @@ async def run(
 
         async def profile_lane(lane: list[EngineSpec]) -> None:
             for spec in lane:
-                await profile_engine(spec)
+                await profile_engine(spec, lane)
 
         tasks = [asyncio.create_task(profile_lane(lane)) for lane in lanes]
         try:
