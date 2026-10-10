@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
+import multiprocessing
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -19,7 +23,7 @@ from ...provenance import stamp
 from ...runtime.role_switch import RoleSwitcher, engine_side, place_pair
 from ...types import Role
 from ..generation import read_generation
-from ..model import decode_evidence_problems
+from ..model import Profile, decode_evidence_problems
 from ..store import ProfileStore
 from ..tasks import cancel_tasks
 from .engine import engine_context_limit
@@ -89,6 +93,96 @@ def _pair_roles(
     return serve_as
 
 
+def _lane_worker(
+    cfg: FleetConfig,
+    only: set[str],
+    sweep: Sweep | None,
+    limits_path: Path | None,
+    observation_timeout_s: float | None,
+) -> int:
+    return asyncio.run(
+        run(
+            cfg,
+            only,
+            sweep,
+            overwrite=True,
+            limits_path=limits_path,
+            observation_timeout_s=observation_timeout_s,
+            split_lanes=False,
+        )
+    )
+
+
+async def _run_lanes_apart(
+    cfg: FleetConfig,
+    lanes: list[list[EngineSpec]],
+    sweep: Sweep | None,
+    store: ProfileStore,
+    evidence_path: Path,
+    measurement_record: dict[str, object],
+    evidence_rows: dict[str, object],
+    *,
+    overwrite: bool,
+    limits_path: Path | None,
+    observation_timeout_s: float | None,
+) -> int:
+    # One event loop cannot stream every lane's decode cohort and dispatch its paired legs on
+    # time, so each lane measures in its own process.
+    loop = asyncio.get_running_loop()
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=store.path.parent) as folder:
+        lane_cfgs = []
+        for index, _ in enumerate(lanes):
+            lane_cfg = copy.copy(cfg)
+            lane_cfg.profiles_path = Path(folder) / f"lane-{index}.json"
+            lane_cfgs.append(lane_cfg)
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=len(lanes), mp_context=context) as pool:
+            futures = [
+                loop.run_in_executor(
+                    pool,
+                    _lane_worker,
+                    lane_cfg,
+                    {spec.iid for spec in lane},
+                    sweep,
+                    limits_path,
+                    observation_timeout_s,
+                )
+                for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
+            ]
+            _, pending = await asyncio.wait(futures, return_when=asyncio.FIRST_EXCEPTION)
+            if pending:
+                for worker in multiprocessing.active_children():
+                    worker.terminate()
+                await asyncio.wait(pending)
+        outcomes = [future.exception() or future.result() for future in futures]
+        profiles: list[Profile] = []
+        for lane_cfg in lane_cfgs:
+            lane_evidence = lane_cfg.profiles_path.with_suffix(".samples.json")
+            if lane_evidence.is_file():
+                evidence_rows.update(json.loads(lane_evidence.read_text())["engines"])
+            if lane_cfg.profiles_path.is_file():
+                profiles.extend(ProfileStore(lane_cfg.profiles_path).all_profiles())
+    if evidence_rows:
+        with evidence_path.open("w" if overwrite else "x", encoding="utf-8") as output:
+            output.write(json.dumps(measurement_record, indent=2) + "\n")
+    if profiles and not overwrite:
+        with store.path.open("x", encoding="utf-8"):
+            pass
+    for profile in profiles:
+        store.put(profile)
+    codes = []
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+        codes.append(outcome)
+    failed = next((code for code in codes if code), 0)
+    if failed:
+        return failed
+    print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
+    return 0
+
+
 async def run(
     cfg: FleetConfig,
     only: set[str] | None,
@@ -98,6 +192,7 @@ async def run(
     limits_path: Path | None = None,
     colocated_workload: ColocatedWorkload | None = None,
     observation_timeout_s: float | None = None,
+    split_lanes: bool = True,
 ) -> int:
     if observation_timeout_s is not None and (
         not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
@@ -154,6 +249,19 @@ async def run(
     }
     # A paired engine borrows a peer from its lane for its other leg.
     lanes = _profile_lanes(targets, colocated=colocated_workload is not None, paired=paired)
+    if paired and split_lanes and len(lanes) > 1:
+        return await _run_lanes_apart(
+            cfg,
+            lanes,
+            sweep,
+            store,
+            evidence_path,
+            measurement_record,
+            evidence_rows,
+            overwrite=overwrite,
+            limits_path=limits_path,
+            observation_timeout_s=observation_timeout_s,
+        )
     connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     pairing = (
