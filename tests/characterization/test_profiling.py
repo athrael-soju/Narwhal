@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.engines.client import EngineClient
 from narwhal.engines.dialect import lookup
@@ -20,9 +21,6 @@ from narwhal.profiling.probe.engine import (
     count_tokens,
     engine_context_limit,
     kv_capacity,
-    parse_cache_block_tokens,
-    parse_kv_capacity,
-    parse_prefix_cache_hits,
     prefix_cache_hits,
 )
 from narwhal.profiling.probe.neighbours import ColocatedWorkload, NeighbourLoad
@@ -34,6 +32,8 @@ from tests.characterization.golden import assert_golden
 from tests.characterization.vllm_fake import ENGINES, FakeVllm, routed, untimed
 from tests.fixtures import ROOT
 from tests.wire import engine_transports
+
+VLLM_METRICS = load_backend("vllm").metrics
 
 E0 = "http://engine-0.invalid:8000"
 E3 = "http://engine-3.invalid:8000"
@@ -65,9 +65,9 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         client = self.client()
         self.engine.prefix_hits["e0"] = 48
         read = {
-            "kv_capacity": await kv_capacity(client, E0),
-            "cache_block_tokens": await cache_block_tokens(client, E0),
-            "prefix_cache_hits": await prefix_cache_hits(client, E0),
+            "kv_capacity": await kv_capacity(client, E0, VLLM_METRICS),
+            "cache_block_tokens": await cache_block_tokens(client, E0, VLLM_METRICS),
+            "prefix_cache_hits": await prefix_cache_hits(client, E0, VLLM_METRICS),
             "context_limit": await engine_context_limit(client, E0, "test-model", self.dialect),
             "token_count": await count_tokens(client, E0, "test-model", "a b c", self.dialect),
         }
@@ -90,9 +90,9 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         }
         parsed = {
             name: {
-                "kv_capacity": parse_kv_capacity(text),
-                "cache_block_tokens": parse_cache_block_tokens(text),
-                "prefix_cache_hits": parse_prefix_cache_hits(text),
+                "kv_capacity": VLLM_METRICS.kv_capacity(text),
+                "cache_block_tokens": VLLM_METRICS.cache_block_tokens(text),
+                "prefix_cache_hits": VLLM_METRICS.prefix_cache_hits(text),
             }
             for name, text in texts.items()
         }
@@ -117,6 +117,7 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             "test-model",
             Sweep(cached_prefix_lens=(64,), cached_suffix_lens=(16,), cached_repeats=1),
             self.dialect,
+            metrics=VLLM_METRICS,
             max_model_len=8192,
             block_tokens=16,
         )

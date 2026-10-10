@@ -389,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
         parser.error("--kv-events requires --model")
+    from ..backends import load as load_backend
     from ..cli_errors import failure
 
     try:
@@ -411,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             residency,
             f"ipc://{args.kv_events / EVENTS_SOCKET}",
             f"ipc://{args.kv_events / REPLAY_SOCKET}",
+            decoder=load_backend("vllm").kv_events,
         )
         feed.start()
     try:

@@ -25,14 +25,9 @@ src/narwhal/engines/attestation.py
 src/narwhal/engines/client.py
 src/narwhal/engines/connector.py
 src/narwhal/engines/dialect.py
-src/narwhal/engines/kv_events.py
-src/narwhal/engines/residency.py
-src/narwhal/engines/residency_feed.py
 src/narwhal/profiling/probe/decode.py
 src/narwhal/profiling/probe/engine.py
 src/narwhal/profiling/probe/instance.py
 src/narwhal/profiling/probe/prefill.py
-src/narwhal/runtime/listeners.py
-src/narwhal/runtime/release.py
 src/narwhal/serving/completion.py
 src/narwhal/serving/handoff.py

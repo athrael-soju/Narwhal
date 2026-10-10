@@ -1,17 +1,9 @@
-"""vLLM KV cache events expressed as Narwhal block identities.
-
-Groups that keep only some blocks, such as Mamba state in `align` mode, omit
-hashes for the blocks they skip.
-"""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Any, ClassVar
-
-import msgpack  # type: ignore[import-untyped]
+from typing import ClassVar
 
 from .prefix import CacheNamespace, block_identities
 
@@ -20,14 +12,12 @@ GPU_MEDIUM = "GPU"
 
 @dataclass(frozen=True)
 class StoredBlocks:
-    """One stored-block event for a KV cache group."""
-
     block_hashes: tuple[Hashable, ...]
     parent_hash: Hashable | None
     token_ids: tuple[int, ...]
     block_size: int
     adapter: str | None = None
-    # One entry per reported block hash; None when vLLM reports no extra keys.
+    # One entry per reported block hash.
     extra_keys: tuple[tuple[object, ...] | None, ...] | None = None
     group: int | None = None
     kind: str | None = None
@@ -37,12 +27,10 @@ class StoredBlocks:
 
     @property
     def block_count(self) -> int:
-        """Return the number of full blocks the event's token run spans."""
         return len(self.token_ids) // self.block_size
 
     @property
     def complete(self) -> bool:
-        """Return whether the event reports a hash for every block it spans."""
         return (
             self.block_size > 0
             and len(self.token_ids) == self.block_count * self.block_size
@@ -52,78 +40,16 @@ class StoredBlocks:
 
 @dataclass(frozen=True)
 class RemovedBlocks:
-    """Blocks one KV cache group evicted, named by the backend's hashes."""
-
     block_hashes: tuple[Hashable, ...]
     group: int | None = None
     medium: str | None = None
 
 
 @dataclass(frozen=True)
-class CacheCleared:
-    """The engine reset its prefix cache; no block remains resident."""
+class CacheCleared: ...
 
 
 CacheEvent = StoredBlocks | RemovedBlocks | CacheCleared
-
-
-def _hashes(values: Any) -> tuple[Hashable, ...]:
-    if not isinstance(values, list) or not all(isinstance(v, bytes | int) for v in values):
-        raise ValueError("block hashes must be a list of bytes or integers")
-    return tuple(values)
-
-
-def _event(item: Any) -> CacheEvent | None:
-    """Decode one tagged vLLM event map; an unrecognised type decodes to None."""
-    if not isinstance(item, dict):
-        raise ValueError("cache event must be a map")
-    kind = item.get("type")
-    if kind == "AllBlocksCleared":
-        return CacheCleared()
-    if kind == "BlockRemoved":
-        return RemovedBlocks(
-            _hashes(item["block_hashes"]), item.get("group_idx"), item.get("medium")
-        )
-    if kind != "BlockStored":
-        return None
-    parent = item.get("parent_block_hash")
-    tokens = item["token_ids"]
-    extras = item.get("extra_keys")
-    if not isinstance(tokens, list) or any(type(t) is not int for t in tokens):
-        raise ValueError("stored-block token IDs must be integers")
-    if parent is not None and not isinstance(parent, bytes | int):
-        raise ValueError("parent block hash must be bytes or an integer")
-    if extras is not None and not isinstance(extras, list):
-        raise ValueError("extra keys must be a list")
-    adapter = item.get("lora_name")
-    if adapter is not None and not isinstance(adapter, str):
-        raise ValueError("LoRA name must be a string")
-    return StoredBlocks(
-        _hashes(item["block_hashes"]),
-        parent,
-        tuple(tokens),
-        int(item["block_size"]),
-        adapter,
-        None if extras is None else tuple(None if k is None else tuple(k) for k in extras),
-        item.get("group_idx"),
-        item.get("kv_cache_spec_kind"),
-        item.get("medium"),
-        item.get("kv_cache_spec_sliding_window"),
-    )
-
-
-def decode_batch(payload: bytes) -> list[CacheEvent | None]:
-    """Decode one msgpack event batch published by vLLM's ZeroMQ publisher.
-
-    Raises ValueError for a payload that does not follow the batch layout.
-    """
-    try:
-        batch = msgpack.unpackb(payload, raw=False, strict_map_key=False)
-        if not isinstance(batch, list) or len(batch) < 2 or not isinstance(batch[1], list):
-            raise ValueError("event batch must be [timestamp, events, ...]")
-        return [_event(item) for item in batch[1]]
-    except (msgpack.UnpackException, KeyError, TypeError) as exc:
-        raise ValueError(f"malformed cache event batch: {exc}") from exc
 
 
 def _block_extras(event: StoredBlocks, index: int) -> tuple[object, ...]:
@@ -134,7 +60,6 @@ def _block_extras(event: StoredBlocks, index: int) -> tuple[object, ...]:
 
 
 def _cache_salt(event: StoredBlocks) -> tuple[bool, str | None]:
-    """Read text-only extra keys; return (supported, salt of the first prompt block)."""
     if event.extra_keys is not None and len(event.extra_keys) != len(event.block_hashes):
         return False, None
     adapter = () if event.adapter is None else (event.adapter,)
@@ -144,7 +69,7 @@ def _cache_salt(event: StoredBlocks) -> tuple[bool, str | None]:
         if extras[: len(adapter)] != adapter:
             return False, None
         rest = extras[len(adapter) :]
-        # vLLM mixes the cache salt into the first prompt block only.
+        # The salt is mixed into the first prompt block only.
         if index == 0 and event.parent_hash is None and len(rest) == 1:
             if not isinstance(rest[0], str):
                 return False, None
@@ -158,11 +83,6 @@ def _cache_salt(event: StoredBlocks) -> tuple[bool, str | None]:
 def stored_identities(
     event: StoredBlocks, model: str, tokenizer: str, parent: bytes | None
 ) -> list[bytes] | None:
-    """Return Narwhal identities aligned with a complete event's block hashes.
-
-    Return None when the event skips blocks, carries unsupported extra keys, or
-    continues from a parent whose identity `parent` does not supply.
-    """
     if not event.complete or (event.parent_hash is not None and parent is None):
         return None
     supported, salt = _cache_salt(event)
@@ -178,10 +98,6 @@ def stored_identities(
 
 
 def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> list[bytes | None]:
-    """Return identities for an event's hashes from blocks another group reported.
-
-    vLLM gives groups with equal block sizes the same hash for a block.
-    """
     return [known.get(block_hash) for block_hash in event.block_hashes]
 
 
@@ -190,5 +106,4 @@ class KvEventDecoder(ABC):
     recomputes_final_token: ClassVar[bool] = True
 
     @abstractmethod
-    def decode_batch(self, payload: bytes) -> list[CacheEvent | None]:
-        """Decode one published batch; raise ValueError for a malformed batch."""
+    def decode_batch(self, payload: bytes) -> list[CacheEvent | None]: ...

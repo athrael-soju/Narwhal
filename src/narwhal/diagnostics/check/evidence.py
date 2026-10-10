@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import time
 from hashlib import sha256
 from pathlib import Path
@@ -18,11 +17,6 @@ from ...engines.validation import validation_pairs
 from ...profiling.generation import binding_digest, generation_problem
 from ...profiling.store import ProfileStore
 from .report import Report
-
-_NIXL_TRANSFER = re.compile(
-    r"^vllm:nixl_xfer_time_seconds_(count|sum)(?:\{[^}]*\})?\s+([0-9.eE+-]+)$",
-    re.MULTILINE,
-)
 
 
 async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
@@ -46,13 +40,12 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
             raise ValueError(f"{iid} attestation: {'; '.join(failures)}")
         metrics = await client.get(spec.url.rstrip("/") + "/metrics", headers=cfg.engine_headers())
         metrics.raise_for_status()
-    transfer = {"count": 0.0, "sum": 0.0}
-    for name, value in _NIXL_TRANSFER.findall(metrics.text):
-        transfer[name] += float(value)
-    if not math.isfinite(transfer["count"]) or not math.isfinite(transfer["sum"]):
-        raise ValueError(f"{iid} returned non-finite NIXL transfer metrics")
-    if not _NIXL_TRANSFER.search(metrics.text):
+    totals = load_backend(cfg.backend).metrics.transfer_totals(metrics.text)
+    if totals is None:
         raise ValueError(f"{iid} exposes no NIXL transfer metrics")
+    count, seconds = totals
+    if not math.isfinite(count) or not math.isfinite(seconds):
+        raise ValueError(f"{iid} returned non-finite NIXL transfer metrics")
     sources = {LEGACY_CONTRACT_FIELDS.get(k, k): v for k, v in payload["sources"].items()}
     return {
         "iid": iid,
@@ -66,8 +59,8 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         },
         "connector_source": sources["connector_version"],
         "transfer_mode_source": sources["transfer_mode"],
-        "nixl_transfer_count": transfer["count"],
-        "nixl_transfer_seconds_sum": transfer["sum"],
+        "nixl_transfer_count": count,
+        "nixl_transfer_seconds_sum": seconds,
     }
 
 

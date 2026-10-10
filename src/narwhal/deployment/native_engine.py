@@ -134,7 +134,7 @@ def _ports_free(selected: list[tuple[Path, dict]]) -> None:
         host = values["VLLM_NIXL_SIDE_CHANNEL_HOST"]
         port = int(values["VLLM_NIXL_SIDE_CHANNEL_PORT"])
         try:
-            check_engine_bind(host, port, nixl=True)
+            check_engine_bind(host, port, dual_stack=True)
         except OSError as error:
             raise ValueError(
                 f"{plan['role']}: NIXL port {port} is unavailable at {host}: {error}"

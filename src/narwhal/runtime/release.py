@@ -1,9 +1,3 @@
-"""Peer release rounds after an engine ejection or drain.
-
-A vLLM NIXL consumer keeps a producer's KV memory mapped until a consume request
-finds that producer idle for longer than the connector's `engine_ttl`.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -14,18 +8,13 @@ from typing import TYPE_CHECKING
 
 from ..engines.validation import can_consume, can_produce
 from ..types import LEG_CONNECTION
+from .fabric import FabricLifecycle
 
 if TYPE_CHECKING:
     from ..serving.router.routing import NarwhalRouter
 
 log = logging.getLogger("narwhal.peer_release")
 
-# Seconds after the engine leaves placement. The first round follows the launcher's 60 s
-# engine_ttl; the last follows vLLM's 3600 s default.
-RELEASE_AFTER_S = (65.0, 125.0, 245.0, 485.0, 965.0, 1925.0, 3845.0)
-# Seconds before the one retry of a round's missed consumers; vLLM sends lease heartbeats at
-# most every 5 s.
-RETRY_AFTER_S = 5.0
 # Outcomes a retry within the round leaves unchanged.
 SETTLED = ("sent", "no producer", "no model")
 # Lifecycle states that hold an engine out of placement after its drain.
@@ -33,9 +22,13 @@ RELEASED_STATES = ("drained", "deadline_exceeded", "validating", "blocked")
 
 
 class PeerRelease:
-    """Release-round schedule for each engine out of placement."""
+    def __init__(self, clock: Callable[[], float], fabric: FabricLifecycle | None = None) -> None:
+        if fabric is None:
+            from ..backends import load
+            from ..config import FleetConfig
 
-    def __init__(self, clock: Callable[[], float]) -> None:
+            fabric = load(FleetConfig.backend).fabric
+        self.fabric = fabric
         self._clock = clock
         self._rounds: dict[str, tuple[str, float, int]] = {}
         self.tasks: set[asyncio.Task[dict[str, str]]] = set()
@@ -43,7 +36,6 @@ class PeerRelease:
         self.retry_at = 0.0
 
     def track(self, released: Mapping[str, str]) -> None:
-        """Start an engine's schedule when it leaves placement or changes state."""
         now = self._clock()
         for iid in set(self._rounds) - set(released):
             del self._rounds[iid]
@@ -55,38 +47,36 @@ class PeerRelease:
             self.missed.clear()
 
     def due(self) -> list[str]:
-        """Return engines with a due round and advance their schedules."""
         now = self._clock()
         due = []
+        schedule = self.fabric.release_after_s
         for iid, (reason, since, done) in sorted(self._rounds.items()):
-            if done < len(RELEASE_AFTER_S) and now - since >= RELEASE_AFTER_S[done]:
+            if done < len(schedule) and now - since >= schedule[done]:
                 self._rounds[iid] = (reason, since, done + 1)
                 due.append(iid)
         return due
 
     def finish(self, task: asyncio.Task[dict[str, str]], *, retry: bool) -> None:
-        """Keep a round's missed consumers for one retry."""
         if task.cancelled() or task.exception() is not None:
             return
         if retry:
             self.missed = set()
             return
         self.missed = {iid for iid, outcome in task.result().items() if outcome not in SETTLED}
-        self.retry_at = self._clock() + RETRY_AFTER_S
+        self.retry_at = self._clock() + self.fabric.release_retry_s
 
     def retry_due(self) -> bool:
-        """Return whether missed consumers are due their retry."""
         return bool(self.missed) and self._clock() >= self.retry_at
 
     def snapshot(self) -> dict[str, dict[str, float | int | None]]:
-        """Completed rounds and seconds until the next round per engine."""
         now = self._clock()
+        schedule = self.fabric.release_after_s
         return {
             iid: {
                 "rounds": done,
                 "next_round_s": (
-                    round(max(0.0, since + RELEASE_AFTER_S[done] - now), 3)
-                    if done < len(RELEASE_AFTER_S)
+                    round(max(0.0, since + schedule[done] - now), 3)
+                    if done < len(schedule)
                     else None
                 ),
             }
@@ -95,7 +85,6 @@ class PeerRelease:
 
 
 def released_engines(router: NarwhalRouter) -> dict[str, str]:
-    """Map each engine out of placement to its lifecycle state, or `ejected`."""
     released = dict.fromkeys(router.scheduler.ejected, "ejected")
     for iid, record in router.lifecycle.records.items():
         if record.state in RELEASED_STATES:
@@ -104,7 +93,6 @@ def released_engines(router: NarwhalRouter) -> dict[str, str]:
 
 
 def release_peers(router: NarwhalRouter) -> None:
-    """Start a due release round, or the retry for the consumers a round missed."""
     release = router.peer_release
     if router.cfg.engine_restart_policy != "individual":
         return
@@ -129,7 +117,6 @@ def release_peers(router: NarwhalRouter) -> None:
 async def release_round(
     router: NarwhalRouter, gone: list[str], only: set[str] | None = None
 ) -> dict[str, str]:
-    """Send one transfer probe through each live consumer and return each outcome."""
     specs = {spec.iid: spec for spec in router.cfg.engines}
     live = [inst for inst in router.scheduler.live_instances() if inst.iid in specs]
     producers = [inst for inst in live if can_produce(specs[inst.iid])]

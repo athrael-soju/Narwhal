@@ -1,5 +1,3 @@
-"""KV handoff production and directed transfer gates."""
-
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +5,7 @@ import time
 from hashlib import sha256
 from typing import cast
 
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.client import EngineClient, EngineError, first_output_timeout
 from ...engines.connector import PrefillResult
@@ -21,7 +20,6 @@ from .report import Report
 async def gate_produce(
     cfg: FleetConfig, live: set[str], client: EngineClient, rep: Report
 ) -> dict[str, PrefillResult]:
-    """Check that every live engine produces a KV handoff."""
     print("produce")
     handoffs: dict[str, PrefillResult] = {}
     body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 1, "temperature": 0.0}
@@ -49,11 +47,6 @@ async def gate_consume(
     repeats: int = 1,
     evidence: list[dict[str, object]] | None = None,
 ) -> None:
-    """Probe role-permitted transfers between distinct engines.
-
-    Ring mode covers each eligible producer and consumer with a peer; mesh mode covers
-    every eligible ordered pair.
-    """
     print(f"consume ({'mesh' if mesh else 'ring'}, {repeats}x)")
     ids = [s.iid for s in cfg.engines if s.iid in live and s.iid in handoffs]
     if len(ids) < 2:
@@ -136,7 +129,7 @@ async def gate_consume(
                 record.update(
                     status="passed",
                     connector=params.connector,
-                    transfer_metric="vllm:nixl_xfer_time_seconds",
+                    transfer_metric=load_backend(cfg.backend).metrics.transfer_series,
                     transfer_mode=descriptor.get("transfer_mode"),
                     remote_engine_id=descriptor.get("remote_engine_id"),
                     remote_host=descriptor.get("remote_host"),

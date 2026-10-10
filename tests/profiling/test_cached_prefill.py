@@ -1,5 +1,3 @@
-"""Check warm prefill measurement, fitting, the cold split step and their cold fallback."""
-
 import io
 import json
 import re
@@ -12,17 +10,19 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.engines.dialect import VllmDialect
 from narwhal.profiling.fitting import fit_cached_prefill, fit_prefill_samples, splits_prefill
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS, Profile
 from narwhal.profiling.probe import warm as warm_probe
-from narwhal.profiling.probe.engine import parse_cache_block_tokens
 from narwhal.profiling.probe.instance import profile_instance
 from narwhal.profiling.probe.offline import refit_saved_prefill
 from narwhal.profiling.probe.sweep import PREFILL_LENS, Sweep, bounded_sweep, warm_cases
 from narwhal.profiling.probe.warm import apply_cached_fit, probe_cached_prefill
 from tests.fixtures import profile
 from tests.profiling.fixtures import patched_profile_sweeps
+
+VLLM_METRICS = load_backend("vllm").metrics
 
 A, B, C, D = 2e-9, 1e-5, 0.07, 4e-6
 
@@ -32,7 +32,6 @@ def warm_time(prefix, suffix):
 
 
 def warm_samples(prefixes=(1024, 2048, 4096), suffixes=(256, 1024, 2048), repeats=3, noise=None):
-    """Samples shaped like the profiler's, optionally scaled by `noise(prefix, suffix)`."""
     scale = noise or (lambda p, s: 1.0)
     return [
         {
@@ -194,8 +193,8 @@ class ColdSplitStepTests(unittest.TestCase):
 
     def test_block_size_comes_from_the_engine_cache_metric(self):
         metrics = 'vllm:cache_config_info{block_size="512",engine="0"} 1.0\n'
-        self.assertEqual(parse_cache_block_tokens(metrics), 512)
-        self.assertIsNone(parse_cache_block_tokens("vllm:num_requests_running 0\n"))
+        self.assertEqual(VLLM_METRICS.cache_block_tokens(metrics), 512)
+        self.assertIsNone(VLLM_METRICS.cache_block_tokens("vllm:num_requests_running 0\n"))
 
 
 class WarmSweepBoundsTests(unittest.TestCase):
@@ -210,8 +209,6 @@ class WarmSweepBoundsTests(unittest.TestCase):
 
 
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
-    """A fake engine caches whole 16-token blocks per salt and counts reused tokens."""
-
     def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None, blind_after_cold=False):
         cache: dict[str, int] = {}
         hits = [0]
@@ -274,7 +271,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 redirect_stdout(io.StringIO()),
             ):
                 return await probe_cached_prefill(
-                    client, "http://e", "stub", sweep, VllmDialect(), **kwargs
+                    client, "http://e", "stub", sweep, VllmDialect(), metrics=VLLM_METRICS, **kwargs
                 )
 
     async def test_samples_record_observed_cache_state_and_cold_controls(self):
@@ -353,7 +350,7 @@ class ProfileInstanceWarmTests(unittest.IsolatedAsyncioTestCase):
             prefill, decode, hits=7, block=block, warm=sweep_result
         ) as sweep:
             row = await profile_instance(
-                None, "e0", "http://e", "stub", evidence=evidence, **kwargs
+                None, "e0", "http://e", "stub", metrics=VLLM_METRICS, evidence=evidence, **kwargs
             )
         self.warm_sweeps = sweep.await_count
         return row, evidence

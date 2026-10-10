@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.diagnostics.check import preflight
 from narwhal.diagnostics.check.engines import gate_contract
@@ -19,7 +20,6 @@ from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
 from narwhal.observability.metrics.render import render
 from narwhal.profiling.generation import binding_digest
 from narwhal.profiling.store import ProfileStore
-from narwhal.runtime.listeners import check_engine_bind
 from narwhal.runtime.release import PeerRelease, release_peers
 from narwhal.serving.app import create_app
 from tests.characterization.golden import assert_golden
@@ -184,7 +184,7 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def bind(port, nixl):
         try:
-            check_engine_bind("127.0.0.1", port, nixl=nixl)
+            load_backend("vllm").fabric.check_engine_bind("127.0.0.1", port, fabric=nixl)
         except OSError as exc:
             return type(exc).__name__
         return "ok"

@@ -1,5 +1,3 @@
-"""Profile one engine from its cold and warm sweeps."""
-
 from __future__ import annotations
 
 import math
@@ -8,6 +6,7 @@ from typing import Any
 import httpx
 
 from ...engines.dialect import EngineDialect, VllmDialect
+from ...engines.metrics import EngineMetrics
 from ..fitting import (
     CACHED_FIT_MIN_CASES,
     cached_fit_possible,
@@ -27,7 +26,6 @@ from .warm import apply_cached_fit, probe_cached_prefill
 def prefill_fields(
     coefficients: tuple[float, float, float, float | None], block_tokens: int | None
 ) -> dict[str, Any]:
-    """Return the Profile fields for a cold prefill fit and the engine's cache block size."""
     a, b, c, split = coefficients
     return {
         "ttft_a": a,
@@ -42,15 +40,12 @@ async def _require_cold(
     client: httpx.AsyncClient,
     iid: str,
     url: str,
+    metrics: EngineMetrics,
     before: int | None,
     timeout_s: float | None,
     evidence: dict[str, object] | None,
 ) -> None:
-    """Fail when the engine served prompt tokens from its prefix cache since `before`.
-
-    A missing or decreasing counter records no count.
-    """
-    after = await prefix_cache_hits(client, url, timeout_s or 30.0)
+    after = await prefix_cache_hits(client, url, metrics, timeout_s or 30.0)
     hit_tokens = None if before is None or after is None or after < before else after - before
     if evidence is not None:
         evidence["prefix_cache_hit_tokens"] = hit_tokens
@@ -70,16 +65,16 @@ async def profile_instance(
     dialect: EngineDialect | None = None,
     chars_per_token: float = 3.8,
     *,
+    metrics: EngineMetrics,
     evidence: dict[str, object] | None = None,
     max_model_len: int | None = None,
     observation_timeout_s: float | None = None,
 ) -> Profile:
-    """Run both sweeps and fit one engine profile."""
     s = sweep or Sweep()
     dialect = dialect or VllmDialect()
     print(f"  {iid}")
-    hits_before = await prefix_cache_hits(client, url, observation_timeout_s or 30.0)
-    block_tokens = await cache_block_tokens(client, url, observation_timeout_s or 30.0)
+    hits_before = await prefix_cache_hits(client, url, metrics, observation_timeout_s or 30.0)
+    block_tokens = await cache_block_tokens(client, url, metrics, observation_timeout_s or 30.0)
     prefill = await probe_prefill(
         client,
         url,
@@ -93,7 +88,7 @@ async def profile_instance(
     )
     if evidence is not None:
         evidence["prefill"] = prefill
-    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
+    await _require_cold(client, iid, url, metrics, hits_before, observation_timeout_s, evidence)
     prefill_fit, representatives, prefill_fit_mape = fit_prefill_samples(prefill, block_tokens)
     split = prefill_fit[3]
     print(
@@ -126,7 +121,7 @@ async def profile_instance(
     ]
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
-    await _require_cold(client, iid, url, hits_before, observation_timeout_s, evidence)
+    await _require_cold(client, iid, url, metrics, hits_before, observation_timeout_s, evidence)
     cached: list[dict[str, Any]] = []
     reason: str | None
     cases = warm_cases(s, max_model_len)
@@ -144,13 +139,14 @@ async def profile_instance(
             model,
             s,
             dialect,
+            metrics=metrics,
             observation_timeout_s=observation_timeout_s,
             max_model_len=max_model_len,
             block_tokens=block_tokens,
         )
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
-    capacity = await kv_capacity(client, url, observation_timeout_s or 30.0)
+    capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     profile = Profile(
         iid=iid,
         **prefill_fields(prefill_fit, block_tokens),
