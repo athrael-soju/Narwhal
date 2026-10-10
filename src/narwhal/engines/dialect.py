@@ -9,6 +9,8 @@ class EngineDialect(ABC):
     health_path: ClassVar[str] = "/health"
     # None selects character-ratio estimates in callers.
     tokenize_path: ClassVar[str | None] = "/tokenize"
+    # None reads the context limit from the tokenize response.
+    context_limit_path: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.
     cache_reset_path: ClassVar[str | None] = None
     # These client fields conflict with the forced one-token prefill request.
@@ -36,6 +38,11 @@ class EngineDialect(ABC):
 
     @abstractmethod
     def tokenize_response(self, payload: dict[str, Any]) -> int | None: ...
+
+    def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
+        """The served context limit in a context-limit or tokenize response."""
+        limit = payload.get("max_model_len")
+        return limit if type(limit) is int and limit > 0 else None
 
     @abstractmethod
     def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None: ...

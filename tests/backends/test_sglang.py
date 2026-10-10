@@ -15,6 +15,7 @@ from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
+from narwhal.profiling.probe.engine import engine_context_limit
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Role
 from tests.fixtures import fleet
@@ -71,6 +72,32 @@ class ChatTokenTests(unittest.TestCase):
             [sse_token_bearing(event, dialect, "/v1/chat/completions") for event in events],
             [False, True, True],
         )
+
+
+class ContextLimitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context_limit_reads_the_served_model(self):
+        paths = []
+
+        async def answer(request):
+            paths.append((request.method, request.url.path))
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {"id": "other", "max_model_len": 4096},
+                        {"id": "m", "max_model_len": 32768},
+                    ],
+                },
+            )
+
+        dialect = load("sglang").dialect
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            limit = await engine_context_limit(client, "http://e", "m", dialect)
+            self.assertEqual(limit, 32768)
+            self.assertEqual(paths, [("GET", "/v1/models")])
+            with self.assertRaisesRegex(RuntimeError, "no valid max_model_len for absent"):
+                await engine_context_limit(client, "http://e", "absent", dialect)
 
 
 class ConnectorTests(unittest.TestCase):

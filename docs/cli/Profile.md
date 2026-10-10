@@ -114,7 +114,7 @@ A profiling run aborts when any of these conditions occurs:
 
 - the `--only` selection matches zero configured engines
 - `/health` fails its HTTP 200 check
-- the `/tokenize` response fails `max_model_len` validation
+- the context-limit response fails `max_model_len` validation: `/tokenize` on vLLM, the served model in `/v1/models` on SGLang
 - engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
 - the representative prefill fit exceeds 20% mean error or 50% worst-point error
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, or its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`
