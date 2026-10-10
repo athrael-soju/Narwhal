@@ -29,7 +29,7 @@ RETRY_AFTER_S = FABRIC.release_retry_s
 class PeerReleaseScheduleTests(unittest.TestCase):
     def test_rounds_follow_ejection_until_readmission(self):
         now = [100.0]
-        release = PeerRelease(lambda: now[0])
+        release = PeerRelease(lambda: now[0], FABRIC)
         release.track({"e5": "ejected"})
         self.assertEqual(release.due(), [])
         self.assertEqual(release.snapshot(), {"e5": {"rounds": 0, "next_round_s": 65.0}})
@@ -55,7 +55,7 @@ class PeerReleaseScheduleTests(unittest.TestCase):
 
     def test_a_state_change_restarts_the_schedule(self):
         now = [100.0]
-        release = PeerRelease(lambda: now[0])
+        release = PeerRelease(lambda: now[0], FABRIC)
         release.track({"e5": "ejected"})
         now[0] += RELEASE_AFTER_S[0]
         self.assertEqual(release.due(), ["e5"])
@@ -95,7 +95,7 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
             self.router.profiles.put(profile(spec.iid))
         self.addAsyncCleanup(self.router.engines.aclose)
         self.now = [1000.0]
-        self.router.peer_release = PeerRelease(lambda: self.now[0])
+        self.router.peer_release = PeerRelease(lambda: self.now[0], FABRIC)
         self.urls = {spec.url: spec.iid for spec in cfg.engines}
         self.calls: list[tuple[str, str]] = []
 

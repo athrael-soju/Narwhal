@@ -22,12 +22,7 @@ RELEASED_STATES = ("drained", "deadline_exceeded", "validating", "blocked")
 
 
 class PeerRelease:
-    def __init__(self, clock: Callable[[], float], fabric: FabricLifecycle | None = None) -> None:
-        if fabric is None:
-            from ..backends import load
-            from ..config import FleetConfig
-
-            fabric = load(FleetConfig.backend).fabric
+    def __init__(self, clock: Callable[[], float], fabric: FabricLifecycle) -> None:
         self.fabric = fabric
         self._clock = clock
         self._rounds: dict[str, tuple[str, float, int]] = {}

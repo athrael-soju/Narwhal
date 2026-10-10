@@ -301,6 +301,7 @@ def build_app(
     timeout_s: float = 5.0,
     transport: httpx.AsyncBaseTransport | None = None,
     residency: ResidencyIndex | None = None,
+    reader: EngineIdentityReader | None = None,
 ) -> FastAPI:
     app = FastAPI(title="narwhal-engine-attestation")
     # Each sidecar process serves its own epoch.
@@ -312,6 +313,7 @@ def build_app(
                 engine_base,
                 timeout_s=timeout_s,
                 transport=transport,
+                reader=reader,
             )
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(
@@ -431,7 +433,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         uvicorn.run(
             build_app(
-                document, args.engine_base, identity, timeout_s=args.timeout_s, residency=residency
+                document,
+                args.engine_base,
+                identity,
+                timeout_s=args.timeout_s,
+                residency=residency,
+                reader=backend.identity,
             ),
             host=args.host,
             port=args.port,

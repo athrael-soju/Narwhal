@@ -164,6 +164,7 @@ async def run(
                     cfg.engine_contract,
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
+                    reader=load_backend(cfg.backend).identity,
                 )
                 engine_evidence["generation_evidence"] = generation.document
                 profile = await profile_instance(
@@ -208,6 +209,7 @@ async def run(
                     cfg.engine_contract,
                     timeout_s=observation_timeout_s or cfg.health_timeout_s,
                     headers=cfg.engine_headers(),
+                    reader=load_backend(cfg.backend).identity,
                 )
                 if generation.process_digest != current.process_digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")

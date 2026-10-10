@@ -11,6 +11,8 @@ from ..types import Role
 
 class RoleSwitcher(ABC):
     requires_idle: ClassVar[bool]
+    # The connectors whose engines switch roles; None means every connector.
+    connectors: ClassVar[frozenset[str] | None] = None
 
     @abstractmethod
     async def switch(
@@ -18,7 +20,7 @@ class RoleSwitcher(ABC):
         client: httpx.AsyncClient,
         base: str,
         role: Role,
-        peer: Mapping[str, Any] | None = None,
+        launch: Mapping[str, Any] | None = None,
     ) -> None: ...
 
 
@@ -30,5 +32,5 @@ class RouterRoleSwitch(RoleSwitcher):
         client: httpx.AsyncClient,
         base: str,
         role: Role,
-        peer: Mapping[str, Any] | None = None,
+        launch: Mapping[str, Any] | None = None,
     ) -> None: ...

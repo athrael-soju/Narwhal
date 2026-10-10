@@ -22,7 +22,7 @@ Router CPU seconds are the router process's user and system time from `/proc/<pi
 
 ## Simulated engines
 
-`tools/measurement/simulated_engine.py` serves one simulated engine per process. `--backend` selects the engine backend whose protocol it serves; the default, `vllm`, is the only one.
+`tools/measurement/simulated_engine.py` serves one simulated engine per process. `--backend` selects the engine backend whose protocol it serves: `vllm`, the default, or `sglang`.
 
 Each engine answers these routes:
 

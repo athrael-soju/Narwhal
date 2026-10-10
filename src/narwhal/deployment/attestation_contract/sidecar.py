@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from ...engines.attestation import AttestationDocument
 from ...engines.attestation import main as attest_main
-from ..launch_engine.backend import plan_launcher
+from ..launch_engine.backend import engine_backend, plan_launcher
 from .evidence import checked_plan, live_container, live_native, read_json
 
 
@@ -49,5 +49,7 @@ def serve(run: Path) -> int:
         url.hostname,
         "--port",
         str(url.port),
+        "--backend",
+        engine_backend(plan.get("engine")).name,
     ]
     return attest_main(arguments + residency_arguments(plan, checked))

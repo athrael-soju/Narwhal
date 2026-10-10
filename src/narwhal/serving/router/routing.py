@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -58,6 +59,10 @@ from .verification import SuspectVerifier
 
 if TYPE_CHECKING:
     from ...runtime.lease import FileLease
+
+log = logging.getLogger("narwhal.router")
+# An engine-side switch to decode captures decode graphs, which takes seconds.
+ROLE_SWITCH_TIMEOUT_S = 60.0
 
 
 class NarwhalRouter:
@@ -183,6 +188,16 @@ class NarwhalRouter:
         )
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
+        switcher = self.backend.role_switcher(cfg.connector)
+        # A router-side switch lets any engine serve either leg; otherwise each serves its role.
+        self.role_switch = switcher if switcher is not None and switcher.requires_idle else None
+        self.role_switches: set[asyncio.Task[None]] = set()
+        self.scheduler.availability.roles_bound = switcher is None or switcher.requires_idle
+        if switcher is None:
+            self.scheduler.pinned = frozenset(spec.iid for spec in cfg.engines)
+        elif self.role_switch is not None:
+            self.scheduler.switch_requires_idle = True
+            self.scheduler.on_flip = self._begin_switch
         # The journal writes this into its run metadata when it opens.
         journal.extra = {
             "token_accounting": self._token_accounting(),
@@ -304,6 +319,38 @@ class NarwhalRouter:
 
     def _admission_mode(self) -> dict[str, Any]:
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
+
+    def _begin_switch(self, inst: Instance, role: Role) -> None:
+        self.scheduler.availability.switching.add(inst.iid)
+        task = asyncio.get_running_loop().create_task(self._apply_switch(inst.iid, role))
+        self.role_switches.add(task)
+        task.add_done_callback(self.role_switches.discard)
+
+    async def _apply_switch(self, iid: str, role: Role) -> None:
+        error = await self.switch_role(iid, role)
+        if error is not None:
+            log.warning("role switch of %s to %s failed: %s", iid, role.value, error)
+            self.scheduler.eject(iid, "role_switch")
+
+    async def switch_role(self, iid: str, role: Role) -> str | None:
+        if self.role_switch is None:
+            return None
+        self.scheduler.availability.switching.add(iid)
+        try:
+            async with httpx.AsyncClient(
+                timeout=ROLE_SWITCH_TIMEOUT_S,
+                headers=self.cfg.engine_headers(),
+                transport=self.lifecycle_transport,
+            ) as client:
+                await self.role_switch.switch(
+                    client, self.monitor.instances[iid].url, role, self.launches.get(iid)
+                )
+        except (httpx.HTTPError, ValueError) as exc:
+            return f"{type(exc).__name__}: {exc}"
+        finally:
+            self.scheduler.availability.switching.discard(iid)
+            self.scheduler.refresh_floor_state()
+        return None
 
     def attested(self, iid: str, payload: Any) -> None:
         identity = self.backend.identity
