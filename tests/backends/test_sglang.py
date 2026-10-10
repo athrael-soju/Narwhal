@@ -208,6 +208,19 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn("--enable-pd-role-switch", args)
         self.assertEqual((transfer["launch_role"], transfer["role_switch"]), ("decode", False))
 
+    def test_a_switching_engine_without_the_radix_cache_needs_no_decode_radix_flag(self):
+        runtime = runtime_record(extra_args=["--disable-radix-cache"])
+        args, _ = plan.serve_args(
+            {"runtime": runtime, "tensor_parallel_size": 1},
+            model="/model",
+            served_name="m",
+            host="0.0.0.0",
+            port=8000,
+            kv_events=None,
+        )
+        self.assertIn("--enable-pd-role-switch", args)
+        self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
+
     def test_every_engine_launches_as_prefill_with_the_pins(self):
         record = {"runtime": runtime_record(), "tensor_parallel_size": 2}
         events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
@@ -226,6 +239,7 @@ class LaunchTests(unittest.TestCase):
         ):
             self.assertEqual(plan.option(args, name), value, name)
         self.assertIn("--enable-pd-role-switch", args)
+        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
         self.assertEqual(json.loads(plan.option(args, "--kv-events-config"))["publisher"], "zmq")
         self.assertEqual(
             transfer,
