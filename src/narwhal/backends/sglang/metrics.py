@@ -26,14 +26,33 @@ _TRANSFER = re.compile(
 class SglangMetrics(EngineMetrics):
     transfer_series: ClassVar[str | None] = TRANSFER_SERIES
     dashboard_series: ClassVar[Mapping[str, str]] = {
-        "running": "sglang:num_running_reqs",
-        "waiting": "sglang:num_queue_reqs",
-        "kv_usage": "sglang:token_usage",
-        "prompt_tokens": "sglang:prompt_tokens_total",
-        "generation_tokens": "sglang:generation_tokens_total",
-        "prefix_cache_hits": "sglang:cached_tokens_total",
-        "bootstrap_queue": "sglang:num_prefill_bootstrap_queue_reqs",
-        "transfer_queue": "sglang:num_decode_transfer_queue_reqs",
+        "running": "sum by(iid) (sglang:num_running_reqs{@sel})",
+        "waiting": "sum by(iid) (sglang:num_queue_reqs{@sel})",
+        "kv_usage": "max by(iid) (sglang:token_usage{@sel})",
+        "prefix_hit_ratio": (
+            "(sum by(iid) (rate(sglang:cached_tokens_total{@sel}[$__rate_interval])) / "
+            "sum by(iid) (rate(sglang:prompt_tokens_total{@sel}[$__rate_interval])))"
+        ),
+        # A decode engine also counts the prompt of each request it decodes.
+        "prompt_tokens": (
+            "(sum by(iid) (rate(sglang:prompt_tokens_total{@sel}[$__rate_interval])) unless "
+            'on(iid) (max by(iid) (narwhal_instance_role{job="narwhal-router",'
+            'instance=~"$router",role="decode"}) == 1))'
+        ),
+        "output_tokens": (
+            "sum by(iid) (rate(sglang:generation_tokens_total{@sel}[$__rate_interval]))"
+        ),
+        "handoff": (
+            'sum by(iid) ({__name__=~"sglang:num_prefill_bootstrap_queue_reqs|'
+            'sglang:num_decode_prealloc_queue_reqs|sglang:num_decode_transfer_queue_reqs",@sel})'
+        ),
+    }
+    dashboard_text: ClassVar[Mapping[str, str]] = {
+        "handoff_title": "KV handoff queue",
+        "handoff_description": "Requests waiting for a KV handoff on each engine: bootstrap on "
+        "prefill engines, preallocation and transfer on decode engines.",
+        "handoff_unit": "short",
+        "handoff_color": "#F2CC0C",
     }
 
     def kv_capacity(self, metrics: str) -> int | None:
