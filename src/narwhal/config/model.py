@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..backends import DEFAULT_BACKEND, renamed_fields
+from ..backends import load as load_backend
 from ..contracts import canonical_digest
 from ..scheduling.control import SLO, Thresholds
 from ..serving.policy import ServingPolicy
@@ -32,17 +34,9 @@ class SharedDeviceAllocation:
     gpu_memory_utilization: float
 
 
-# Contract field names written before engine backends were pluggable.
-LEGACY_CONTRACT_FIELDS = {
-    "vllm_version": "engine_version",
-    "nixl_version": "transfer_version",
-    "nixl_connector_version": "connector_version",
-}
-
-
 def current_contract_names(raw: dict[str, Any]) -> dict[str, Any]:
     out = dict(raw)
-    for old, new in LEGACY_CONTRACT_FIELDS.items():
+    for old, new in renamed_fields("contract").items():
         if old in out:
             if new in out:
                 raise ValueError(f"engine contract sets both {old} and {new}")
@@ -65,7 +59,7 @@ class EngineContract:
     kv_cache_dtype: str = ""
     cross_layers_blocks: bool | None = None
     hybrid_kv_cache_manager: bool | None = None
-    connector: str = "NixlConnector"
+    connector: str = ""
     kv_role: str = ""
     transfer_mode: str = ""
     speculative_config: str = ""
@@ -248,9 +242,10 @@ class FleetConfig:
     min_prefill: int = 1
     # Role changes preserve this live-decode floor. Breaker ejections may breach it.
     min_decode: int = 1
-    backend: str = "vllm"
-    connector: str = "nixl"
-    dialect: str = "vllm"
+    backend: str = DEFAULT_BACKEND
+    # Empty selects the backend's default connector and its dialect.
+    connector: str = ""
+    dialect: str = ""
     engine_contract: EngineContract | None = None
     hardware: HardwareSpec | None = None
     # Decode error limits applied by preflight.
@@ -264,6 +259,12 @@ class FleetConfig:
         ]
         if problems:
             raise ValueError("; ".join(problems))
+        try:
+            backend = load_backend(self.backend)
+        except ValueError:
+            return
+        self.connector = self.connector or backend.default_connector
+        self.dialect = self.dialect or backend.dialect.name
 
     @staticmethod
     def load(path: str | Path) -> FleetConfig:

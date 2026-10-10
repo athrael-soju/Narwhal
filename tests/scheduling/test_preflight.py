@@ -655,8 +655,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 "engine_version": "0.29.0",
                 "process_start_time_seconds": start,
                 "attestation_digest": "sha256:attested",
-                "nixl_transfer_count": transfers,
-                "nixl_transfer_seconds_sum": transfers * 0.2,
+                "transfer_count": transfers,
+                "transfer_seconds_sum": transfers * 0.2,
             }
 
         pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
@@ -688,7 +688,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(report.failed, [])
         self.assertEqual(report.pairs[0]["status"], "passed")
-        self.assertEqual(report.pairs[0]["nixl_transfer_seconds"], 0.2)
+        self.assertEqual(report.pairs[0]["transfer_seconds"], 0.2)
         self.assertEqual(report.pairs[0]["remote_port"], 5701)
         self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)
 
@@ -838,8 +838,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 "consumer_before": snapshot(dst),
                 "consumer_after": snapshot(dst),
                 "output_tokens": 3,
-                "nixl_transfer_count_delta": 1,
-                "nixl_transfer_seconds": 0.2,
+                "transfer_count_delta": 1,
+                "transfer_seconds": 0.2,
             }
             for src, dst in pairs
         ]
@@ -917,8 +917,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         "engine_version": "0.29.0",
                         "process_start_time_seconds": 101.0 if restarted else 100.0,
                         "attestation_digest": "sha256:" + "b" * 64 if restarted else digest,
-                        "nixl_transfer_count": transfers,
-                        "nixl_transfer_seconds_sum": transfers * 0.2,
+                        "transfer_count": transfers,
+                        "transfer_seconds_sum": transfers * 0.2,
                     }
 
                 async def output(*args, **kwargs):

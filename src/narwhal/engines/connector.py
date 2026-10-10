@@ -34,6 +34,8 @@ class PrefillResult:
 
 class KvHandoff(ABC):
     name: str
+    # The connector name an engine contract records for this handoff.
+    contract_name: str
 
     @abstractmethod
     def handoff_bound(self, lease_s: int) -> float: ...

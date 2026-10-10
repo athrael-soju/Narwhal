@@ -47,11 +47,11 @@
       "contract.transfer_version is 'test', expected 'other'"
     ],
     "live_version_differs": [
-      "engine vLLM version is '1.0.0', live /version returned '0.0.1'"
+      "engine version is '1.0.0', the live engine reports '0.0.1'"
     ],
     "matching": [],
     "process_restarted": [
-      "engine process started at 100.0, live /metrics reports 101.0"
+      "engine process started at 100.0, the live engine reports 101.0"
     ]
   }
 }

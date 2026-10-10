@@ -36,7 +36,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 ### 2. Capturing the NIXL connector version
 
 ```bash
-.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-nixl --run "$ENGINE_RUN"
+.venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-connector --run "$ENGINE_RUN"
 ```
 
 `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.

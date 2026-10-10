@@ -32,7 +32,7 @@ async def gate_produce(
             rep.fail(f"{spec.iid} prefill leg: {exc}")
             continue
         handoffs[spec.iid] = params
-        rep.ok(f"{spec.iid} returned kv_transfer_params ({', '.join(sorted(params.parameters()))})")
+        rep.ok(f"{spec.iid} returned handoff parameters ({', '.join(sorted(params.parameters()))})")
     return handoffs
 
 
@@ -116,14 +116,14 @@ async def gate_consume(
                     raise ValueError(f"{src} process or attestation changed during transfer")
                 if not same_generation(before_dst, after_dst):
                     raise ValueError(f"{dst} process or attestation changed during transfer")
-                count_delta = cast(float, after_dst["nixl_transfer_count"]) - cast(
-                    float, before_dst["nixl_transfer_count"]
+                count_delta = cast(float, after_dst["transfer_count"]) - cast(
+                    float, before_dst["transfer_count"]
                 )
-                transfer_seconds = cast(float, after_dst["nixl_transfer_seconds_sum"]) - cast(
-                    float, before_dst["nixl_transfer_seconds_sum"]
+                transfer_seconds = cast(float, after_dst["transfer_seconds_sum"]) - cast(
+                    float, before_dst["transfer_seconds_sum"]
                 )
                 if count_delta < 1 or transfer_seconds <= 0:
-                    raise ValueError(f"{src} -> {dst} produced no observed consumer NIXL transfer")
+                    raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
                 descriptor = params.parameters()
                 record.update(
                     status="passed",
@@ -137,8 +137,8 @@ async def gate_consume(
                     prefill_seconds=prefill_seconds,
                     decode_seconds=decode_seconds,
                     first_token_seconds=first_token_seconds,
-                    nixl_transfer_count_delta=count_delta,
-                    nixl_transfer_seconds=transfer_seconds,
+                    transfer_count_delta=count_delta,
+                    transfer_seconds=transfer_seconds,
                     output_tokens=tokens,
                 )
         except EngineError as exc:

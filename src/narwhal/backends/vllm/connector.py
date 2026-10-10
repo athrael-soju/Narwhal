@@ -7,6 +7,7 @@ from ...engines.connector import KvConnector
 
 class NixlConnector(KvConnector):
     name = "nixl"
+    contract_name = "NixlConnector"
     param_key = "kv_transfer_params"
     renewal_divisor: ClassVar[int] = 6
 

@@ -10,8 +10,8 @@ from pathlib import Path
 import httpx
 
 from ...backends import load as load_backend
+from ...backends import renamed_fields
 from ...config import FleetConfig
-from ...config.model import LEGACY_CONTRACT_FIELDS
 from ...engines.attestation import fetch_engine_identity, verify_attestation
 from ...engines.validation import validation_pairs
 from ...profiling.generation import binding_digest, generation_problem
@@ -42,11 +42,12 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         metrics.raise_for_status()
     totals = load_backend(cfg.backend).metrics.transfer_totals(metrics.text)
     if totals is None:
-        raise ValueError(f"{iid} exposes no NIXL transfer metrics")
+        raise ValueError(f"{iid} exposes no KV transfer metrics")
     count, seconds = totals
     if not math.isfinite(count) or not math.isfinite(seconds):
-        raise ValueError(f"{iid} returned non-finite NIXL transfer metrics")
-    sources = {LEGACY_CONTRACT_FIELDS.get(k, k): v for k, v in payload["sources"].items()}
+        raise ValueError(f"{iid} returned non-finite KV transfer metrics")
+    renamed = renamed_fields("contract")
+    sources = {renamed.get(k, k): v for k, v in payload["sources"].items()}
     return {
         "iid": iid,
         "engine_version": identity.version,
@@ -59,8 +60,8 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         },
         "connector_source": sources["connector_version"],
         "transfer_mode_source": sources["transfer_mode"],
-        "nixl_transfer_count": count,
-        "nixl_transfer_seconds_sum": seconds,
+        "transfer_count": count,
+        "transfer_seconds_sum": seconds,
     }
 
 
@@ -129,10 +130,10 @@ async def verify_directed_kv_evidence(
             if (
                 not isinstance(row.get("output_tokens"), int)
                 or row["output_tokens"] < 1
-                or not isinstance(row.get("nixl_transfer_count_delta"), (int, float))
-                or row["nixl_transfer_count_delta"] < 1
-                or not isinstance(row.get("nixl_transfer_seconds"), (int, float))
-                or row["nixl_transfer_seconds"] <= 0
+                or not isinstance(row.get("transfer_count_delta"), (int, float))
+                or row["transfer_count_delta"] < 1
+                or not isinstance(row.get("transfer_seconds"), (int, float))
+                or row["transfer_seconds"] <= 0
             ):
                 problems.append(f"{src} -> {dst} lacks observed KV transfer and token evidence")
             for side, iid in (("producer", src), ("consumer", dst)):

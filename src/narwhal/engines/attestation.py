@@ -16,9 +16,12 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
+from ..backends import DEFAULT_BACKEND, renamed_fields
+from ..backends import load as load_backend
+from ..backends import names as backend_names
 from ..cli_support import add_version_argument
 from ..config import EngineContract
-from ..config.model import LEGACY_CONTRACT_FIELDS, current_contract_names
+from ..config.model import current_contract_names
 from ..contracts import (
     ATTESTATION,
     ContractVersionError,
@@ -151,7 +154,8 @@ def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
         isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
     ):
         raise ValueError("attestation sources must map field names to nonempty strings")
-    raw = {LEGACY_CONTRACT_FIELDS.get(k, k): v for k, v in raw.items()}
+    renamed = renamed_fields("contract")
+    raw = {renamed.get(k, k): v for k, v in raw.items()}
     unknown_sources = sorted(set(raw) - set(contract.fields()))
     if unknown_sources:
         raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
@@ -178,9 +182,7 @@ async def fetch_engine_identity(
     reader: EngineIdentityReader | None = None,
 ) -> EngineIdentity:
     if reader is None:
-        from ..backends import DEFAULT_BACKEND, load
-
-        reader = load(DEFAULT_BACKEND).identity
+        reader = load_backend(DEFAULT_BACKEND).identity
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport, headers=headers) as client:
         return await reader.read(client, engine_base)
 
@@ -264,11 +266,11 @@ def verify_attestation(
     if not isinstance(engine, dict):
         failures.append("engine identity is not an object")
         return failures
-    version = engine.get("version", engine.get("vllm_version"))
+    renamed = renamed_fields("engine")
+    engine = {renamed.get(k, k): v for k, v in engine.items()}
+    version = engine.get("version")
     if version != live.version:
-        failures.append(
-            f"engine vLLM version is {version!r}, live /version returned {live.version!r}"
-        )
+        failures.append(f"engine version is {version!r}, the live engine reports {live.version!r}")
     process_start = engine.get("process_start_time_seconds")
     if not isinstance(process_start, int | float) or isinstance(process_start, bool):
         failures.append("engine process_start_time_seconds is not a number")
@@ -276,7 +278,7 @@ def verify_attestation(
         float(process_start), live.process_start_time_seconds, rel_tol=0.0, abs_tol=1e-6
     ):
         failures.append(
-            f"engine process started at {process_start}, live /metrics reports "
+            f"engine process started at {process_start}, the live engine reports "
             f"{live.process_start_time_seconds}"
         )
     return failures
@@ -369,7 +371,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     add_version_argument(parser)
     parser.add_argument("--document", required=True, help="attestation document JSON")
-    parser.add_argument("--engine-base", required=True, help="vLLM HTTP base URL")
+    parser.add_argument("--engine-base", required=True, help="engine HTTP base URL")
+    parser.add_argument(
+        "--backend",
+        default=DEFAULT_BACKEND,
+        choices=backend_names(),
+        help="engine backend (default: %(default)s)",
+    )
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8010, help="TCP port (default: %(default)s)")
     parser.add_argument(
@@ -389,18 +397,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--port must be between 0 and 65535, got {args.port}")
     if args.kv_events is not None and not args.model:
         parser.error("--kv-events requires --model")
-    from ..backends import load as load_backend
     from ..cli_errors import failure
+
+    backend = load_backend(args.backend)
 
     try:
         document = AttestationDocument.load(args.document)
     except (OSError, ValueError) as exc:
         return failure("narwhal-attest", f"load document {args.document}", exc, 2)
     try:
-        identity = asyncio.run(fetch_engine_identity(args.engine_base, timeout_s=args.timeout_s))
+        identity = asyncio.run(
+            fetch_engine_identity(
+                args.engine_base, timeout_s=args.timeout_s, reader=backend.identity
+            )
+        )
         if identity.version != document.contract.engine_version:
             raise ValueError(
-                f"engine runs vLLM {identity.version}, "
+                f"engine runs version {identity.version}, "
                 f"document expects {document.contract.engine_version}"
             )
     except (OSError, ValueError, httpx.HTTPError) as exc:
@@ -412,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
             residency,
             f"ipc://{args.kv_events / EVENTS_SOCKET}",
             f"ipc://{args.kv_events / REPLAY_SOCKET}",
-            decoder=load_backend("vllm").kv_events,
+            decoder=backend.kv_events,
         )
         feed.start()
     try:

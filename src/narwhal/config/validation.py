@@ -273,7 +273,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         if not contract.enforce_handshake_compat:
             problems.append(
                 "engine_contract.enforce_handshake_compat must stay true; "
-                "disabling vLLM's NIXL compatibility hash permits silent corruption"
+                "disabling the connector's compatibility check permits silent corruption"
             )
         if contract.image_digest and not re.fullmatch(
             r"sha256:[0-9a-f]{64}", contract.image_digest

@@ -110,6 +110,7 @@ class BoundaryTests(unittest.TestCase):
                 ("from ..backends.vllm import backend\n", True),
                 ("from ..backends import load\n", False),
                 ("nixl = True\n", True),
+                ('message = f"{iid} vLLM {version}"\n', True),
             ):
                 path.write_text(source)
                 with self.subTest(source=source):

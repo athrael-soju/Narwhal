@@ -110,9 +110,11 @@ async def gate_contract(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
     print("contract")
+    backend = load_backend(cfg.backend)
+    label = backend.label
     declared = cfg.engine_contract
     if declared is None:
-        rep.skip("no engine_contract declared; checking live vLLM versions only")
+        rep.skip(f"no engine_contract declared; checking live {label} versions only")
     else:
         rep.ok(f"declared engine contract {declared.fingerprint()}")
         missing = declared.missing()
@@ -140,7 +142,7 @@ async def gate_contract(
                         timeout_s=cfg.health_timeout_s,
                         transport=transport,
                         headers=cfg.engine_headers(),
-                        reader=load_backend(cfg.backend).identity,
+                        reader=backend.identity,
                     )
                     version = identity.version
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
@@ -153,10 +155,10 @@ async def gate_contract(
                     rep.skip(message)
                 continue
             observed[spec.iid] = version
-            rep.ok(f"{spec.iid} vLLM {version}")
+            rep.ok(f"{spec.iid} {label} {version}")
             if declared is not None and version != declared.engine_version:
                 rep.fail(
-                    f"{spec.iid} vLLM {version}, expected {declared.engine_version} "
+                    f"{spec.iid} {label} {version}, expected {declared.engine_version} "
                     f"from contract {declared.fingerprint()}"
                 )
                 unsafe.add(spec.iid)
@@ -188,7 +190,7 @@ async def gate_contract(
     versions = set(observed.values())
     if len(versions) > 1:
         version_detail = ", ".join(f"{iid}={version}" for iid, version in sorted(observed.items()))
-        rep.fail(f"mixed vLLM versions before KV transfer: {version_detail}")
+        rep.fail(f"mixed {label} versions before KV transfer: {version_detail}")
         unsafe.update(observed)
     return unsafe
 

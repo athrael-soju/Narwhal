@@ -38,12 +38,23 @@ def _launcher() -> EngineLauncher:
 def backend() -> EngineBackend:
     return EngineBackend(
         name="vllm",
+        label="vLLM",
         dialect=VllmDialect(),
         connectors={"nixl": NixlConnector()},
+        default_connector="nixl",
         identity=VllmIdentity(),
         kv_events=VllmKvEvents(),
         metrics=VllmMetrics(),
         fabric=VllmFabric(),
         launcher=_launcher,
         role_switch=RouterRoleSwitch(),
+        renamed_fields={
+            "contract": {
+                "vllm_version": "engine_version",
+                "nixl_version": "transfer_version",
+                "nixl_connector_version": "connector_version",
+            },
+            "engine": {"vllm_version": "version"},
+            "dev_ports": {"nixl_first": "side_channel_first"},
+        },
     )
