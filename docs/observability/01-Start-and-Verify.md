@@ -14,7 +14,7 @@ description: Start Prometheus and Grafana for a Narwhal router and verify every 
 - `curl`
 - network reachability from the router host to every engine metrics endpoint
 
-Run every command on this page in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells). That shell runs in the deployed checkout, with `runs/deployment/.env.router` loaded and `.venv` active.
+Run these commands in the [installed router-role shell](../deploy/02-Install.md#opening-installed-role-shells), with `runs/deployment/.env.router` loaded and `.venv` active.
 
 ## Configuring the monitored deployment
 
@@ -27,7 +27,7 @@ export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 ```
 
-[Environment references](../configuration/05-Engine-Launch.md#14-engine-endpoints-generated-from-node-environments) in the fleet file resolve from the variables loaded in the router-role shell.
+[Environment references](../configuration/05-Engine-Launch.md#engine-endpoints-generated-from-node-environments) in the fleet file resolve from the variables loaded in the router-role shell.
 
 ### Scraping the fleet control service
 
@@ -119,4 +119,4 @@ Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashb
 
 Each `make observe` run regenerates the staged files and resets their permissions.
 
-[![Next: Accessing dashboards and isolating listeners](https://img.shields.io/badge/next-Accessing%20dashboards%20and%20isolating%20listeners-0f766e)](02-Access.md)
+[Access dashboards and isolate listeners](02-Access.md)

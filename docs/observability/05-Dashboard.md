@@ -219,7 +219,7 @@ These panels show pool load, admission seats and the requests waiting at each qu
 
 **Pool pressure** plots each pool's load as a fraction of its SLO target, and the dashed yellow line at 1 marks the target. When a pool's load stays at or above `controller.thresholds.expand` (default 1.0), [reactive role control](../concepts/02-Role-Control.md#expansion-and-consolidation) can move an engine into that pool.
 
-**Admission in-flight** plots the requests holding an admission seat (`narwhal_admission_inflight`) against the router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) (`narwhal_admission_inflight_limit`), drawn as a dashed yellow line. While in-flight sits at the limit, further requests wait in the admission queue, up to `serving.queue_capacity`. Beyond that, the router rejects each new request with HTTP 429 and reason `inflight_limit`.
+**Admission in-flight** plots the requests holding an admission seat (`narwhal_admission_inflight`) against the router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) (`narwhal_admission_inflight_limit`), drawn as a dashed yellow line. The configuration reference defines queueing and rejection at that limit.
 
 **Queue depth** plots the requests waiting at each stage:
 
@@ -247,7 +247,7 @@ These panels show how long requests wait and how the router retries failed attem
 
 </div>
 
-**Request waiting time** plots the p95 wait at each queue stage from `narwhal_queue_wait_seconds`, split by its `stage` label: **admission wait p95** for an admission seat, and **prefill seat wait p95** and **decode seat wait p95** for an engine seat. **seat time p95** shows how long a request holds an admission seat. A request whose admission wait reaches `serving.queue_timeout_s` expires with reason `queue_timeout`.
+**Request waiting time** plots the p95 wait at each queue stage from `narwhal_queue_wait_seconds`, split by its `stage` label: **admission wait p95** for an admission seat, and **prefill seat wait p95** and **decode seat wait p95** for an engine seat. **seat time p95** shows how long a request holds an admission seat. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) defines the bounds and outcomes.
 
 **Retries and early exits** plots these rates:
 
@@ -258,7 +258,7 @@ These panels show how long requests wait and how the router retries failed attem
 | completed after retry | Requests completed by an attempt after the first                                               |
 | ended before sizing   | Requests that ended before [input sizing](../http-api/03-Backend-and-Failures.md#input-sizing) |
 
-**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The pool starts at `serving.retry_budget`, each retry spends one credit when it dispatches, and each successful original request adds `serving.retry_replenish` up to the starting size. While less than one credit remains, the router denies each retry, and the request ends with its attempt's failure. The [retry settings](../configuration/02-Serving-and-Role-Control.md#42-waiting-engine-seats-and-retries) define both fields.
+**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The [retry settings](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) define the pool's size, spending, and replenishment.
 
 ## Router event loop
 
@@ -294,4 +294,4 @@ The **State** column shows the most serious state that applies to an engine. The
 | Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
 | Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
 
-[![Next: GPU telemetry, alerts, and recovery](https://img.shields.io/badge/next-GPU%20telemetry%2C%20alerts%2C%20and%20recovery-0f766e)](03-Telemetry-and-Recovery.md)
+[GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md)

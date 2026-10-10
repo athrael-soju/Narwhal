@@ -2,15 +2,15 @@
 description: Package an approved Narwhal revision and install it on the router and engine hosts.
 ---
 
-# Gate B: Packaging and installing the approved revision
+# Install the approved revision
 
-Gate B runs two `deploy_hosts.py` commands. `prepare` bundles the approved commit, role files, and helper snapshots. `install` installs the approved commit on each host.
+`prepare` bundles the approved commit, role files, and helper snapshots. `install` installs the approved commit on each host.
 
 ## Building an immutable deployment package
 
 In the management checkout:
 
-1. Load `.env` and `config/deployment.env` from Gate A.
+1. Load `.env` and `config/deployment.env` from deployment discovery.
 2. Set `NARWHAL_DEPLOYMENT_REVISION` to the full approved commit.
 3. Set management credentials in the workstation environment.
 4. Prepare the package into a new `--out` directory:
@@ -104,4 +104,4 @@ Each shell opens with:
 - the role environment loaded
 - `.venv` active
 
-[![Next: Gate C: Validating and starting every engine](https://img.shields.io/badge/next-Gate%20C%3A%20Validating%20and%20starting%20every%20engine-0f766e)](03-Validate-Engines.md)
+[Validate and start engines](03-Validate-Engines.md)

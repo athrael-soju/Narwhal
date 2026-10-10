@@ -198,5 +198,5 @@ To load updated profiles:
 Under `recovery.engine_restart_policy: whole_wave`:
 
 1. Drain the wave.
-2. When `wave.ready_to_stop` is `true`, restart the wave through its [supervisor sequence](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave).
+2. When `wave.ready_to_stop` is `true`, restart the wave through its [supervisor sequence](../operate/03-Restart-Engines.md#restart-an-engine-wave).
 3. Readmit the wave.

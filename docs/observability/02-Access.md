@@ -6,7 +6,7 @@ description: Open the Narwhal Grafana dashboard from a workstation and isolate a
 
 ## Accessing the dashboard from a workstation
 
-An open [Gate G tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
+An open [deployment tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation) already forwards both monitoring ports.
 
 To open a monitoring tunnel:
 
@@ -50,4 +50,4 @@ python3 tools/deployment/deploy_hosts.py tunnel --role router \
   --forward 13000:3000 --forward 19090:19090
 ```
 
-[![Next: Reading the dashboard](https://img.shields.io/badge/next-Reading%20the%20dashboard-0f766e)](05-Dashboard.md)
+[Read the dashboard](05-Dashboard.md)

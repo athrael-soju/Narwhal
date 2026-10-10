@@ -1,5 +1,5 @@
 ---
-description: The files a fleet control session writes, the run.json schema, the recorded action names, and how router journal extracts are copied.
+description: Files, `run.json`, action names, and router journal extracts written by a fleet control session.
 ---
 
 # Run record

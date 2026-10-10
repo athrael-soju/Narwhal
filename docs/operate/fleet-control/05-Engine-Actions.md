@@ -1,5 +1,5 @@
 ---
-description: Pause, resume, stop, start, drain and readmit engines from the fleet control console, and find out why an engine action is disabled.
+description: Pause, resume, stop, start, drain, and readmit engines from the fleet control console.
 ---
 
 # Engine actions

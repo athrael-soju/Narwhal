@@ -4,7 +4,7 @@ description: Run a synthetic load trial at 0.5 and 1 request/s against a frozen 
 
 # Synthetic load trial
 
-## 7. Running the synthetic deployment trial
+## Running the synthetic deployment trial
 
 1. Send 200 requests with 8,192 input tokens and 128 output tokens at 0.5 request/s from the management workstation, through the [router tunnel](../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
 2. Confirm that the 0.5 request/s rate passes.
@@ -78,7 +78,7 @@ An offer over either limit becomes a terminal `client_schedule_miss` record with
 
 Check client CPU and scheduling lag before raising either limit.
 
-## 8. Measuring 0.5 request/s
+## Measuring 0.5 request/s
 
 Run the first rate:
 
@@ -111,7 +111,7 @@ A `client_schedule_valid` value of `false` means client scheduling missed:
 2. Repair client scheduling.
 3. Repeat the rate.
 
-## 9. Measuring 1 request/s
+## Measuring 1 request/s
 
 The router has drained when `/narwhal/state` reports zero for:
 

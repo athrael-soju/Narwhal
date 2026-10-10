@@ -4,9 +4,9 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 
 # Serving and role control
 
-## 4. Request admission and bounded serving
+## Request admission and bounded serving
 
-### 4.1 Global admission
+### Global admission
 
 | Field                        | Default        | Meaning                                                                | Values                                                 |
 | ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -19,11 +19,11 @@ In `predictive` mode, the router returns HTTP 429 when a request fails the time 
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
-Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit) gives the client outcomes of each mode and limit.
+Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps) gives the measurement procedure.
 
 #### In-flight limit
 
-The in-flight limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#18-cli-precedence) when set, otherwise `serving.max_connections`. At most that many requests hold an admission seat at once. With `serving.queue_capacity` above 0, up to that many more requests wait for a seat.
+The in-flight limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#cli-precedence) when set, otherwise `serving.max_connections`. At most that many requests hold an admission seat at once. With `serving.queue_capacity` above 0, up to that many more requests wait for a seat.
 
 The router counts a completion request against the limit from its arrival, before it reads the body, until its response ends. When the requests it counts reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429, error type `server_overloaded_error` and message `router in-flight limit reached`. It sends the 429 before parsing the body and counts the request as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers) with rejection reason `inflight_limit`.
 
@@ -89,7 +89,7 @@ The check projects generation at these token intervals:
 | Request resident in decode | Its decode engine's interval       |
 | Every other request        | Fleet mean of the engine intervals |
 
-An engine's interval is its profiled token interval times the [decode correction](#71-load-definitions). The profiled interval assumes a full batch at the current mean context, within the decode KV token bound.
+An engine's interval is its profiled token interval times the [decode correction](#load-definitions). The profiled interval assumes a full batch at the current mean context, within the decode KV token bound.
 
 The check admits the request when all three of these pass:
 
@@ -103,7 +103,7 @@ The check admits the request when all three of these pass:
 
 In `predictive` mode, only an original request's first attempt is priced against the TTFT check. An attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
 
-### 4.2 Waiting, engine seats, and retries
+### Waiting, engine seats, and retries
 
 | Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
 | ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -135,13 +135,13 @@ Waiting requests keep their arrival order. When a seat frees, the release gives 
 
 In `predictive` mode, the router prices an original request's first attempt when it starts an admission-seat or prefill-seat wait. It prices the request again each time the wait wakes. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. The price grows with the time waited, so the router also prices the request when that growth alone would exceed the TTFT budget. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
 
-The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#51-prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
+The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
 
 A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
 
 | Hold begins                                                                     | Requests that end with the 503                                                                     | Requests that continue                                        |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [Whole-wave hold](../operate/03-Restart-Engines.md#8-restarting-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
+| [Whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
 | Degraded engine monitoring                                                      | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
 | Lost or failed router lease                                                     | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
 
@@ -168,13 +168,13 @@ The decode admission check counts each engine's decode seats as its slots. With 
 
 After prefill, the producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
 
-The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#33-attestation). It derives the producer's handoff bound:
+The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#attestation). It derives the producer's handoff bound:
 
 ```text
 handoff bound = kv_lease_duration - kv_lease_duration // 6
 ```
 
-At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtime.kv_lease_s`](05-Engine-Launch.md#16-runtime-launch-records-and-image-verification) sets the lease.
+At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtime.kv_lease_s`](05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease.
 
 The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
 
@@ -204,7 +204,7 @@ Tune queueing and retries:
 3. Verify that the backend releases abandoned KV handoffs when the lease expires.
 4. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
 
-### 4.3 Streaming failure semantics
+### Streaming failure semantics
 
 A streaming response holds its HTTP status and headers until the first output frame.
 
@@ -222,9 +222,8 @@ Treat an error event, or a stream that ends before the success terminator, as a 
 
 Fit client-side retries inside the caller's remaining deadline.
 
----
 
-## 5. Placement
+## Placement
 
 Placement selects the lowest-cost engine that passes the role, availability, exclusion, and projected service-level objective (SLO) filters. Ties go to the lowest instance ID.
 
@@ -238,7 +237,7 @@ A live role change:
 - leaves resident requests on their current engine and reservation until completion or cancellation
 - keeps lifecycle drains, quarantine, ejections, and restart holds in place
 
-### 5.1 Prefix-cache pricing
+### Prefix-cache pricing
 
 For a request sized from exact token IDs, the router records the leading prompt blocks each engine has cached, from that engine's [residency view](../http-api/05-Live-State.md#residency).
 
@@ -276,9 +275,8 @@ The router prices a request on the cold curve of its full input when any of thes
 
 The request journal records each placement priced with cache evidence in [`cache_placement`](../telemetry/01-Journal.md#cache-placement).
 
----
 
-## 6. Request deadlines and engine HTTP behaviour
+## Request deadlines and engine HTTP behaviour
 
 | Field                                 | Default | Meaning                                                                                     | Values                                        |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------------------- | --------------------------------------------- |
@@ -294,7 +292,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | `engine.pool_timeout_s`               | `5.0`   | Maximum wait for a connection from the data or control connection pool.                     | Positive                                      |
 | `engine.health_timeout_s`             | `5.0`   | HTTP I/O timeout for preflight, breaker, readmission, and residency requests.               | Positive                                      |
 
-### 6.1 Request and prefill deadlines
+### Request and prefill deadlines
 
 Set the deadlines from these inputs:
 
@@ -307,7 +305,7 @@ For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the pro
 
 A prefill, tokenization, or health call ends at the first of its phase, connection, or pool timeouts to expire.
 
-### 6.2 First-token deadline and calibration
+### First-token deadline and calibration
 
 The `engine.first_token_timeout_s` window runs from before the decode HTTP stream opens to the first generated token.
 
@@ -330,9 +328,9 @@ Preflight and router startup respond to these conditions:
 | An engine's process generation changed                | Stale        | Fail                         |
 | An engine relaunched during calibration               | Insufficient | Fail                         |
 
-### 6.3 Decode stream gaps
+### Decode stream gaps
 
-Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget. [Decode stream gaps](../operate/07-Admission-Queue-and-Retry-Settings.md#decode-stream-gaps) gives the client outcome of a positive limit and of `0`.
+Set `engine.decode_read_timeout_s` from measured inter-chunk gaps and the service's failure budget. [Decode timeouts](../http-api/03-Backend-and-Failures.md#decode-timeouts) gives the client outcome of a positive limit and of `0`.
 
 Disable the gap limit:
 
@@ -344,7 +342,7 @@ Disable the gap limit:
 }
 ```
 
-### 6.4 Token counting
+### Token counting
 
 The router counts a request's input tokens this way:
 
@@ -358,7 +356,7 @@ When the exact-count call fails, the client receives the engine error before pla
 
 Measure `engine.chars_per_token` for the served tokenizer and for every dialect that uses the estimate.
 
-### 6.5 Connection, pool, and health timeouts
+### Connection, pool, and health timeouts
 
 Set these timeouts from latency measured under the intended load:
 
@@ -386,9 +384,8 @@ An inconclusive probe has this effect for each caller:
 | Readmission probe      | Engine stays ejected                    |
 | Readmission validation | Failed `/health` check                  |
 
----
 
-## 7. Role control
+## Role control
 
 | Field                                       | Default | Meaning                                                                                              | Values                               |
 | ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------ |
@@ -406,7 +403,7 @@ An inconclusive probe has this effect for each caller:
 | `controller.thresholds.flip_resident_guard` | `0`     | Maximum resident decode streams allowed on a decode-to-prefill donor.                                | `0` disables the guard               |
 | `controller.flip_history`                   | `1000`  | Maximum role-change records the router retains and exposes in `/narwhal/state`.                      | At least 1                           |
 
-### 7.1 Load definitions
+### Load definitions
 
 Prefill load is:
 
@@ -433,7 +430,7 @@ A load of `1.0` means the phase has reached its target.
 
 Controller decision details call load "pressure", as in the `mixed_pressure` eligibility rule and the `source_pressure_safe` flag.
 
-### 7.2 Role floors
+### Role floors
 
 In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count. A one-engine fleet has both floors at `1`.
 
@@ -455,14 +452,14 @@ Both floor recoveries:
 - honor pins, availability, floor limits, and advisory mode
 - add each applied move to the role-change records that `controller.flip_history` caps
 
-### 7.3 Resident work during role changes
+### Resident work during role changes
 
 A decode-to-prefill move requires:
 
 - the new split and resident decode batches inside the profile's decode domain
 - KV capacity for the resident work
 
-### 7.4 Advisory rollout
+### Advisory rollout
 
 Before allowing role changes in production, run advisory mode against recorded traffic.
 
@@ -478,7 +475,7 @@ Enable advisory mode:
 
 `/narwhal/state` and Prometheus expose each proposal's prefill and decode counts, caller, reason, and result.
 
-### 7.5 Adjacent-split decisions
+### Adjacent-split decisions
 
 An adjacent split differs from the current split by one engine moved between prefill and decode.
 
@@ -632,7 +629,7 @@ The cooldown bypass arms after `controller.thresholds.sustained_intervals` conse
 - decode load at or above `controller.thresholds.panic_ratio` times `controller.thresholds.expand`
 - prefill load at or below `controller.thresholds.shrink`
 
-### 7.6 Evidence gating for decode-to-prefill consolidation
+### Evidence gating for decode-to-prefill consolidation
 
 Decode-to-prefill consolidation waits for the arrival-evidence window to close. The window closes when either of these holds:
 
@@ -653,7 +650,7 @@ The `steady_demand` rule requires a closed arrival-evidence window for moves in 
 
 Live state and metrics expose the short and long demand estimates, the arrival-evidence window state, and the gate blocking movement.
 
-### 7.7 Reactive-controller parameters
+### Reactive-controller parameters
 
 | Field                                               | Default | Meaning                                                                                                                                                                                                                                                                                                                 | Values                                                   |
 | --------------------------------------------------- | :-----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |

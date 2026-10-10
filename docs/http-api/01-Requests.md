@@ -93,11 +93,11 @@ Narwhal tracks three kinds of request ID:
 | Backend request ID | One per engine attempt and phase   | Engine requests and the KV handoff |
 | `client_rid`       | Trusted request ID sent by ingress | Request journal                    |
 
-[Configure ingress](../operate/01-Start-Routers.md#3-configuring-the-client-path) to:
+[Configure ingress](../operate/01-Start-Routers.md#configuring-the-client-path) to:
 
 1. Authenticate the client.
 2. Strip the client's credentials.
 3. Strip the internal IDs the client sent.
 4. Set the trusted identity values.
 
-With [`engine.engine_api_key_env`](../configuration/03-Recovery-and-Validation.md#10-engine-authentication-and-protocol-adapters) set, Narwhal sends that credential on serving and control requests to the engine.
+With [`engine.engine_api_key_env`](../configuration/03-Recovery-and-Validation.md#engine-authentication-and-protocol-adapters) set, Narwhal sends that credential on serving and control requests to the engine.

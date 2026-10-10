@@ -45,7 +45,7 @@ The service runs these hooks:
 | `router_restart` | Overlay, restoring the baseline          | Restart the router with the fleet configuration at `NARWHAL_CONTROL_FLEET`                  |
 | `cold_restart`   | Cold restart                             | Restart every engine and the router with the fleet configuration at `NARWHAL_CONTROL_FLEET` |
 
-### How hooks run
+### Hook execution
 
 A hook succeeds when it exits `0` within its timeout. The service runs each hook in its own process group with standard input closed, and writes the hook's standard output and standard error to a log in the session directory. At the timeout, the service sends SIGTERM to the process group, then SIGKILL 5 seconds later.
 

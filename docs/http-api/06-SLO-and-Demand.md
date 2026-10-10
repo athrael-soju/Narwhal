@@ -123,7 +123,7 @@ decode_pressure_recovery
 
 Source-pressure and movement-gate checks use demand at full precision. State and journal records round it.
 
-Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gates](../configuration/02-Serving-and-Role-Control.md#7-role-control) constrain each move.
+Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gates](../configuration/02-Serving-and-Role-Control.md#role-control) constrain each move.
 
 ### Decode recovery ratio
 

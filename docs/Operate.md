@@ -74,24 +74,3 @@ TLS, authentication, WAF, model routing
     Profile the fleet, calibrate SLOs, and measure a target workload.
 
 </div>
-
-## Production startup checklist
-
-For a new or replaced production deployment:
-
-1. Assemble one [deployment set](operate/01-Start-Routers.md#2-keeping-one-deployment-set).
-2. Confirm state handoff compatibility with `narwhal-check --print-contract-versions`.
-3. Configure private control interfaces on the [client path](operate/01-Start-Routers.md#3-configuring-the-client-path).
-4. Configure trusted ingress rewriting on the client path.
-5. Confirm both router hosts share the required [lease domain](operate/01-Start-Routers.md#4-starting-a-router-pair).
-6. Start the intended primary.
-7. Start its standby from the same deployment set.
-8. Verify `/ready` returns HTTP 200 on the primary.
-9. Verify `/ready` returns HTTP 503 on the standby.
-10. Verify `/health` reports `status: ok` on the active router.
-11. Run the deployment workload through production ingress.
-12. Verify dashboard collection.
-13. Verify paging thresholds.
-14. Run the [engine restart drill](operate/05-Release-Drills.md#11-validating-every-release) for the configured restart policy.
-15. Run the router failover drill through the production load balancer.
-16. Open client admission.

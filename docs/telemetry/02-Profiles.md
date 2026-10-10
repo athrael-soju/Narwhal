@@ -29,7 +29,7 @@ The saved digest and the `.samples.json` sidecar contents depend on the fleet:
 | Other fleets with `engine_contract` | Per-process attestation digest. | The full attestation response. |
 | Otherwise | Digest of the process identity from `/version` and `/metrics`. | The process identity. |
 
-The [attested launch digest](../configuration/01-Fleet-Schema.md#33-attestation) covers:
+The [attested launch digest](../configuration/01-Fleet-Schema.md#attestation) covers:
 
 - the contract fields
 - the engine arguments, with the values of `--host`, `--port`, `--served-model-name`, and `--kv-events-config` removed
@@ -101,7 +101,7 @@ Profile loading handles invalid input as follows:
 | A field outside the profile fields table | Profile loading aborts. |
 | A partial set of `cached_` fields | Profile loading aborts. |
 
-The router prices a request with a cached prefix from the `cached_` fields, following the [prefix-cache pricing rules](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing).
+The router prices a request with a cached prefix from the `cached_` fields, following the [prefix-cache pricing rules](../configuration/02-Serving-and-Role-Control.md#prefix-cache-pricing).
 
 ### Prefill price derived from the profile
 

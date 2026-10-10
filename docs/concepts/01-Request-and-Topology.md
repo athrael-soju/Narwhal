@@ -1,5 +1,5 @@
 ---
-description: The engine contract, request execution path and fleet topology behind Narwhal disaggregated serving.
+description: Engine contract, request execution, and fleet topology for Narwhal disaggregated serving.
 ---
 
 # Request flow and fleet topology
@@ -15,18 +15,18 @@ Every engine in a fleet meets the same contract:
 - Passes preflight validation before taking traffic.
 - Passes readmission checks after a hold, drain, failure, or maintenance event.
 
-The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#3-engine-shape-and-compatibility-contract) that every engine must match.
+The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract) that every engine must match.
 
 ### KV transfer for vLLM engines
 
-A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh when three requirements hold. [Gate E](../deploy/05-Attest.md#capturing-the-attestation-inputs) captures the attestation inputs from the live process. The attestation sidecar binds the process to its image, NIXL connector and runtime features, and [`narwhal-check`](../cli/Check.md) validates the attested process.
+A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh when three requirements hold. [Attestation capture](../deploy/05-Attest.md#capturing-the-attestation-inputs) reads the inputs from the live process. The attestation sidecar binds the process to its image, NIXL connector and runtime features, and [`narwhal-check`](../cli/Check.md) validates the attested process.
 
-## How a request executes
+## Request execution
 
 A completion request passes through these stages:
 
 1. The request takes a seat under the [router in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit).
-2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#51-prefix-cache-pricing) for cached prefixes.
+2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#prefix-cache-pricing) for cached prefixes.
 3. With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check).
 4. The chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff.
 5. An eligible engine consumes the handoff and runs decode.
@@ -35,7 +35,7 @@ A completion request passes through these stages:
 
 When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) gives each wait's bound and response.
 
-A [retry](../configuration/02-Serving-and-Role-Control.md#42-waiting-engine-seats-and-retries) reruns prefill and decode with a fresh KV handoff.
+A [retry](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) reruns prefill and decode with a fresh KV handoff.
 
 ## Fleet topology
 

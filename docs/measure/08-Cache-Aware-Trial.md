@@ -51,10 +51,10 @@ The baseline arm adds `["--kv-events-config", "{\"enable_kv_cache_events\": fals
 
 For each arm:
 
-1. Launch and check every engine as in [Gate C](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine).
-2. Attest the engines as in [Gate E](../deploy/05-Attest.md).
+1. Launch and check every engine as in [Validate and start engines](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine).
+2. Attest the engines as in [Attest live engines](../deploy/05-Attest.md).
 3. Profile the engines with the lengths from [Choosing the workload shape](#choosing-the-workload-shape).
-4. Calibrate the first-token deadline over every directed engine pair as in [Gate F](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+4. Calibrate the first-token deadline over every directed engine pair as in [Calibrating the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 5. Run a passing preflight.
 6. Start the router with `pin: false` on every engine and the recorded controller settings.
 
@@ -101,7 +101,7 @@ Each repeated-prefix request prompt is one of the family prefixes followed by a 
 ## Checking cache-aware pricing
 
 1. In the cache-aware arm, run one short, unscored point with a repeated-prefix workload.
-2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Joining client offers to the router journal](04-Reconcile-and-Accept.md#10-joining-client-offers-to-the-router-journal).
+2. Join its `requests.jsonl` to the router journal on `client_rid`, as in [Joining client offers to the router journal](04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal).
 3. Compare `predicted_prefill_s` with `cold_prefill_s` in the [`cache_placement`](../telemetry/01-Journal.md#cache-placement) record of each row with `placed_cached_tokens` above 0.
 
 When `predicted_prefill_s` is below `cold_prefill_s` on every row, start the measured runs. When it is at or above `cold_prefill_s` on any row, revisit the workload shape and the warm prefill lengths.
@@ -126,7 +126,7 @@ Run one point:
 
 Set `--requests` to 60 seconds of offers at the point's rate. Give each point a distinct `--run-seed`, shared by both arms.
 
-A run that exits with [status `0` or `2`](03-Load-Trial.md#8-measuring-05-requests) writes `summary.json` with:
+A run that exits with [status `0` or `2`](03-Load-Trial.md#measuring-05-requests) writes `summary.json` with:
 
 | Field | Meaning |
 | --- | --- |
@@ -144,7 +144,7 @@ Between runs:
 
 Run one separate, unscored cache-aware point after the measured runs.
 
-A reactive prefill-to-decode move requires every [adjacent-split condition](../configuration/02-Serving-and-Role-Control.md#75-adjacent-split-decisions).
+A reactive prefill-to-decode move requires every [adjacent-split condition](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions).
 
 Run the role-change point:
 

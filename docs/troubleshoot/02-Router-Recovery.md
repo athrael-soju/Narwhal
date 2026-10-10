@@ -32,7 +32,7 @@ The standby's `/ready` returns HTTP 503 with reason `no fresh handoff` when the 
 
 1. Keep client traffic stopped.
 2. Restore a compatible router release.
-3. Restore the [deployment set](../operate/01-Start-Routers.md#2-keeping-one-deployment-set).
+3. Restore the [deployment set](../operate/01-Start-Routers.md#keeping-one-deployment-set).
 
 If handoff restoration fails:
 
@@ -45,5 +45,5 @@ If handoff restoration fails:
 
 ## Router rollback
 
-1. Follow [Rolling back](../operate/04-Upgrade-and-Validate.md#103-rolling-back).
-2. Run the drills in [Validating every release](../operate/05-Release-Drills.md#11-validating-every-release).
+1. Follow [Rolling back](../operate/04-Upgrade-and-Validate.md#rolling-back).
+2. Run the drills in [Validating every release](../operate/05-Release-Drills.md#validating-every-release).

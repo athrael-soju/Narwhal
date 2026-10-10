@@ -68,4 +68,4 @@ docker compose -f tools/observability/compose.yml logs prometheus grafana
 - Save deployment addresses and captured responses under `runs/`.
 - Attach the verified Prometheus targets and dashboard queries to the load record from the [deployment acceptance sequence](../deploy/07-Serve-and-Measure.md).
 
-[![Next: Monitoring placement and control](https://img.shields.io/badge/next-Monitoring%20placement%20and%20control-0f766e)](../operate/02-Monitor.md#6-monitoring-placement-and-control)
+[Monitor placement and control](../operate/02-Monitor.md#monitoring-placement-and-control)

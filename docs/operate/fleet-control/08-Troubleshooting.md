@@ -1,5 +1,5 @@
 ---
-description: Diagnose fleet control console problems from the first visible symptom, including empty chart frames, missing chart markers, and engines stuck after a drain or stop.
+description: Diagnose fleet control console failures, including empty charts, missing markers, and stuck engines.
 ---
 
 # Troubleshooting the console
@@ -31,7 +31,7 @@ Run an engine action to confirm the fix. Its marker appears on the Narwhal Orche
 
 The router readmits this engine only after its process restarts.
 
-1. Restart the engine with **Stop**, then **Start**. Without those hooks, restart it through its process manager, as in [Replacing the process](../03-Restart-Engines.md#72-replacing-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave).
+1. Restart the engine with **Stop**, then **Start**. Without those hooks, restart it through its process manager, as in [Replacing the process](../03-Restart-Engines.md#replace-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
 2. Wait until **Readmit** is enabled.
 3. Select **Readmit**. The engine returns to `in service`.
 
@@ -49,6 +49,6 @@ The router readmits this engine only after its process restarts.
 
 **Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
 
-On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release). Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#8-restarting-an-engine-wave).
+On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release). Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
 
 To let **Start** succeed without a wave restart, set `UCX_CUDA_IPC_CACHE` to `n` in `runtime.environment` and use UCX 1.22 or later in the engine image. Peers then release a stopped engine's GPU memory. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.
