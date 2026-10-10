@@ -136,7 +136,7 @@ When `engine.engine_api_key_env` names a variable at deployment export, the cred
 
 Use the same authentication mode for workload measurement and production serving.
 
-The protocol fields `engine.connector` and `engine.dialect` default to `"nixl"` and `"vllm"`. In this release, each field accepts only its default value.
+The protocol fields `engine.backend`, `engine.connector` and `engine.dialect` default to `"vllm"`, `"nixl"` and `"vllm"`. In this release, each field accepts only its default value.
 
 ---
 

@@ -6,8 +6,7 @@ import math
 import re
 from typing import TYPE_CHECKING
 
-from ..engines.connector import lookup as lookup_connector
-from ..engines.dialect import lookup as lookup_dialect
+from ..backends import load as load_backend
 
 if TYPE_CHECKING:
     from .model import FleetConfig, SharedDeviceAllocation
@@ -212,13 +211,19 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             f"recovery.health.relative_band must be nonnegative, got {config.health_relative_band}"
         )
     try:
-        lookup_connector(config.connector)
+        backend = load_backend(config.backend)
     except ValueError as exc:
         problems.append(str(exc))
-    try:
-        lookup_dialect(config.dialect)
-    except ValueError as exc:
-        problems.append(str(exc))
+    else:
+        try:
+            backend.connector(config.connector)
+        except ValueError as exc:
+            problems.append(str(exc))
+        if config.dialect != backend.dialect.name:
+            problems.append(
+                f"backend {backend.name!r} has no dialect {config.dialect!r}: "
+                f"its dialect is {backend.dialect.name}"
+            )
     if not isinstance(config.advisory, bool):
         problems.append("controller.advisory must be a boolean")
     if not isinstance(config.min_prefill, int) or isinstance(config.min_prefill, bool):

@@ -7,6 +7,8 @@ import asyncio
 import json
 import math
 import re
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +46,24 @@ class EngineIdentity:
 
     vllm_version: str
     process_start_time_seconds: float
+
+
+class EngineIdentityReader(ABC):
+    """Read a backend's process identity and its attested launch limits."""
+
+    @abstractmethod
+    async def read(
+        self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
+    ) -> EngineIdentity:
+        """Read the version and process generation from a running engine."""
+
+    @abstractmethod
+    def sequence_limit(self, attestation: Any) -> int | None:
+        """Return the concurrent-sequence cap in an attestation's launch, if set."""
+
+    @abstractmethod
+    def kv_lease(self, attestation: Any) -> int | None:
+        """Return the producer's KV lease in seconds, if set."""
 
 
 @dataclass(frozen=True)
@@ -183,15 +203,22 @@ async def fetch_engine_identity(
     headers: dict[str, str] | None = None,
 ) -> EngineIdentity:
     """Read the version and process start directly from a running engine."""
-    base = engine_base.rstrip("/")
     async with httpx.AsyncClient(timeout=timeout_s, transport=transport, headers=headers) as client:
-        version_response = await client.get(f"{base}/version")
-        version_response.raise_for_status()
-        version = version_response.json().get("version")
-        if not isinstance(version, str) or not version.strip():
-            raise ValueError("/version returned no version")
-        metrics_response = await client.get(f"{base}/metrics")
-        metrics_response.raise_for_status()
+        return await read_identity(client, engine_base)
+
+
+async def read_identity(
+    client: httpx.AsyncClient, engine_base: str, headers: Mapping[str, str] | None = None
+) -> EngineIdentity:
+    """Read vLLM's /version and the process start time in its /metrics."""
+    base = engine_base.rstrip("/")
+    version_response = await client.get(f"{base}/version", headers=headers)
+    version_response.raise_for_status()
+    version = version_response.json().get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError("/version returned no version")
+    metrics_response = await client.get(f"{base}/metrics", headers=headers)
+    metrics_response.raise_for_status()
     return EngineIdentity(version.strip(), parse_process_start(metrics_response.text))
 
 

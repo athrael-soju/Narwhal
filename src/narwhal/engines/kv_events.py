@@ -6,9 +6,10 @@ hashes for the blocks they skip.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import msgpack  # type: ignore[import-untyped]
 
@@ -182,3 +183,14 @@ def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> lis
     vLLM gives groups with equal block sizes the same hash for a block.
     """
     return [known.get(block_hash) for block_hash in event.block_hashes]
+
+
+class KvEventDecoder(ABC):
+    """Decode a backend's published KV cache events."""
+
+    # The engine always computes a prompt's final token, so a cached prefix never covers it.
+    recomputes_final_token: ClassVar[bool] = True
+
+    @abstractmethod
+    def decode_batch(self, payload: bytes) -> list[CacheEvent | None]:
+        """Decode one published batch; raise ValueError for a malformed batch."""

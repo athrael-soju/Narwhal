@@ -250,6 +250,7 @@ class FleetConfig:
     min_prefill: int = 1
     # Role changes preserve this live-decode floor. Breaker ejections may breach it.
     min_decode: int = 1
+    backend: str = "vllm"
     connector: str = "nixl"
     dialect: str = "vllm"
     engine_contract: EngineContract | None = None

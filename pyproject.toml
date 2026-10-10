@@ -68,6 +68,9 @@ narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe.cli:main"
 
+[project.entry-points."narwhal.backends"]
+vllm = "narwhal.backends.vllm:backend"
+
 [project.urls]
 Documentation = "https://athrael-soju.github.io/Narwhal/"
 Repository = "https://github.com/athrael-soju/Narwhal"

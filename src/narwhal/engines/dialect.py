@@ -22,6 +22,18 @@ class EngineDialect(ABC):
     prefill_incompatible: ClassVar[tuple[str, ...]] = ()
     # True when streamed decode honors return_token_ids and stream_interval.
     token_ids: ClassVar[bool] = False
+    keepalive_expiry_s: ClassVar[float] = 4.0
+    engine_output_fields: ClassVar[tuple[str, ...]] = ()
+    # Dotted client fields that would override Narwhal's engine controls.
+    reserved_fields: ClassVar[tuple[str, ...]] = ()
+
+    @abstractmethod
+    def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
+        """Return the headers and body fields that name one engine request."""
+
+    @abstractmethod
+    def token_id_fields(self) -> dict[str, Any]:
+        """Return the decode fields that stream every token ID."""
 
     @abstractmethod
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
@@ -53,6 +65,14 @@ class VllmDialect(EngineDialect):
     prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
     # vLLM streams per-chunk token ids for return_token_ids and honors stream_interval=1.
     token_ids = True
+    # vLLM closes an idle connection after 5 s (VLLM_HTTP_TIMEOUT_KEEP_ALIVE).
+    keepalive_expiry_s = 4.0
+    engine_output_fields = ("token_ids", "prompt_token_ids")
+    reserved_fields = (
+        "vllm_xargs.kv_cache_report_mode",
+        "vllm_xargs.kv_transfer_params",
+        "vllm_xargs.ec_transfer_params",
+    )
     # Chat template fields the tokenize route needs to count the engine's render.
     tokenize_passthrough: ClassVar[tuple[str, ...]] = (
         "tools",
@@ -62,6 +82,14 @@ class VllmDialect(EngineDialect):
         "add_generation_prompt",
         "add_special_tokens",
     )
+
+    def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
+        """Name the request in X-Request-Id."""
+        return {"x-request-id": rid}, {}
+
+    def token_id_fields(self) -> dict[str, Any]:
+        """Stream one token ID per chunk."""
+        return {"return_token_ids": True, "stream_interval": 1}
 
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
         """Build vLLM's tokenization request from an OpenAI request body."""
