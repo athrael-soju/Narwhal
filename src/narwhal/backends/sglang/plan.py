@@ -8,10 +8,13 @@ CONNECTORS = ("mooncake", "nixl")
 # Only these transfer backends switch roles at runtime.
 ROLE_SWITCH_CONNECTORS = ("mooncake",)
 TRANSFER_PACKAGES = {"mooncake": "mooncake-transfer-engine", "nixl": "nixl"}
+# Images install CUDA builds under suffixed names, such as mooncake-transfer-engine-cuda13.
+_CUDA_BUILD = re.compile(r"-cu(?:da)?[0-9]+")
 # Both roles must agree on page size, and some hybrid models force page 1 with Triton in prefill.
 PAGE_SIZE = 1
 ATTENTION_BACKEND = "triton"
-# An uncapped request pool sized from the whole GPU fails decode kernel warmup.
+# An uncapped request pool sized from the whole GPU fails decode kernel warmup. A launch may
+# set a lower cap.
 MAX_RUNNING_REQUESTS = 256
 # Prefill gives up on an absent decode peer after this many seconds; the connector's
 # decode wait follows it.
@@ -27,6 +30,7 @@ VALUE_OPTIONS = {
     "--load-format",
     "--disaggregation-ib-device",
     "--mamba-ssm-dtype",
+    "--max-running-requests",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -57,7 +61,7 @@ def validate_runtime(runtime: dict) -> None:
     if name not in CONNECTORS:
         raise ValueError(f"runtime.connector must be one of {', '.join(CONNECTORS)}")
     packages = runtime.get("expected_packages", {})
-    if not packages.get("sglang") or not packages.get(TRANSFER_PACKAGES[name]):
+    if not packages.get("sglang") or transfer_package(name, packages) is None:
         raise ValueError(
             f"runtime.expected_packages requires pinned sglang and {TRANSFER_PACKAGES[name]} "
             "versions"
@@ -92,17 +96,19 @@ def validate_runtime(runtime: dict) -> None:
         raise ValueError("runtime.extra_args must be an argument list")
     index = 0
     while index < len(args):
-        option = args[index]
-        if (
-            option in VALUE_OPTIONS
-            and index + 1 < len(args)
-            and not args[index + 1].startswith("--")
-        ):
+        flag = args[index]
+        if flag in VALUE_OPTIONS and index + 1 < len(args) and not args[index + 1].startswith("--"):
             index += 2
-        elif option in FLAG_OPTIONS:
+        elif flag in FLAG_OPTIONS:
             index += 1
         else:
-            raise ValueError(f"unsupported or incomplete runtime option: {option}")
+            raise ValueError(f"unsupported or incomplete runtime option: {flag}")
+    if "--max-running-requests" in args:
+        cap = option(args, "--max-running-requests")
+        if cap is None or not cap.isdigit() or not 1 <= int(cap) <= MAX_RUNNING_REQUESTS:
+            raise ValueError(
+                f"--max-running-requests must be set once, from 1 to {MAX_RUNNING_REQUESTS}"
+            )
     for name, value in runtime.get("environment", {}).items():
         if (
             not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
@@ -113,6 +119,16 @@ def validate_runtime(runtime: dict) -> None:
             or any(c in value for c in "\r\n\0")
         ):
             raise ValueError(f"unsupported runtime environment field: {name}")
+
+
+def transfer_package(connector_name: str, packages: dict) -> str | None:
+    base = TRANSFER_PACKAGES[connector_name]
+    pinned = [
+        name
+        for name in packages
+        if name == base or (name.startswith(base) and _CUDA_BUILD.fullmatch(name[len(base) :]))
+    ]
+    return pinned[0] if len(pinned) == 1 and packages[pinned[0]] else None
 
 
 def publishes_kv_events(args: list[str]) -> bool:
@@ -130,6 +146,11 @@ def serve_args(
     kv_events: dict | None,
 ) -> tuple[list[str], dict]:
     runtime = record["runtime"]
+    extra = list(runtime.get("extra_args", []))
+    cap = option(extra, "--max-running-requests") or str(MAX_RUNNING_REQUESTS)
+    if "--max-running-requests" in extra:
+        index = extra.index("--max-running-requests")
+        del extra[index : index + 2]
     name = connector(runtime)
     switches = name in ROLE_SWITCH_CONNECTORS
     # A switching engine starts as prefill and the router switches decode engines at admission:
@@ -168,7 +189,7 @@ def serve_args(
         "--attention-backend",
         ATTENTION_BACKEND,
         "--max-running-requests",
-        str(MAX_RUNNING_REQUESTS),
+        cap,
         "--stream-interval",
         "1",
         "--enable-metrics",
@@ -192,7 +213,7 @@ def serve_args(
                 ),
             ]
         ),
-        *runtime.get("extra_args", []),
+        *extra,
     ]
     return args, transfer
 

@@ -95,6 +95,17 @@ def calibration_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list
     return [rounds[index] for index in sorted(rounds)]
 
 
+def role_phases(pairs: list[Pair]) -> list[list[Pair]]:
+    # Each phase keeps every engine in one role, so engines that switch roles switch once per
+    # phase. A pair joins the phase of the lowest index bit where its engines differ.
+    index = {iid: n for n, iid in enumerate(sorted({iid for pair in pairs for iid in pair}))}
+    phases: dict[tuple[int, int], list[Pair]] = {}
+    for src, dst in pairs:
+        bit = (index[src] ^ index[dst]) & -(index[src] ^ index[dst])
+        phases.setdefault((bit, index[src] & bit), []).append((src, dst))
+    return [phases[key] for key in sorted(phases)]
+
+
 def exclusive_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[Pair]]:
     # Engines that switch roles serve one leg per round, so no slot repeats in a round.
     rounds: list[tuple[set[str], list[Pair]]] = []
@@ -557,8 +568,10 @@ async def calibrate(
     backend = load_backend(cfg.backend)
     switcher = engine_side(backend.role_switcher(cfg.connector))
     slots = {spec.iid: device_key(spec) for spec in cfg.engines}
-    rounds = (
-        calibration_rounds(pairs, slots) if switcher is None else exclusive_rounds(pairs, slots)
+    phases = (
+        [(pairs, calibration_rounds(pairs, slots))]
+        if switcher is None
+        else [(phase, exclusive_rounds(phase, slots)) for phase in role_phases(pairs)]
     )
     groups = [
         (src, dst, target)
@@ -635,14 +648,19 @@ async def calibrate(
             )
             print(
                 f"calibration groups: {len(groups)}; concurrent rounds per input length: "
-                f"{len(rounds)}; sweep 1 runs each group alone"
+                f"{sum(len(rounds) for _, rounds in phases)}; sweep 1 runs each group alone"
             )
-            for src, dst, target in groups:
-                await lockstep.step([(src, dst)], target, 1, None)
-            for index in range(2, samples_per_group + 1):
-                for target in input_tokens:
-                    for number, members in enumerate(rounds, 1):
-                        await lockstep.step(members, target, index, number)
+            first = 1
+            for phase, rounds in phases:
+                members_of = set(phase)
+                for src, dst, target in groups:
+                    if (src, dst) in members_of:
+                        await lockstep.step([(src, dst)], target, 1, None)
+                for index in range(2, samples_per_group + 1):
+                    for target in input_tokens:
+                        for number, members in enumerate(rounds, first):
+                            await lockstep.step(members, target, index, number)
+                first += len(rounds)
     finally:
         await client.aclose()
     rows: list[dict[str, Any]] = []
