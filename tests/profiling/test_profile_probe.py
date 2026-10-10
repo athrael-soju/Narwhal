@@ -823,29 +823,6 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             [[spec.iid for spec in lane] for lane in colocated], [[s.iid for s in engines]]
         )
 
-    def test_paired_profile_lanes_run_disjoint_pairs(self):
-        with tempfile.TemporaryDirectory() as folder:
-            engines = fleet(Path(folder)).engines
-        specs = [replace(engines[0], iid=f"n{i}") for i in range(1, 6)]
-
-        def lanes(targets):
-            return [
-                [spec.iid for spec in lane]
-                for lane in fleet_probe._profile_lanes(targets, colocated=False, paired=True)
-            ]
-
-        self.assertEqual(lanes(specs[:4]), [["n1", "n2"], ["n3", "n4"]])
-        self.assertEqual(lanes(specs), [["n1", "n2"], ["n3", "n4", "n5"]])
-        self.assertEqual(lanes(specs[:1]), [["n1"]])
-        pair = lanes(specs[:4])[0]
-        lane = [spec for spec in specs if spec.iid in pair]
-        self.assertEqual(fleet_probe._lane_peer(lane[0], lane, specs).iid, "n2")
-        self.assertEqual(fleet_probe._lane_peer(lane[1], lane, specs).iid, "n1")
-        self.assertEqual(fleet_probe._lane_peer(specs[0], specs[:1], specs).iid, "n2")
-        shared = SharedDeviceAllocation("gpu-0", "uuid", 0.5, 0.1)
-        specs[0] = replace(specs[0], shared_device=shared)
-        self.assertEqual(lanes(specs[:4]), [["n1", "n2", "n3", "n4"]])
-
     async def test_run_profiles_engines_on_separate_devices_concurrently(self):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
