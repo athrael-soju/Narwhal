@@ -105,7 +105,7 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembled responses carry the engine's response metadata. `finish_reason` and `stop_reason` come from the last choice that reports each.
+Assembled responses carry the engine's response metadata. `finish_reason` and `stop_reason` come from the last choice that reports each, and so does SGLang's `matched_stop`.
 
 `usage` carries the non-null engine `usage`, including one from a later usage-only frame. When the engine omits `usage`, the router computes it from the input length and the measured output token count.
 

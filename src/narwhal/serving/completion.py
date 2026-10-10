@@ -133,7 +133,9 @@ def _chat_delta(
             _strings(tool["function"], function, ("name", "arguments"))
 
 
-def reassemble(events: list[SseEvent], *, endpoint: str) -> dict[str, Any]:
+def reassemble(
+    events: list[SseEvent], *, endpoint: str, choice_fields: tuple[str, ...] = ()
+) -> dict[str, Any]:
     chat = endpoint == "/v1/chat/completions"
     merged: dict[str, Any] = {"index": 0, "finish_reason": "stop"}
     message: dict[str, Any] = {"role": "assistant", "content": None}
@@ -171,10 +173,11 @@ def reassemble(events: list[SseEvent], *, endpoint: str) -> dict[str, Any]:
                     "prompt_token_ids",
                     "logprobs",
                     "delta" if chat else "text",
+                    *choice_fields,
                 },
                 "choice",
             )
-            for key in ("finish_reason", "stop_reason", "prompt_token_ids"):
+            for key in ("finish_reason", "stop_reason", "prompt_token_ids", *choice_fields):
                 if choice.get(key) is not None:
                     merged[key] = choice[key]
             if chat:

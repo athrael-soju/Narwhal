@@ -20,6 +20,8 @@ class EngineDialect(ABC):
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ()
+    # Engine choice fields that a reassembled non-streaming choice carries from the stream.
+    choice_fields: ClassVar[tuple[str, ...]] = ()
     # Dotted client fields that would override Narwhal's engine controls.
     reserved_fields: ClassVar[tuple[str, ...]] = ()
 
