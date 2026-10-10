@@ -969,6 +969,36 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertIn("generation changed", saved["engines"]["e0"]["error"])
 
+    async def test_a_timeout_records_its_type(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "new.json"
+            client = httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            )
+            timeout = httpx.ReadTimeout(
+                "", request=httpx.Request("POST", "http://e0/v1/completions")
+            )
+            with (
+                patch.object(httpx, "AsyncClient", return_value=client),
+                patch.object(fleet_probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(fleet_probe, "profile_instance", AsyncMock(side_effect=timeout)),
+                patch.object(
+                    fleet_probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence(
+                            "sha256:" + "a" * 64, {"engine": {"start": 100}}, 100.0
+                        )
+                    ),
+                ),
+                redirect_stdout(io.StringIO()),
+                self.assertRaises(httpx.ReadTimeout),
+            ):
+                await fleet_probe.run(cfg, {"e0"})
+            saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
+            self.assertEqual(saved["engines"]["e0"]["error"], "ReadTimeout: ")
+
     def test_saved_prefill_refit_preserves_decode_and_original_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

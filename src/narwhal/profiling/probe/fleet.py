@@ -295,7 +295,7 @@ async def run(
                 if neighbour_load is not None and neighbour_load.tasks:
                     await cancel_tasks(neighbour_load.tasks)
                     engine_evidence["colocated_load"] = neighbour_load.evidence()
-                engine_evidence["error"] = str(exc)
+                engine_evidence["error"] = f"{type(exc).__name__}: {exc}"
                 evidence_rows[spec.iid] = engine_evidence
                 evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 with evidence_path.open(
