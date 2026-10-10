@@ -1,5 +1,4 @@
 ---
-glightbox: true
 description: Read the Narwhal Orchestrator dashboard from the service-level headline down to individual engines.
 ---
 
@@ -8,6 +7,31 @@ description: Read the Narwhal Orchestrator dashboard from the service-level head
 The **Narwhal Orchestrator** dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine, outcome and pool panels below it show how the fleet carries the load and why requests drop. The latency, admission, queue, retry and router event-loop panels at the bottom show where delays and failures start.
 
 Open the dashboard through the tunnel in [Accessing the dashboard from a workstation](02-Access.md#accessing-the-dashboard-from-a-workstation).
+
+## Walkthrough
+
+[![Dashboard walkthrough title frame.](../assets/observability/walkthrough/thumbnail.png)](../assets/observability/walkthrough/index.html){ .narwhal-walkthrough-trigger }
+
+<dialog id="dashboard-walkthrough" class="narwhal-walkthrough-dialog" aria-label="Dashboard walkthrough"><button type="button" class="narwhal-walkthrough-close" aria-label="Close walkthrough">×</button><iframe title="Dashboard walkthrough"></iframe></dialog>
+
+<script>
+(() => {
+  const trigger = document.querySelector(".narwhal-walkthrough-trigger");
+  const dialog = document.querySelector("#dashboard-walkthrough");
+  const frame = dialog.querySelector("iframe");
+
+  trigger.addEventListener("click", (event) => {
+    event.preventDefault();
+    frame.src = trigger.href;
+    dialog.showModal();
+  });
+  dialog.querySelector("button").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => { frame.src = "about:blank"; });
+})();
+</script>
 
 ## Selectors
 
@@ -59,20 +83,6 @@ The charts and the headline row colour request outcomes, alerts, status values a
 
 The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing now.
 
-<div class="narwhal-panel-row stats" markdown>
-
-![Requests table with within-SLO share, offered, completed, cancelled, dropped and failed counts.](../assets/observability/headline-requests.png)
-
-</div>
-
-<div class="narwhal-panel-row stats" markdown>
-
-![Latency table with TTFT p95 and TPOT p95 as a share of the SLO.](../assets/observability/headline-latency.png)
-
-![Router block with admission Ready and 0 firing alerts.](../assets/observability/headline-router.png)
-
-</div>
-
 | Requests column                    | Shows                                                                          |
 | ---------------------------------- | ------------------------------------------------------------------------------ |
 | Within SLO                         | Share of ended requests that met both the TTFT and TPOT SLOs                   |
@@ -101,14 +111,6 @@ Status colours:
 
 The engine table shows each engine's current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
 
-<div class="narwhal-panel-row" markdown>
-
-![Engines table in ID order with role, resident and running bars, and KV cache use.](../assets/observability/engines.png)
-
-![Engine role history with each engine's role and unreachable periods.](../assets/observability/engine-role-history.png)
-
-</div>
-
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
 
 | Column       | Shows                                                                                                               |
@@ -127,18 +129,6 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 ## Request outcomes and fleet events
 
 **Request outcomes** shows what happened to client requests, and **Fleet events** shows which alerts fired at the same time.
-
-<div class="narwhal-panel-row" markdown>
-
-![Request outcomes with completed following offered, and page markers where an engine drops out.](../assets/observability/request-outcomes.png)
-
-</div>
-
-<div class="narwhal-panel-row" markdown>
-
-![Fleet events timeline with NarwhalEngineDown and NarwhalEngineEjected pages.](../assets/observability/fleet-events.png)
-
-</div>
 
 In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went:
 
@@ -171,35 +161,11 @@ The row under **Request outcomes** breaks its drop series down by request outcom
 
 **Pool assignments** shows how many engines serve each phase over time.
 
-<div class="narwhal-panel-row" markdown>
-
-![Pool assignments as the role controller moves engines between pools.](../assets/observability/pool-assignments.png)
-
-</div>
-
 The teal line counts prefill engines, the blue line counts decode engines and the red line counts engines the breaker ejected. Mirrored steps in the teal and blue lines mark a role flip.
 
 ## Latency and token throughput
 
 These panels show how long requests take and how much work the engines complete.
-
-<div class="narwhal-panel-row" markdown>
-
-![Time to first token with p50, p95 and p99 below the SLO line for the whole window, and p95 and p99 rising sharply in a load spike at the end.](../assets/observability/time-to-first-token.png)
-
-</div>
-
-<div class="narwhal-panel-row" markdown>
-
-![Time per output token with p50, p95 and p99 below the SLO line for the whole window.](../assets/observability/time-per-output-token.png)
-
-</div>
-
-<div class="narwhal-panel-row" markdown>
-
-![Token throughput for prefilled prompt tokens and output tokens.](../assets/observability/token-throughput.png)
-
-</div>
 
 **Time to first token** plots the p50, p95 and p99 time from router arrival to the end of prefill. **Time per output token** plots the same percentiles of each ended request's average time between output tokens after prefill.
 
@@ -210,12 +176,6 @@ Both panels draw the selected router's SLO as a dashed red line. When p95 crosse
 ## Pool pressure, admission and queue depth
 
 These panels show pool load, admission seats and the requests waiting at each queue stage.
-
-<div class="narwhal-panel-row" markdown>
-
-![Pool pressure with decode load crossing its target in short spikes and prefill load near zero.](../assets/observability/pool-pressure.png)
-
-</div>
 
 **Pool pressure** plots each pool's load as a fraction of its SLO target, and the dashed yellow line at 1 marks the target. When a pool's load stays at or above `controller.thresholds.expand` (default 1.0), [reactive role control](../concepts/02-Role-Control.md#expansion-and-consolidation) can move an engine into that pool.
 
@@ -235,18 +195,6 @@ When the prefill or decode line rises, no engine of that phase has a free seat. 
 
 These panels show how long requests wait and how the router retries failed attempts.
 
-<div class="narwhal-panel-row" markdown>
-
-![Request waiting time p95 by stage, with seat time p95.](../assets/observability/request-waiting-time.png)
-
-</div>
-
-<div class="narwhal-panel-row" markdown>
-
-![Retries and early exits at zero until requests begin ending before sizing at the end of the window.](../assets/observability/retries.png)
-
-</div>
-
 **Request waiting time** plots the p95 wait at each queue stage from `narwhal_queue_wait_seconds`, split by its `stage` label: **admission wait p95** for an admission seat, and **prefill seat wait p95** and **decode seat wait p95** for an engine seat. **seat time p95** shows how long a request holds an admission seat. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) defines the bounds and outcomes.
 
 **Retries and early exits** plots these rates:
@@ -263,12 +211,6 @@ These panels show how long requests wait and how the router retries failed attem
 ## Router event loop
 
 **Router event loop** shows the selected router's event-loop busy share and monitoring-deadline lag.
-
-<div class="narwhal-panel-row" markdown>
-
-![Router event loop with busy share and event-loop lag during a load ramp.](../assets/observability/router-event-loop.png)
-
-</div>
 
 | Series | Shows                                                                                                                        |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------- |

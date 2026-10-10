@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reading the dashboard: walkthrough</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+<style>
+html, body { min-height: 100%; background: #101a20; }
+body { display: grid; margin: 0; overflow: hidden; place-items: center; }
+#dc-root { overflow: hidden; }
+</style>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Noto+Sans+Mono:wght@400;500&amp;family=Noto+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#45d2d5}a:hover{color:#8ce9ea}
+button{font:inherit;margin:0}
+.draw{stroke-dasharray:1;stroke-dashoffset:1;animation:nwdraw 1.8s ease-out .5s forwards}
+@keyframes nwdraw{to{stroke-dashoffset:0}}
+.ring{animation:nwpulse 1.6s ease-in-out infinite}
+@keyframes nwpulse{0%,100%{box-shadow:0 0 0 0 rgba(69,210,213,.55)}50%{box-shadow:0 0 0 10px rgba(69,210,213,0)}}
+@media (prefers-reduced-motion: reduce){.draw{animation:none;stroke-dasharray:none}.ring{animation:none}}
+</style>
+</helmet>
+<div style="width: 1600px; height: 956px; display: flex; flex-direction: column; background: #0b0c0f; font-family: 'Noto Sans', sans-serif">
+
+<div style="position: relative; width: 1600px; height: 900px; overflow: hidden; background: #0b0c0f">
+
+<div style="position: absolute; left: 0; top: 0; width: 3040px; height: 2360px; background: #111217; color: #ccccdc; font-family: Inter, 'Noto Sans', sans-serif; transform-origin: 0 0; transform: translate({{cam.x}}px, {{cam.y}}px) scale({{cam.s}})">
+
+<div style="position: absolute; left: 0; top: 0; width: 3040px; height: 40px; box-sizing: border-box; border-bottom: 1px solid #24262c; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; font-size: 14px">
+<div style="display: flex; align-items: center; gap: 14px">
+<span style="width: 20px; height: 20px; border-radius: 50%; background: #f46800"></span>
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9fa7b3" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+<span style="color: #9fa7b3">Dashboards</span><span style="color: #6e7380">›</span><span style="color: #e0e0ec">Narwhal Orchestrator</span>
+</div>
+<div style="display: flex; align-items: center; gap: 16px">
+<span style="width: 300px; height: 26px; box-sizing: border-box; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; color: #6e7380; font-size: 13px">Search…<span style="font-size: 11px">ctrl+k</span></span>
+<span style="color: #e0e0ec">Sign in</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 14px; top: 58px; display: flex; gap: 10px; font-size: 13px">
+<span style="height: 32px; display: flex; border: 1px solid #2f323a; border-radius: 2px"><span style="padding: 0 10px; display: flex; align-items: center; background: #22252b; color: #ccccdc">Data source</span><span style="padding: 0 12px; display: flex; align-items: center; color: #6e9fff">Prometheus</span></span>
+<span style="height: 32px; display: flex; border: 1px solid #2f323a; border-radius: 2px"><span style="padding: 0 10px; display: flex; align-items: center; background: #22252b">Router</span><span style="padding: 0 12px; display: flex; align-items: center; gap: 8px; color: #e0e0ec">All<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9fa7b3" stroke-width="3" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></span>
+<span style="height: 32px; display: flex; border: 1px solid #2f323a; border-radius: 2px"><span style="padding: 0 10px; display: flex; align-items: center; background: #22252b">Engine detail</span><span style="padding: 0 12px; display: flex; align-items: center; gap: 10px; color: #e0e0ec"><span style="padding: 1px 6px; background: #2f323a; border-radius: 2px">All ×</span>×<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9fa7b3" stroke-width="3" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; gap: 8px; color: #e0e0ec"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ccccdc" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>Fleet control</span>
+</div>
+<div style="position: absolute; right: 14px; top: 58px; display: flex; gap: 8px; font-size: 13px; color: #e0e0ec">
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center">«</span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; gap: 8px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ccccdc" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>2026-10-09 16:37:29 to 2026-10-09 16:51:37</span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center">»</span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center; gap: 8px">↻ Refresh</span>
+<span style="height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #2f323a; border-radius: 2px; display: flex; align-items: center">5s</span>
+</div>
+
+<div style="position: absolute; left: 22px; top: 120px; width: 6px; height: 120px; background: #45d2d5"></div>
+<div style="position: absolute; left: 36px; top: 124px; width: 112px; height: 112px; border-radius: 6px; background: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px"><img src="./assets/b2333a63e88d1fb1fda7207988c72351.png" alt="Narwhal logo" style="width: 84px; height: 67px; object-fit: contain"><span style="font-size: 15px; font-weight: 700; color: #111111">Narwhal</span></div>
+<svg width="2864" height="128" viewBox="0 0 2864 128" aria-hidden="true" style="position: absolute; left: 160px; top: 116px">
+<defs><linearGradient id="nwband" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f6d6c" stop-opacity="0.55"></stop><stop offset="1" stop-color="#132b2e" stop-opacity="0.9"></stop></linearGradient></defs>
+<path d="M0,20 C600,0 1000,60 1500,40 C2000,20 2400,0 2864,30 L2864,128 L0,128 Z" fill="url(#nwband)"></path>
+<path d="M0,50 C500,30 1100,90 1600,64 C2100,40 2500,40 2864,60" fill="none" stroke="#2b8f8d" stroke-opacity="0.45" stroke-width="2"></path>
+</svg>
+
+<div style="position: absolute; left: 14px; top: 262px; width: 1752px; height: 148px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500">Requests ⓘ</div>
+<div style="position: absolute; left: 8px; right: 8px; top: 38px; display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); font-size: 13px">
+<span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Within SLO</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Offered</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Completed</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Cancelled</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Dropped</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Refused</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Rejected</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Failed</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">Expired</span>
+<span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; background: #d44a3a; color: #ffffff">89.8%</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">35.9 K</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">32.2 K</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">0</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; background: #d44a3a; color: #ffffff">10.2%</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">733</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">2.91 K</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">22</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">0</span>
+</div>
+<div style="position: absolute; left: 16px; right: 16px; top: 114px; height: 8px; border-radius: 4px; background: #2c2f36"><div style="width: 96%; height: 8px; border-radius: 4px; background: #4a4e57"></div></div>
+</div>
+
+<div style="position: absolute; left: 1776px; top: 262px; width: 864px; height: 148px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500">Latency ⓘ</div>
+<div style="position: absolute; left: 8px; right: 8px; top: 38px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); font-size: 13px">
+<span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">TTFT / SLO</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">TPOT / SLO</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">TTFT p95</span><span style="height: 30px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; border-bottom: 1px solid #2c2f36">TPOT p95</span>
+<span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; background: #56a64b; color: #ffffff">47%</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; background: #56a64b; color: #ffffff">63%</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">1.0 s</span><span style="height: 34px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">28 ms</span>
+</div>
+</div>
+
+<div style="position: absolute; left: 2652px; top: 262px; width: 372px; height: 148px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500">Router ⓘ</div>
+<div style="position: absolute; left: 8px; right: 8px; top: 36px; bottom: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px">
+<div style="background: #56a64b; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px"><span style="font-size: 12px">Admission</span><span style="font-size: 30px; font-weight: 500">Ready</span></div>
+<div style="background: #56a64b; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px"><span style="font-size: 12px">Alerts</span><span style="font-size: 30px; font-weight: 500">0</span></div>
+</div>
+</div>
+
+<div style="position: absolute; left: 14px; top: 416px; width: 2006px; height: 408px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px; padding: 6px 8px 0">
+<div style="display: grid; grid-template-columns: 72px 92px 104px repeat(4, minmax(0, 1fr)) 98px; height: 32px; align-items: center; font-size: 13px; border-bottom: 1px solid #2c2f36">
+<span style="padding-left: 6px">Engine ↑</span><span style="text-align: right; padding-right: 8px">Role</span><span style="text-align: right; padding-right: 8px">State</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">Resident</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">vLLM running</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">KV cache</span><span style="padding-left: 8px; border-left: 1px solid #2c2f36">Prefix hits</span><span style="text-align: right; padding-right: 8px; border-left: 1px solid #2c2f36">Tokens/s</span>
+</div>
+<sc-for list="{{eng}}" as="e" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 72px 92px 104px repeat(4, minmax(0, 1fr)) 98px; height: 42px; align-items: stretch; font-size: 13px; border-bottom: 1px solid #22252b">
+<span style="padding-left: 6px; display: flex; align-items: center">{{e.id}}</span>
+<span style="background: {{e.roleBg}}; color: #ffffff; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">{{e.role}}</span>
+<span style="background: #56a64b; color: #ffffff; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">Serving</span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 14px 0 8px"><span style="flex: 1; height: 26px; background: #22252b; overflow: hidden"><span style="display: block; height: 26px; box-sizing: border-box; background: #44484f; border-right: 2px solid #8e9196; width: {{e.resW}}"></span></span><span style="width: 30px; text-align: right">{{e.res}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 14px 0 8px"><span style="flex: 1; height: 26px; background: #22252b; overflow: hidden"><span style="display: block; height: 26px; box-sizing: border-box; background: #44484f; border-right: 2px solid #8e9196; width: {{e.runW}}"></span></span><span style="width: 30px; text-align: right">{{e.run}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 14px 0 8px"><span style="flex: 1; height: 26px; background: #22252b; overflow: hidden"><span style="display: block; height: 26px; background: #56a64b; width: {{e.kvW}}"></span></span><span style="width: 48px; text-align: right">{{e.kv}}</span></span>
+<span style="display: flex; align-items: center; gap: 10px; padding: 0 14px 0 8px"><span style="flex: 1; height: 26px; background: #22252b; box-sizing: border-box; border-left: 2px solid #8e9196"></span><span style="width: 48px; text-align: right">0%</span></span>
+<span style="display: flex; align-items: center; justify-content: flex-end; padding-right: 8px">{{e.tok}}</span>
+</div>
+</sc-for>
+<div style="margin: 10px 8px 0; height: 8px; border-radius: 4px; background: #2c2f36"><div style="width: 99%; height: 8px; border-radius: 4px; background: #4a4e57"></div></div>
+</div>
+
+<div style="position: absolute; left: 2030px; top: 416px; width: 994px; height: 408px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500">Engine role history ⓘ</div>
+<sc-for list="{{hist}}" as="h" hint-placeholder-count="8">
+<div style="position: absolute; left: 0; width: 994px; top: {{h.top}}px; height: 36px">
+<span style="position: absolute; left: 10px; top: 9px; font-size: 12px; color: #9fa7b3">{{h.id}}</span>
+<sc-for list="{{h.segs}}" as="sg" hint-placeholder-count="1">
+<span style="position: absolute; top: 0; height: 36px; left: {{sg.left}}px; width: {{sg.width}}px; box-sizing: border-box; border-right: 2px solid #181b1f; background: {{sg.bg}}; color: #ffffff; display: flex; align-items: center; justify-content: {{sg.justify}}; padding: 0 8px; font-size: 22px; font-weight: 600; overflow: hidden; white-space: nowrap">{{sg.label}}</span>
+</sc-for>
+<span style="position: absolute; left: 976px; top: 4px; width: 6px; height: 28px; background: {{h.tail}}"></span>
+</div>
+</sc-for>
+<span style="position: absolute; left: 48px; top: 376px; font-size: 11px; color: #9fa7b3">16:38:00</span>
+<span style="position: absolute; left: 311px; top: 376px; font-size: 11px; color: #9fa7b3">16:42:00</span>
+<span style="position: absolute; left: 573px; top: 376px; font-size: 11px; color: #9fa7b3">16:46:00</span>
+<span style="position: absolute; left: 836px; top: 376px; font-size: 11px; color: #9fa7b3">16:50:00</span>
+</div>
+
+<div style="position: absolute; left: 2280px; top: 836px; width: 744px; height: 292px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500">Fleet events ⓘ</div>
+<span style="position: absolute; left: 10px; top: 132px; width: 186px; font-size: 12px; color: #ccccdc">NarwhalUnservedRising</span>
+<div style="position: absolute; left: 200px; top: 44px; width: 528px; height: 196px">
+<div style="position: absolute; top: 0; bottom: 0; left: 94px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 281px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: 468px; border-left: 1px solid #24262c"></div>
+<div style="position: absolute; left: 0; top: 10px; width: 169px; height: 176px; background: #c9a20c"></div>
+</div>
+<span style="position: absolute; left: 280px; top: 252px; font-size: 11px; color: #9fa7b3">16:40</span>
+<span style="position: absolute; left: 467px; top: 252px; font-size: 11px; color: #9fa7b3">16:45</span>
+<span style="position: absolute; left: 654px; top: 252px; font-size: 11px; color: #9fa7b3">16:50</span>
+</div>
+
+<sc-for list="{{charts}}" as="ch" hint-placeholder-count="9">
+<div style="position: absolute; left: {{ch.x}}px; top: {{ch.y}}px; width: {{ch.w}}px; height: {{ch.h}}px; box-sizing: border-box; background: #181b1f; border: 1px solid #24262c; border-radius: 2px">
+<div style="position: absolute; left: 10px; top: 8px; font-size: 14px; font-weight: 500; color: #ccccdc">{{ch.title}} ⓘ</div>
+<div style="position: absolute; left: {{ch.left}}px; top: 44px; width: {{ch.pw}}px; height: {{ch.ph}}px">
+<sc-for list="{{ch.grid}}" as="gl" hint-placeholder-count="5"><div style="position: absolute; left: 0; right: 0; top: {{gl.y}}px; border-top: 1px solid #24262c"></div></sc-for>
+<sc-for list="{{ch.vgrid}}" as="vl" hint-placeholder-count="10"><div style="position: absolute; top: 0; bottom: 0; left: {{vl.x}}px; border-left: 1px solid #1f2126"></div></sc-for>
+<sc-for list="{{ch.areas}}" as="ar" hint-placeholder-count="1"><svg width="{{ar.pw}}" height="{{ar.ph}}" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible"><path d="{{ar.d}}" fill="{{ar.fill}}" stroke="none"></path></svg></sc-for>
+<sc-for list="{{ch.refs}}" as="rf" hint-placeholder-count="1"><div style="position: absolute; left: 0; right: 0; top: {{rf.y}}px; border-top: 2px dashed {{rf.color}}"></div></sc-for>
+<sc-for list="{{ch.marks}}" as="mk" hint-placeholder-count="1"><div style="position: absolute; top: 0; bottom: 0; left: {{mk.x}}px; border-left: 2px dashed {{mk.color}}"></div></sc-for>
+<sc-for list="{{ch.lines}}" as="ln" hint-placeholder-count="2"><svg width="{{ln.pw}}" height="{{ln.ph}}" aria-hidden="true" style="position: absolute; left: 0; top: 0; overflow: visible"><path class="{{ln.cls}}" pathLength="1" d="{{ln.d}}" fill="none" stroke="{{ln.color}}" stroke-width="2" stroke-linejoin="round"></path></svg></sc-for>
+</div>
+<sc-for list="{{ch.ylabels}}" as="yl" hint-placeholder-count="5"><span style="position: absolute; left: 0; width: {{yl.w}}px; top: {{yl.top}}px; text-align: right; font-size: 11px; color: #9fa7b3; white-space: nowrap">{{yl.label}}</span></sc-for>
+<sc-for list="{{ch.rlabels}}" as="rl" hint-placeholder-count="0"><span style="position: absolute; left: {{rl.left}}px; top: {{rl.top}}px; font-size: 11px; color: #9fa7b3; white-space: nowrap">{{rl.label}}</span></sc-for>
+<sc-for list="{{ch.xlabels}}" as="xl" hint-placeholder-count="10"><span style="position: absolute; left: {{xl.left}}px; top: {{xl.top}}px; width: 56px; text-align: center; font-size: 11px; color: #9fa7b3">{{xl.label}}</span></sc-for>
+<div style="position: absolute; left: 10px; bottom: 6px; display: flex; gap: 16px; font-size: 11px; color: #ccccdc">
+<sc-for list="{{ch.legend}}" as="lg" hint-placeholder-count="3"><span style="display: flex; align-items: center; gap: 6px"><span style="width: 14px; height: 4px; border-radius: 2px; background: {{lg.color}}"></span>{{lg.label}}</span></sc-for>
+</div>
+</div>
+</sc-for>
+
+<div style="position: absolute; left: {{spot.x}}px; top: {{spot.y}}px; width: {{spot.w}}px; height: {{spot.h}}px; border-radius: 4px; box-shadow: 0 0 0 6000px rgba(6,8,11,{{spot.dim}}); outline: 3px solid rgba(69,210,213,{{spot.line}}); outline-offset: 4px; pointer-events: none"></div>
+<sc-for list="{{rings}}" as="rg" hint-placeholder-count="1">
+<div class="ring" style="position: absolute; left: {{rg.x}}px; top: {{rg.y}}px; width: {{rg.w}}px; height: {{rg.h}}px; box-sizing: border-box; border: 3px solid #45d2d5; border-radius: 8px; opacity: {{rg.op}}; pointer-events: none"></div>
+</sc-for>
+</div>
+
+<sc-if value="{{card.right}}" hint-placeholder-val="{{true}}">
+<div style="position: absolute; left: 1124px; top: 24px; width: 452px; height: 852px; display: flex; align-items: center; pointer-events: none">
+<div style="width: 452px; box-sizing: border-box; padding: 28px 30px 24px; border-radius: 14px; background: rgba(23,36,43,0.97); border: 1px solid #3b545b; box-shadow: 0 20px 50px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 14px; opacity: {{card.op}}">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 13px; letter-spacing: 0.12em; color: #45d2d5">{{card.step}}</span>
+<span style="font-size: 30px; font-weight: 700; line-height: 1.15; color: #edfafa">{{card.title}}</span>
+<span style="font-size: 17px; line-height: 1.55; color: #c3d3d5">{{card.body}}</span>
+<sc-if value="{{card.hasSw}}" hint-placeholder-val="{{false}}">
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 4px">
+<sc-for list="{{card.sw}}" as="s" hint-placeholder-count="6"><span style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #dce7e8"><span style="width: 16px; height: 16px; border-radius: 3px; background: {{s.c}}; flex: none"></span>{{s.l}}</span></sc-for>
+</div>
+</sc-if>
+<span style="font-size: 14px; color: #8fa7ac">{{card.foot}}</span>
+<div style="height: 3px; border-radius: 2px; background: #2b3e46"><div style="height: 3px; border-radius: 2px; background: #45d2d5; width: {{card.prog}}"></div></div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{card.bottom}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; left: 24px; top: 664px; width: 1552px; height: 212px; box-sizing: border-box; padding: 26px 32px 22px; border-radius: 14px; background: rgba(23,36,43,0.97); border: 1px solid #3b545b; box-shadow: 0 20px 50px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 14px; opacity: {{card.op}}; pointer-events: none">
+<div style="flex: 1; display: grid; grid-template-columns: 360px 1fr; gap: 40px">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<span style="font-family: 'Noto Sans Mono', monospace; font-size: 13px; letter-spacing: 0.12em; color: #45d2d5">{{card.step}}</span>
+<span style="font-size: 30px; font-weight: 700; line-height: 1.15; color: #edfafa">{{card.title}}</span>
+</div>
+<span style="font-size: 18px; line-height: 1.6; color: #c3d3d5">{{card.body}}</span>
+</div>
+<div style="height: 3px; border-radius: 2px; background: #2b3e46"><div style="height: 3px; border-radius: 2px; background: #45d2d5; width: {{card.prog}}"></div></div>
+</div>
+</sc-if>
+</div>
+
+<sc-if value="{{ctl.show}}" hint-placeholder-val="{{true}}">
+<div style="height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 20px; background: #101a20; border-top: 1px solid #22353d; color: #dce7e8">
+<button type="button" onClick="{{ctl.prev}}" aria-label="Previous panel" style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid #3b545b; background: #1d2d35; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#45d2d5" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></button>
+<button type="button" onClick="{{ctl.toggle}}" aria-label="{{ctl.playLabel}}" style="width: 40px; height: 40px; border-radius: 50%; border: 1px solid #3b545b; background: #1d2d35; display: flex; align-items: center; justify-content: center; cursor: pointer">
+<sc-if value="{{ctl.playing}}" hint-placeholder-val="{{true}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="#45d2d5" aria-hidden="true"><rect x="5" y="4" width="5" height="16" rx="1"></rect><rect x="14" y="4" width="5" height="16" rx="1"></rect></svg></sc-if>
+<sc-if value="{{ctl.paused}}" hint-placeholder-val="{{false}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="#45d2d5" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg></sc-if>
+</button>
+<button type="button" onClick="{{ctl.next}}" aria-label="Next panel" style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid #3b545b; background: #1d2d35; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#45d2d5" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg></button>
+<span style="width: 330px; font-size: 14px; color: #adbec1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ctl.label}}</span>
+<div style="flex: 1; display: flex; align-items: center; gap: 6px; justify-content: flex-end">
+<sc-for list="{{ctl.dots}}" as="dt" hint-placeholder-count="16"><button type="button" onClick="{{dt.go}}" aria-label="{{dt.aria}}" style="width: {{dt.w}}px; height: 10px; border-radius: 5px; border: 0; padding: 0; background: {{dt.bg}}; cursor: pointer"></button></sc-for>
+</div>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"autoplay":{"editor":"boolean","default":true},"showControls":{"editor":"boolean","default":true},"$preview":{"width":1600,"height":956}}'>
+const DW = 3040, DH = 2360;
+const T0 = 16 * 3600 + 37 * 60 + 29, SPAN = 848;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ease = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const pad2 = (n) => String(n).padStart(2, '0');
+const hms = (s) => pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60)) + ':' + pad2(s % 60);
+const interp = (pts) => (u) => {
+  if (u <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) { if (u <= pts[i][0]) { const a = pts[i - 1], b = pts[i]; return a[1] + (b[1] - a[1]) * (u - a[0]) / (b[0] - a[0]); } }
+  return pts[pts.length - 1][1];
+};
+const scaled = (fn, k) => (u) => fn(u) * k;
+const zero = () => 0;
+
+const OFF = [[0, 0], [.041, 6], [.082, 18], [.118, 20], [.155, 18], [.191, 10], [.223, 11], [.273, 36], [.305, 40], [.336, 40], [.364, 17], [.395, 14], [.464, 57], [.5, 58], [.536, 58], [.573, 36], [.6, 18], [.636, 56], [.664, 76], [.7, 81], [.727, 79], [.764, 36], [.777, 19], [.795, 39], [.827, 88], [.85, 100], [.882, 100], [.9, 99], [.927, 72], [.955, 36], [.982, 6], [1, 0]];
+const COMP = OFF.filter((p) => p[0] <= .636).map((p) => [p[0], p[1] * 0.99]).concat([[.664, 72], [.7, 75], [.727, 74], [.764, 34], [.777, 18], [.795, 36], [.827, 66], [.85, 76], [.882, 77], [.9, 75], [.927, 60], [.955, 30], [.982, 5], [1, 0]]);
+const offered = interp(OFF);
+const completed = interp(COMP);
+const rejected = interp([[0, 0], [.636, 0], [.664, 3], [.7, 6], [.727, 5], [.764, 2], [.777, .5], [.795, 2], [.827, 14], [.85, 20], [.882, 20], [.9, 20], [.927, 11], [.955, 5], [.982, 1], [1, 0]]);
+const refused = interp([[0, 0], [.8, 0], [.827, 3], [.85, 4], [.9, 4], [.955, 1], [1, 0]]);
+const ttft99 = interp([[0, .1], [.3, .12], [.45, .2], [.55, .35], [.6, .5], [.64, .9], [.68, 1.5], [.7, 1.62], [.72, 1.78], [.74, 1.85], [.76, 1.4], [.78, .9], [.8, .95], [.85, 1.1], [.9, 1.28], [.95, 1.3], [1, 1.3]]);
+const tpot99 = interp([[0, 15], [.55, 15], [.58, 22], [.65, 23], [.72, 25], [.76, 29], [.8, 30], [.85, 28], [.9, 31], [1, 31]]);
+const pressD = interp([[0, .2], [.6, .3], [.62, 2], [.63, 13], [.645, 4], [.66, 8], [.675, 2], [.69, 12], [.71, 5], [.73, .5], [.8, .4], [.82, 4], [.835, 1.5], [.855, 20], [.875, .5], [1, .3]]);
+const seat = interp([[0, 0], [.02, 6], [.62, 6], [.64, 15], [.66, 16.5], [.68, 16], [.7, 14], [.715, 13], [.73, 6.5], [.75, 19], [.78, 20], [1, 20]]);
+const ended = interp([[0, 0], [.6, 0], [.63, 3], [.66, 6], [.68, 10], [.7, 7], [.72, 6], [.74, .5], [.76, 1], [.8, 10], [.84, 18], [.86, 20], [.88, 14], [.9, 4], [.92, 0], [1, 0]]);
+const lag = interp([[0, 0], [.6, 0], [.62, .35], [.63, 0], [.68, 0], [.69, .2], [.7, 3.1], [.71, .2], [.72, .85], [.73, .1], [.8, .1], [.84, .5], [.86, .2], [.9, .15], [.92, 0], [1, 0]]);
+const busy = (u) => Math.min(1.02, 0.02 + offered(u) / 92);
+const poolP = interp([[0, 4], [.08, 4], [.1, 3], [1, 3]]);
+const poolD = interp([[0, 4], [.08, 4], [.1, 5], [1, 5]]);
+
+const TEAL = '#299E97', BLUE = '#336B9E';
+const DEFS = [
+  { id: 'outcomes', title: 'Request outcomes', x: 14, y: 836, w: 2256, h: 292, left: 86, ymax: 120, yt: [0, 20, 40, 60, 80, 100, 120].map((v) => [v, v + ' req/s']), xstep: 30,
+    series: [{ fn: offered, c: '#5794F2', area: 'rgba(87,148,242,0.07)' }, { fn: completed, c: '#56A64B', area: 'rgba(86,166,75,0.07)' }, { fn: refused, c: '#F2CC0C' }, { fn: rejected, c: '#FF9830' }, { fn: zero, c: '#D44A3A' }],
+    marks: [{ u: .004, c: '#F2CC0C' }],
+    legend: [['offered', '#5794F2'], ['completed', '#56A64B'], ['failed', '#D44A3A'], ['refused (predictive)', '#F2CC0C'], ['rejected (capacity)', '#FF9830'], ['expired', '#C4162A'], ['cancelled', '#FFEE52'], ['invalid', '#FF7383']] },
+  { id: 'pool', title: 'Pool assignments', x: 14, y: 1140, w: 3010, h: 292, left: 60, ymax: 5.4, yt: [0, 1, 2, 3, 4, 5].map((v) => [v, String(v)]), xstep: 30,
+    series: [{ fn: poolP, c: TEAL, area: 'rgba(41,158,151,0.07)' }, { fn: poolD, c: BLUE, area: 'rgba(51,107,158,0.07)' }, { fn: zero, c: '#D44A3A' }], legend: [] },
+  { id: 'ttft', title: 'Time to first token', x: 14, y: 1444, w: 996, h: 292, left: 70, ymax: 2.4, yt: [[0, '0 s'], [.5, '500 ms'], [1, '1 s'], [1.5, '1.5 s'], [2, '2 s']], xstep: 60,
+    series: [{ fn: scaled(ttft99, .42), c: '#1A847E' }, { fn: scaled(ttft99, .78), c: TEAL }, { fn: ttft99, c: '#49B7B0' }], refs: [{ v: 2.1, c: '#D44A3A' }],
+    legend: [['p50', '#1A847E'], ['p95', TEAL], ['p99', '#49B7B0'], ['SLO', '#D44A3A']] },
+  { id: 'tpot', title: 'Time per output token', x: 1022, y: 1444, w: 994, h: 292, left: 70, ymax: 50, yt: [0, 10, 20, 30, 40, 50].map((v) => [v, v + ' ms']), xstep: 60,
+    series: [{ fn: scaled(tpot99, .78), c: '#21537E' }, { fn: scaled(tpot99, .93), c: BLUE }, { fn: tpot99, c: '#69A2D8' }], refs: [{ v: 45, c: '#D44A3A' }],
+    legend: [['p50', '#21537E'], ['p95', BLUE], ['p99', '#69A2D8'], ['SLO', '#D44A3A']] },
+  { id: 'tok', title: 'Token throughput', x: 2028, y: 1444, w: 996, h: 292, left: 60, ymax: 45000, yt: [[0, '0'], [10000, '10 K'], [20000, '20 K'], [30000, '30 K'], [40000, '40 K']], xstep: 60,
+    series: [{ fn: scaled(offered, 420), c: TEAL, area: 'rgba(41,158,151,0.08)' }, { fn: scaled(completed, 190), c: BLUE, area: 'rgba(51,107,158,0.08)' }],
+    legend: [['Prefill/s', TEAL], ['Decode/s', BLUE]] },
+  { id: 'pressure', title: 'Pool pressure', x: 14, y: 1748, w: 996, h: 292, left: 50, ymax: 22, yt: [0, 5, 10, 15, 20].map((v) => [v, String(v)]), xstep: 60,
+    series: [{ fn: pressD, c: BLUE }, { fn: () => 0.08, c: TEAL }], refs: [{ v: 1, c: '#F2CC0C' }], legend: [['decode', BLUE], ['prefill', TEAL]] },
+  { id: 'wait', title: 'Request waiting time', x: 1022, y: 1748, w: 994, h: 292, left: 60, ymax: 22, yt: [0, 5, 10, 15, 20].map((v) => [v, v + ' s']), xstep: 60,
+    series: [{ fn: () => 0.05, c: '#A352CC' }, { fn: seat, c: '#CA95E5', area: 'rgba(202,149,229,0.07)' }], legend: [['admission wait p95', '#A352CC'], ['seat time p95', '#CA95E5']] },
+  { id: 'retries', title: 'Retries and early exits', x: 2028, y: 1748, w: 996, h: 292, left: 72, ymax: 22, yt: [0, 5, 10, 15, 20].map((v) => [v, v + ' ops/s']), xstep: 60,
+    series: [{ fn: zero, c: '#B877D9' }, { fn: ended, c: '#8AB8FF', area: 'rgba(138,184,255,0.08)' }], legend: [['retry attempts', '#B877D9'], ['ended before sizing', '#8AB8FF']] },
+  { id: 'loop', title: 'Router event loop', x: 14, y: 2052, w: 3010, h: 288, left: 60, right: 56, ymax: 1.2, yt: [0, .2, .4, .6, .8, 1, 1.2].map((v) => [v, Math.round(v * 100) + '%']), rmax: 3.3, rt: [[0, '0 s'], [1, '1 s'], [2, '2 s'], [3, '3 s']], xstep: 30,
+    series: [{ fn: busy, c: '#CA95E5', area: 'rgba(202,149,229,0.08)' }, { fn: lag, c: '#A352CC', ax: 'r' }], legend: [['busy', '#CA95E5'], ['lag (right axis)', '#A352CC']] }
+];
+const GEO = {};
+function build(def) {
+  const right = def.right || 16;
+  const pw = def.w - def.left - right, ph = def.h - 100;
+  GEO[def.id] = { def, pw, ph };
+  const Y = (v) => ph - v / def.ymax * ph;
+  const YR = (v) => ph - v / (def.rmax || 1) * ph;
+  const N = 240;
+  const pathOf = (fn, yf) => { let d = ''; for (let i = 0; i <= N; i++) { const u = i / N; d += (i ? 'L' : 'M') + (u * pw).toFixed(1) + ',' + yf(fn(u)).toFixed(1); } return d; };
+  const xl = [], vg = [];
+  const first = Math.ceil((T0 + 8) / def.xstep) * def.xstep;
+  for (let s = first; s <= T0 + SPAN - 8; s += def.xstep) { const u = (s - T0) / SPAN; xl.push({ left: (def.left + u * pw - 28).toFixed(1), top: 44 + ph + 6, label: hms(s) }); vg.push({ x: (u * pw).toFixed(1) }); }
+  return {
+    id: def.id, title: def.title, x: def.x, y: def.y, w: def.w, h: def.h, left: def.left, pw, ph,
+    grid: def.yt.map((t) => ({ y: Y(t[0]).toFixed(1) })), vgrid: vg,
+    areas: def.series.filter((s) => s.area).map((s) => ({ pw, ph, fill: s.area, d: pathOf(s.fn, s.ax === 'r' ? YR : Y) + 'L' + pw + ',' + ph + 'L0,' + ph + 'Z' })),
+    lineBase: def.series.map((s) => ({ pw, ph, color: s.c, d: pathOf(s.fn, s.ax === 'r' ? YR : Y) })),
+    refs: (def.refs || []).map((r) => ({ y: Y(r.v).toFixed(1), color: r.c })),
+    marks: (def.marks || []).map((m) => ({ x: (m.u * pw).toFixed(1), color: m.c })),
+    ylabels: def.yt.map((t) => ({ w: def.left - 8, top: (44 + Y(t[0]) - 8).toFixed(1), label: t[1] })),
+    rlabels: (def.rt || []).map((t) => ({ left: def.left + pw + 8, top: (44 + YR(t[0]) - 8).toFixed(1), label: t[1] })),
+    xlabels: xl,
+    legend: def.legend.map((l) => ({ label: l[0], color: l[1] }))
+  };
+}
+const CHARTS = DEFS.map(build);
+function ringU(id, u0, u1, v0, v1) {
+  const g = GEO[id], d = g.def;
+  const Y = (v) => g.ph - v / d.ymax * g.ph;
+  return [d.x + d.left + u0 * g.pw, d.y + 44 + Y(v0), (u1 - u0) * g.pw, Y(v1) - Y(v0)];
+}
+
+const ENG = [
+  ['n1', 'Decode', 26, 24, 5.1, '2 K'], ['n2', 'Prefill', 2, 1, 0.4, '8 K'], ['n3', 'Prefill', 2, 0, 0.4, '6 K'], ['n4', 'Prefill', 2, 0, 0.2, '7 K'],
+  ['n5', 'Decode', 27, 26, 5.3, '2 K'], ['n6', 'Decode', 26, 24, 5.0, '2 K'], ['n7', 'Decode', 27, 23, 4.8, '2 K'], ['n8', 'Decode', 29, 22, 4.7, '2 K']
+].map((r) => ({ id: r[0], role: r[1], roleBg: r[1] === 'Prefill' ? TEAL : BLUE, res: String(r[2]), resW: (r[2] / 29 * 100).toFixed(1) + '%', run: String(r[3]), runW: (r[3] / 29 * 100).toFixed(1) + '%', kv: r[4].toFixed(1) + '%', kvW: Math.max(0.8, r[4]).toFixed(1) + '%', tok: r[5] }));
+const HB = 928;
+const HIST = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'].map((id, i) => {
+  let segs;
+  if (id === 'n1') segs = [{ left: 40, width: (.085 * HB).toFixed(1), bg: TEAL, label: 'Prefill', justify: 'flex-start' }, { left: (40 + .085 * HB).toFixed(1), width: ((1 - .085) * HB).toFixed(1), bg: BLUE, label: 'Decode', justify: 'center' }];
+  else { const p = ['n2', 'n3', 'n4'].indexOf(id) >= 0; segs = [{ left: 40, width: HB, bg: p ? TEAL : BLUE, label: p ? 'Prefill' : 'Decode', justify: 'center' }]; }
+  return { id, top: 44 + i * 40, segs, tail: ['n2', 'n3', 'n4'].indexOf(id) >= 0 ? TEAL : BLUE };
+});
+
+const STOPS = [
+  { d: 10, frame: [0, 0, DW, DH], spot: null, card: 'right', title: 'Reading the Narwhal Orchestrator dashboard', body: 'The dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine, outcome and pool panels show how the fleet carries the load. The latency, queue, retry and event-loop panels at the bottom show where delays and failures start.', foot: 'Observability › Reading the dashboard' },
+  { d: 9, frame: [0, 30, 1130, 240], spot: [12, 56, 708, 36], card: 'right', title: 'Selectors', body: 'Router scopes every panel built from router metrics. Engine detail narrows the engine table, Engine role history and Expired KV by producer to the engines you pick. Both default to All. Fleet control opens the operator console in a new tab.' },
+  { d: 10, frame: [0, 250, 1780, 172], spot: [14, 262, 1752, 148], card: 'bottom', title: 'Requests', body: 'Within SLO is the share of ended requests that met both the TTFT and TPOT SLOs: green from 95%, yellow from 90%, red below. Dropped is the share refused, rejected, failed or expired, red from 5%. At 89.8% and 10.2%, this window missed its SLOs.', rings: [[22, 334, 193, 34], [794, 334, 193, 34]] },
+  { d: 9.5, frame: [1766, 250, 1274, 172], spot: [1776, 262, 1248, 148], card: 'bottom', title: 'Latency and Router', body: 'TTFT / SLO and TPOT / SLO give the 95th percentile as a share of the SLO the router ran with: green below 80%, yellow to 100%, red past it. Router shows Ready while it admits requests, and how many Narwhal alerts are firing now.', rings: [[1784, 334, 424, 34]] },
+  { d: 10, frame: [0, 404, 2032, 432], spot: [14, 416, 2006, 408], card: 'bottom', title: 'Engines', body: 'One row per engine. Role is its current pool and State its most serious state, from Serving through Probation, Draining and Ejected to Unreachable and Restarting. Resident and vLLM running bars scale to the busiest engine. KV cache turns amber from 80% and red from 95%.' },
+  { d: 9.5, frame: [2020, 404, 1020, 432], spot: [2030, 416, 994, 408], card: 'right', title: 'Engine role history', body: 'The same engines in the same order, over time. Teal is Prefill, blue is Decode and violet is Colocated, so a change of colour is a role flip. Here n1 started in prefill and flipped to decode at 16:38:40. Out-of-service periods take the colour of the engine’s state.', rings: [[2066, 456, 200, 44]] },
+  { d: 10.5, frame: [0, 824, 2290, 316], spot: [14, 836, 2256, 292], card: 'bottom', charts: ['outcomes'], title: 'Request outcomes', body: 'In a healthy fleet, completed follows offered and every other series stays near zero. When a gap opens, the series rising inside it shows where the missing requests went: here rejected (capacity) and refused (predictive) climb in the two heaviest waves. A dashed marker shows when an alert starts firing.', ringU: ['outcomes', .79, .94, 106, 0] },
+  { d: 9, frame: [2270, 824, 770, 316], spot: [2280, 836, 744, 292], card: 'right', title: 'Fleet events', body: 'Each Narwhal alert gets its own row, with one row per engine for NarwhalEngineDown. A bar marks when the alert fires: red for a page, yellow for a warning. Here NarwhalUnservedRising fired as a warning early in the window.' },
+  { d: 9.5, frame: [0, 1128, 1500, 316], spot: [14, 1140, 3010, 292], card: 'bottom', charts: ['pool'], title: 'Pool assignments', body: 'How many engines serve each phase: teal counts prefill, blue counts decode and red counts engines the breaker ejected. Mirrored steps in teal and blue mark a role flip. At 16:38:40 the role controller moved n1 to decode, so 4 and 4 became 3 and 5.', ringU: ['pool', .055, .13, 5.3, 2.6] },
+  { d: 10.5, frame: [0, 1432, 2030, 316], spot: [14, 1444, 2002, 292], card: 'bottom', charts: ['ttft', 'tpot'], title: 'Time to first token and per output token', body: 'p50, p95 and p99 from router arrival to the end of prefill, and between output tokens after prefill. The dashed red line is the SLO: when p95 crosses it, more than 5% of requests in that window missed it. TTFT p99 comes closest during the 80 req/s wave.', ringU: ['ttft', .66, .78, 2.0, 1.2] },
+  { d: 9, frame: [2018, 1432, 1022, 316], spot: [2028, 1444, 996, 292], card: 'right', charts: ['tok'], title: 'Token throughput', body: 'Prefill/s counts the prompt tokens the engines prefill. Decode/s counts the output tokens the router observes. Each load wave shows up as a plateau in both.' },
+  { d: 10, frame: [4, 1736, 1016, 316], spot: [14, 1748, 996, 292], card: 'right', charts: ['pressure'], title: 'Pool pressure', body: 'Each pool’s load as a fraction of its SLO target, with the target as a dashed yellow line at 1. When a pool stays at or above controller.thresholds.expand, 1.0 by default, reactive role control can move an engine into it. Decode load spikes far past its target in the last waves.', ringU: ['pressure', .61, .88, 21, 0] },
+  { d: 9.5, frame: [1012, 1736, 1014, 316], spot: [1022, 1748, 994, 292], card: 'right', charts: ['wait'], title: 'Request waiting time', body: 'The 95th-percentile wait at each queue stage, and seat time p95: how long a request holds an admission seat. A request whose admission wait reaches serving.queue_timeout_s expires with reason queue_timeout. Seat time climbs from 6 s to 20 s under the heaviest load.', ringU: ['wait', .61, .8, 21, 4] },
+  { d: 9, frame: [2018, 1736, 1022, 316], spot: [2028, 1748, 996, 292], card: 'right', charts: ['retries'], title: 'Retries and early exits', body: 'Retry attempts, retries denied, requests completed after a retry and requests that ended before input sizing. Retries stay at zero here, while requests ending before sizing rise with the two heaviest waves.' },
+  { d: 10, frame: [1290, 2040, 1750, 312], spot: [14, 2052, 3010, 288], card: 'bottom', charts: ['loop'], title: 'Router event loop', body: 'The selected router’s event-loop busy share on the left axis, and its lag past the latest monitoring deadline on the right. Busy share pins near 100% in the heaviest waves, and lag spikes to 3 s at 16:47.', ringU: ['loop', .685, .725, 1.18, 0] },
+  { d: 11.5, frame: [0, 0, DW, DH], spot: null, card: 'right', title: 'Where to look first', body: 'Start at the headline row. When Within SLO turns yellow or red, Request outcomes shows where the missing requests went. Fleet events and the engine table show which alert or engine was involved. The latency, pool pressure and queue panels show where delays and failures start.' }
+];
+STOPS.forEach((s) => { if (s.ringU) s.rings = [ringU.apply(null, s.ringU)]; });
+const STARTS = [];
+let acc = 0;
+STOPS.forEach((s) => { STARTS.push(acc); acc += s.d; });
+const T_END = acc;
+const AW = { right: [24, 24, 1076, 852], bottom: [24, 24, 1552, 620] };
+function camFor(s) {
+  const a = AW[s.card];
+  const f = s.frame;
+  const sc = Math.min(a[2] / f[2], a[3] / f[3], 1.35);
+  return { s: sc, x: a[0] + (a[2] - f[2] * sc) / 2 - f[0] * sc, y: a[1] + (a[3] - f[3] * sc) / 2 - f[1] * sc };
+}
+const lerp = (a, b, p) => a + (b - a) * p;
+
+class Component extends DCLogic {
+  componentDidMount() {
+    this._t = 0; this._last = null; this._acc = 0;
+    const step = (ts) => {
+      if (this._dead) return;
+      if (this._last === null) this._last = ts;
+      const dt = Math.min(0.1, (ts - this._last) / 1000);
+      this._last = ts;
+      if (this.isPlaying()) {
+        this._t = (this._t + dt) % T_END;
+        this._acc += dt;
+        if (this._acc >= 1 / 30) { this._acc = 0; this.setState({ t: this._t }); }
+      }
+      this._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  }
+  componentWillUnmount() { this._dead = true; if (this._raf) cancelAnimationFrame(this._raf); }
+  isPlaying() { const s = this.state || {}; return s.playing ?? (this.props.autoplay ?? true); }
+  seek(v) { this._t = clamp(v, 0, T_END - 0.01); this.setState({ t: this._t }); }
+  idxAt(t) { let i = 0; STARTS.forEach((s, k) => { if (t >= s) i = k; }); return i; }
+
+  renderVals() {
+    const st = this.state || {};
+    const t = st.t ?? 0;
+    const playing = this.isPlaying();
+    const i = this.idxAt(t);
+    const S = STOPS[i];
+    const P = STOPS[(i + STOPS.length - 1) % STOPS.length];
+    const lt = t - STARTS[i];
+    const p = ease(clamp(lt / 1.2, 0, 1));
+    const c0 = camFor(P), c1 = camFor(S);
+    const cam = { s: lerp(c0.s, c1.s, p).toFixed(4), x: lerp(c0.x, c1.x, p).toFixed(1), y: lerp(c0.y, c1.y, p).toFixed(1) };
+
+    let spot;
+    const full = [0, 0, DW, DH];
+    const a = P.spot || full, b = S.spot || full;
+    const dimA = P.spot ? 0.62 : 0, dimB = S.spot ? 0.62 : 0;
+    spot = { x: lerp(a[0], b[0], p).toFixed(1), y: lerp(a[1], b[1], p).toFixed(1), w: lerp(a[2], b[2], p).toFixed(1), h: lerp(a[3], b[3], p).toFixed(1), dim: lerp(dimA, dimB, p).toFixed(3), line: (lerp(P.spot ? 1 : 0, S.spot ? 1 : 0, p) * 0.9).toFixed(3) };
+
+    const rop = clamp((lt - 1.6) / 0.5, 0, 1) * (1 - clamp((lt - (S.d - 0.4)) / 0.3, 0, 1));
+    const rings = (S.rings || []).map((r) => ({ x: (r[0] - 6).toFixed(1), y: (r[1] - 6).toFixed(1), w: (r[2] + 12).toFixed(1), h: (r[3] + 12).toFixed(1), op: rop.toFixed(3) }));
+
+    const focus = S.charts || [];
+    const charts = CHARTS.map((c) => {
+      const on = focus.indexOf(c.id) >= 0;
+      return Object.assign({}, c, { lines: c.lineBase.map((l) => Object.assign({}, l, { cls: on ? 'draw' : '' })) });
+    });
+
+    const cop = clamp((lt - 0.7) / 0.5, 0, 1) * (1 - clamp((lt - (S.d - 0.35)) / 0.3, 0, 1));
+    const card = {
+      right: S.card === 'right', bottom: S.card === 'bottom', op: cop.toFixed(3),
+      step: pad2(i + 1) + ' / ' + pad2(STOPS.length), title: S.title, body: S.body, foot: S.foot || '',
+      hasSw: !!S.sw, sw: (S.sw || []).map((x) => ({ c: x[0], l: x[1] })),
+      prog: (clamp(lt / S.d, 0, 1) * 100).toFixed(1) + '%'
+    };
+
+    const ctl = {
+      show: this.props.showControls ?? true,
+      playing, paused: !playing, playLabel: playing ? 'Pause' : 'Play',
+      toggle: () => this.setState({ playing: !this.isPlaying() }),
+      prev: () => this.seek(STARTS[(i + STOPS.length - 1) % STOPS.length] + 0.01),
+      next: () => this.seek(STARTS[(i + 1) % STOPS.length] + 0.01),
+      label: pad2(i + 1) + ' / ' + pad2(STOPS.length) + ' · ' + S.title,
+      dots: STOPS.map((s, k) => ({ go: () => this.seek(STARTS[k] + 0.01), aria: 'Go to ' + s.title, w: k === i ? 28 : 10, bg: k === i ? '#45d2d5' : k < i ? '#2b8f8d' : '#3b545b' }))
+    };
+
+    return { cam, spot, rings, charts, eng: ENG, hist: HIST, card, ctl };
+  }
+}
+</script>
+<script>
+(() => {
+  const width = 1600;
+  const height = 956;
+
+  function fit() {
+    const root = document.getElementById("dc-root");
+    if (!root || !root.firstElementChild) {
+      requestAnimationFrame(fit);
+      return;
+    }
+    const scale = Math.min(1, window.innerWidth / width, window.innerHeight / height);
+    root.style.width = `${width * scale}px`;
+    root.style.height = `${height * scale}px`;
+    root.firstElementChild.style.transform = `scale(${scale})`;
+    root.firstElementChild.style.transformOrigin = "top left";
+  }
+
+  window.addEventListener("load", fit);
+  window.addEventListener("resize", fit);
+  fit();
+})();
+</script>
+</body>
+</html>
