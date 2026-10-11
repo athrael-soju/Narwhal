@@ -319,6 +319,21 @@ class DevTests(unittest.TestCase):
         merged = [merge_args[i + 1] for i, arg in enumerate(merge_args) if arg == "--merge"]
         self.assertEqual(set(merged), {str(run / f"profiles-{p}p{4 - p}d.json") for p in (1, 2, 3)})
 
+    def test_paired_four_engine_profiles_measure_one_split(self):
+        self.initialize()
+        fleet = lifecycle.read(self.root / "fleet.json")
+        spec = json.loads(json.dumps(self.spec))
+        for key in [key for key in spec["profile"] if key.startswith("neighbour_")]:
+            spec["profile"].pop(key)
+        run = self.root / "run-profiles"
+        run.mkdir()
+        (run / "profiles-2p2d.json").write_text('{"profiles": []}')
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, fleet, spec)
+        self.assertEqual([call.args[3] for call in command.call_args_list], ["profile-2p2d"])
+        self.assertNotIn("--colocated", command.call_args.args[2])
+        self.assertEqual((run / "profiles.json").read_text(), '{"profiles": []}')
+
     def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
         self.initialize()
         with (

@@ -91,7 +91,7 @@ narwhal dev status
 2. Checks that the ports are free.
 3. Starts the engines.
 4. Captures attestations and starts the attestation sidecars.
-5. Profiles every role split.
+5. Profiles every role split under neighbour load. A template without neighbour load, such as the SGLang template, profiles the engines in pairs at the opening split.
 6. Starts the router.
 
 `verify` runs these steps:
@@ -199,7 +199,7 @@ Stages and default budgets:
 | `native-start-shared` | Native shared startup | 180 seconds per engine |
 | `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
-| `profile-merge` | Merging the role-split profiles, with three or more engines | 300 seconds |
+| `profile-merge` | Merging the role-split profiles, with three or more engines under neighbour load | 300 seconds |
 | `preflight` | Directed KV preflight during `verify` | 300 seconds |
 
 Override the startup and preflight budgets:

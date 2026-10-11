@@ -242,8 +242,12 @@ def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
 
 def _profiles(run: Path, fleet: dict, spec: dict) -> None:
     count = len(fleet["engines"])
+    # A backend that profiles engines in pairs takes no neighbour load and measures both roles
+    # of each engine, so one split covers every split.
+    colocated = "neighbour_prefill_rps" in spec["profile"]
+    opening = sum(engine["role"] == "prefill" for engine in fleet["engines"])
     sources = []
-    for prefill in range(1, count):
+    for prefill in range(1, count) if colocated else (opening,):
         measured = json.loads(json.dumps(fleet))
         for index, engine in enumerate(measured["engines"]):
             engine["role"] = "prefill" if index < prefill else "decode"
@@ -252,8 +256,7 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         fleet_path = run / f"profile-{prefill}p{count - prefill}d.fleet.json"
         write(fleet_path, measured)
         args = ["--fleet", str(fleet_path)]
-        # A backend that profiles engines in pairs takes no neighbour load.
-        if "neighbour_prefill_rps" in spec["profile"]:
+        if colocated:
             args.append("--colocated")
         for key, value in spec["profile"].items():
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
