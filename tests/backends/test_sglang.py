@@ -17,6 +17,7 @@ from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
+from narwhal.runtime.role_switch import restore_roles
 from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Phase, Request, Role
@@ -87,29 +88,30 @@ class PrefixHitTests(unittest.TestCase):
 
 
 class ContextLimitTests(unittest.IsolatedAsyncioTestCase):
-    async def test_context_limit_reads_the_served_model(self):
+    async def test_context_limit_is_the_served_input_limit(self):
         paths = []
 
         async def answer(request):
             paths.append((request.method, request.url.path))
             return httpx.Response(
                 200,
-                json={
-                    "object": "list",
-                    "data": [
-                        {"id": "other", "max_model_len": 4096},
-                        {"id": "m", "max_model_len": 32768},
-                    ],
-                },
+                json={"served_model_name": "m", "context_length": 1024, "max_req_input_len": 1018},
             )
 
         dialect = load("sglang").dialect
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
             limit = await engine_context_limit(client, "http://e", "m", dialect)
-            self.assertEqual(limit, 32768)
-            self.assertEqual(paths, [("GET", "/v1/models")])
+            self.assertEqual(limit, 1018)
+            self.assertEqual(paths, [("GET", "/server_info")])
             with self.assertRaisesRegex(RuntimeError, "no valid max_model_len for absent"):
                 await engine_context_limit(client, "http://e", "absent", dialect)
+
+    def test_the_context_length_bounds_a_larger_input_limit(self):
+        payload = {"served_model_name": "m", "context_length": 1024, "max_req_input_len": 4000}
+        self.assertEqual(load("sglang").dialect.context_limit(payload, "m"), 1024)
+        self.assertIsNone(
+            load("sglang").dialect.context_limit({**payload, "context_length": 0}, "m")
+        )
 
 
 class ReassemblyTests(unittest.TestCase):
@@ -268,6 +270,37 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             await switcher.place(client, a, b)
             self.assertEqual(posted, ["b prefill", "a decode", "a prefill", "b decode"])
 
+    async def test_restored_roles_leave_no_stale_endpoint(self):
+        modes = {"a": "decode", "b": "prefill", "c": "decode"}
+        posted = []
+
+        def handle(request):
+            host = request.url.host
+            if request.method == "GET":
+                return httpx.Response(
+                    200, json={"internal_states": [{"disaggregation_mode": modes[host]}]}
+                )
+            role = json.loads(request.content)["new_role"]
+            modes[host] = role
+            posted.append(f"{host} {role}")
+            return httpx.Response(200, json={"success": True, "message": "ok"})
+
+        switcher = SglangRoleSwitch()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            self.assertIs(await switcher.role(client, "http://a"), Role.DECODE)
+            await restore_roles(
+                switcher,
+                client,
+                {
+                    "http://a": (Role.PREFILL, LAUNCH),
+                    "http://b": (Role.DECODE, LAUNCH),
+                    "http://c": (Role.DECODE, LAUNCH),
+                },
+            )
+        # b switched after a entered prefill; c may hold a's earlier endpoint.
+        self.assertEqual(posted, ["a prefill", "b decode", "c prefill", "c decode"])
+        self.assertEqual(modes, {"a": "prefill", "b": "decode", "c": "decode"})
+
     def test_only_mooncake_switches_roles(self):
         self.assertIsNotNone(BACKEND.role_switcher("mooncake"))
         self.assertIsNone(BACKEND.role_switcher("nixl"))
@@ -404,6 +437,15 @@ class LaunchTests(unittest.TestCase):
             record, model="/model", served_name="m", host="0.0.0.0", port=8000, kv_events=None
         )
         self.assertEqual(plan.option(args, "--max-running-requests"), "64")
+
+    def test_peers_reach_the_bootstrap_server_on_the_bind_address(self):
+        launcher = load("sglang").launcher()
+        native = launcher.engine_env("192.0.2.11", 5600, "", "127.0.0.1")
+        self.assertEqual(launcher.side_channel_address(native), ("127.0.0.1", 5600))
+        self.assertEqual(native["SGLANG_HOST_IP"], "192.0.2.11")
+        for wildcard in ("0.0.0.0", "::"):
+            env = launcher.engine_env("192.0.2.11", 5600, "", wildcard)
+            self.assertEqual(launcher.side_channel_address(env), ("192.0.2.11", 5600))
 
     def test_the_wrapper_adds_the_bootstrap_port_and_key(self):
         command = runtime.server_command(

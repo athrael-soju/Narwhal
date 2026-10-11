@@ -34,7 +34,9 @@ class VllmLauncher(EngineLauncher):
     def sequence_limit(self, runtime: dict) -> int:
         return discovery.sequence_limit(runtime.get("extra_args", []))
 
-    def engine_env(self, host: str, side_channel_port: int, api_key: str) -> dict[str, str]:
+    def engine_env(
+        self, host: str, side_channel_port: int, api_key: str, bind_host: str | None = None
+    ) -> dict[str, str]:
         return {
             "NIXL_HOST_IP": host,
             "VLLM_NIXL_SIDE_CHANNEL_HOST": host,

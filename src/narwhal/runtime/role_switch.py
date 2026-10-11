@@ -51,6 +51,10 @@ class RoleSwitcher(ABC):
         """Clear the transfer state `base` holds from earlier handoffs; it keeps `role`."""
         return None
 
+    async def role(self, client: httpx.AsyncClient, base: str) -> Role | None:
+        """The role `base` serves now, when the engine reports it."""
+        return None
+
 
 class RouterRoleSwitch(RoleSwitcher):
     requires_idle = False
@@ -67,6 +71,21 @@ class RouterRoleSwitch(RoleSwitcher):
 def engine_side(switcher: RoleSwitcher | None) -> RoleSwitcher | None:
     # A switcher that needs an idle engine changes the engine itself, not only the router.
     return switcher if switcher is not None and switcher.requires_idle else None
+
+
+async def restore_roles(
+    switcher: RoleSwitcher,
+    client: httpx.AsyncClient,
+    roles: Mapping[str, tuple[Role, Mapping[str, Any] | None]],
+) -> None:
+    """Serve each engine in `roles` as its role again, with no transfer state from before."""
+    ordered = sorted(roles.items(), key=lambda item: item[1][0] is not Role.PREFILL)
+    for base, (role, launch) in ordered:
+        await switcher.switch(client, base, role, launch)
+    producers = [base for base, (role, _) in ordered if role is Role.PREFILL]
+    for base, (role, launch) in ordered:
+        if role is Role.DECODE and any(switcher.stale_handoff(p, base) for p in producers):
+            await switcher.refresh(client, base, role, launch)
 
 
 async def place_pair(

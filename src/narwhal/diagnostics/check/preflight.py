@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import FleetConfig
+from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient
+from ...runtime.role_switch import RoleSwitcher, engine_side, restore_roles
+from ...types import Role
 from .engines import (
     colocated_restart_risk,
     gate_calibration,
@@ -20,6 +27,25 @@ from .evidence import check_directed_evidence, write_directed_evidence
 from .profiles import gate_profile, gate_profile_generation, gate_slo
 from .report import Report
 from .transfer import gate_consume, gate_produce
+
+
+async def _live_roles(
+    cfg: FleetConfig, live: set[str], switcher: RoleSwitcher
+) -> dict[str, tuple[Role, Mapping[str, Any] | None]]:
+    specs = [spec for spec in cfg.engines if spec.iid in live]
+    launches = await attested_launches(specs, timeout_s=cfg.health_timeout_s)
+    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
+    async with httpx.AsyncClient(
+        timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+    ) as control:
+        for spec in specs:
+            try:
+                role = await switcher.role(control, spec.url)
+            except (httpx.HTTPError, ValueError):
+                continue
+            if role is not None:
+                roles[spec.url] = (role, launches.get(spec.iid))
+    return roles
 
 
 async def run(
@@ -63,8 +89,13 @@ async def run(
         model=cfg.model,
         engine_api_key=cfg.resolve_engine_key(),
     )
+    # The gates switch engines to place each pair; a running router keeps the roles it set.
+    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
     try:
         live = await gate_reach(cfg, client, rep)
+        if switcher is not None:
+            roles = await _live_roles(cfg, live, switcher)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
         await gate_calibration(cfg, rep)
@@ -97,7 +128,16 @@ async def run(
                 cfg, store, rep, repeats, fleet_path, fleet_hash, profile_hash
             )
     finally:
-        await client.aclose()
+        try:
+            if switcher is not None and roles:
+                async with httpx.AsyncClient(
+                    timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                ) as control:
+                    await restore_roles(switcher, control, roles)
+        except (httpx.HTTPError, ValueError) as exc:
+            rep.fail(f"role restore: {type(exc).__name__}: {exc}")
+        finally:
+            await client.aclose()
 
     if evidence_out is not None:
         write_directed_evidence(

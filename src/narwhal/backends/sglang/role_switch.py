@@ -80,6 +80,12 @@ class SglangRoleSwitch(RoleSwitcher):
         await self.switch(client, base, other, launch)
         await self.switch(client, base, role, launch)
 
+    async def role(self, client: httpx.AsyncClient, base: str) -> Role | None:
+        info = await client.get(f"{base.rstrip('/')}/server_info")
+        info.raise_for_status()
+        mode = current_role(info.json())
+        return None if mode is None else Role(mode)
+
     async def switch(
         self,
         client: httpx.AsyncClient,

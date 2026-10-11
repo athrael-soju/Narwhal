@@ -388,6 +388,24 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     calls["consume"].assert_not_awaited()
                     self.assertEqual(len(report.skipped), 1)
 
+    async def test_orchestration_restores_the_roles_engines_served(self):
+        switcher, roles = object(), {"http://e0": ("prefill", None)}
+        client = SimpleNamespace(aclose=AsyncMock())
+        with (
+            patch.object(preflight, "EngineClient", return_value=client),
+            patch.object(preflight, "engine_side", return_value=switcher),
+            patch.object(preflight, "gate_reach", new=AsyncMock(return_value={"e0"})),
+            patch.object(preflight, "_live_roles", new=AsyncMock(return_value=roles)),
+            patch.object(preflight, "colocated_restart_risk", side_effect=RuntimeError("late")),
+            patch.object(preflight, "restore_roles", new=AsyncMock()) as restore,
+            self.assertRaisesRegex(RuntimeError, "late"),
+        ):
+            await preflight.run(self.cfg, mesh=False, skip_kv=False)
+        restore.assert_awaited_once()
+        self.assertEqual(restore.call_args.args[0], switcher)
+        self.assertEqual(restore.call_args.args[2], roles)
+        client.aclose.assert_awaited_once()
+
     async def test_orchestration_closes_client_on_gate_exception(self):
         client = SimpleNamespace(aclose=AsyncMock())
         with (

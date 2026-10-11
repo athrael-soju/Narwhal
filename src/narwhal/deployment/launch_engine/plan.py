@@ -156,6 +156,11 @@ def build(
     endpoint = urlsplit(env[f"NARWHAL_NODE_{node}_URL"])
     if endpoint.scheme != "http" or endpoint.port != port or not endpoint.hostname:
         raise ValueError("the engine URL must select HTTP and NARWHAL_ENGINE_PORT")
+    bind_host = (
+        endpoint.hostname
+        if backend == "native"
+        else ("::" if ":" in endpoint.hostname else "0.0.0.0")
+    )
     values = dict(runtime.get("environment", {}))
     values.update(record["environment"])
     gpu_transport = record["transfer"].get(
@@ -173,7 +178,9 @@ def build(
         {
             "UCX_TLS": f"{net_transport},sm,self,{gpu_transport}",
             "UCX_TCP_PORT_RANGE": env["NARWHAL_UCX_TCP_PORT_RANGE"],
-            **engine.engine_env(source, side_port, env.get("NARWHAL_ENGINE_API_KEY", "")),
+            **engine.engine_env(
+                source, side_port, env.get("NARWHAL_ENGINE_API_KEY", ""), bind_host
+            ),
         }
     )
     if any(any(c in value for c in "\r\n\0") for value in values.values()):
@@ -242,9 +249,7 @@ def build(
         record,
         model=model_ref,
         served_name=env["NARWHAL_ENGINE_MODEL_NAME"],
-        host=endpoint.hostname
-        if backend == "native"
-        else ("::" if ":" in endpoint.hostname else "0.0.0.0"),
+        host=bind_host,
         port=port,
         kv_events=kv_events,
         evict_peers=evict_peers,
