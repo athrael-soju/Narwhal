@@ -32,12 +32,14 @@ VALUE_OPTIONS = {
     "--mamba-ssm-dtype",
     "--max-mamba-cache-size",
     "--max-running-requests",
+    "--mamba-radix-cache-strategy",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
     "--disable-radix-cache",
     "--disable-cuda-graph",
     "--enable-mixed-chunk",
+    "--disable-overlap-schedule",
 }
 MANAGED_ENV = {
     "CUDA_VISIBLE_DEVICES",
