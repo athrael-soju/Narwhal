@@ -510,7 +510,11 @@ def main(argv: list[str] | None = None) -> int:
         return failure("narwhal-attest", f"attest engine {args.engine_base}", exc, 1)
     residency = feed = None
     if args.kv_events is not None:
-        residency = ResidencyIndex(args.model, document.contract.fingerprint())
+        residency = ResidencyIndex(
+            args.model,
+            document.contract.fingerprint(),
+            min_block_tokens=backend.kv_events.min_block_tokens,
+        )
         feed = ResidencyFeed(
             residency,
             f"ipc://{args.kv_events / EVENTS_SOCKET}",

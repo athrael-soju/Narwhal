@@ -61,6 +61,10 @@ def _event(item: Any) -> CacheEvent | None:
 
 
 class SglangKvEvents(KvEventDecoder):
+    # The launcher sets one-token pages. Per-token residency costs the router a lookup and an
+    # identity per cached token.
+    min_block_tokens = 64
+
     def decode_batch(self, payload: bytes) -> list[CacheEvent | None]:
         try:
             batch = msgpack.unpackb(payload, raw=False, strict_map_key=False)
