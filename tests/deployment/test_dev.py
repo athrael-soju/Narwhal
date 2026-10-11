@@ -192,6 +192,10 @@ class DevTests(unittest.TestCase):
         runtime = launch["engines"]["engine-1"]["runtime"]
         self.assertEqual(runtime["backend"], "sglang")
         self.assertIn("--mem-fraction-static", runtime["extra_args"])
+        self.assertEqual(
+            runtime["extra_args"][-3:],
+            ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
+        )
         self.assertEqual(lifecycle.instance(self.root)["model_path"], str(self.model))
         run = self.root / "run-profiles"
         run.mkdir()

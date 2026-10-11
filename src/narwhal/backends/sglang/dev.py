@@ -27,6 +27,7 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
             str(template["max_model_len"]),
             "--mem-fraction-static",
             str(memory_fraction),
+            *template.get("extra_args", []),
         ],
     }
 

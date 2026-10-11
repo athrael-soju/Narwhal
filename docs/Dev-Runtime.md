@@ -120,7 +120,7 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP, and the router switches their roles.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP, and the router switches their roles. The checkpoint is a hybrid SSM model, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
 1. Install Narwhal and the pinned packages in a fresh virtual environment:
 
