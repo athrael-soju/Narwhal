@@ -1,12 +1,22 @@
 import asyncio
 import itertools
 import json
+import tempfile
 import time
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
 from narwhal.engines.connector import RendezvousConnector
+from narwhal.profiling.store import ProfileStore
+from narwhal.scheduling.control import SLO, Thresholds
+from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.scheduler.placement import GlobalScheduler
+from narwhal.serving import execution
+from narwhal.types import Instance, Phase, Request, Role
+from tests.fixtures import profile
 from tests.serving.test_http_accounting import HttpHarness
 
 
@@ -82,6 +92,53 @@ class RendezvousServingTests(HttpHarness):
         for failure in row["attempt_failures"]:
             self.assertEqual(failure["phase"], "prefill")
         self.assert_released()
+
+
+class SeatedDecodeTests(unittest.TestCase):
+    def setUp(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profiles = ProfileStore(Path(folder) / "profiles.json")
+        self.monitor = InstanceMonitor(profiles=profiles)
+        for iid in ("d1", "d2"):
+            profiles.put(profile(iid))
+            self.monitor.add(Instance(iid, f"http://{iid}", Role.DECODE))
+        scheduler = GlobalScheduler(self.monitor, profiles, SLO(2.0, 0.05), Thresholds())
+        self.router = SimpleNamespace(
+            scheduler=scheduler,
+            profiles=profiles,
+            monitor=self.monitor,
+            sequence_limits={"d1": 2, "d2": 2},
+            controller=SimpleNamespace(
+                demand=SimpleNamespace(output_estimator=lambda: lambda r: r.wanted_len)
+            ),
+        )
+        self.request = Request("new", 128, wanted_len=64)
+
+    def resident(self, iid, rid, left):
+        request = Request(rid, 128, phase=Phase.DECODE, output_len=8, wanted_len=8 + left)
+        self.monitor.instances[iid].decode[rid] = request
+
+    def skipped(self, exclude=frozenset()):
+        return execution._seated_decode_engines(self.router, self.request, set(exclude))
+
+    def test_a_rendezvous_decode_leg_skips_engines_without_a_free_seat(self):
+        self.resident("d1", "r1", 100)
+        self.resident("d1", "r2", 100)
+        self.assertEqual(self.skipped(), {"d1"})
+        self.resident("d2", "r3", 100)
+        self.assertEqual(self.skipped(), {"d1"})
+        self.assertEqual(self.skipped({"d1"}), set())
+
+    def test_with_every_seat_taken_the_leg_goes_where_a_seat_frees_first(self):
+        self.resident("d1", "r1", 400)
+        self.resident("d1", "r2", 300)
+        self.resident("d2", "r3", 500)
+        self.resident("d2", "r4", 20)
+        self.assertEqual(self.skipped(), {"d1"})
+        # Legs already queued on d2 take its next freed seats.
+        self.resident("d2", "r5", 10)
+        self.resident("d2", "r6", 600)
+        self.assertEqual(self.skipped(), {"d2"})
 
 
 if __name__ == "__main__":
