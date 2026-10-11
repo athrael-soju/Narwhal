@@ -304,6 +304,15 @@ class LaunchTests(unittest.TestCase):
         # Images install CUDA builds of the transfer engine under suffixed names.
         cuda_build = {"sglang": "0.5.21", "mooncake-transfer-engine-cuda13": "0.3.13"}
         plan.validate_runtime(runtime_record(expected_packages=cuda_build))
+        plan.validate_runtime(
+            runtime_record(
+                extra_args=[
+                    "--mamba-radix-cache-strategy",
+                    "no_buffer",
+                    "--disable-overlap-schedule",
+                ]
+            )
+        )
         self.assertEqual(
             plan.transfer_package("mooncake", cuda_build), "mooncake-transfer-engine-cuda13"
         )
