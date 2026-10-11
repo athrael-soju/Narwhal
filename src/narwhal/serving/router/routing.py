@@ -259,6 +259,8 @@ class NarwhalRouter:
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
+        # A switch hold lapses after three controller steps without a request.
+        self.scheduler.switch_hold_s = 3 * cfg.reactive_step_s
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](

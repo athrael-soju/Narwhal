@@ -90,6 +90,8 @@ While an engine is ejected, quarantined, draining, or recovering, the role contr
 
 After an engine changes role, requests already running on it finish there.
 
+An SGLang engine on Mooncake changes roles only while it is idle. When no engine in the source role is idle, the role controller holds the least busy one out of new placements and changes its role once its requests finish. The hold ends when any engine changes roles, or after three `controller.reactive.step_s` intervals without the controller asking for the move again.
+
 A projected-TTFT recovery evaluation applies all the guards above. It also checks that every engine has a profile, that enough decode capacity remains, that there is enough evidence to consolidate, and which way decode demand is trending.
 
 ### Advisory mode

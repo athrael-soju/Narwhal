@@ -19,7 +19,7 @@ from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
 from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
-from narwhal.types import Role
+from narwhal.types import Phase, Request, Role
 from tests.fixtures import fleet
 
 BACKEND = load("sglang")
@@ -484,7 +484,8 @@ class RouterRoleTests(unittest.IsolatedAsyncioTestCase):
         router = self.router("mooncake", lambda request: httpx.Response(500))
         self.assertTrue(router.scheduler.switch_requires_idle)
         for inst in router.monitor.instances.values():
-            inst.decode["r"] = object()
+            inst.decode["r"] = Request("r", 128, phase=Phase.DECODE)
         donor, reason = router.scheduler.roles.planned_donor(Role.PREFILL, bypass_dwell=True)
         self.assertIsNone(donor)
         self.assertIn("idle", reason)
+        self.assertEqual(len(router.scheduler.held_for_switch()), 1)
