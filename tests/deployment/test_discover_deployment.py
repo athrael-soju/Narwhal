@@ -260,6 +260,33 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "engine-1: set DECODE_CUDA_GRAPH_MEMORY_GB"):
             build_records(hosts, env, observations, Path("/synthetic"))
 
+    def test_switching_sglang_engines_cache_ssm_state_without_the_extra_buffer(self):
+        env = sglang_environment(Path("/synthetic"))
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": sglang_observation(f"10.0.0.{i}") for i in (1, 2)}
+        for observed in observations.values():
+            observed["requires_ds_conv_state_layout"] = True
+
+        def extra_args() -> list[str]:
+            _, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+            return launches["engines"]["engine-1"]["runtime"]["extra_args"]
+
+        self.assertEqual(
+            extra_args(),
+            [
+                "--context-length",
+                "16384",
+                "--mamba-radix-cache-strategy",
+                "no_buffer",
+                "--disable-overlap-schedule",
+            ],
+        )
+        env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
+        self.assertEqual(extra_args(), ["--disable-radix-cache"])
+        env["NARWHAL_ENGINE_CONNECTOR"] = "nixl"
+        del env["NARWHAL_ENGINE_ARGS"]
+        self.assertEqual(extra_args(), ["--context-length", "16384"])
+
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
             def run(self, host, gate, script, payload=None):

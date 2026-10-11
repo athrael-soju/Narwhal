@@ -18,6 +18,18 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, 
         raise ValueError("ENGINE_ARGS must be a JSON array")
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
+    if (
+        connector in ROLE_SWITCH_CONNECTORS
+        and observed.get("requires_ds_conv_state_layout")
+        and "--disable-radix-cache" not in args
+        and "--mamba-radix-cache-strategy" not in args
+    ):
+        # A switched decode engine caches finished requests' SSM states. With the extra buffer a
+        # request needs three state slots, SGLang's decode admission evicts a cached state only
+        # when none is free, and the engine exits under load.
+        args += ["--mamba-radix-cache-strategy", "no_buffer"]
+        if "--disable-overlap-schedule" not in args:
+            args.append("--disable-overlap-schedule")
     environment = dict(observed["image_environment"])
     overrides = json.loads(setting("ENGINE_ENV", "{}"))
     if not isinstance(overrides, dict):
