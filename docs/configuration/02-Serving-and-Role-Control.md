@@ -158,6 +158,8 @@ The router derives each engine's prefill and decode seats from engine evidence:
 
 The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. Every SGLang launch sets `--max-running-requests`.
 
+An SGLang prefill engine holds a request until its decode engine takes the KV, and the decode engine takes it only into a free running slot. In an SGLang fleet the router therefore places a decode leg on an engine with a free decode seat while any decode engine has one, including with `serving.queue_capacity` at `0`.
+
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
 The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.

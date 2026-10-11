@@ -199,7 +199,7 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 | `engine_timeout` | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
 | `local_pool` | A wait for a router data connection to the engine reached `engine.pool_timeout_s`. |
 
-Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats.
+Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, except [SGLang decode legs](configuration/02-Serving-and-Role-Control.md#engine-seats), and an engine queues requests above its seats.
 
 Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 

@@ -45,7 +45,7 @@ from .records import (
 )
 from .response import RelayBatch, RequestStreamResponse
 from .retry import leg_failure_reason
-from .seats import decode_seat_map
+from .seats import decode_seat_map, decode_seats
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
@@ -167,14 +167,32 @@ async def _place(
             raise
         finally:
             state.waited("prefill" if prefill else "decode", router._clock() - began)
+    exclude = set(failed)
+    if not prefill and isinstance(router.engines.kv, RendezvousConnector):
+        exclude |= _seated_decode_engines(router, exclude)
     try:
-        inst = router.scheduler.schedule(req, exclude=set(failed))
+        inst = router.scheduler.schedule(req, exclude=exclude)
     except RuntimeError as exc:
         raise NoEngine(
             "no schedulable engines" + (" after prefill" if not prefill else "")
         ) from exc
     claim(inst)
     return inst
+
+
+def _seated_decode_engines(router: NarwhalRouter, exclude: set[str]) -> set[str]:
+    """Return the decode engines with every seat taken, or none when no engine has a free seat.
+
+    A rendezvous producer holds its prefill until the consumer admits the decode leg, so a leg
+    placed on a full engine waits on both engines.
+    """
+    pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
+    full = {
+        inst.iid
+        for inst in pool
+        if (limit := decode_seats(router, inst.iid)) and len(inst.decode) >= limit
+    }
+    return full if len(full) < len(pool) else set()
 
 
 def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:

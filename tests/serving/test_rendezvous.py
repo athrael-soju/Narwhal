@@ -1,12 +1,22 @@
 import asyncio
 import itertools
 import json
+import tempfile
 import time
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
 from narwhal.engines.connector import RendezvousConnector
+from narwhal.profiling.store import ProfileStore
+from narwhal.scheduling.control import SLO, Thresholds
+from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.scheduler.placement import GlobalScheduler
+from narwhal.serving import execution
+from narwhal.types import Instance, Phase, Request, Role
+from tests.fixtures import profile
 from tests.serving.test_http_accounting import HttpHarness
 
 
@@ -82,6 +92,28 @@ class RendezvousServingTests(HttpHarness):
         for failure in row["attempt_failures"]:
             self.assertEqual(failure["phase"], "prefill")
         self.assert_released()
+
+
+class SeatedDecodeTests(unittest.TestCase):
+    def test_a_rendezvous_decode_leg_skips_engines_without_a_free_seat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profiles = ProfileStore(Path(folder) / "profiles.json")
+        monitor = InstanceMonitor(profiles=profiles)
+        for iid in ("d1", "d2"):
+            profiles.put(profile(iid))
+            monitor.add(Instance(iid, f"http://{iid}", Role.DECODE))
+        scheduler = GlobalScheduler(monitor, profiles, SLO(2.0, 0.05), Thresholds())
+        router = SimpleNamespace(
+            scheduler=scheduler, profiles=profiles, sequence_limits={"d1": 2, "d2": 2}
+        )
+        for rid in ("r1", "r2"):
+            monitor.instances["d1"].decode[rid] = Request(rid, 128, phase=Phase.DECODE)
+        self.assertEqual(execution._seated_decode_engines(router, set()), {"d1"})
+        monitor.instances["d2"].decode["r3"] = Request("r3", 128, phase=Phase.DECODE)
+        self.assertEqual(execution._seated_decode_engines(router, set()), {"d1"})
+        monitor.instances["d2"].decode["r4"] = Request("r4", 128, phase=Phase.DECODE)
+        self.assertEqual(execution._seated_decode_engines(router, set()), set())
+        self.assertEqual(execution._seated_decode_engines(router, {"d2"}), set())
 
 
 if __name__ == "__main__":
