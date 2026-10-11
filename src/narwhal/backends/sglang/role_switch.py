@@ -51,16 +51,34 @@ class SglangRoleSwitch(RoleSwitcher):
         consumer: tuple[str, Mapping[str, Any] | None],
     ) -> None:
         await super().place(client, producer, consumer)
-        source, target = producer[0].rstrip("/"), consumer[0].rstrip("/")
-        generation = self._generations.setdefault(source, 0)
-        received = self._received.get(target)
+        if self.stale_handoff(producer[0], consumer[0]):
+            await self.refresh(client, consumer[0], Role.DECODE, consumer[1])
+        self.record_handoff(producer[0], consumer[0])
+
+    def stale_handoff(self, producer: str, consumer: str) -> bool:
         # A decode engine keeps each producer's transfer endpoint until it switches itself, and
         # a producer that enters prefill again listens on a new one. An engine this switcher has
         # not switched may hold endpoints from before it.
-        if received is None or received.get(source, generation) != generation:
-            await self.switch(client, target, Role.PREFILL, consumer[1])
-            await self.switch(client, target, Role.DECODE, consumer[1])
-        self._received[target][source] = generation
+        source, target = producer.rstrip("/"), consumer.rstrip("/")
+        received = self._received.get(target)
+        generation = self._generations.get(source, 0)
+        return received is None or received.get(source, generation) != generation
+
+    def record_handoff(self, producer: str, consumer: str) -> None:
+        if not self.stale_handoff(producer, consumer):
+            source, target = producer.rstrip("/"), consumer.rstrip("/")
+            self._received[target][source] = self._generations.get(source, 0)
+
+    async def refresh(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None = None,
+    ) -> None:
+        other = Role.DECODE if role is Role.PREFILL else Role.PREFILL
+        await self.switch(client, base, other, launch)
+        await self.switch(client, base, role, launch)
 
     async def switch(
         self,

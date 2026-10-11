@@ -61,6 +61,9 @@ class GlobalScheduler:
         # callback applies each change.
         self.switch_requires_idle = False
         self.on_flip: Callable[[Instance, Role], None] | None = None
+        # Whether a decode engine must refresh before it takes a handoff from a producer, by
+        # engine ID.
+        self.stale_handoff: Callable[[str, str], bool] | None = None
         # Refreshes a request's cache evidence older than the given seconds from current residency.
         self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
         self.roles = RoleChanges(self, flip_history)
@@ -349,7 +352,26 @@ class GlobalScheduler:
         if request.phase is not Phase.DECODE or producer is None:
             return set()
         pool = self.role_pool(Role.DECODE, self.live_instances(exclude=set(exclude)))
-        return {producer} if any(inst.iid != producer for inst in pool) else set()
+        excluded = {producer} if any(inst.iid != producer for inst in pool) else set()
+        stale = self.stale_handoff
+        if stale is not None:
+            held = {inst.iid for inst in pool if stale(producer, inst.iid)}
+            if any(inst.iid not in excluded | held for inst in pool):
+                excluded |= held
+        return excluded
+
+    def _fresh_producers(self, candidates: list[Instance]) -> list[Instance]:
+        """Return the prefill candidates with a decode engine that can take their handoff."""
+        stale = self.stale_handoff
+        if stale is None:
+            return candidates
+        decodes = self.role_pool(Role.DECODE, self.live_instances())
+        fresh = [
+            inst
+            for inst in candidates
+            if any(d.iid != inst.iid and not stale(inst.iid, d.iid) for d in decodes)
+        ]
+        return fresh or candidates
 
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
         """Place one phase without changing roles, excluding failed endpoints."""
@@ -365,6 +387,7 @@ class GlobalScheduler:
         if not candidates:
             raise RuntimeError("no schedulable instances for the pinned roles")
         if request.phase is Phase.PREFILL:
+            candidates = self._fresh_producers(candidates)
             request.cache_placement = None
             self.recheck_evidence(request, 0.0)
         probation = self.health.probation_set() if self.health is not None else None

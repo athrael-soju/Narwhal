@@ -31,6 +31,7 @@ health
 drains
 rollover
 readmission
+transfer_refresh
 liveness
 residency
 handoff

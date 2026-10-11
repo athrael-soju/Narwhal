@@ -38,6 +38,7 @@ from ..runtime.standby import (
     ready,
     standby_loop,
 )
+from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
@@ -207,6 +208,7 @@ def create_app(
         journal.open()
         if controls_fleet(router):
             await check_process_identities(router)
+            await refresh_idle_consumers(router)
         loop = asyncio.create_task(monitor_loop(router))
         lag = asyncio.create_task(measure_loop_lag(router))
         follow = asyncio.create_task(residency_loop(router))

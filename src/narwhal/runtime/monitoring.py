@@ -18,6 +18,7 @@ from .lifecycle.readmission import validate_readmission
 from .lifecycle.records import ValidationOutcome
 from .release import release_peers
 from .standby import controls_fleet
+from .transfer_refresh import refresh_consumers
 
 if TYPE_CHECKING:
     from ..serving.router.routing import NarwhalRouter
@@ -30,6 +31,7 @@ MONITOR_STAGES = (
     "drains",
     "rollover",
     "readmission",
+    "transfer_refresh",
     "liveness",
     "residency",
     "handoff",
@@ -413,6 +415,12 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.monitoring.fail("readmission", exc)
     else:
         router.monitoring.ok("readmission")
+    try:
+        refresh_consumers(router)
+    except Exception as exc:
+        router.monitoring.fail("transfer_refresh", exc)
+    else:
+        router.monitoring.ok("transfer_refresh")
     if router.cfg.liveness_every and router.scheduler.sweep_due(
         interval * router.cfg.liveness_every
     ):
