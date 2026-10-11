@@ -340,6 +340,7 @@ async def _prepare_rendezvous(
     router = state.router
     # The decode leg must be listening before the prefill leg pushes its KV.
     decode = await _place(state, prefill=False, claim=state.reserve)
+    seated_at = router._clock()
     state.begin_attempt()
     state.prefill_iid, state.decode_iid = prefill.iid, decode.iid
     router.note_handoff(prefill.iid, decode.iid)
@@ -362,6 +363,8 @@ async def _prepare_rendezvous(
         state.prefilled_at = router._clock()
         router.scheduler.record_answer(prefill.iid, "prefill")
         router.monitor.first_token(prefill.iid, state.request.rid)
+        # The decode seat is held from placement until the producer's KV arrives.
+        router.controller.demand.saw_seat_lead(state.prefilled_at - seated_at)
 
     state.phase = "decode"
     task = asyncio.create_task(run())

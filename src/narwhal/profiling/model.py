@@ -326,10 +326,12 @@ class Profile:
         output_tokens: float,
         *,
         correction: float = 1.0,
+        seat_lead_s: float = 0.0,
     ) -> float:
         """Return one decode engine's request capacity inside its measured domain.
 
         A batch below the smallest measured batch takes that batch's token interval.
+        `seat_lead_s` is how long each request holds its seat before decoding starts.
         """
         if (
             context_tokens <= 0
@@ -361,7 +363,7 @@ class Profile:
         )
         if interval <= 0 or interval > tpot_slo_s:
             return 0.0
-        return best / (output_tokens * interval)
+        return best / (output_tokens * interval + max(0.0, seat_lead_s))
 
 
 _OPTIONAL_DEFAULTS: dict[str, Any] = {

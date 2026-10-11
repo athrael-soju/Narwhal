@@ -430,6 +430,25 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(decision["unsized_offers"], 1)
         ControllerDecisionOut.model_validate(decision)
 
+    def test_a_rendezvous_seat_lead_raises_decode_demand(self) -> None:
+        fleet = self.fleet
+        demand = fleet.controller.demand
+        profiles = fleet.profiles.all_profiles()
+
+        def decode() -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=5.0, profiles=profiles
+            ).decode_engines
+
+        demand.residency = type(demand.residency)(
+            lambda: fleet.now, retained_s=60.0, bucket_s=1.0, merge=max
+        )
+        without = decode()
+        for _ in range(10):
+            demand.saw_seat_lead(1.0, at=fleet.now)
+        self.assertAlmostEqual(demand.seat_lead(fleet.now - 60.0), 1.0)
+        self.assertGreater(decode(), without)
+
     def test_held_decisions_report_beyond_profile_and_unsized_counts(self) -> None:
         fleet = self.fleet
         for row in fleet.profiles.all_profiles():

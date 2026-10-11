@@ -114,6 +114,10 @@ class DemandModel:
         self.residency = DemandWindow[float](
             clock, retained_s=window_s, bucket_s=bucket_s, merge=max
         )
+        # Seconds a rendezvous handoff holds its decode seat before decoding starts, to 10 ms.
+        self.seat_leads = DemandWindow[float](
+            clock, retained_s=window_s, bucket_s=bucket_s, merge=max
+        )
         self.last_demand = Demand(0.0, 0.0, 0, 0)
 
     def resolve_unsized(self, *, at: float, retain: bool) -> None:
@@ -182,6 +186,16 @@ class DemandModel:
         The server calls this once after the stream closes.
         """
         self.observed_decode.add((input_len, max(0, wanted_len), max(0, observed_len)), at=at)
+
+    def saw_seat_lead(self, seconds: float, *, at: float | None = None) -> None:
+        """Record how long a rendezvous decode seat waited for its prefill."""
+        self.seat_leads.add(round(max(0.0, seconds), 2), at=at)
+
+    def seat_lead(self, since: float) -> float:
+        """Return the mean decode seat lead since `since`, 0 without rendezvous handoffs."""
+        rows = list(self.seat_leads.rows(since))
+        count = sum(row.count for row in rows)
+        return sum(row.value * row.count for row in rows) / count if count else 0.0
 
     def sample(self) -> None:
         """Add current decode residency, in engine equivalents, to the demand window."""
@@ -295,6 +309,7 @@ class DemandModel:
         expected_decode = 0.0
         estimates = self._output_estimates() if estimates is None else estimates
         correction = self._decode_correction() if correction is None else correction
+        seat_lead = self.seat_lead(h0)
         capacities: dict[tuple[int, int], float | None] = {}
         exact_capacities: dict[tuple[int, int], float | None] = {}
         # Capacity bucket and exact shape per expected shape; None marks an unknown output.
@@ -323,12 +338,14 @@ class DemandModel:
                 continue
             key, exact = shapes
             if key not in capacities:
-                capacities[key] = self._shape_capacity(profiles, key, correction)
+                capacities[key] = self._shape_capacity(profiles, key, correction, seat_lead)
             capacity = capacities[key]
             if not capacity:
                 # A bucket without capacity prices the exact shape.
                 if exact not in exact_capacities:
-                    exact_capacities[exact] = self._shape_capacity(profiles, exact, correction)
+                    exact_capacities[exact] = self._shape_capacity(
+                        profiles, exact, correction, seat_lead
+                    )
                 capacity = exact_capacities[exact]
             if not capacity:
                 demand_complete = False
@@ -364,7 +381,11 @@ class DemandModel:
         return prices
 
     def _shape_capacity(
-        self, profiles: tuple[Profile, ...], key: tuple[int, int], correction: float
+        self,
+        profiles: tuple[Profile, ...],
+        key: tuple[int, int],
+        correction: float,
+        seat_lead: float = 0.0,
     ) -> float | None:
         """Return the mean decode request rate for one input and output length."""
         input_len, output_len = key
@@ -375,6 +396,7 @@ class DemandModel:
                 context,
                 output_len,
                 correction=correction,
+                seat_lead_s=seat_lead,
             )
             for p in profiles
         ]

@@ -129,6 +129,8 @@ Role floors, cooldown, dwell, KV limits, and the [movement and confirmation gate
 
 `recovery_decode_ratio` equals the observed decode pressure. Role control prices decode capacity from engine profiles without the router's [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats).
 
+With a rendezvous handoff, such as SGLang on Mooncake, a decode request holds its seat from placement until its prefill completes. Role control adds the mean of that wait over the demand window to each request's decode time when it prices decode capacity.
+
 Decisions held before candidate scoring, while they wait for demand history or fleet profiles, report `recovery_decode_ratio`.
 
 ### Consolidation evidence

@@ -77,6 +77,8 @@ class RendezvousServingTests(HttpHarness):
         self.assertTrue(legs["decode"][1]["stream"])
         self.assertTrue(legs["prefill"][0]["x-request-id"].endswith("-prefill"))
         self.assertTrue(legs["decode"][0]["x-request-id"].endswith("-decode"))
+        # The decode seat's wait for the producer counts toward decode demand.
+        self.assertEqual(self.router.controller.demand.seat_leads.count(), 1)
         self.assert_released()
 
     async def test_decode_without_its_prefill_ends_at_the_wait_bound(self):
