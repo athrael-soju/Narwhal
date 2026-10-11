@@ -162,10 +162,10 @@ class SglangPreflightTests(PairedEngines):
             )
         self.assertGreater(profile.tpot_intercept, 0)
         self.assertEqual(profile.kv_capacity_tokens, sim.MAX_MODEL_LEN)
-        # The peer decoded each prefill sample; the target decoded the warmup stream and each
-        # decode stream.
+        # The peer decoded each prefill sample; the target decoded a warmup cohort at each
+        # concurrency and each decode stream.
         self.assertEqual(peer.transfers, 3)
-        self.assertEqual(target.transfers, 7)
+        self.assertEqual(target.transfers, 9)
 
     async def test_paired_transport_passes_other_routes_through(self):
         pairing = PairedTransport(httpx.AsyncHTTPTransport(), self.client.kv, self.backend.dialect)

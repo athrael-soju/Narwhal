@@ -189,8 +189,10 @@ async def probe_decode(
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
         if not warmed:
-            # An engine's first decode can include kernel compilation; it stays out of the fit.
-            await _decode_cohort(client, url, model, prompt, input_len, 1, tokens, dialect)
+            # An engine's first decode at each batch size can include kernel compilation; it
+            # stays out of the fit.
+            for c in concurrency:
+                await _decode_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
             warmed = True
         for c in concurrency:
             replicates: list[tuple[float, float, float]] = []
