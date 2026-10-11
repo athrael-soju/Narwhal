@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -110,6 +111,8 @@ class ConsolidationSafety:
         self._risk_since: float | None = None
         self._risk_kind: str | None = None
         self._risk_events: dict[str, int] = {"first_token_timeout": 0, "p_to_d_recovery": 0}
+        # The last state snapshot, keyed by demand bucket and risk start.
+        self._snapshot: tuple[tuple[int, float | None], dict[str, object]] | None = None
 
     def note_risk_event(self, kind: str, at: float | None = None) -> None:
         """Restart the decode-consolidation evidence window after a risk event.
@@ -184,11 +187,19 @@ class ConsolidationSafety:
         )
 
     def consolidation_evidence_snapshot(self) -> dict[str, object]:
-        """Consolidation evidence and risk state for `/narwhal/state` and `/metrics`."""
+        """Consolidation evidence and risk state for `/narwhal/state` and `/metrics`.
+
+        Snapshots within one demand bucket and risk window reuse the first capture, so frequent
+        scrapes price the demand window once per bucket.
+        """
         now = self._clock()
-        evidence = self.capture(now, estimates=self.demand.current_estimates())
-        out = empty_demand_evidence()
-        out.update(evidence.snapshot())
+        key = (math.floor(now / self.demand.arrivals.bucket_s), self._risk_since)
+        if self._snapshot is None or self._snapshot[0] != key:
+            evidence = self.capture(now, estimates=self.demand.current_estimates())
+            snapshot = empty_demand_evidence()
+            snapshot.update(evidence.snapshot())
+            self._snapshot = (key, snapshot)
+        out = dict(self._snapshot[1])
         out["risk_events"] = dict(self._risk_events)
         return out
 

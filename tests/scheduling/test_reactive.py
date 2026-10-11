@@ -485,6 +485,45 @@ class MixedPressureTests(unittest.TestCase):
             fleet.controller.safety.consolidation_evidence_snapshot()
             rebuild.assert_called_once()
 
+    def test_state_snapshots_capture_evidence_once_per_demand_bucket(self) -> None:
+        fleet = self.fleet
+        safety = fleet.controller.safety
+        with patch.object(safety, "capture", wraps=safety.capture) as capture:
+            first = safety.consolidation_evidence_snapshot()
+            self.assertEqual(safety.consolidation_evidence_snapshot(), first)
+            self.assertEqual(capture.call_count, 1)
+            safety.note_risk_event("first_token_timeout", at=fleet.now)
+            self.assertEqual(
+                safety.consolidation_evidence_snapshot()["risk_events"]["first_token_timeout"], 1
+            )
+            self.assertEqual(capture.call_count, 2)
+            fleet.now += fleet.controller.demand.arrivals.bucket_s
+            safety.consolidation_evidence_snapshot()
+            self.assertEqual(capture.call_count, 3)
+
+    def test_demand_prices_each_arrival_shape_once_per_profile_set(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        for index in range(20):
+            demand.saw_arrival(400 + index, wanted_len=200, at=fleet.now)
+
+        def price(prefill_iids=None) -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles, prefill_iids=prefill_iids
+            ).prefill_engines
+
+        with patch.object(
+            type(demand), "_arrival_price", wraps=type(demand)._arrival_price
+        ) as arrival_price:
+            first = price()
+            shapes = arrival_price.call_count
+            self.assertGreaterEqual(shapes, 20)
+            self.assertEqual(price(), first)
+            self.assertEqual(arrival_price.call_count, shapes)
+            price({profiles[0].iid})
+            self.assertEqual(arrival_price.call_count, 2 * shapes)
+
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
         fleet.profiles._by_id.pop("e5")
