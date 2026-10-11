@@ -446,7 +446,11 @@ class ReactivePolicy:
 
         eligible = [row for row in evaluations if admitted(row)]
         if not eligible:
-            self.proposal, self.confirmations = None, 0
+            # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
+            if controller.scheduler.held_for_switch():
+                controller.scheduler.renew_draining_holds()
+            else:
+                self.proposal, self.confirmations = None, 0
             held: Evaluation = (
                 min(evaluations, key=lambda row: (row[0].objective, row[0].prefill))
                 if evaluations
@@ -553,6 +557,9 @@ class ReactivePolicy:
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
+        if moved is None and controller.scheduler.held_for_switch():
+            # The next pass with this proposal moves the donor once it is idle.
+            self.proposal, self.confirmations = proposal, confirmations
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)

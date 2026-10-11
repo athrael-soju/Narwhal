@@ -171,6 +171,29 @@ class MixedPressureTests(unittest.TestCase):
             self.assertIsNone(fleet.step())
         self.assertIsNotNone(fleet.step())
 
+    def test_a_draining_switch_donor_keeps_the_confirmed_move(self) -> None:
+        fleet = self.fleet
+        fleet.scheduler.switch_requires_idle = True
+        decodes = fleet.monitor.pool(Role.DECODE)
+        for index, inst in enumerate(decodes):
+            inst.decode[f"r{index}"] = Request(f"r{index}", 100)
+        # Scoring a move while it waits for confirmation holds no engine.
+        self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+        self.assertIsNone(fleet.confirm())
+        self.assertIn("holding", fleet.scheduler.roles._last_decision["reason"])
+        (held,) = fleet.scheduler.held_for_switch()
+        # Passes without an eligible move keep the proposal and the hold while the donor drains.
+        fleet.pressure[Role.PREFILL] = 0.9
+        for _ in range(4):
+            self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), {held})
+        fleet.pressure[Role.PREFILL] = 6.0
+        fleet.monitor.instances[held].decode.clear()
+        moved = fleet.step()
+        self.assertIsNotNone(moved)
+        self.assertEqual(moved.iid, held)
+
     def test_sustained_mixed_pressure_converges_without_oscillation(self) -> None:
         fleet = self.fleet
         for index in range(60):
