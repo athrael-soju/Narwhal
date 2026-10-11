@@ -523,6 +523,10 @@ class MixedPressureTests(unittest.TestCase):
             self.assertEqual(arrival_price.call_count, shapes)
             price({profiles[0].iid})
             self.assertEqual(arrival_price.call_count, 2 * shapes)
+            # Split scoring alternates prefill pools; each keeps its prices.
+            self.assertEqual(price(), first)
+            price({profiles[0].iid})
+            self.assertEqual(arrival_price.call_count, 2 * shapes)
 
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
