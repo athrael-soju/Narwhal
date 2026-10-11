@@ -21,8 +21,8 @@ from ..engines.stream import (
     sse_token_ids,
 )
 from ..scheduling.prefill import prefill_seconds
-from ..scheduling.scheduler.occupancy import decode_refusal
-from ..types import Instance, Phase, Role
+from ..scheduling.scheduler.occupancy import decode_occupancy, decode_refusal
+from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
 from .dispatch import placement_hold
@@ -169,7 +169,7 @@ async def _place(
             state.waited("prefill" if prefill else "decode", router._clock() - began)
     exclude = set(failed)
     if not prefill and isinstance(router.engines.kv, RendezvousConnector):
-        exclude |= _seated_decode_engines(router, exclude)
+        exclude |= _seated_decode_engines(router, req, exclude)
     try:
         inst = router.scheduler.schedule(req, exclude=exclude)
     except RuntimeError as exc:
@@ -180,19 +180,34 @@ async def _place(
     return inst
 
 
-def _seated_decode_engines(router: NarwhalRouter, exclude: set[str]) -> set[str]:
-    """Return the decode engines with every seat taken, or none when no engine has a free seat.
+def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set[str]) -> set[str]:
+    """Return the decode engines a rendezvous decode leg must skip.
 
     A rendezvous producer holds its prefill until the consumer admits the decode leg, so a leg
-    placed on a full engine waits on both engines.
+    placed on a full engine waits on both engines. The leg skips full engines while one has a
+    free seat, and otherwise goes to the engine whose seat is projected to free first.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
-    full = {
-        inst.iid
-        for inst in pool
-        if (limit := decode_seats(router, inst.iid)) and len(inst.decode) >= limit
-    }
-    return full if len(full) < len(pool) else set()
+    seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}
+    full = {inst.iid for inst in pool if seats[inst.iid] and len(inst.decode) >= seats[inst.iid]}
+    if len(full) < len(pool):
+        return full
+    occupancy = decode_occupancy(
+        router.scheduler,
+        request.input_len,
+        seats=decode_seat_map(router),
+        expected_output=router.controller.demand.output_estimator(),
+    )
+    if occupancy is None:
+        return set()
+
+    def frees(inst: Instance) -> float:
+        ends = sorted(end for (iid, _), end in occupancy.ends.items() if iid == inst.iid)
+        behind = len(inst.decode) - seats[inst.iid]
+        return ends[behind] if behind < len(ends) else math.inf
+
+    first = min(pool, key=lambda inst: (frees(inst), inst.iid))
+    return full - {first.iid}
 
 
 def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:
