@@ -104,6 +104,8 @@ def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> lis
 class KvEventDecoder(ABC):
     # The engine always computes a prompt's final token, so a cached prefix never covers it.
     recomputes_final_token: ClassVar[bool] = True
+    # Shortest block the residency index publishes; shorter pages publish as runs of pages.
+    min_block_tokens: ClassVar[int | None] = None
 
     @abstractmethod
     def decode_batch(self, payload: bytes) -> list[CacheEvent | None]: ...
