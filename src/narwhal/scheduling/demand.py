@@ -19,8 +19,9 @@ OutputEstimates = tuple[dict[tuple[int, int], float], dict[int, float]]
 CAPACITY_STEPS_PER_OCTAVE = 16
 
 
-# Arrival shapes priced before the memo starts over.
+# Arrival shapes priced, and profile and prefill-pool sets kept, before a memo starts over.
 _PRICE_MEMO_LIMIT = 65536
+_PRICE_MEMO_SETS = 64
 
 
 @dataclass(frozen=True)
@@ -80,9 +81,15 @@ class DemandModel:
         self._estimated: dict[tuple[int, int], int] = {}
         # Output estimates from the last history without shape overflow.
         self._learned: OutputEstimates = ({}, {})
-        # Arrival prices by shape, for the profiles and prefill pool in `_priced_for`.
-        self._arrival_prices: dict[tuple[int, tuple[tuple[str, int], ...]], tuple[float, bool]] = {}
-        self._priced_for: tuple[tuple[int, ...], frozenset[str] | None] | None = None
+        # Arrival prices by shape for each set of profiles and prefill pool priced. Each entry
+        # keeps its profiles, so their identities stay unique while the entry lives.
+        self._arrival_prices: dict[
+            tuple[tuple[int, ...], frozenset[str] | None],
+            tuple[
+                tuple[Profile, ...],
+                dict[tuple[int, tuple[tuple[str, int], ...]], tuple[float, bool]],
+            ],
+        ] = {}
         self.started_at = clock()
         self.unsized_pending = 0
         self.unsized = DemandWindow[bool](
@@ -349,10 +356,12 @@ class DemandModel:
             tuple(id(p) for p in profiles),
             None if prefill_iids is None else frozenset(prefill_iids),
         )
-        if key != self._priced_for or len(self._arrival_prices) > _PRICE_MEMO_LIMIT:
-            self._arrival_prices = {}
-            self._priced_for = key
-        return self._arrival_prices
+        if key not in self._arrival_prices and len(self._arrival_prices) >= _PRICE_MEMO_SETS:
+            self._arrival_prices.clear()
+        prices = self._arrival_prices.setdefault(key, (profiles, {}))[1]
+        if len(prices) > _PRICE_MEMO_LIMIT:
+            prices.clear()
+        return prices
 
     def _shape_capacity(
         self, profiles: tuple[Profile, ...], key: tuple[int, int], correction: float
