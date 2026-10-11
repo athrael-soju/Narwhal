@@ -12,7 +12,7 @@ class SglangDialect(EngineDialect):
     name = "sglang"
     cache_reset_path = "/flush_cache"
     # /tokenize reports the tokenizer's limit, not the --context-length the engine serves.
-    context_limit_path = "/v1/models"
+    context_limit_path = "/server_info"
     prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
     # The launcher pins --stream-interval 1, so each streamed chunk carries one token.
     token_ids = True
@@ -62,11 +62,14 @@ class SglangDialect(EngineDialect):
             return None
 
     def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
-        entries = payload.get("data")
-        for entry in entries if isinstance(entries, list) else []:
-            if isinstance(entry, dict) and entry.get("id") == model:
-                return super().context_limit(entry, model)
-        return None
+        # SGLang rejects an input of max_req_input_len tokens or more, a few tokens short of
+        # its context length, so a request fits when its input and one output token fit this.
+        if payload.get("served_model_name") != model:
+            return None
+        context, inputs = payload.get("context_length"), payload.get("max_req_input_len")
+        if type(context) is not int or type(inputs) is not int or min(context, inputs) <= 0:
+            return None
+        return min(context, inputs)
 
     def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
         tokens = payload.get("tokens")

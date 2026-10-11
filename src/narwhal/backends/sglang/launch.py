@@ -40,9 +40,13 @@ class SglangLauncher(EngineLauncher):
     def sequence_limit(self, runtime: dict) -> int:
         return discovery.sequence_limit(runtime.get("extra_args", []))
 
-    def engine_env(self, host: str, side_channel_port: int, api_key: str) -> dict[str, str]:
+    def engine_env(
+        self, host: str, side_channel_port: int, api_key: str, bind_host: str | None = None
+    ) -> dict[str, str]:
+        # The bootstrap server listens on the HTTP bind address.
+        bootstrap = host if bind_host in (None, "0.0.0.0", "::") else bind_host
         return {
-            BOOTSTRAP_HOST_ENV: host,
+            BOOTSTRAP_HOST_ENV: bootstrap,
             BOOTSTRAP_PORT_ENV: str(side_channel_port),
             # SGLang advertises this address to decode peers.
             "SGLANG_HOST_IP": host,

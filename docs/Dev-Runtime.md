@@ -128,7 +128,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     python3.12 -m venv .venv-sglang
     source .venv-sglang/bin/activate
     python -m pip install .
-    python -m pip install 'sglang==0.5.21' 'mooncake-transfer-engine==0.3.13' \
+    python -m pip install 'sglang==0.5.21' 'mooncake-transfer-engine-cuda13==0.3.13' \
       'torch==2.13.0' 'transformers==5.12.1'
     ```
 

@@ -52,7 +52,7 @@ Before you select deployment SLOs, profile each engine whose process generation 
 ### Prefill sweep
 
 - Select at least three prefill lengths that span the production range, including its longest inputs.
-- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads it from the served model in `/v1/models`, because SGLang's `/tokenize` reports the tokenizer's limit.
+- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`, because SGLang's `/tokenize` reports the tokenizer's limit and SGLang rejects inputs a few tokens short of its context length.
 - Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 - The router prices a prompt longer than the longest swept length with the [fit extended past the sweep](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile).
 
