@@ -41,6 +41,8 @@ With `--engine-container` or `--engine-pid` set, `GET /v1/process` returns `proc
 
 With `--kv-events` set, the sidecar serves a bounded index of prefix blocks on the engine's GPU.
 
+SGLang engines run one-token pages. The sidecar groups their pages into 64-token blocks, and a block stays resident while its last page is resident.
+
 ### Routes
 
 `GET /v1/residency` returns a snapshot. `GET /v1/residency/events?after=N` returns the sidecar's `epoch`, the last applied `sequence`, `block_size`, `reason`, and the `changes` applied after sequence `N`.
@@ -82,6 +84,7 @@ Residency becomes unknown when any of these happens:
 - a batch fails to decode
 - cache groups report different block sizes
 - the index grows past 1,000,000 blocks
+- the index tracks more than 4,000,000 SGLang pages
 - replay or subscription fails
 
 A snapshot with unknown residency has an empty `groups` list.

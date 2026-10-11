@@ -23,7 +23,7 @@ Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusa
 
 ## Choosing the workload shape
 
-`L` is the input token count of every request in a workload. `B` is the engine cache block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
+`L` is the input token count of every request in a workload. `B` is the residency block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
 
 For a prompt of `L = k*B + s` tokens with `0 < s < B`, an engine with boundary-state groups, such as Mamba state, keeps its boundary state at `k*B`.
 

@@ -17,6 +17,7 @@ from narwhal.engines.residency_feed import ResidencyFeed
 
 VLLM_EVENTS = load("vllm").kv_events
 decode_batch = VLLM_EVENTS.decode_batch
+SGLANG_EVENTS = load("sglang").kv_events
 
 MODEL, TOKENIZER = "model", "contract"
 
@@ -336,6 +337,80 @@ class ResidencyIndexTests(unittest.TestCase):
         self.apply(lost, 0, stored([1], range(4)))
         self.assertFalse(lost.known)
         self.assertIn("feed stopped", lost.reason)
+
+
+def page_stored(hashes, tokens, *, parent=None, **fields):
+    """SGLang's one-token-page store event."""
+    return {
+        "type": "BlockStored",
+        "block_hashes": list(hashes),
+        "parent_block_hash": parent,
+        "token_ids": list(tokens),
+        "block_size": 1,
+        **fields,
+    }
+
+
+class PageRunTests(unittest.TestCase):
+    def setUp(self):
+        self.index = ResidencyIndex(MODEL, TOKENIZER, min_block_tokens=4)
+
+    def apply(self, sequence, *events, index=None):
+        payload = msgpack.packb([1.0, list(events), 0])
+        (index or self.index).apply(sequence, SGLANG_EVENTS.decode_batch(payload))
+
+    def test_sglang_pages_publish_as_runs_of_its_minimum_block(self):
+        self.assertEqual(SGLANG_EVENTS.min_block_tokens, 64)
+        self.assertIsNone(VLLM_EVENTS.min_block_tokens)
+        prompt = tuple(range(100, 110))
+        # The second store continues the first mid-run.
+        self.apply(0, page_stored(range(1, 7), prompt[:6]))
+        self.apply(1, page_stored(range(7, 11), prompt[6:], parent=6))
+        names = identities(prompt[:8])
+        snapshot = self.index.snapshot()
+        self.assertEqual(snapshot["block_size"], 4)
+        self.assertEqual(snapshot["groups"][0]["identities"], [name.hex() for name in names])
+        self.assertEqual(self.index.cached_prefix_blocks(identities((*prompt, 0, 0))), 2)
+        self.assertEqual(
+            self.index.changes_after(0).changes[0]["groups"]["None"]["stored"], [names[1].hex()]
+        )
+
+    def test_a_run_leaves_when_its_last_page_is_evicted(self):
+        prompt = tuple(range(8))
+        names = identities(prompt)
+        self.apply(0, page_stored(range(1, 9), prompt))
+        self.apply(1, {"type": "BlockRemoved", "block_hashes": [7]})
+        self.assertEqual(self.index.cached_prefix_blocks(names), 2)
+        self.apply(2, {"type": "BlockRemoved", "block_hashes": [8]})
+        self.assertEqual(self.index.cached_prefix_blocks(names), 1)
+        self.assertEqual(
+            self.index.changes_after(1).changes[0]["groups"]["None"]["removed"], [names[1].hex()]
+        )
+        # A second copy of a page keeps its run until both copies leave.
+        self.apply(3, page_stored([4], prompt[3:4], parent=3))
+        self.apply(4, {"type": "BlockRemoved", "block_hashes": [4]})
+        self.assertEqual(self.index.cached_prefix_blocks(names), 1)
+        self.apply(5, {"type": "BlockRemoved", "block_hashes": [4]})
+        self.assertEqual(self.index.cached_prefix_blocks(names), 0)
+
+    def test_the_first_run_keeps_the_root_salt_and_adapter(self):
+        prompt = tuple(range(8))
+        self.apply(0, page_stored(range(1, 9), prompt, lora_id="a", cache_salt="s"))
+        names = block_identities(CacheNamespace(MODEL, TOKENIZER, "a", "s"), prompt, 4)
+        self.assertEqual(self.index.cached_prefix_blocks(names), 2)
+        self.assertEqual(self.index.cached_prefix_blocks(identities(prompt)), 0)
+
+    def test_pages_under_an_unknown_parent_and_a_reset(self):
+        prompt = tuple(range(8))
+        self.apply(0, page_stored(range(5, 9), prompt[4:], parent=4))
+        self.assertEqual(self.index.snapshot()["groups"], [])
+        self.apply(1, page_stored(range(1, 5), prompt[:4]), {"type": "AllBlocksCleared"})
+        self.apply(2, page_stored(range(1, 9), prompt))
+        self.assertEqual(self.index.cached_prefix_blocks(identities(prompt)), 2)
+        bounded = ResidencyIndex(MODEL, TOKENIZER, min_block_tokens=4, max_pages=6)
+        self.apply(0, page_stored(range(1, 9), prompt), index=bounded)
+        self.assertFalse(bounded.known)
+        self.assertIn("more than 6 cache pages", bounded.reason)
 
 
 class ResidencyFeedTests(unittest.TestCase):
