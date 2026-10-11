@@ -154,10 +154,6 @@ class RoleChanges:
         ]
         if not pool:
             return None, "pins or nominated engine exclude every source candidate"
-        if self.scheduler.switch_requires_idle:
-            pool = [inst for inst in pool if not inst.prefill and not inst.decode]
-            if not pool:
-                return None, "an engine-side role switch needs an idle source engine"
         if self.scheduler.th.dwell_s > 0.0 and not bypass_dwell:
             now = self.scheduler._clock()
             pool = [
@@ -180,6 +176,18 @@ class RoleChanges:
             ]
             if not pool:
                 return None, "measured shared-device profiles exclude every source candidate"
+        if self.scheduler.switch_requires_idle:
+            idle = [inst for inst in pool if not inst.prefill and not inst.decode]
+            if not idle:
+                # A busy donor stops taking new work, and a later pass switches it once idle.
+                held = [inst for inst in pool if inst.iid in self.scheduler.held_for_switch()]
+                donor = held[0] if held else min(pool, key=self.flip_cost)
+                self.scheduler.hold_for_switch(donor.iid)
+                return None, (
+                    f"holding {donor.iid} out of new placements until it is idle "
+                    "for an engine-side role switch"
+                )
+            pool = idle
         return min(pool, key=self.flip_cost), ""
 
     def flip(
@@ -284,6 +292,8 @@ class RoleChanges:
         self._flip_inflight[Phase.PREFILL.value] += len(chosen.prefill)
         self._flip_inflight[Phase.DECODE.value] += len(chosen.decode)
         chosen.role = target
+        # A held donor returns once any engine changes roles.
+        self.scheduler.switch_holds.clear()
         self._last_flip[chosen.iid] = now
         if target is Role.DECODE:
             self._last_p2d_flip = now

@@ -61,6 +61,11 @@ class GlobalScheduler:
         # callback applies each change.
         self.switch_requires_idle = False
         self.on_flip: Callable[[Instance, Role], None] | None = None
+        # A busy donor held out of new placements until it is idle for an engine-side switch,
+        # with when the controller last asked for the switch. The hold lapses after
+        # `switch_hold_s` without a request.
+        self.switch_holds: dict[str, float] = {}
+        self.switch_hold_s = 15.0
         # Whether a decode engine must refresh before it takes a handoff from a producer, by
         # engine ID.
         self.stale_handoff: Callable[[str, str], bool] | None = None
@@ -386,6 +391,9 @@ class GlobalScheduler:
         candidates = self.role_pool(want, instances)
         if not candidates:
             raise RuntimeError("no schedulable instances for the pinned roles")
+        held = self.held_for_switch()
+        if held and any(inst.iid not in held for inst in candidates):
+            candidates = [inst for inst in candidates if inst.iid not in held]
         if request.phase is Phase.PREFILL:
             candidates = self._fresh_producers(candidates)
             request.cache_placement = None
@@ -402,6 +410,18 @@ class GlobalScheduler:
                 request, chosen, candidates, prices, probation
             )
         return chosen
+
+    def hold_for_switch(self, iid: str) -> None:
+        """Hold `iid` out of new placements until it is idle for an engine-side role switch."""
+        self.switch_holds = {iid: self._clock()}
+
+    def held_for_switch(self) -> set[str]:
+        """Return engines held out of new placements for a pending engine-side role switch."""
+        now = self._clock()
+        self.switch_holds = {
+            iid: at for iid, at in self.switch_holds.items() if now - at <= self.switch_hold_s
+        }
+        return set(self.switch_holds)
 
     def recheck_evidence(self, request: Request, fresh_s: float) -> None:
         """Refresh a prefill request's cache evidence older than `fresh_s` seconds."""
