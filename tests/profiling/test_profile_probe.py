@@ -566,8 +566,8 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 evidence=evidence,
                 max_model_len=4096,
             )
-        # One unmeasured warmup stream precedes the sweep.
-        self.assertEqual(calls, [64] + [64] * 4 + [192] * 4)
+        # One unmeasured warmup cohort at each concurrency precedes the sweep.
+        self.assertEqual(calls, [64] * 4 + [64] * 4 + [192] * 4)
         self.assertEqual([row["tokens"] for row in evidence], [192])
         calls.clear()
         with (
@@ -585,7 +585,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 tokens=64,
                 max_model_len=250,
             )
-        self.assertEqual(calls, [64] + [64] * 4)
+        self.assertEqual(calls, [64] * 4 + [64] * 4)
 
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
 
@@ -602,6 +602,27 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 None, "http://e", "stub", DIALECT, concurrency=(1,), input_lens=(128,), tokens=4
             )
         self.assertAlmostEqual(samples[0][2], 0.03)
+
+    async def test_a_first_batch_size_compile_stays_out_of_the_fit(self):
+        seen: set[int] = set()
+
+        async def compiling(client, url, model, prompt, input_len, state, observed, *_):
+            # A batch size compiles on its first cohort.
+            size = int(state["cohort"])
+            gap = 0.01 if size in seen else 0.07
+            if state.setdefault("streams", 0) == size - 1:
+                seen.add(size)
+            state["streams"] += 1
+            observed.extend((float(size), float(input_len), gap) for _ in range(2))
+
+        with (
+            patch.object(decode_probe, "make_prompt", AsyncMock(return_value=("p", 128))),
+            patch.object(decode_probe, "_one_decode_stream", side_effect=compiling),
+        ):
+            samples = await probe_decode(
+                None, "http://e", "stub", DIALECT, concurrency=(1, 2), input_lens=(128,), tokens=4
+            )
+        self.assertEqual([round(sample[2], 3) for sample in samples], [0.01, 0.01])
 
     async def test_profile_fits_axes_and_retains_raw_evidence(self):
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
