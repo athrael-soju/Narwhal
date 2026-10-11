@@ -144,8 +144,12 @@ class RoleChanges:
         *,
         candidate: Instance | None = None,
         bypass_dwell: bool = False,
+        hold: bool = False,
     ) -> tuple[Instance | None, str]:
-        """Return the donor for a change toward `target`, or None and the blocking reason."""
+        """Return the donor for a change toward `target`, or None and the blocking reason.
+
+        With `hold`, a busy donor for an engine-side switch is held out of new placements.
+        """
         source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         pool = [
             inst
@@ -182,7 +186,8 @@ class RoleChanges:
                 # A busy donor stops taking new work, and a later pass switches it once idle.
                 held = [inst for inst in pool if inst.iid in self.scheduler.held_for_switch()]
                 donor = held[0] if held else min(pool, key=self.flip_cost)
-                self.scheduler.hold_for_switch(donor.iid)
+                if hold:
+                    self.scheduler.hold_for_switch(donor.iid)
                 return None, (
                     f"holding {donor.iid} out of new placements until it is idle "
                     "for an engine-side role switch"
@@ -252,7 +257,7 @@ class RoleChanges:
         ):
             return None
         chosen, donor_block = self.planned_donor(
-            target, candidate=candidate, bypass_dwell=bypass_dwell
+            target, candidate=candidate, bypass_dwell=bypass_dwell, hold=True
         )
         if chosen is None:
             blocked(donor_block)

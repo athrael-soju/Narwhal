@@ -177,12 +177,17 @@ class MixedPressureTests(unittest.TestCase):
         decodes = fleet.monitor.pool(Role.DECODE)
         for index, inst in enumerate(decodes):
             inst.decode[f"r{index}"] = Request(f"r{index}", 100)
+        # Scoring a move while it waits for confirmation holds no engine.
+        self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
         self.assertIsNone(fleet.confirm())
         self.assertIn("holding", fleet.scheduler.roles._last_decision["reason"])
         (held,) = fleet.scheduler.held_for_switch()
-        # A pass without an eligible move keeps the proposal while the donor drains.
+        # Passes without an eligible move keep the proposal and the hold while the donor drains.
         fleet.pressure[Role.PREFILL] = 0.9
-        self.assertIsNone(fleet.step())
+        for _ in range(4):
+            self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), {held})
         fleet.pressure[Role.PREFILL] = 6.0
         fleet.monitor.instances[held].decode.clear()
         moved = fleet.step()

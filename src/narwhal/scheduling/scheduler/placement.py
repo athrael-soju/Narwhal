@@ -415,6 +415,14 @@ class GlobalScheduler:
         """Hold `iid` out of new placements until it is idle for an engine-side role switch."""
         self.switch_holds = {iid: self._clock()}
 
+    def renew_draining_holds(self) -> None:
+        """Renew the holds on engines that still run requests."""
+        now = self._clock()
+        for iid in self.held_for_switch():
+            inst = self.monitor.instances.get(iid)
+            if inst is not None and (inst.prefill or inst.decode):
+                self.switch_holds[iid] = now
+
     def held_for_switch(self) -> set[str]:
         """Return engines held out of new placements for a pending engine-side role switch."""
         now = self._clock()

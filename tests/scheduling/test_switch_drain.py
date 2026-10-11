@@ -61,6 +61,17 @@ class SwitchDrainTests(unittest.TestCase):
         self.assertEqual(moved.iid, "d1")
         self.assertEqual(self.scheduler.held_for_switch(), set())
 
+    def test_only_a_draining_donor_renews_its_hold(self):
+        self.assertIsNone(self.scheduler.roles.flip(Role.PREFILL, "test"))
+        self.now += self.scheduler.switch_hold_s
+        self.scheduler.renew_draining_holds()
+        self.now += 1
+        self.assertEqual(self.scheduler.held_for_switch(), {"d2"})
+        self.decodes["d2"].clear()
+        self.scheduler.renew_draining_holds()
+        self.now += self.scheduler.switch_hold_s
+        self.assertEqual(self.scheduler.held_for_switch(), set())
+
     def test_a_hold_lapses_without_a_new_request(self):
         self.assertIsNone(self.scheduler.roles.flip(Role.PREFILL, "test"))
         self.now += self.scheduler.switch_hold_s + 1

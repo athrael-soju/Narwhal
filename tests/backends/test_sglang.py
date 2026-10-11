@@ -488,4 +488,7 @@ class RouterRoleTests(unittest.IsolatedAsyncioTestCase):
         donor, reason = router.scheduler.roles.planned_donor(Role.PREFILL, bypass_dwell=True)
         self.assertIsNone(donor)
         self.assertIn("idle", reason)
+        # Pricing a split holds no engine; only a move does.
+        self.assertEqual(router.scheduler.held_for_switch(), set())
+        router.scheduler.roles.planned_donor(Role.PREFILL, bypass_dwell=True, hold=True)
         self.assertEqual(len(router.scheduler.held_for_switch()), 1)

@@ -446,8 +446,10 @@ class ReactivePolicy:
 
         eligible = [row for row in evaluations if admitted(row)]
         if not eligible:
-            # A donor draining for an engine-side switch keeps the confirmed proposal.
-            if not controller.scheduler.held_for_switch():
+            # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
+            if controller.scheduler.held_for_switch():
+                controller.scheduler.renew_draining_holds()
+            else:
                 self.proposal, self.confirmations = None, 0
             held: Evaluation = (
                 min(evaluations, key=lambda row: (row[0].objective, row[0].prefill))
