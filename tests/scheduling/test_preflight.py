@@ -772,10 +772,19 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["transfer_count"], 1.0)
 
     async def test_consume_bounds_stalled_stream_when_gap_timeout_is_disabled(self):
-        self.cfg.request_timeout_s = 0.02
+        self.cfg.request_timeout_s = 60
         self.cfg.decode_read_timeout_s = 0
         src, dst = self.cfg.engines[0].iid, self.cfg.engines[1].iid
         closed = asyncio.Event()
+        deadlines: list[asyncio.Timeout] = []
+
+        class RecordedDeadline:
+            def __getattr__(self, name):
+                return getattr(asyncio, name)
+
+            def timeout(self, delay):
+                deadlines.append(asyncio.timeout(delay))
+                return deadlines[-1]
 
         class StalledStream(httpx.AsyncByteStream):
             async def __aiter__(self):
@@ -797,6 +806,14 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             read_timeout_s=self.cfg.decode_read_timeout_s,
             **engine_transports(answer),
         )
+        decode_handoff = client.decode_handoff
+
+        async def expire_after_first_batch(*args, **kwargs):
+            async for batch in decode_handoff(*args, **kwargs):
+                yield batch
+                # The stream stalls after this token, so the request deadline expires mid-stream.
+                deadlines[0].reschedule(asyncio.get_running_loop().time())
+
         result = NixlConnector().prefill_result(
             payload,
             url=self.cfg.engines[0].url,
@@ -809,6 +826,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     transfer, "pair_snapshot", new=AsyncMock(return_value={"iid": src})
                 ) as snapshot,
+                patch.object(transfer, "asyncio", RecordedDeadline()),
+                patch.object(client, "decode_handoff", expire_after_first_batch),
             ):
                 report = Report()
                 await asyncio.wait_for(
@@ -821,12 +840,12 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                         True,
                         evidence=report.pairs,
                     ),
-                    timeout=0.5,
+                    timeout=5,
                 )
         finally:
             await client.aclose()
         self.assertEqual(snapshot.await_count, 2)
-        await asyncio.wait_for(closed.wait(), 1.0)
+        await asyncio.wait_for(closed.wait(), 5)
         self.assertEqual(report.pairs[0]["status"], "failed")
         self.assertEqual(report.pairs[0]["failure_kind"], "request_deadline_exceeded")
         self.assertIsInstance(report.pairs[0]["first_token_seconds"], float)

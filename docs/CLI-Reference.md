@@ -40,7 +40,7 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
     ---
 
-    Serve engine identity and attestation data for one vLLM engine.
+    Serve engine identity and attestation data for one vLLM or SGLang engine.
 
 -   [`narwhal-serve`](cli/Serve.md)
 

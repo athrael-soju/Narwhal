@@ -14,7 +14,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on any NVIDIA GPU with enough free VRAM. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
