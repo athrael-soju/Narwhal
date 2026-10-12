@@ -3,19 +3,19 @@
 import copy
 import unittest
 
+from narwhal.deployment.engine_launch import expose_colocated_gpus, selected_launch
 from tests.deployment.fixtures import cuda_engine, launch_document, runtime
-from tools.deployment.engine_launch import expose_colocated_gpus, selected_launch
 
 
 class EngineLaunchTests(unittest.TestCase):
-    def test_selected_record_resolves_transport_and_generates_matching_tp_arguments(self):
+    def test_selected_record_resolves_transport(self):
         record = selected_launch(
             launch_document(), "engine-1", {"NARWHAL_FABRIC_INTERFACE": "fabric0"}
         )
         self.assertEqual(
             record["environment"], {"ROCR_VISIBLE_DEVICES": "0,1", "UCX_NET_DEVICES": "fabric0"}
         )
-        self.assertEqual(record["vllm_args"], ["--tensor-parallel-size", "2"])
+        self.assertEqual(record["tensor_parallel_size"], 2)
         self.assertEqual(record["transfer"]["devices"], [])
         self.assertEqual(record["transfer"]["gpu_tls"], "rocm")
 
@@ -88,7 +88,6 @@ class EngineLaunchTests(unittest.TestCase):
         expose_colocated_gpus(launches, [["engine-1", "engine-2", "engine-3"]])
         visible = {role: r["environment"]["CUDA_VISIBLE_DEVICES"] for role, r in launches.items()}
         self.assertEqual(visible, {"engine-1": "0,1,2", "engine-2": "1,0,2", "engine-3": "2,0,1"})
-        self.assertEqual(launches["engine-2"]["vllm_args"], ["--tensor-parallel-size", "1"])
 
     def test_shared_device_engine_keeps_its_gpu_out_of_peer_lists(self):
         document = launch_document()

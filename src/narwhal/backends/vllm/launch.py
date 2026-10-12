@@ -27,7 +27,7 @@ class VllmLauncher(EngineLauncher):
         policy.validate_runtime(runtime)
 
     def discovered_runtime(
-        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+        self, observed: dict, setting: Callable[[str, str], str], connector: str
     ) -> dict:
         return discovery.runtime(observed, setting)
 
@@ -74,9 +74,6 @@ class VllmLauncher(EngineLauncher):
             kv_events=kv_events,
             evict_peers=evict_peers,
         )
-
-    def tensor_parallel_args(self, size: int) -> list[str]:
-        return ["--tensor-parallel-size", str(size)]
 
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)

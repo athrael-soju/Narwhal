@@ -33,7 +33,7 @@ class EngineLauncher(ABC):
 
     @abstractmethod
     def discovered_runtime(
-        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+        self, observed: dict, setting: Callable[[str, str], str], connector: str
     ) -> dict: ...
 
     @abstractmethod
@@ -65,9 +65,6 @@ class EngineLauncher(ABC):
         kv_events: dict | None,
         evict_peers: bool,
     ) -> tuple[list[str], dict]: ...
-
-    @abstractmethod
-    def tensor_parallel_args(self, size: int) -> list[str]: ...
 
     @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...

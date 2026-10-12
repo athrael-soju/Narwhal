@@ -11,14 +11,14 @@ IMAGE_PACKAGES = "sglang|torch|" + "|".join(
 )
 
 
-def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, role: str) -> dict:
+def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) -> dict:
     dtype, args, environment, _ = discovered_settings(
         observed, setting, lambda max_len: ["--context-length", str(max_len)]
     )
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
     if (
-        observed.get("requires_ds_conv_state_layout")
+        observed.get("conv_state_layers")
         and "--disable-radix-cache" not in args
         and "--mamba-radix-cache-strategy" not in args
     ):

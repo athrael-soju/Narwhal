@@ -26,6 +26,8 @@ _TRANSFER = re.compile(
 
 class SglangMetrics(EngineMetrics):
     transfer_series: ClassVar[str | None] = TRANSFER_SERIES
+    kv_capacity_pattern = _KV_CAPACITY
+    block_tokens_pattern = _PAGE_SIZE
     dashboard_series: ClassVar[Mapping[str, str]] = {
         "running": "sum by(iid) (sglang:num_running_reqs{@sel})",
         "waiting": "sum by(iid) (sglang:num_queue_reqs{@sel})",
@@ -44,14 +46,6 @@ class SglangMetrics(EngineMetrics):
             "sum by(iid) (rate(sglang:generation_tokens_total{@sel}[$__rate_interval]))"
         ),
     }
-
-    def kv_capacity(self, metrics: str) -> int | None:
-        values = [int(float(match)) for match in _KV_CAPACITY.findall(metrics)]
-        return min(values) if values else None
-
-    def cache_block_tokens(self, metrics: str) -> int | None:
-        values = {int(float(match)) for match in _PAGE_SIZE.findall(metrics)}
-        return values.pop() if len(values) == 1 and min(values) > 0 else None
 
     def prefix_cache_hits(self, metrics: str) -> int | None:
         # One series per cache source: device, host and storage hits all skip prefill.

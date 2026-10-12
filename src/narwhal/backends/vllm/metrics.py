@@ -20,6 +20,8 @@ _TRANSFER = re.compile(
 
 class VllmMetrics(EngineMetrics):
     transfer_series: ClassVar[str | None] = TRANSFER_SERIES
+    kv_capacity_pattern = _KV_CAPACITY
+    block_tokens_pattern = _BLOCK_TOKENS
     dashboard_series: ClassVar[Mapping[str, str]] = {
         "running": "sum by(iid) (vllm:num_requests_running{@sel})",
         "waiting": "sum by(iid) (vllm:num_requests_waiting{@sel})",
@@ -36,14 +38,6 @@ class VllmMetrics(EngineMetrics):
         ),
         "output_tokens": "sum by(iid) (rate(vllm:generation_tokens_total{@sel}[$__rate_interval]))",
     }
-
-    def kv_capacity(self, metrics: str) -> int | None:
-        values = [int(float(match)) for match in _KV_CAPACITY.findall(metrics)]
-        return min(values) if values else None
-
-    def cache_block_tokens(self, metrics: str) -> int | None:
-        values = {int(match) for match in _BLOCK_TOKENS.findall(metrics)}
-        return values.pop() if len(values) == 1 and min(values) > 0 else None
 
     def prefix_cache_hits(self, metrics: str) -> int | None:
         values = [float(match) for match in _PREFIX_CACHE_HITS.findall(metrics)]

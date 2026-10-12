@@ -140,8 +140,8 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
 
-    def test_qwen_linear_convolution_requires_ds_layout(self):
-        from narwhal.backends.vllm.plan import requires_ds_conv_state_layout
+    def test_linear_convolution_layers_hold_a_conv_state(self):
+        from narwhal.deployment.launch_engine.plan import model_conv_state_layers
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -155,7 +155,7 @@ class EngineLauncherTests(unittest.TestCase):
                     }
                 )
             )
-            self.assertTrue(requires_ds_conv_state_layout(root))
+            self.assertTrue(model_conv_state_layers(root))
 
     def test_plan_supplies_model_devices_ports_and_connector_without_access_credentials(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -199,7 +199,6 @@ class EngineLauncherTests(unittest.TestCase):
             ):
                 record, env = launcher_inputs(Path(folder))
                 cuda_engine(record, visible=visible)
-                record["vllm_args"] = ["--tensor-parallel-size", "1"]
                 record["transfer"]["gpu_tls"] = gpu_tls
                 if cache is not None:
                     record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
@@ -428,7 +427,6 @@ class EngineLauncherTests(unittest.TestCase):
                 record, env = launcher_inputs(root)
                 if ipc:
                     cuda_engine(record, visible="0,1")
-                    record["vllm_args"] = ["--tensor-parallel-size", "1"]
                 if cache is not None:
                     record["runtime"]["environment"]["UCX_CUDA_IPC_CACHE"] = cache
                 Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
