@@ -61,6 +61,37 @@ Each hook inherits the service's environment, minus the bearer token variable, p
 | `NARWHAL_CONTROL_ENGINE_URL` | Engine hooks                     | The engine's `url` from the baseline fleet configuration, or empty         |
 | `NARWHAL_CONTROL_FLEET`      | `router_restart`, `cold_restart` | Absolute path of the fleet configuration the restarted processes must load |
 
+Hooks run in the service's working directory, so relative paths in `argv` resolve against it.
+
+### Reference engine hook
+
+`tools/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches. It works with every engine backend that runs in a container. It refuses native launches. Use it for all four engine hooks. Pass the hook name without `engine_` as the action:
+
+```json
+"engine_start": {
+  "argv": [".venv/bin/python", "-m", "tools.fleet_control.engine_hook",
+           "--launch-dirs", "config/fleet-control.launch-dirs.json", "start"],
+  "timeout_s": 900
+}
+```
+
+`--launch-dirs` names a JSON file that maps each engine ID to the absolute path of its launch directory:
+
+```json
+{
+  "n1": "/srv/narwhal/runs/engine-launch-20260101T000000Z-1",
+  "n2": "/srv/narwhal/runs/engine-launch-20260101T000000Z-2"
+}
+```
+
+`narwhal-engine start` writes the container ID to `container.id` in the launch directory. The hook reads that ID. It then runs `docker pause`, `docker unpause`, `docker stop` or `docker start` on the container.
+
+After `docker start`, the hook polls the health route of the endpoint in `launch.json`. It polls every 2 seconds. The start succeeds when the route returns `200`. The start fails if the container stops. The start also fails if the route does not return `200` within `--health-timeout` seconds (600 by default).
+
+To run a command after the engine answers its health route, add `--` and the command after `start`. An example is an attestation sidecar restart. The hook runs the command with `NARWHAL_CONTROL_LAUNCH_DIR` set to the engine's launch directory. The start fails if the command exits non-zero. Set `timeout_s` on `engine_start` to more than `--health-timeout` plus the command's run time.
+
+The hook exits `2` before it runs Docker when it refuses the request, for example when the engine has no entry in the map or the launch is native. Any later failure exits `1`. The hook prints the reason to stderr.
+
 ## Router
 
 | Key                        | Default                 | Meaning                                                                                                                                   |
