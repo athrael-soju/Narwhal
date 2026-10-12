@@ -260,6 +260,9 @@ An `engine_probe` event with `kind: verify_inference` adds these fields:
 | `producer` | Engine that ran the probe's prefill leg, `null` for a standalone probe. |
 | `recorded_producer` | Producer recorded by the failed transfer this probe verifies, `null` when none was recorded. |
 | `producer_class` | Failure class of the producer leg, on a `producer_failed` outcome. |
+| `consumer` | On SGLang, the decode engine that ran the decode leg of a held prefill engine's probe. |
+| `consumer_class` | Failure class of the consumer leg, on a `consumer_failed` outcome. |
+| `reason` | On SGLang, `no_producer` or `no_consumer` on an `inconclusive` outcome with no live peer in the other role. |
 | `prefill_class`, `decode_class` | Failure class of each failed leg, on a `failed` outcome. |
 
 ### Profile recovery events

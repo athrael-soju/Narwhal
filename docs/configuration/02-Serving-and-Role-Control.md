@@ -156,13 +156,13 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. Every SGLang launch sets `--max-running-requests`.
-
-An SGLang prefill engine holds a request until its decode engine takes the KV, and the decode engine takes it only into a free running slot. In an SGLang fleet the router therefore places a decode leg on an engine with a free decode seat while any decode engine has one, and otherwise on the engine where the profiles project a decode seat to free first. This holds with `serving.queue_capacity` at `0`.
+The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
 The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
+
+In an SGLang fleet with the queue off, decode legs still go to engines with a free decode seat. When all decode engines are full, the router picks the one the profiles expect to free a seat soonest.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 

@@ -26,7 +26,7 @@ Run these steps from the router shell.
 
 8. Compare each printed effective sweep with every checked serving plan.
 
-`deploy_hosts.py prepare` writes `profiling-limits.json` from each engine's sequence limit: `--max-num-seqs` for vLLM and `--max-running-requests` for SGLang.
+`deploy_hosts.py prepare` writes each engine's sequence limit to `profiling-limits.json`: `--max-num-seqs` on vLLM, `--max-running-requests` on SGLang.
 
 The effective sweep has these bounds:
 

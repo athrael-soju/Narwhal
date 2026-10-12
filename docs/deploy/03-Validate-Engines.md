@@ -1,5 +1,5 @@
 ---
-description: Validate and start every vLLM engine in a Narwhal fleet.
+description: Validate and start every vLLM or SGLang engine in a Narwhal fleet.
 ---
 
 # Validate and start engines
@@ -18,8 +18,9 @@ import json
 import os
 from pathlib import Path
 record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+args = "sglang_args" if "sglang_args" in record else "vllm_args"
 for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
-              "accelerator_devices", "network_mode", "transfer", "environment", "vllm_args"):
+              "accelerator_devices", "network_mode", "transfer", "environment", args):
     print(f"{field}: {json.dumps(record[field])}")
 PY_LAUNCH
 ```
@@ -82,7 +83,7 @@ ss -ltnp
 
 A passing `test` command is silent and exits with status 0.
 
-- If `ss -ltnp` shows a planned HTTP, attestation, NIXL side-channel, or transfer port in use, free the port.
+- If `ss -ltnp` shows a planned HTTP, attestation, vLLM NIXL side-channel, SGLang bootstrap, or transfer port in use, free the port.
 - If `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest with the configured digest.
 - If the provisioned checkpoint changed, rerun discovery.
 
@@ -147,17 +148,17 @@ Each output line names a signature group, its representative role, and its membe
 
 The launcher builds one launch plan per engine with these properties:
 
-| Property                      | Value                                                                                                                       |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Serving command               | `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`                                               |
-| Model mount                   | `NARWHAL_MODEL_DIR`, read-only at `/model`                                                                                  |
-| Devices                       | The configured devices with the selected TP allocation                                                                      |
-| KV connector                  | `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail` |
-| Side-channel address and port | The role environment                                                                                                        |
-| Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                         |
-| Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                      |
-| Cache events                  | Published by vLLM over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                           |
-| Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) |
+| Property                      | Value                                                                                                                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Serving command               | vLLM: `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`. SGLang: `python3 -m sglang.launch_server`, started by the Narwhal launch wrapper inside `NARWHAL_ENGINE_IMAGE` |
+| Model mount                   | `NARWHAL_MODEL_DIR`, read-only at `/model`                                                                                                                                                    |
+| Devices                       | The configured devices with the selected TP allocation                                                                                                                                        |
+| KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` or `nixl` transfer backend; a `mooncake` engine launches as prefill with `--enable-pd-role-switch` |
+| Side-channel address and port | The role environment, for the vLLM NIXL side channel or the SGLang bootstrap server                                                                                                           |
+| Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                                                                                           |
+| Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                                                                                        |
+| Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                                                                                       |
+| Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                         |
 
 For the [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching`, or SGLang's `--disable-radix-cache`, to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
 
@@ -206,24 +207,29 @@ Validate the image and plan:
 narwhal-engine check --run "$ENGINE_RUN"
 ```
 
-A passing check confirms:
+A passing check confirms, for both backends:
 
 - the immutable image identity and runtime identity
 - the pinned package versions
 - the custom-code requirements
+- the plan hash
+- the resolved prefix-caching setting and cache-event endpoints, matched against the plan
+
+For vLLM, the check also confirms:
+
 - the connector, resolved through `KVConnectorFactory`
 - the tokenizer and its custom-code metadata, loaded with the plan's `--trust-remote-code` setting
 - the DS convolutional-state layout, when required
-- the plan hash
-- the resolved prefix-caching setting and cache-event endpoints, matched against the plan
+
+For SGLang, the check also parses the serving arguments with SGLang's own argument parser.
 
 The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 A failed check names the failing package, tokenizer, or identity check.
 
-The checked tokenizer is the final `--tokenizer` value in the serving arguments, or the model directory by default.
+The vLLM check loads the final `--tokenizer` value in the serving arguments, or the model directory by default.
 
-For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
+For a container engine, the check logs to `image-check.log`, and the vLLM check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the vLLM check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
 When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
 
@@ -285,25 +291,36 @@ Before you reuse a failed deployment:
     plan = json.loads(plan_data)
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
-    expected_version = checked["vllm_api_version"]
+    sglang = plan.get("engine") == "sglang"
+    expected_version = checked["sglang_version" if sglang else "vllm_api_version"]
     headers = {"Content-Type": "application/json"}
     if os.environ.get("NARWHAL_ENGINE_API_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
-    def probe(path, filename, body=None):
+    def probe(path, filename=None, body=None):
         data = json.dumps(body).encode() if body is not None else None
         request = Request(plan["endpoint"].rstrip("/") + path, data=data, headers=headers)
         with urlopen(request, timeout=60) as response:
             content = response.read()
-        with (run / filename).open("xb") as output:
-            output.write(content)
+        if filename:
+            with (run / filename).open("xb") as output:
+                output.write(content)
         return content
     probe("/health", "health.txt")
-    version = json.loads(probe("/version", "version.json"))
+    if sglang:
+        # /server_info also returns the engine's API key; keep only the version.
+        version = {"version": json.loads(probe("/server_info"))["version"]}
+        with (run / "version.json").open("x") as output:
+            json.dump(version, output)
+    else:
+        version = json.loads(probe("/version", "version.json"))
     assert version["version"] == expected_version, (
-        f"/version returned {version['version']!r}; checked image expects {expected_version!r}"
+        f"engine reported version {version['version']!r}; checked image expects {expected_version!r}"
     )
     models = json.loads(probe("/v1/models", "models.json"))
     assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
+    if sglang:
+        print("Engine health, version and model passed.")
+        raise SystemExit
     metrics = probe("/metrics", "metrics.txt").decode()
     assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
     completion = json.loads(probe("/v1/completions", "completion.json", {
@@ -315,7 +332,9 @@ Before you reuse a failed deployment:
     PY_ENGINE
     ```
 
-If the probe reports another API version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
+For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list: SGLang publishes no process start over HTTP, and an SGLang engine serves a completion only with a peer engine for the other leg. [Attestation](05-Attest.md) reads the SGLang process start on the host, and [preflight](06-Profile-and-Preflight.md) sends paired completions.
+
+If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
 
 - Leave each serving container running through the workload trial.
 - Keep the engines idle during fabric qualification and profiling.

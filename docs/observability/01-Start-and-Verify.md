@@ -94,15 +94,15 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 
 `make observe` stages its configuration under `runs/observability/mounts/`:
 
-| Source                                                                       | Staged path                                                                       |
-| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `tools/observability/prometheus.yml`                                         | `prometheus/prometheus.yml`                                                       |
-| `tools/observability/prometheus-alerts.yml`                                  | `prometheus/prometheus-alerts.yml`                                                |
-| `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL`                                     | `prometheus/targets/router.json`, `prometheus/targets/engines.json`               |
-| `tools/observability/grafana/provisioning/`                                  | `grafana-provisioning/`                                                           |
-| `tools/observability/grafana-narwhal.json`, `NARWHAL_FLEET` and `NARWHAL_CONTROL_CONSOLE_URL` | `grafana-dashboards/narwhal.json`                                |
-| `NARWHAL_CONTROL_METRICS_URL`                                                | `prometheus/targets/fleet-control.json`, empty if unset                           |
-| `NARWHAL_CONTROL_TOKEN`                                                      | `prometheus/fleet-control-token`, empty if `NARWHAL_CONTROL_METRICS_URL` is unset |
+| Source                                                                                        | Staged path                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `tools/observability/prometheus.yml`                                                          | `prometheus/prometheus.yml`                                                       |
+| `tools/observability/prometheus-alerts.yml`                                                   | `prometheus/prometheus-alerts.yml`                                                |
+| `NARWHAL_FLEET` and `NARWHAL_ROUTER_URL`                                                      | `prometheus/targets/router.json`, `prometheus/targets/engines.json`               |
+| `tools/observability/grafana/provisioning/`                                                   | `grafana-provisioning/`                                                           |
+| `tools/observability/grafana-narwhal.json`, `NARWHAL_FLEET` and `NARWHAL_CONTROL_CONSOLE_URL` | `grafana-dashboards/narwhal.json`                                                 |
+| `NARWHAL_CONTROL_METRICS_URL`                                                                 | `prometheus/targets/fleet-control.json`, empty if unset                           |
+| `NARWHAL_CONTROL_TOKEN`                                                                       | `prometheus/fleet-control-token`, empty if `NARWHAL_CONTROL_METRICS_URL` is unset |
 
 The staged files and the renderer token have these modes:
 

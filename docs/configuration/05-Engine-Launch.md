@@ -134,7 +134,7 @@ Operator input for each `runtime` field:
 
 | Runtime field       | Operator input                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backend`           | Optional registered engine backend that builds and checks the launch, default `vllm`. The fields below are the `vllm` backend's.                                    |
+| `backend`           | Engine backend, `vllm` (the default) or `sglang`. The fields below apply to `vllm`.                                                                                 |
 | `expected_packages` | Exact installed versions for `vllm`, `nixl` or `nixl-rocm`, and each image package whose identity `narwhal-engine check` must verify.                                |
 | `model_dtype`       | `bfloat16` or `float16`.                                                                                                                                             |
 | `kv_cache_dtype`    | `auto`.                                                                                                                                                              |
@@ -160,7 +160,7 @@ The launcher sets these values itself:
 
 `runtime.environment` rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`. It also rejects names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
 
-When the checkpoint model or tokenizer metadata contains an `auto_map`, discovery adds `--trust-remote-code` to the arguments configured in `NARWHAL_ENGINE_ARGS`. When model metadata identifies convolutional state-space model (SSM) transfer state, discovery sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`, and any other layout value in `NARWHAL_ENGINE_ENV` fails discovery. For an SGLang `mooncake` engine with SSM transfer state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless the arguments set `--mamba-radix-cache-strategy` or `--disable-radix-cache`.
+When the checkpoint model or tokenizer metadata contains an `auto_map`, discovery adds `--trust-remote-code` to the arguments configured in `NARWHAL_ENGINE_ARGS`. When model metadata identifies convolutional state-space model (SSM) transfer state, discovery sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`, and any other layout value in `NARWHAL_ENGINE_ENV` fails discovery.
 
 Checks that `narwhal-engine check` runs before model startup:
 
@@ -195,6 +195,10 @@ The [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-
 
 The image's NIXL connector must implement the fleet's required `kv_both` behavior.
 
+Launch directories, environment files, and runtime captures live under the Git-ignored `runs/`.
+
+Record the application revision, launcher digest, and container ID with each deployment.
+
 ### SGLang runtime fields
 
 With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) writes these `runtime` fields:
@@ -211,11 +215,15 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 | `environment`                 | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with a `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_`, or `SAFETENSORS_` prefix.                                                                           |
 | `extra_args`                  | SGLang options from the `extra_args` allowlist.                                                                                                                                                                                            |
 
-The model path names a checkpoint directory. The launcher rejects a GGUF file.
+The model path must be a checkpoint directory.
 
-A `mooncake` engine launches as prefill with `--enable-pd-role-switch`, and the router switches each decode engine through `POST /pd_role_switch` and swaps roles at runtime. A decode engine keeps each prefill engine's transfer endpoint until it switches itself, and a prefill engine listens on a new endpoint each time it enters prefill. Profiling, calibration, `narwhal-check` and the router switch a decode engine to prefill and back before it decodes for an engine whose endpoint it may hold from an earlier prefill period, as [transfer state refresh](../concepts/03-Failure-and-State.md#transfer-state-refresh) describes for the router. The launcher adds `--disaggregation-decode-enable-radix-cache` to a `mooncake` engine unless `--disable-radix-cache` is set, so a switched decode engine evicts cached KV to admit requests. A switched decode engine of an SSM model also caches each finished request's SSM state. SGLang's `extra_buffer` strategy, its default with overlap scheduling, needs three state slots per admitted request, and decode admission evicts a cached state only when no slot is free, so the engine exits under sustained decode load. Set `--mamba-radix-cache-strategy no_buffer`, which requires `--disable-overlap-schedule`, on these engines. A `nixl` engine serves the role in `runtime.role` for its lifetime, so the fleet sets `pin` on every engine.
+A `mooncake` engine starts as prefill with `--enable-pd-role-switch`, and the router switches its role at runtime through `POST /pd_role_switch`. Unless `--disable-radix-cache` is set, the launcher also adds `--disaggregation-decode-enable-radix-cache`.
 
-Give each engine on a host its own RDMA device with `--disaggregation-ib-device`. Engines that share one device slow each other's KV transfers.
+For a model with SSM transfer state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to a `mooncake` engine, unless `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy` or `--disable-radix-cache`. Keep both flags when you set the arguments yourself: with SGLang's default `extra_buffer` strategy, a decode engine exits under sustained load.
+
+A `nixl` engine serves `runtime.role` for its lifetime, so [set `pin` on every engine](03-Recovery-and-Validation.md#engine-authentication-and-protocol-adapters).
+
+Give each engine on a host its own RDMA device with `--disaggregation-ib-device`.
 
 The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy` and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`.
 
@@ -223,36 +231,32 @@ The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-
 
 `runtime.environment` rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `SGLANG_HOST_IP`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT` and `NARWHAL_SGLANG_API_KEY`. It also rejects names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
 
-For an SGLang engine, `checked.json` records `sglang_version` in place of `vllm_api_version`, and has no `ucx_version` or `peer_release`.
-
-Launch directories, environment files, and runtime captures live under the Git-ignored `runs/`.
-
-Record the application revision, launcher digest, and container ID with each deployment.
+For an SGLang engine, `checked.json` records `sglang_version` in place of `vllm_api_version`, `ucx_version` and `peer_release`.
 
 ### Prefix caching and cache events
 
-vLLM turns prefix caching on by default. Prefix caching is off when `extra_args` contains vLLM's `--no-enable-prefix-caching`, when vLLM's resolved engine configuration turns it off for the model, or when vLLM turns it off during model load for some attention configurations.
+vLLM turns prefix caching on by default. Prefix caching is off when `extra_args` contains vLLM's `--no-enable-prefix-caching`, when vLLM's resolved engine configuration turns it off for the model, or when vLLM turns it off during model load for some attention configurations. On SGLang, `--disable-radix-cache` in `extra_args` turns prefix caching off.
 
 An engine with prefix caching off publishes zero block events.
 
-With prefix caching on, vLLM publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. `events.sock` carries published event batches, each with a sequence number. `replay.sock` takes replay requests for batches held in vLLM's replay buffer.
+With prefix caching on, the engine publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. `events.sock` carries published event batches, each with a sequence number. `replay.sock` takes replay requests for batches held in the engine's replay buffer.
 
 In the path, `<uid>` is the effective user ID of the launching user and `<plan name>` is `narwhal-engine-<n>-<12 hex>`.
 
 Each socket directory has these properties:
 
-| Property        | Value                                                                              |
-| --------------- | ---------------------------------------------------------------------------------- |
-| Mode            | `0700`, for the launching user                                                     |
-| Created by      | Preparation, the check, and each engine start                                      |
-| Container mount | Plan directory at `/narwhal-kv-events`                                             |
-| Record          | `kv_events` in `launch.json`, with the host directory and the endpoints vLLM binds |
+| Property        | Value                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| Mode            | `0700`, for the launching user                                                           |
+| Created by      | Preparation, the check, and each engine start                                            |
+| Container mount | Plan directory at `/narwhal-kv-events`                                                   |
+| Record          | `kv_events` in `launch.json`, with the host directory and the endpoints the engine binds |
 
 Stopping a native engine removes its plan directory. For a container engine, remove the directory after removing the container.
 
 Preparation, the check, and engine start fail when either directory belongs to another user or grants group or other access.
 
-To keep prefix caching on and turn event publishing off, add vLLM's event setting to `extra_args`:
+To keep prefix caching on and turn event publishing off on a vLLM engine, add vLLM's event setting to `extra_args`:
 
 ```json
 ["--kv-events-config", "{\"enable_kv_cache_events\": false}"]
@@ -261,6 +265,8 @@ To keep prefix caching on and turn event publishing off, add vLLM's event settin
 The launcher rejects every other `--kv-events-config` value.
 
 ### Resetting prefix caches
+
+An SGLang engine empties its cache on `POST /flush_cache`.
 
 vLLM serves `POST /reset_prefix_cache` on an engine started with `VLLM_SERVER_DEV_MODE=1`. The route empties the engine's prefix cache.
 

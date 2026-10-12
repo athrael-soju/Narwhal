@@ -12,19 +12,21 @@ description: Measure the prefill and decode cost model of each engine with narwh
 | Refit | Recomputes cold and warm time to first token (TTFT) fits from retained samples, with the decode fits kept. | `--out` |
 | Merge | Combines separately measured role mixes. | `--out` |
 
-Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.
+Every mode writes a profile store, plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`, and rejects symlink destinations.
 
-When the fleet configuration sets `engine_contract`, a live sweep binds each fit to the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation) when the attestation carries launch evidence, otherwise to its `attestation_digest`. When the configuration omits `engine_contract`, a live sweep binds each fit to the live process identity.
+A live sweep binds each fit to the engine it measured. When the fleet configuration sets `engine_contract`, the binding is the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation) when the attestation carries launch evidence, and its `attestation_digest` otherwise. Without `engine_contract`, the binding is the live process identity.
 
-A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
+A live sweep measures engines on separate devices at the same time. Engines in one `shared_device.group`, and all engines under `--colocated`, take turns.
 
-On an SGLang fleet, a live sweep pairs the selected engines in fleet order, and each engine borrows the other engine of its pair as its peer. With an odd count, the last three engines form one group, and each borrows the next engine in the group. A single selected engine borrows the next engine in the fleet. For each leg the sweep switches the engine and its peer to prefill and decode, then empties both engines' caches through `POST /flush_cache`. A decode engine keeps each prefill engine's transfer endpoint until it switches itself, so the sweep switches the peer to prefill and back when the sweep has not switched it, or when the engine it decodes for has entered prefill since. Pairs measure at the same time, each in its own process. With an even count, they switch legs together. When any selected engine sets `shared_device`, the sweep measures engines one after another. It requires `engine.connector` `mooncake` and at least two engines, and rejects `--colocated`. The engine evidence records the peer in `peer`.
+### SGLang pairs
 
-Every mode rejects symlink destinations.
+On an SGLang fleet, the sweep measures both roles of each engine, with a peer engine serving the other leg of each request. It needs `engine.connector` `mooncake` and at least two engines in the fleet, and rejects `--colocated`. Before each leg, the sweep switches both engines into their roles and empties their caches with `POST /flush_cache`. The evidence names each engine's peer in `peer`.
+
+The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time, and each engine's peer is the next selected engine.
 
 ## Selection, refitting, and output
 
-These options select engines, choose the mode, and set the output files.
+These options select engines, choose the mode, and set the output files:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -39,7 +41,7 @@ These options select engines, choose the mode, and set the output files.
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Positive diagnostic HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace live profile and sample files when the first engine completes. |
 
-Mode rules:
+The mode options depend on each other:
 
 | Option | Requires | Mutually exclusive with |
 | --- | --- | --- |
@@ -48,18 +50,13 @@ Mode rules:
 | `--out` | `--refit-samples` or `--merge` | |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
 
-With `--only`, `--overwrite` writes a store holding the selected profiles.
+With `--only`, `--overwrite` writes a store that holds the selected profiles.
 
-Refit and merge outputs:
+A refit keeps the raw samples and process-generation evidence in its new sample sidecar.
 
-- Refits retain the raw samples and process-generation evidence in the new sample sidecar.
-- A merge requires matching measurement evidence for every input profile.
-- A merge requires coverage of every configured engine.
-- Each engine, GPU group, role split, and target-role variant must occur once in a merge.
-- The merged sample sidecar records each source file's path and SHA-256 hash.
-- Keep the source files.
+A merge needs matching measurement evidence for every input profile and must cover every configured engine, with each engine, GPU group, role split and target-role variant occurring once. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
 
-Commands for each mode:
+Run each mode with:
 
 ```bash
 narwhal-profile --fleet fleet.json
@@ -82,11 +79,11 @@ All modes validate these options:
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input-length and concurrency point. | At least 1 |
 
-Before its decode sweep, each engine serves one unmeasured decode stream. A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
+Each engine's [decode sweep](../measure/01-Profile.md#decode-sweep) warms each concurrency with one unmeasured cohort. A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
 
 ## Shared-GPU neighbour traffic
 
-Each neighbour's tokenized input plus output must fit its live `max_model_len`.
+With `--colocated`, each target is measured under traffic from its neighbours. Each neighbour's tokenized input plus output must fit its live `max_model_len`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -106,9 +103,7 @@ narwhal-profile --fleet fleet.json --colocated \
 
 ## Sweep validation and completion
 
-With `--colocated`, a profile's measured role mix is rejected when a neighbour completes zero requests during the target's measurement interval.
-
-The sample sidecar records each neighbour's role, completion count, achieved rate, and errors.
+With `--colocated`, the sample sidecar records each neighbour's role, completion count, achieved rate, and errors. A profile's measured role mix is rejected when a neighbour completes zero requests during the target's measurement interval.
 
 A profiling run aborts when any of these conditions occurs:
 

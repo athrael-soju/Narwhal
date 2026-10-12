@@ -53,15 +53,15 @@ make sync VENV_PYTHON=/path/to/venv/bin/python
 
 These targets run the checks:
 
-| Command                    | Action                                                                                                                       |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Command                    | Action                                                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
-| `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                               |
-| `make publication`         | Scans the Git index for private files and private key material                                                               |
-| `make boundary`            | Fails when a module in `src/narwhal/` outside `backends/` imports a backend package or names an engine-specific term         |
-| `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                              |
-| `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                    |
-| `make test`                | Runs the unit suite                                                                                                          |
+| `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                                                 |
+| `make publication`         | Scans the Git index for private files and private key material                                                                                 |
+| `make boundary`            | Fails when a module in `src/narwhal/` outside `backends/` imports a backend package or names an engine-specific term                           |
+| `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                                                |
+| `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
+| `make test`                | Runs the unit suite                                                                                                                            |
 
 Stage new files with `git add` before running `make publication`.
 

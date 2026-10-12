@@ -71,7 +71,7 @@ NARWHAL_NIXL_SIDE_CHANNEL_PORT
 NARWHAL_UCX_TCP_PORT_RANGE
 ```
 
-For a fleet with `engine.backend` `sglang`, engine export requires `NARWHAL_SGLANG_BOOTSTRAP_PORT` in place of `NARWHAL_NIXL_SIDE_CHANNEL_PORT`.
+On an SGLang fleet, engine export requires `NARWHAL_SGLANG_BOOTSTRAP_PORT` instead of `NARWHAL_NIXL_SIDE_CHANNEL_PORT`.
 
 With `engine.engine_api_key_env` set, engine export requires the variable it names.
 

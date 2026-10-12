@@ -79,7 +79,7 @@ Each engine entry takes these fields:
 | Field             | Default    | Notes                                                                                              |
 | ----------------- | ---------- | -------------------------------------------------------------------------------------------------- |
 | `iid`             | required   | Scheduler identity, unique within `engines`.                                                       |
-| `url`             | required   | The vLLM HTTP base URL.                                                                            |
+| `url`             | required   | The engine HTTP base URL.                                                                          |
 | `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`. |
 | `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                      |
 | `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume.    |
@@ -113,7 +113,7 @@ The group's `gpu_memory_utilization` values sum to at most its `device_allowance
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` sets every [contract field](#contract-fields) that the engine backend attests to a nonempty string, positive integer or boolean. `image_digest` is optional. SGLang attests every field except `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat`, which stay `0`, `null` or `""`.
+A complete `engine_contract` sets every [contract field](#contract-fields) that the engine backend attests to a nonempty string, positive integer or boolean. `image_digest` is optional. On SGLang, leave `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat` unset.
 
 With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
 
@@ -125,15 +125,15 @@ The optional `hardware` block needs all three fields when present.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `hardware.accelerator`             | Nonempty accelerator product name from [engine-host inspection](../deploy/03-Validate-Engines.md#inspecting-every-engine-host). |
 | `hardware.accelerators_per_engine` | Accelerators per replica, an integer of 1 or more.                                                                              |
-| `hardware.tensor_parallel`         | The TP size your launcher passes to vLLM, an integer between 1 and `hardware.accelerators_per_engine`.                          |
+| `hardware.tensor_parallel`         | The TP size your launcher passes to the engine, an integer between 1 and `hardware.accelerators_per_engine`.                    |
 
 ### Contract fields
 
 | Field                      | Default           | Requirement                                                                                    |
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `engine_version`           | required          | The exact string each engine returns from `/version`.                                          |
+| `engine_version`           | required          | The exact string each engine returns from `/version`, or from `/server_info` on SGLang.        |
 | `image_digest`             | `""`              | The immutable `sha256:<64 hex>` container digest from engine-side attestation.                 |
-| `transfer_version`         | `""`              | The NIXL package version installed in the image.                                               |
+| `transfer_version`         | `""`              | The installed transfer package version: NIXL on vLLM, Mooncake or NIXL on SGLang. |
 | `connector_version`        | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
 | `model_architecture`       | `""`              | The model implementation name.                                                                 |
 | `model_dtype`              | `""`              | The dtype the model runs in.                                                                   |
@@ -144,13 +144,13 @@ The optional `hardware` block needs all three fields when present.
 | `kv_cache_dtype`           | `""`              | The KV-cache dtype.                                                                            |
 | `cross_layers_blocks`      | `null`            | Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API. |
 | `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager is part of the layout.                                  |
-| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. The default is the name of `engine.connector`'s connector. |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. On SGLang, the default is `engine.connector`. |
 | `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
 | `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
 | `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
 | `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` for SGLang. |
 
-Earlier releases named three of these fields differently. The loader and `narwhal-attest` still read the earlier names, in the fleet file, the attestation document and its `sources`:
+The loader and `narwhal-attest` accept these earlier names in the fleet file, the attestation document and its `sources`:
 
 | Earlier name             | Current name        |
 | ------------------------ | ------------------- |
@@ -158,14 +158,13 @@ Earlier releases named three of these fields differently. The loader and `narwha
 | `nixl_version`           | `transfer_version`  |
 | `nixl_connector_version` | `connector_version` |
 
-A section that sets both names of one field fails to load. The rename changes the contract fingerprint and the profile generation digests, so after upgrading follow [Upgrading across the contract field rename](../operate/04-Upgrade-and-Validate.md#upgrading-across-the-contract-field-rename).
+A contract that sets both names of one field fails to load. To upgrade, follow [Upgrading across the contract field rename](../operate/04-Upgrade-and-Validate.md#upgrading-across-the-contract-field-rename).
 
 Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
-Values to check against the live engine:
+Check the resolved `head_size` dimensions against the live engine. On vLLM, also check these values:
 
 - `connector_version`
-- the resolved `head_size` dimensions
 - `cross_layers_blocks`
 - the resolved `transfer_mode` class and mode
 - `enforce_handshake_compat`, both the configured value and the installed default
@@ -203,10 +202,10 @@ For each contracted engine:
 
 Sidecar identity values, read at startup:
 
-- the engine's `/version`
-- the `process_start_time_seconds` metric from the engine's `/metrics`
+- the engine version, from `/version`, or from `/server_info` on SGLang
+- the engine process start time: the `process_start_time_seconds` metric on vLLM, or on SGLang the host start time of the process that `--engine-container` or `--engine-pid` names
 
-When `/version` at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
+When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
 
 Each sidecar response carries:
 

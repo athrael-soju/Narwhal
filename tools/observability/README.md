@@ -71,7 +71,14 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It fills each `<<name>>` and `<<name{selector}>>` field from the `dashboard_text` and `dashboard_series` of the fleet's `engine.backend`, and leaves out a panel with a field the backend does not map. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`, which fills its placeholders from the fleet's `engine.backend`:
+
+- `<<engine>>`: the backend's `label`
+- `<<backend_badges>>`: the icon of each registered backend
+- `<<name>>`: the backend's `dashboard_text` entry
+- `<<name{selector}>>`: the backend's `dashboard_series` query for that selector
+
+It drops each panel whose placeholder the backend leaves unmapped. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 

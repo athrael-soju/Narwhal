@@ -36,7 +36,6 @@ class EngineDialect(ABC):
     def token_id_fields(self) -> dict[str, Any]: ...
 
     def streams_token_ids(self, endpoint: str) -> bool:
-        """Whether streamed decode on `endpoint` carries token IDs."""
         return self.token_ids
 
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
@@ -60,7 +59,6 @@ class EngineDialect(ABC):
             return None
 
     def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
-        """The served context limit in a context-limit or tokenize response."""
         limit = payload.get("max_model_len")
         return limit if type(limit) is int and limit > 0 else None
 

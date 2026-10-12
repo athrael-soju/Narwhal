@@ -42,7 +42,7 @@ The **Router** selector scopes every panel built from router metrics. **Engine d
 The engine panels query the series of the fleet's `engine.backend`. This page describes a vLLM fleet. On an SGLang fleet:
 
 - The engine table's **SGLang running** column reads `sglang:num_running_reqs`, **KV cache** reads `sglang:token_usage`, and **Prefix hits** divides `sglang:cached_tokens_total` by `sglang:prompt_tokens_total`. **Backlogged** means `sglang:num_queue_reqs` is above zero.
-- **Prefill/s** on **Token throughput** counts `sglang:prompt_tokens_total` on engines outside the decode role. The engine table's **Tokens/s** counts it on prefill engines, and counts `sglang:generation_tokens_total` on decode engines.
+- **Prefill/s** on **Token throughput** counts `sglang:prompt_tokens_total` on engines outside the decode role. The engine table's **Tokens/s** counts `sglang:prompt_tokens_total` on prefill engines and `sglang:generation_tokens_total` on decode engines.
 
 ## Colours
 
@@ -81,9 +81,9 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Orange       | `#FF9830` | rejected                                                                                                     |
 | Pink         | `#FF7383` | invalid                                                                                                      |
 | Red          | `#D44A3A` | failed, pages, SLO lines, ejected engines and headline values past their limit                               |
-| Dark red     | `#C4162A` | expired requests and expired KV                                                                              |
+| Dark red     | `#C4162A` | expired requests                                                                                             |
 | Purple       | `#B877D9` | retry attempts and retry credits                                                                             |
-| Dark purple  | `#A352CC` | admission queue and wait, the admission and queue attempt phases, and event-loop lag                         |
+| Dark purple  | `#A352CC` | admission queue and wait, and event-loop lag                                                                 |
 | Light purple | `#CA95E5` | seat time, requests in flight and event-loop busy share                                                      |
 
 ## Headline row
@@ -116,7 +116,7 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's backend, current role, state and load. **Backend** shows the logo of the engine backend that serves the engine, such as vLLM or SGLang. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
+The engine table shows each engine's backend, current role, state and load. **Backend** shows the logo of the engine's backend, such as vLLM or SGLang. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
 

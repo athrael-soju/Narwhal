@@ -1,5 +1,3 @@
-"""Write the router engine contract after verifying every live sidecar."""
-
 from __future__ import annotations
 
 import asyncio

@@ -94,15 +94,22 @@ While an inference hold lasts, engine monitoring repeats the inference probe eve
 
 ### Inference probe producers
 
-Each `stream` failure on a decode leg records the producer of its KV transfer against the decode engine. `holds.inference[].recorded_producers` lists them. The inference probe verifies each recorded producer's path and tries producers in this order:
+Each `stream` failure on a decode leg records the leg's producer against the decode engine, and `holds.inference[].recorded_producers` lists those producers. The inference probe retests each recorded path, and the hold lifts once every recorded path has passed, through any producer, and the profile-match rule holds.
 
-1. The recorded producer, while it is configured and live: not ejected, held, or draining.
-2. One other live engine that places prefill legs, choosing the fewest resident prefill requests and then engine ID order. Prefill-role engines place prefill legs; when none is live, unpinned engines do.
+On vLLM, the probe of each path tries producers in this order:
+
+1. The recorded producer, while it is live: configured, and outside any ejection, hold or drain.
+2. One other live engine that places prefill legs, choosing the engine with the fewest resident prefill requests and then by engine ID order. Prefill-role engines place prefill legs, and unpinned engines do when no prefill-role engine is live.
 3. A standalone probe, which runs both legs on the held engine without a KV transfer.
 
-When a producer's prefill leg fails, the probe has tested nothing on the held engine. The verifier records a `producer_failed` outcome and defers to the next producer in the list. A producer leg that waits out the local control pool is inconclusive instead: the verifier keeps the hold and retries at the next probe.
+An engine held without a recorded producer, such as one held for `inference_status` evidence alone, verifies through the standalone probe.
 
-After every recorded path passes, through any producer, and the profile-match rule holds, the verifier clears the recorded producers and lifts the hold. An engine without a recorded producer, such as one held for `inference_status` evidence alone, verifies through a standalone probe.
+On SGLang, every engine serves only its live role, so the probe pairs the held engine with a peer in the other role and has no standalone step:
+
+- A held decode engine tries the recorded producer and then one other live prefill-role engine, chosen as on vLLM. With neither live, the probe is `inconclusive` with the reason `no_producer`.
+- A held prefill engine produces for the live decode engines, starting with the one that has the fewest resident decode requests and then in engine ID order. When no decode engine is live, or every one has failed its leg, the probe is `inconclusive` with the reason `no_consumer`.
+
+A failed peer leg leaves the held engine untested, so the verifier records `producer_failed` or `consumer_failed` and moves to the next peer. On SGLang, a held decode engine whose producers have all failed stays held until the next probe. A peer leg that waits out the router's control pool makes the probe `inconclusive`, and the verifier keeps the hold and tries again at the next probe.
 
 ### Verification probe outcomes
 
@@ -112,8 +119,9 @@ After every recorded path passes, through any producer, and the profile-match ru
 | --- | --- | --- |
 | `passed` | both | `/health` answered, or both inference legs passed. Under the profile-match rule the probed failure evidence clears; a profile mismatch ejects the engine with cause `profile_generation`. |
 | `failed` | both | `/health` did not answer, or a leg on the probed engine failed. A covered engine is ejected; an uncovered engine leaves any hold and stays in placement. |
-| `inconclusive` | both | A probe leg waited out the local control pool. The hold and streaks stay unchanged. |
+| `inconclusive` | both | A probe leg waited out the local control pool, or on SGLang no live peer in the other role remained. The hold and streaks stay unchanged. |
 | `producer_failed` | `verify_inference` | The producer's prefill leg failed. The next producer runs the probe. |
+| `consumer_failed` | `verify_inference` | On SGLang, a decode engine's leg failed after the held prefill engine's leg passed. The next decode engine runs the probe. |
 | `unavailable` | `verify_inference` | The router has no model name to probe with. The hold stays. |
 
 ### Ejections, holds and readmissions

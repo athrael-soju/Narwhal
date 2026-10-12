@@ -134,7 +134,7 @@ When `engine.engine_api_key_env` names a variable at deployment export, the cred
 
 Use the same authentication mode for workload measurement and production serving.
 
-`engine.backend` defaults to `"vllm"`. `engine.connector` and `engine.dialect` default to the backend's connector and dialect: `"nixl"` and `"vllm"` for vLLM, `"mooncake"` and `"sglang"` for SGLang. SGLang's `nixl` connector keeps each engine in its launch role, so a fleet that uses it sets `pin` on every engine.
+`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang. An SGLang fleet can also use the `"nixl"` connector, which keeps each engine in its launch role, so set `pin` on every engine.
 
 
 ## Profile validation

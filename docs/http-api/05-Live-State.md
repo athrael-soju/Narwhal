@@ -163,9 +163,9 @@ A new router process starts these counts at zero.
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
 | `iid`                | Engine                                                                                               |
 | `held_s`             | Seconds since the hold started                                                                       |
-| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when the probe runs standalone             |
+| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when none was recorded                     |
 
-The probe tries a recorded producer only while it is live, and otherwise [another live producer or a standalone probe](../telemetry/04-Failures.md#inference-probe-producers).
+[Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the order in which the probe tries producers.
 
 ### `peer_release`
 

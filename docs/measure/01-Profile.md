@@ -52,7 +52,7 @@ Before you select deployment SLOs, profile each engine whose process generation 
 ### Prefill sweep
 
 - Select at least three prefill lengths that span the production range, including its longest inputs.
-- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`, because SGLang's `/tokenize` reports the tokenizer's limit and SGLang rejects inputs a few tokens short of its context length.
+- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`.
 - Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 - The router prices a prompt longer than the longest swept length with the [fit extended past the sweep](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile).
 
@@ -122,13 +122,13 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. An SGLang engine that exports `sglang:num_running_reqs` without `sglang:cached_tokens_total` has served no cache hit and counts zero hits.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. An SGLang engine counts zero hits until it exports `sglang:cached_tokens_total`.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
 
 - The engine fails a warm sweep condition.
-- A primer ends at or before the end of its prefix's last full block, or on a block boundary, after eight padding words. With one-token blocks, any primer past its prefix qualifies.
+- After eight padding words, a primer still ends at or before the end of its prefix's last full block, or, with blocks longer than one token, on a block boundary.
 - The prefix-cache hit counter becomes unreadable during the warm sweep.
 - A warm case reuses zero cached tokens.
 - The measured warm cases cover fewer than two prefix lengths, two suffix lengths, or five cases.

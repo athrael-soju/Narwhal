@@ -4,15 +4,17 @@ description: Narwhal dev runs several vLLM or SGLang engines with prefill and de
 
 # Narwhal dev
 
-Narwhal dev runs several independent inference engines on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2.
+Narwhal dev runs two to eight independent vLLM or SGLang engines and a router on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
-An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities.
+A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three:
 
-Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+| Template | Backend and KV transfer | Model | Engines |
+| --- | --- | --- | --- |
+| `small-cuda-v1.json`, the default | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 2 |
+| `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
+| `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-For NVIDIA GPUs with 8 GB of VRAM or less, the shipped template starts one prefill and one decode engine running the Qwen3.5-0.8B GGUF model.
-
-The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on any NVIDIA GPU with enough free VRAM. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -35,23 +37,23 @@ The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 509
 
 ## Installing the runtime and model
 
-Install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md).
+For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md). For the SGLang template, follow [Running SGLang engines](#running-sglang-engines).
 
 ## Template and GPU allocation
 
-Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, the share of total VRAM for each vLLM process, covering model weights, runtime overhead, and KV cache. The installed template sets it to `0.35`.
+Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
-`--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The installed template sets it to `0.8`.
+`--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
-`init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB installed).
+`init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB in the small templates). During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
 
-The shipped template sets development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
+The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
-A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM.
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
 
 Create a custom template:
 
-1. Export the installed template:
+1. Export an installed template:
 
     ```bash
     mkdir -p runs
@@ -81,7 +83,7 @@ narwhal dev status
 
 1. Checks the model and tokenizer checksums.
 2. Selects a CUDA GPU by UUID and checks its free VRAM.
-3. Checks the runtime package versions and the GGUF plugin hashes that a vLLM template pins.
+3. Checks the runtime package versions, imports the engine runtime, and checks the GGUF plugin hashes that a vLLM template pins.
 4. Checks the network interface and ports.
 5. Writes the private instance.
 
@@ -89,9 +91,9 @@ narwhal dev status
 
 1. Checks the model and tokenizer hashes, and the GGUF plugin hashes that a vLLM template pins.
 2. Checks that the ports are free.
-3. Starts the engines.
+3. Checks and starts the engines.
 4. Captures attestations and starts the attestation sidecars.
-5. Profiles every role split. The SGLang template profiles only the opening split, where it measures both roles of each engine.
+5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split, where `narwhal-profile` pairs the engines and measures both roles of each one.
 6. Starts the router.
 
 `verify` runs these steps:
@@ -99,7 +101,7 @@ narwhal dev status
 1. Runs preflight over every eligible directed KV path.
 2. Sends a routed arithmetic request.
 3. Saves the router and engine metrics.
-4. Reports `ready` when every check passes.
+4. Checks router readiness, and reports `ready` when every check passes.
 
 Run every later lifecycle command in the Python environment that ran `init`.
 
@@ -120,7 +122,7 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP, and the router switches their roles. The checkpoint is a hybrid SSM model, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. Both engines launch as prefill, and the router sets each engine's role through SGLang's `/pd_role_switch` route. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
 1. Install Narwhal and the pinned packages in a fresh virtual environment:
 
@@ -151,8 +153,6 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev up --instance runs/dev-sglang
     narwhal dev verify --instance runs/dev-sglang
     ```
-
-The template's `allocation.gpu_memory_utilization` sets each engine's `--mem-fraction-static`. SGLang applies the fraction to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
 ## Inspecting and stopping the instance
 

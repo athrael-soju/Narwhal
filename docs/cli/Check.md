@@ -4,9 +4,11 @@ description: Run the narwhal-check deployment preflight gates, from engine reach
 
 # `narwhal-check`
 
-`narwhal-check --fleet PATH` runs these deployment preflight gates in order: `reach`, `calibration`, `contract`, `profile`, `model`, `pace`, `tokenize`, `produce`, `consume`, `slo`.
+`narwhal-check` checks the running engines and their measured profiles before you start the router. It has three modes:
 
-Text output prints each gate name followed by result lines marked `ok`, `FAIL`, `SKIP`, or `WARN`.
+- **Preflight**, the default, runs a fixed sequence of gates against the fleet.
+- **Evidence** records the KV transfers of every directed pair with `--evidence-out`, or checks a saved record with `--verify-evidence`.
+- **Calibration** measures first-token times of fresh KV handoffs with `--calibrate-first-token`.
 
 ## Options
 
@@ -20,9 +22,9 @@ General options:
 | `--print-example-config` | off | Print the packaged, annotated config and exit. |
 | `--print-contract-versions` | off | Print the versioned JSON interface registry and exit. |
 
-`--print-example-config` takes precedence over `--print-contract-versions`.
+Every mode needs `--fleet`. When both print options are set, `--print-example-config` wins.
 
-KV transfer probe and evidence options for preflight:
+KV transfer probe and evidence options:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -32,97 +34,79 @@ KV transfer probe and evidence options for preflight:
 | `--evidence-out PATH` | optional | Save full-mesh KV evidence to a new JSON file. |
 | `--verify-evidence PATH` | optional | Check saved evidence against the current fleet, profiles, and engine processes. |
 
-`--evidence-out` is mutually exclusive with `--ring`, `--no-kv`, and `--verify-evidence`. Both evidence options require an `engine_contract` in the fleet configuration.
-
 Options for first-token calibration:
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--calibrate-first-token` | off | Measure fresh KV handoffs at each input length and report a first-token deadline. | |
-| `--input-tokens LIST` | optional | Comma-separated input lengths. | Each leaves room for at least one output token within both engines' live context limits. |
-| `--samples N` | 100 | Fresh handoffs per pair and input length. | |
+| `--input-tokens LIST` | optional | Comma-separated input lengths. | Distinct positive lengths, each leaving room for one output token within both engines' live context limits. |
+| `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
 | `--observation-timeout-s SECONDS` | optional | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
-| `--calibration-out PATH` | optional | Raw samples and group summaries file. | New JSON file under `runs/`. |
+| `--calibration-out PATH` | optional | Raw samples and group summaries file. | A new JSON file |
 
-`--calibrate-first-token` follows these rules:
+## Preflight
 
-- It requires `--input-tokens`, `--observation-timeout-s`, and `--calibration-out`.
-- `--samples`, `--input-tokens`, `--observation-timeout-s`, and `--calibration-out` each require it.
-- It is mutually exclusive with the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1.
-- `--input-tokens` must include the longest input the service admits.
+`narwhal-check --fleet fleet.json` runs the gates below in order. Under each gate's name, it prints result lines marked `ok`, `FAIL`, `SKIP`, or `WARN`.
 
-## What a KV probe does
+| Gate | Checks |
+| --- | --- |
+| `reach` | Each engine answers `/health` with HTTP 200. Later gates skip an engine that fails here. |
+| `calibration` | The [first-token calibration](#the-calibration-gate) at `engine.first_token_calibration_path` matches the running engines. |
+| `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. An SGLang engine's identity takes its process start from the sidecar's [`/v1/process`](Attest.md#routes). |
+| `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. |
+| `model` | Each engine lists the fleet's `model` in `/v1/models`. |
+| `pace` | Each engine's best time over two cold one-token completions of a long prompt stays within 1.5 times the fleet median, with at least three timed engines, and within 1.5 times its own profile's prefill time. |
+| `tokenize` | Each engine returns an exact token count for the probe prompt. With `engine.tokenize` off, the gate is skipped. |
+| `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines. |
+| `slo` | Each engine's profile meets the [SLO targets](#the-slo-gate). |
 
-Each probe sends the prompt `"benchmark " * 64`, tokenized for the model under test, and asks for four output tokens with `min_tokens` and `ignore_eos`. Both legs of a probe share one unique `cache_salt`, and each `pace` repeat uses a fresh one.
+Between `reach` and `calibration`, preflight warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
 
-`consume` takes a KV handoff from an eligible peer. It tests every eligible ordered pair, or a ring with `--ring`.
+When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`, because a stalled transfer can stop a healthy peer's engine core.
 
-On engines that switch roles themselves, such as SGLang over Mooncake, preflight switches each pair into place. When it finishes, it returns every engine to the role it served when preflight started.
+On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. With Mooncake, the peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and leaves them in the roles of its last step. With NIXL, roles stay fixed: `pace` times only engines that can produce, each beside the first live engine pinned to decode, and skips an engine without one.
 
-With `--evidence-out`, a transfer passes when the consumer's transfer histogram count and sum both grow. The histogram is `vllm:nixl_xfer_time_seconds` on vLLM, and the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. The pair record names it in `transfer_metric`, with `transfer_count_delta` and `transfer_seconds`.
+### KV transfer probes
 
-The first-token deadline is `engine.first_token_timeout_s`, and the probe deadline is `serving.request_timeout_s`. A probe succeeds when its stream ends before the probe deadline.
+A KV probe sends the prompt `"benchmark " * 64` and asks for four output tokens with `min_tokens` and `ignore_eos`. Each attempt carries a fresh `cache_salt`, which both of its legs share, so it starts from a cold cache.
 
-When a probe misses the first-token deadline, `narwhal-check` reports the elapsed time and the transfer stays unconfirmed. After a miss, run first-token calibration.
+On vLLM, `produce` runs a prefill on each engine and checks that it returns handoff parameters. `consume` then moves KV from producer to consumer, across every ordered pair that role pins permit or, with `--ring`, across rotating pairs that give every consumer a producer. On SGLang, a prefill completes only together with its decode, so `produce` defers to `consume`, which checks each pair's whole transfer.
+
+A probe passes when the consumer produces at least one token within `serving.request_timeout_s`. The first token must arrive within `engine.first_token_timeout_s`, or on SGLang within the smaller of that and 30 seconds, the bootstrap timeout the launcher sets. When the first token misses its deadline, `narwhal-check` fails the pair, reports the deadline, and leaves the transfer unconfirmed. Run [first-token calibration](#first-token-calibration) after a miss.
 
 ## Recording and verifying KV evidence
 
-An engine restart or a config change invalidates recorded evidence.
+KV evidence ties each directed pair's transfers to specific engine processes. Both evidence options need an `engine_contract` in the fleet configuration. `--evidence-out` probes the full mesh, so it excludes `--ring`, `--no-kv` and `--verify-evidence`.
 
 ```bash
 narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.json
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 ```
 
-`--evidence-out` rejects evidence when:
+With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when the consumer's transfer histogram grows in both count and sum: `vllm:nixl_xfer_time_seconds` on vLLM, or the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. Each pair record names the histogram in `transfer_metric` and the growth in `transfer_count_delta` and `transfer_seconds`.
 
-- an engine's process generation changes between pairs or repeats
-- an engine has lost its profile binding by the final identity check
-- the fleet or profile files differ from the hashes taken at the start of the run
+The run fails when a pair has fewer passing probes than `--repeats`, when an engine's process changes during or after the probes, when an engine's profiles no longer match its live generation, or when the fleet or profile file changes during the run. The evidence file is written either way, with `status` `passed` or `failed`.
 
-`--verify-evidence` rejects saved evidence when:
-
-- the saved run has failed or skipped gates
-- the fleet file, profile store, engine contract, or eligible pairs have changed
-- a pair has fewer passing transfer and token records than the saved repeat count
-- an engine's live process generation differs from the saved records
+`--verify-evidence` runs in place of preflight. It fails when the saved file has failed or skipped gates, when the fleet file, profile store, engine contract or eligible pairs have changed, when a pair has fewer passing records than the saved repeat count or lacks token and transfer evidence, or when an engine's process changed during the saved run or differs from it now. An engine restart or a configuration change therefore calls for new evidence.
 
 ## First-token calibration
 
-Run the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before recording evidence for a fleet.
+Calibration measures how long fresh KV handoffs take to produce their first token, and reports a candidate deadline that `engine.first_token_timeout_s` must exceed. Follow the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) to run it before you record evidence for a fleet.
+
+`--calibrate-first-token` needs `--input-tokens`, `--observation-timeout-s` and `--calibration-out`. Those options, and a `--samples` value other than 100, apply only to calibration. Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
+
+Calibration needs at least one directed pair that role pins permit and an engine tokenizer route that returns exact counts. It exits with status 0 when the artifact is `complete` and 1 otherwise.
 
 ### Sampling schedule
 
-| Term | Rule |
-| --- | --- |
-| Group | One role-permitted directed pair at one input length, with `--samples` attempts |
-| Sweep `k` | Attempt `k` of every group |
-| Device slot | The engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), otherwise the engine |
-| Round | A set of pairs in which each device slot produces at most once and consumes at most once |
-| Round count | The largest number of pairs that one device slot produces or consumes |
-| Sweep 1 | Each group runs alone in order of producer ID, then input length in `--input-tokens` order, then pair |
-| Sweeps 2 to `--samples` | Each round runs as one lockstep step per input length, in `--input-tokens` order |
+A group is one directed pair at one input length, sampled `--samples` times. Sweep 1 runs each group alone, ordered by producer ID, then input length, then pair. Each later sweep runs the pairs in rounds, one lockstep step per round and input length:
 
-When `n` engines use separate device slots and the fleet permits every directed pair, the schedule has `n - 1` rounds per input length.
+1. Calibration sizes each pair's prompt and sends every prefill in the round together.
+2. On vLLM, once every prefill has finished or failed, each consumer decodes from its producer's KV handoff. On SGLang, each consumer starts its decode leg once every prefill has been sent, and the prefill finishes together with it. The step ends when every decode has finished or failed.
 
-A lockstep step runs two phases across every pair in its round:
+A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), or the engine itself without one. In a round, each device slot produces at most once and consumes at most once, so `n` engines on separate slots that permit every pair need `n - 1` rounds per input length. On SGLang, where engines switch roles, calibration splits the pairs into phases that keep each engine in one role, runs every sweep within one phase before the next, and gives each device slot one leg per round. Round numbers continue across phases.
 
-| Phase | Work for each pair | Ends when |
-| --- | --- | --- |
-| Prefill | Prompt sizing and prefill on the producer | Every prefill in the step finishes or fails |
-| Decode | Decode on the consumer from the producer's KV handoff | Every decode in the step finishes or fails |
-
-Each device slot serves at most one calibration prefill or decode at a time.
-
-These timers bound each attempt:
-
-| Interval | Bound |
-| --- | --- |
-| Prompt sizing | `--observation-timeout-s` |
-| Decode start to first output | `--observation-timeout-s` |
-| The sum of the attempt's sizing, prefill, and decode times | `serving.request_timeout_s` |
-
-Each calibration handoff forces four output tokens, capped by the producer's and consumer's live context limits. A handoff at a `max_model_len - 1` target gets one output token. A sample succeeds when it produces a token and a valid stream end.
+Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and because the decode leg starts beside its prefill, the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
 
 ### Calibration artifact
 
@@ -133,44 +117,24 @@ The artifact at `--calibration-out` holds these fields:
 | `status` | `complete` or `incomplete` |
 | `captured_at_unix` | Unix time of the write |
 | `duration_s` | Seconds from the first engine read to the write |
-| `generations` | Each engine's process generation digest |
-| `process_starts` | The process start time that `narwhal-check` reads from each engine with its process generation at the start of the run |
-| `samples_per_group` | The `--samples` value |
-| `groups` | Completed and failed counts, p99, maximum, and candidate deadline for each group |
-| `attempts` | The raw attempts |
-| `attempts[].attempt` | Sweep number, from 1 to `samples_per_group` |
-| `attempts[].round` | `null` in sweep 1, otherwise the round number within the input length, from 1 |
-| `candidate_deadline_s` | The largest candidate deadline of all groups |
+| `model`, `contract_fingerprint`, `engine_urls` | The fleet the run measured |
+| `generations` | Each engine's process generation digest at the start of the run |
+| `process_starts` | Each engine's process start time at the start of the run |
+| `changed_generations`, `generation_errors` | Engines whose process changed during the run, and identity reads that failed at its end |
+| `input_tokens`, `samples_per_group`, `observation_timeout_s`, `configured_deadline_s` | The run's inputs |
+| `groups` | Per group: input token range, completed and failed counts, `p99_seconds`, `maximum_seconds` and `candidate_deadline_s` |
+| `attempts` | Every attempt, with its `attempt` sweep number, its `round` (`null` in sweep 1), timings, and `status` |
+| `candidate_deadline_s` | The largest group candidate |
 
-`groups` follow the sweep 1 order.
+A group's candidate deadline is the larger of its maximum and 1.2 times its p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
 
-`attempts` follow the same group order, then ascending `attempt` order.
-
-The artifact is valid evidence when all of these hold:
-
-- the artifact records `captured_at_unix`
-- the artifact records `duration_s`
-- `process_starts` holds a time for every engine
-- every attempt has a `round`
-- every group has at least 100 completed attempts
-- the attempt numbers are distinct
-- the attempt numbers cover the configured sample count
-- each engine's identity matches its value at the start of the run
-- the final checks passed
-- the candidate deadline is strictly below `serving.request_timeout_s`
-- `engine.first_token_timeout_s` is above the candidate deadline
-
-When the fleet configuration sets `engine_contract`, an engine's identity during calibration is its attestation digest. Otherwise, it is the engine version and process start time. On SGLang, `narwhal-check` reads the process start from the engine's [attestation sidecar](Attest.md#process-route).
-
-The artifact is incomplete when any of these happens:
-
-- an attempt fails
-- an engine's identity changes during the run
-- reading or verifying an engine's identity fails
+The artifact is `complete` when every group completed every sample with zero failures, `--samples` is at least 100, no engine's process changed and every final identity read succeeded, and the largest candidate is below `serving.request_timeout_s`. An engine's process counts as changed when its attestation digest changes, or with `engine_contract` unset, its engine version or process start time. On SGLang, `narwhal-check` reads the process start from the engine's [attestation sidecar](Attest.md#routes).
 
 ## The `calibration` gate
 
-The `calibration` gate checks the artifact at `engine.first_token_calibration_path` against each running engine's [process generation](../Core-Concepts.md#terms):
+The `calibration` gate reads the artifact at `engine.first_token_calibration_path` and warns when the path is unset. It rejects an artifact that is not `complete`, that names a different model, contract or set of engine addresses, whose groups and attempts fail to cover every directed pair and input length, or whose recomputed p99, maximum and candidate differ from the recorded ones. It also rejects an artifact without a capture time, a run duration, a process start for every engine or a round for every attempt, and an artifact for which `engine.first_token_timeout_s` is at or below the candidate deadline.
+
+It then compares each running engine's [process generation](../Core-Concepts.md#terms) with `generations`:
 
 | Fleet and sidecar | Process generation |
 | --- | --- |
@@ -178,15 +142,7 @@ The `calibration` gate checks the artifact at `engine.first_token_calibration_pa
 | `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
 | `engine_contract` unset | Engine version and process start time |
 
-The gate labels each running engine:
-
-| Running engine | Result |
-| --- | --- |
-| Process generation differs from `generations` | `FAIL` with `<iid> process differs from first-token calibration` |
-| Same process generation and process start | `measured` |
-| Same process generation, different process start | `reused` |
-
-The gate reports one of these statuses:
+An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. Because `launch_digest` leaves out the process start, a restarted engine keeps its calibration only when its sidecar reports launch evidence.
 
 | Status | Condition | Output |
 | --- | --- | --- |
@@ -207,15 +163,13 @@ In JSON mode, `data.first_token_calibration` holds:
 
 ## The `slo` gate
 
-The `slo` gate runs three checks against each engine's profile:
+The `slo` gate checks each engine's profile against the SLO targets. An engine without a profile is skipped. When every check passes, the gate reports the batch tokens the engine holds at the TPOT target and the request count behind them.
 
 | Check | Fails when |
 | --- | --- |
+| Decode bounds | The profile's measured decode request or KV-token bound is missing. |
 | TPOT | The token interval at the profile's smallest measured decode cohort exceeds `slo.tpot_s`. |
 | TTFT | `slo.ttft_s` is at or below the profile's single-token prefill time. |
-| Decode bounds | The profile's measured decode request or KV-token bound is missing. |
-
-The capacity output shows the request count used for the TPOT calculation.
 
 ## Exit codes
 
@@ -223,9 +177,9 @@ Text mode uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-cod
 
 | Outcome | Exit code |
 | --- | :--: |
-| A failed gate or operation | `1` |
+| A failed gate, a failed evidence verification, or an incomplete calibration | `1` |
 | A skipped gate with `--evidence-out` | `1` |
 | Invalid arguments | `2` |
 | A fleet config that fails to load or validate | `2` |
 
-JSON mode follows the [command result contract](../Command-Results.md).
+Skipped gates alone leave preflight at exit code `0` in text mode. JSON mode follows the [command result contract](../Command-Results.md): failed gates set the status `failed_gate`, and skipped gates set `degraded`.
