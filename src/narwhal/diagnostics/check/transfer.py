@@ -14,7 +14,7 @@ from ...engines.client import EngineClient, EngineError, first_output_timeout
 from ...engines.connector import PrefillResult, RendezvousConnector
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
-from ...runtime.role_switch import engine_side, place_pair
+from ...runtime.role_switch import engine_side
 from .engines import PROBE_PROMPT
 from .evidence import pair_snapshot, same_generation
 from .report import Report
@@ -105,8 +105,7 @@ async def gate_consume(
                 async with httpx.AsyncClient(
                     timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
                 ) as control:
-                    await place_pair(
-                        switcher,
+                    await switcher.place(
                         control,
                         (by_id[src].url, launches.get(src)),
                         (by_id[dst].url, launches.get(dst)),

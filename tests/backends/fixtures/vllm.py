@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterable
 
 import msgpack
 
@@ -6,27 +7,51 @@ from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from tests.backends.contract import ContractFixtures
 
 
-def _batch(*events: object) -> bytes:
+def stored(
+    hashes: Iterable[object],
+    tokens: Iterable[object],
+    *,
+    parent: object = None,
+    group: int = 0,
+    kind: str = "full_attention",
+    size: int = 4,
+    **fields: object,
+) -> dict[str, object]:
+    return {
+        "type": "BlockStored",
+        "block_hashes": list(hashes),
+        "parent_block_hash": parent,
+        "token_ids": list(tokens),
+        "block_size": size,
+        "lora_id": None,
+        "medium": "GPU",
+        "lora_name": None,
+        "group_idx": group,
+        "kv_cache_spec_kind": kind,
+        **fields,
+    }
+
+
+def batch(*events: object) -> bytes:
     return msgpack.packb([1.0, list(events), None])
 
 
-_STORED = {
-    "type": "BlockStored",
-    "block_hashes": [11, 12],
-    "parent_block_hash": None,
-    "token_ids": [1, 2, 3, 4, 5, 6, 7, 8],
-    "block_size": 4,
-    "lora_id": None,
-    "medium": "GPU",
-    "lora_name": None,
-    "group_idx": 0,
-    "kv_cache_spec_kind": "full_attention",
-}
-_CONNECTOR = {
-    "kv_connector": "NixlConnector",
-    "kv_role": "kv_both",
-    "kv_connector_extra_config": {"kv_lease_duration": 30},
-}
+def nixl_config(lease: object, *, ucx: bool = False) -> dict[str, object]:
+    extra: dict[str, object] = {"backends": ["UCX"]} if ucx else {}
+    if lease is not None:
+        extra["kv_lease_duration"] = lease
+    return {
+        "kv_connector": "NixlConnector",
+        "kv_role": "kv_both",
+        "kv_connector_extra_config": extra,
+    }
+
+
+def launch(*args: object) -> dict[str, object]:
+    return {"launch": {"args": list(args)}}
+
+
+_STORED = stored([11, 12], range(1, 9))
 
 FIXTURES = ContractFixtures(
     metrics=(
@@ -41,17 +66,15 @@ FIXTURES = ContractFixtures(
     prefix_cache_hits=12,
     transfer_totals=(3.0, 0.25),
     kv_batches=[
-        (_batch(_STORED), [StoredBlocks]),
+        (batch(_STORED), [StoredBlocks]),
         (
-            _batch({"type": "BlockRemoved", "block_hashes": [11], "medium": "GPU"}),
+            batch({"type": "BlockRemoved", "block_hashes": [11], "medium": "GPU"}),
             [RemovedBlocks],
         ),
-        (_batch({"type": "AllBlocksCleared"}), [CacheCleared]),
+        (batch({"type": "AllBlocksCleared"}), [CacheCleared]),
     ],
     malformed_kv_batch=b"\xc1",
-    attestation={
-        "launch": {"args": ["--max-num-seqs", "64", "--kv-transfer-config", json.dumps(_CONNECTOR)]}
-    },
+    attestation=launch("--max-num-seqs", "64", "--kv-transfer-config", json.dumps(nixl_config(30))),
     sequence_limit=64,
     kv_lease=30,
     memory_args=["--gpu-memory-utilization", "0.4"],

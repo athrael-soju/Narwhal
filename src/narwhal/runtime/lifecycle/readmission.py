@@ -4,9 +4,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
+from ...engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 from ...engines.client import EngineError
 from ...engines.connector import RendezvousConnector
 from ...engines.stream import sse_token_count
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
 
 def role_bound_pairs(target: str, role: Role, live: list[Instance]) -> list[tuple[str, str]]:
     """Pair `target` with the first live engine serving the other role, prefill first."""
-    # Each engine serves only its live role, so the peer serves the other role.
     peer = next((inst.iid for inst in live if inst.role is not role and inst.iid != target), None)
     if peer is None:
         return []
@@ -103,13 +101,8 @@ async def validate_readmission(
                 continue
             outcome.ok(spec.iid, "health")
             try:
-                identity = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=timeout,
-                    transport=transport,
-                    headers=router.engines._auth(None),
-                    reader=load_backend(cfg.backend).identity,
-                    attestation_url=spec.attestation_url,
+                identity = await fetch_spec_identity(
+                    cfg, spec, transport=transport, headers=router.engines._auth(None)
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"process identity unreadable: {type(exc).__name__}")
@@ -139,11 +132,9 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 router.attested(spec.iid, payload)
-                if spec.iid in engines and (
-                    switched := await router.switch_role(
-                        spec.iid, router.monitor.instances[spec.iid].role
-                    )
-                ):
+                # A replacement process starts in its launch role; the fabric check runs in the
+                # router's role for it.
+                if spec.iid in engines and (switched := await router.resume_role(spec.iid)):
                     outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
@@ -213,13 +204,8 @@ async def validate_readmission(
         identity_failed = False
         for spec in participants:
             try:
-                live = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=timeout,
-                    transport=transport,
-                    headers=router.engines._auth(None),
-                    reader=load_backend(cfg.backend).identity,
-                    attestation_url=spec.attestation_url,
+                live = await fetch_spec_identity(
+                    cfg, spec, transport=transport, headers=router.engines._auth(None)
                 )
                 if live != identities[spec.iid]:
                     raise ValueError("process changed during validation")
@@ -248,15 +234,6 @@ async def validate_readmission(
                 "process identity changed during validation", reset=True
             )
         return not outcome.failures
-
-    for spec in targets:
-        # A replacement process starts in its launch role; the fabric check runs in the
-        # router's role for it.
-        role = router.monitor.instances[spec.iid].role
-        switched = await router.switch_role(spec.iid, role)
-        if switched is not None:
-            outcome.fail(spec.iid, f"role switch to {role.value} failed: {switched}")
-            return outcome
 
     body = {
         "model": cfg.model,

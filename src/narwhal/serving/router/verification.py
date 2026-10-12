@@ -228,20 +228,7 @@ class SuspectVerifier:
                 and probe.prefill.failed is not None
                 and probe.decode.inconclusive
             ):
-                self._probe_outcome(
-                    iid,
-                    "verify_inference",
-                    "producer_failed",
-                    producer_class=probe.prefill.failed,
-                    **fields,
-                )
-                log.info(
-                    "suspect %s inference probe: producer %s leg failed %s; "
-                    "trying the next producer",
-                    iid,
-                    producer,
-                    probe.prefill.failed,
-                )
+                self._peer_failed(iid, "producer", producer, probe.prefill.failed, **fields)
                 continue
             return self._resolve_inference_probe(iid, probe, **fields)
         return False
@@ -265,20 +252,7 @@ class SuspectVerifier:
                 return self._resolve_inference_probe(iid, probe, **fields)
             prefill, decode = probe.prefill, probe.decode
             if prefill.failed is None and not prefill.inconclusive and decode.failed is not None:
-                self._probe_outcome(
-                    iid,
-                    "verify_inference",
-                    "consumer_failed",
-                    consumer_class=decode.failed,
-                    **fields,
-                )
-                log.info(
-                    "suspect %s inference probe: consumer %s leg failed %s; "
-                    "trying the next consumer",
-                    iid,
-                    consumer.iid,
-                    decode.failed,
-                )
+                self._peer_failed(iid, "consumer", consumer.iid, decode.failed, **fields)
                 continue
             # The suspect's verdict rests on its own leg; a decode leg after a failed
             # prefill tested nothing.
@@ -294,6 +268,20 @@ class SuspectVerifier:
         self._probe_outcome(iid, "verify_inference", "inconclusive", reason=f"no_{peer}", **fields)
         log.info("suspect %s inference probe needs a live %s; verdict deferred", iid, peer)
         return False
+
+    def _peer_failed(self, iid: str, peer: str, peer_iid: str, klass: str, **fields: Any) -> None:
+        """Record a failed peer leg, which tested nothing on the suspect."""
+        self._probe_outcome(
+            iid, "verify_inference", f"{peer}_failed", **{f"{peer}_class": klass}, **fields
+        )
+        log.info(
+            "suspect %s inference probe: %s %s leg failed %s; trying the next %s",
+            iid,
+            peer,
+            peer_iid,
+            klass,
+            peer,
+        )
 
     def _resolve_inference_probe(
         self, iid: str, probe: InferenceProbe | None, **fields: Any

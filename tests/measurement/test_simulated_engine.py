@@ -241,6 +241,27 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         reply = await target.handle("POST", "/v1/completions", {}, b"{")
         self.assertEqual(reply.status, 400)
 
+    async def test_sglang_refuses_legs_without_a_bootstrap_room(self):
+        refusal = {
+            "error": {
+                "message": "Disaggregated request received without bootstrap room id",
+                "type": "BadRequestError",
+                "code": 400,
+            }
+        }
+        body = {"model": "m", "prompt": "ab", "max_tokens": 1}
+        cases = [(False, True, 400), (False, False, 200), (True, True, 400), (True, False, 400)]
+        for shared, streamed, status in cases:
+            for room in ({}, {"bootstrap_room": "7"}, {"bootstrap_room": True}):
+                with self.subTest(shared=shared, stream=streamed, room=room):
+                    target = engine(backend="sglang", rooms=sim.Rooms() if shared else None)
+                    reply = await call(
+                        target, "POST", "/v1/completions", body | room | {"stream": streamed}
+                    )
+                    self.assertEqual(reply.status, status)
+                    if status == 400:
+                        self.assertEqual(json.loads(reply.body), refusal)
+
     async def test_unknown_routes_return_not_found(self):
         target = engine()
         for method, path in (("GET", "/v1/models"), ("GET", "/v1/completions")):

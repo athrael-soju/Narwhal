@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -124,6 +125,16 @@ class MonitoringLedger:
                 "consecutive": record.consecutive,
             }
         )
+
+    @contextlib.contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        """Record the stage body's success, or record and suppress the Exception it raises."""
+        try:
+            yield
+        except Exception as exc:
+            self.fail(name, exc)
+        else:
+            self.ok(name)
 
     def finish_pass(self, limit: int) -> None:
         """Close one pass: update the core streak and the degraded gate."""
@@ -363,19 +374,11 @@ def run_controller(
 async def urgent_control_once(router: NarwhalRouter) -> Instance | None:
     """Evaluate one coalesced prefill-risk event between monitoring passes."""
     flipped: Instance | None = None
-    try:
+    with router.monitoring.stage("controller"):
         flipped = run_controller(router, urgent=True, scheduled=False)
-    except Exception as exc:
-        router.monitoring.fail("controller", exc)
-    else:
-        router.monitoring.ok("controller")
     if flipped is not None:
-        try:
+        with router.monitoring.stage("handoff"):
             handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
-        except Exception as exc:
-            router.monitoring.fail("handoff", exc)
-        else:
-            router.monitoring.ok("handoff")
     if router.controller.prefill_risk_pending:
         router.control_wakeup.set()
     router.dispatcher.notify()
@@ -391,46 +394,26 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     interval = router.cfg.monitor_interval_s
     flipped: Instance | None = None
 
-    try:
+    with router.monitoring.stage("controller"):
         flipped = run_controller(router, urgent=urgent)
-    except Exception as exc:
-        router.monitoring.fail("controller", exc)
-    else:
-        router.monitoring.ok("controller")
     for stage, body in (
         ("health", router.scheduler.health_pass),
         ("drains", router.scheduler.roles.settle_drains),
         ("rollover", router.monitor.roll_interval),
     ):
-        try:
+        with router.monitoring.stage(stage):
             body()
-        except Exception as exc:
-            router.monitoring.fail(stage, exc)
-        else:
-            router.monitoring.ok(stage)
-    try:
+    with router.monitoring.stage("readmission"):
         await readmit(router, interval * router.cfg.readmit_every)
         release_peers(router)
-    except Exception as exc:
-        router.monitoring.fail("readmission", exc)
-    else:
-        router.monitoring.ok("readmission")
-    try:
+    with router.monitoring.stage("transfer_refresh"):
         refresh_consumers(router)
-    except Exception as exc:
-        router.monitoring.fail("transfer_refresh", exc)
-    else:
-        router.monitoring.ok("transfer_refresh")
     if router.cfg.liveness_every and router.scheduler.sweep_due(
         interval * router.cfg.liveness_every
     ):
-        try:
+        with router.monitoring.stage("liveness"):
             await sweep_liveness(router)
-        except Exception as exc:
-            router.monitoring.fail("liveness", exc)
-        else:
-            router.monitoring.ok("liveness")
-    try:
+    with router.monitoring.stage("telemetry"):
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
         ld = router.scheduler.pool_load(Role.DECODE)
@@ -444,17 +427,9 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
             n_decode,
             router.scheduler.unserved,
         )
-    except Exception as exc:
-        router.monitoring.fail("telemetry", exc)
-    else:
-        router.monitoring.ok("telemetry")
     # A degraded primary still publishes a handoff every pass.
-    try:
+    with router.monitoring.stage("handoff"):
         handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
-    except Exception as exc:
-        router.monitoring.fail("handoff", exc)
-    else:
-        router.monitoring.ok("handoff")
     router.monitoring.finish_pass(router.cfg.monitor_failure_limit)
     if router.controller.prefill_risk_pending:
         router.control_wakeup.set()
@@ -470,12 +445,8 @@ async def residency_loop(router: NarwhalRouter) -> None:
         await asyncio.sleep(interval)
         if router.standby:
             continue
-        try:
+        with router.monitoring.stage("residency"):
             await router.residency.refresh(router.residency_client)
-        except Exception as exc:
-            router.monitoring.fail("residency", exc)
-        else:
-            router.monitoring.ok("residency")
 
 
 async def monitor_loop(router: NarwhalRouter) -> None:

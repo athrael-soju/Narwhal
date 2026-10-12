@@ -10,9 +10,11 @@ from pathlib import Path
 import httpx
 
 from ...config import EngineContract
-from ...deployment.attestation_contract.document import generate
+from ...contracts import ATTESTATION, versioned
+from ...deployment.attestation_contract import document
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
+    live_binding,
     live_container,
     live_native,
     parse_tagged_capture,
@@ -22,7 +24,7 @@ from ...deployment.attestation_contract.evidence import (
     write_private_json,
 )
 from ...deployment.launch_engine.docker import run_runtime_script
-from ...deployment.launch_engine.plan import read_env
+from ...deployment.launch_engine.plan import launch_headers, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
 from .captures import handshake_policy, registration_layout
 from .identity import parse_process_start
@@ -153,10 +155,7 @@ def capture_model_dimensions(run: Path) -> Path:
     ):
         raise ValueError("Live model dimensions contain invalid compatibility getters")
     require_prior_dimensions(run, plan, plan_hash, contract)
-    if native:
-        record.update(process=identity, model_revision=plan["model_revision"])
-    else:
-        record.update(image_id=checked["image_id"], container_id=identity)
+    record.update(live_binding(plan, checked, identity, model_revision=True))
     record["capture_log_sha256"] = digest(log)
     write_private_json(destination, record)
     return destination
@@ -187,10 +186,7 @@ def capture_nixl(run: Path) -> Path:
     ):
         raise ValueError("Pinned connector returned an invalid protocol version")
     record["plan_sha256"] = plan_hash
-    if native:
-        record["process"] = identity
-    else:
-        record.update(image_id=checked["image_id"], container_id=identity)
+    record.update(live_binding(plan, checked, identity))
     destination = run / "nixl-connector-version.json"
     write_private_json(destination, record)
     return destination
@@ -235,10 +231,7 @@ def capture_native_http(run: Path) -> None:
     if plan.get("backend") != "native":
         raise ValueError("native HTTP capture requires a native launch plan")
     live_native(run, plan, checked)
-    values = read_env(run / "engine.env")
-    key = values.get("VLLM_API_KEY", "")
-    headers = {"Authorization": f"Bearer {key}"} if key else None
-    with httpx.Client(timeout=10, headers=headers) as client:
+    with httpx.Client(timeout=10, headers=launch_headers(run, plan)) as client:
         version_response = client.get(plan["endpoint"].rstrip("/") + "/version")
         version_response.raise_for_status()
         metrics_response = client.get(plan["endpoint"].rstrip("/") + "/metrics")
@@ -271,7 +264,7 @@ def capture_native(run: Path) -> Path:
     capture_native_http(run)
     snapshot = run / "startup-attestation.log"
     write_private(snapshot, (run / "startup.log").read_text())
-    return generate(run, snapshot)
+    return document.generate(run, snapshot)
 
 
 def option(args: list[str], name: str) -> str:
@@ -315,11 +308,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         revision=plan["revision"],
     )
     if dimension_source == live_dimensions:
-        binding = (
-            {"process": identity, "model_revision": plan["model_revision"]}
-            if native
-            else {"image_id": checked["image_id"], "container_id": identity}
-        )
+        binding = live_binding(plan, checked, identity, model_revision=True)
         require_binding(
             dimensions, "Live model dimensions", launcher_sha256=plan["launcher_sha256"], **binding
         )
@@ -335,12 +324,9 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         launch_config_sha256=plan["launch_sha256"],
     )
     nixl = read_json(run / "nixl-connector-version.json")
-    binding = (
-        {"process": identity}
-        if native
-        else {"image_id": checked["image_id"], "container_id": identity}
+    require_binding(
+        nixl, "NIXL protocol", plan_sha256=plan_hash, **live_binding(plan, checked, identity)
     )
-    require_binding(nixl, "NIXL protocol", plan_sha256=plan_hash, **binding)
     transfer = read_json(run / "transfer-mode.json")
     transfer_binding = {"process": identity} if native else {"image_id": checked["image_id"]}
     require_binding(transfer, "Transfer mode", plan_sha256=plan_hash, **transfer_binding)
@@ -449,13 +435,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "ucx_version": checked.get("ucx_version") or "",
         "peer_release": checked.get("peer_release") is True,
     }
-    return {
-        "schema": "narwhal.attestation",
-        "schema_version": 1,
-        "contract": contract,
-        "sources": sources,
-        "launch": launch,
-    }
+    return versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
 
 
 # Flags whose values change per launch.
@@ -463,12 +443,4 @@ _PER_LAUNCH_VALUES = frozenset(("--host", "--port", "--served-model-name", "--kv
 
 
 def launch_args(args: list[str]) -> list[str]:
-    kept: list[str] = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-            continue
-        kept.append(arg)
-        skip = arg in _PER_LAUNCH_VALUES
-    return kept
+    return document.launch_args(args, _PER_LAUNCH_VALUES)

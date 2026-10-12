@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.backends import load as load_backend
-from narwhal.config import FleetConfig
 from narwhal.diagnostics.check import preflight
 from narwhal.diagnostics.check.engines import gate_contract
 from narwhal.diagnostics.check.report import Report
@@ -21,11 +20,11 @@ from narwhal.observability.metrics.render import render
 from narwhal.profiling.generation import binding_digest
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime.release import PeerRelease, release_peers
-from narwhal.serving.app import create_app
+from tests.backends.fixtures.vllm import launch, nixl_config
 from tests.characterization.golden import assert_golden
-from tests.characterization.vllm_fake import ENGINES, FakeVllm, routed, untimed
-from tests.fixtures import ROOT, fleet, profile
-from tests.wire import EngineWire, engine_transports, vllm_engine
+from tests.characterization.vllm_fake import ENGINES, FakeVllm, untimed
+from tests.fixtures import ROOT, contract_free_router, fleet, profile
+from tests.wire import EngineWire, engine_clients, routed, vllm_engine
 from tools.observability.artifacts import render_dashboard
 
 SECONDS = re.compile(r"[0-9]+\.[0-9]+s\b")
@@ -50,13 +49,7 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         report = Report()
         output = io.StringIO()
         with (
-            patch.object(
-                preflight,
-                "EngineClient",
-                side_effect=lambda **kwargs: EngineClient(
-                    **kwargs, **engine_transports(self.engine)
-                ),
-            ),
+            engine_clients(preflight, self.engine),
             patch("httpx.AsyncClient", routed(self.engine)),
             redirect_stdout(output),
         ):
@@ -116,25 +109,13 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
-    def router(self):
-        cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
-        cfg.engine_contract = None
-        cfg.liveness_every = 0
-        cfg.state_path = self.root / "handoff.json"
-        cfg.profiles_path = self.root / "profiles.json"
-        router = create_app(cfg).state.router
-        for spec in cfg.engines:
-            router.profiles.put(profile(spec.iid))
-        self.addAsyncCleanup(router.engines.aclose)
-        return router
-
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
 
     async def test_peer_release_rounds(self):
-        router = self.router()
+        router = contract_free_router(self, self.root)
         now = [1000.0]
         router.peer_release = PeerRelease(lambda: now[0], load_backend("vllm").fabric)
         urls = {spec.url: spec.iid for spec in router.cfg.engines}
@@ -213,12 +194,8 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         assert_golden(self, "preflight_keep_alive", connections)
 
     async def test_lease_metrics_and_dashboard_series(self):
-        router = self.router()
-        transfer = {
-            "kv_connector": "NixlConnector",
-            "kv_connector_extra_config": {"kv_lease_duration": 30},
-        }
-        router.attested("e0", {"launch": {"args": ["--kv-transfer-config", json.dumps(transfer)]}})
+        router = contract_free_router(self, self.root)
+        router.attested("e0", launch("--kv-transfer-config", json.dumps(nixl_config(30))))
         text = render(router.state(), router.ttft, router.tpot, router.seat, router.queue_wait)
         lines = [
             line

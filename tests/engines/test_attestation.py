@@ -22,7 +22,7 @@ from narwhal.engines.attestation import (
 )
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.residency import ResidencyIndex
-from tests.fixtures import ROOT
+from tests.fixtures import ROOT, vllm_identity_engine
 
 
 class AttestationTests(unittest.IsolatedAsyncioTestCase):
@@ -76,6 +76,16 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         legacy = make_attestation(self.document, self.identity)
         self.assertNotIn("launch_digest", legacy)
         self.assertEqual(verify_attestation(legacy, self.contract, self.identity), [])
+
+    def test_response_reads_the_legacy_engine_version_name(self):
+        payload = make_attestation(self.document, self.identity)
+        payload["engine"]["vllm_version"] = payload["engine"].pop("version")
+        payload["attestation_digest"] = _payload_digest(payload)
+        self.assertEqual(verify_attestation(payload, self.contract, self.identity), [])
+        changed = replace(self.identity, version="other")
+        self.assertTrue(
+            any("engine version" in p for p in verify_attestation(payload, self.contract, changed))
+        )
 
     def test_tampering_and_response_shapes_report_failures(self):
         payload = make_attestation(self.document, self.identity)
@@ -165,9 +175,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         def handle(request):
             if failed:
                 return httpx.Response(503)
-            if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.version})
-            return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
+            return vllm_identity_engine(request, self.identity.version, start)
 
         transport = httpx.MockTransport(handle)
         self.assertEqual(
@@ -188,9 +196,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         start = 100
 
         def handle(request):
-            if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.version})
-            return httpx.Response(200, text=f"process_start_time_seconds {start}\n")
+            return vllm_identity_engine(request, self.identity.version, start)
 
         transport = httpx.MockTransport(handle)
         index = ResidencyIndex("model", self.document.contract.fingerprint())
@@ -227,9 +233,7 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
     async def test_residency_events_report_the_state_of_their_changes(self):
 
         def handle(request):
-            if request.url.path == "/version":
-                return httpx.Response(200, json={"version": self.identity.version})
-            return httpx.Response(200, text="process_start_time_seconds 100\n")
+            return vllm_identity_engine(request, self.identity.version, 100)
 
         index = ResidencyIndex("model", self.document.contract.fingerprint())
         index.apply(0, [])

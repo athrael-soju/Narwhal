@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from ...engines.attestation import EngineIdentity, EngineIdentityReader
+from ...engines.attestation import EngineIdentity, EngineIdentityReader, attested_option
 
 _PROCESS_START = re.compile(
     r"^process_start_time_seconds(?:\{[^}]*\})?\s+([0-9.eE+-]+)(?:\s|$)", re.MULTILINE
@@ -25,24 +25,9 @@ def parse_process_start(metrics: str) -> float:
     return value
 
 
-def _launch_arg(payload: Any, name: str) -> str | None:
-    launch = payload.get("launch") if isinstance(payload, dict) else None
-    args = launch.get("args") if isinstance(launch, dict) else None
-    if not isinstance(args, list):
-        return None
-    for index, arg in enumerate(args):
-        if not isinstance(arg, str):
-            continue
-        flag, equals, value = arg.partition("=")
-        if flag != name:
-            continue
-        if not equals:
-            value = args[index + 1] if index + 1 < len(args) else ""
-        return value if isinstance(value, str) else None
-    return None
-
-
 class VllmIdentity(EngineIdentityReader):
+    sequence_flag = "--max-num-seqs"
+
     async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
     ) -> str:
@@ -66,14 +51,8 @@ class VllmIdentity(EngineIdentityReader):
         metrics_response.raise_for_status()
         return EngineIdentity(version, parse_process_start(metrics_response.text))
 
-    def sequence_limit(self, attestation: Any) -> int | None:
-        value = _launch_arg(attestation, "--max-num-seqs")
-        if value is not None and value.isdigit() and int(value) > 0:
-            return int(value)
-        return None
-
     def kv_lease(self, attestation: Any) -> int | None:
-        value = _launch_arg(attestation, "--kv-transfer-config")
+        value = attested_option(attestation, "--kv-transfer-config")
         if value is None:
             return None
         try:

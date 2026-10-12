@@ -7,6 +7,7 @@ import httpx
 
 from ...runtime.role_switch import RoleSwitcher
 from ...types import Role
+from .identity import server_info
 from .plan import ROLE_SWITCH_CONNECTORS
 
 SWITCH_PATH = "/pd_role_switch"
@@ -81,9 +82,7 @@ class SglangRoleSwitch(RoleSwitcher):
         await self.switch(client, base, role, launch)
 
     async def role(self, client: httpx.AsyncClient, base: str) -> Role | None:
-        info = await client.get(f"{base.rstrip('/')}/server_info")
-        info.raise_for_status()
-        mode = current_role(info.json())
+        mode = current_role(await server_info(client, base))
         return None if mode is None else Role(mode)
 
     async def switch(
@@ -94,9 +93,7 @@ class SglangRoleSwitch(RoleSwitcher):
         launch: Mapping[str, Any] | None = None,
     ) -> None:
         base = base.rstrip("/")
-        info = await client.get(f"{base}/server_info")
-        info.raise_for_status()
-        state = info.json()
+        state = await server_info(client, base)
         if current_role(state) == role.value:
             return
         body: dict[str, Any] = {"new_role": role.value}

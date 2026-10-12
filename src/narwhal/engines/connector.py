@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -92,3 +93,6 @@ class RendezvousConnector(KvHandoff):
 
     @abstractmethod
     def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]: ...
+
+    def first_token_bound(self, limit: float | None) -> float:
+        return min(limit or math.inf, self.decode_wait_s)

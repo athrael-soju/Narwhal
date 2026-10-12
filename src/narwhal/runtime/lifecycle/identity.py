@@ -5,9 +5,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...engines.attestation import fetch_spec_identity, verify_attestation
 from ...profiling.generation import binding_digest, profile_generation_problems, read_generation
 from .manager import LifecycleManager
 
@@ -45,13 +44,11 @@ async def check_process_identities(
 
         async def inspect(spec: EngineSpec) -> tuple[float | None, str]:
             try:
-                identity = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=cfg.health_timeout_s,
+                identity = await fetch_spec_identity(
+                    cfg,
+                    spec,
                     transport=router.lifecycle_transport,
                     headers=router.engines._auth(None),
-                    reader=load_backend(cfg.backend).identity,
-                    attestation_url=spec.attestation_url,
                 )
                 if not spec.attestation_url:
                     return None, "attestation_url is not configured"
@@ -75,9 +72,7 @@ async def check_process_identities(
                 if manager.process_starts.get(spec.iid) != start:
                     # A new engine process starts in its launch role. A known process keeps
                     # its role, and a switch would hold it out of placement.
-                    switched = await router.switch_role(
-                        spec.iid, router.monitor.instances[spec.iid].role
-                    )
+                    switched = await router.resume_role(spec.iid)
                     if switched is not None:
                         return None, f"role switch failed: {switched}"
                 return start, ""
@@ -123,14 +118,7 @@ async def capture_process_identities(
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
         try:
-            identity = await fetch_engine_identity(
-                specs[iid].url,
-                timeout_s=cfg.health_timeout_s,
-                transport=transport,
-                headers=cfg.engine_headers(),
-                reader=load_backend(cfg.backend).identity,
-                attestation_url=specs[iid].attestation_url,
-            )
+            identity = await fetch_spec_identity(cfg, specs[iid], transport=transport)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"
         else:
@@ -155,12 +143,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
         spec = next(spec for spec in router.cfg.engines if spec.iid == iid)
         try:
             generation = await read_generation(
-                spec,
-                router.cfg.engine_contract,
-                timeout_s=router.cfg.health_timeout_s,
-                headers=router.cfg.engine_headers(),
-                transport=router.lifecycle_transport,
-                reader=load_backend(router.cfg.backend).identity,
+                router.cfg, spec, transport=router.lifecycle_transport
             )
             problems = profile_generation_problems(router.profiles, iid, generation.digest)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:

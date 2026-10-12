@@ -374,7 +374,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
     write(run / "fleet.json", fleet)
     engine_key = FleetConfig.load(run / "fleet.json").resolve_engine_key()
     allocation = read(root / "engine-launch.json")
-    engine_launcher = launcher(read(root / "template.json")["runtime"].get("backend"))
+    engine_launcher = launcher(spec["runtime"].get("backend"))
     hook = engine_launcher.cache_hook
     runs = []
     for index, engine in enumerate(fleet["engines"]):

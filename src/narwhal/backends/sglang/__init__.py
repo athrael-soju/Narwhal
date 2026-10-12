@@ -3,7 +3,6 @@ from __future__ import annotations
 from importlib import resources
 from typing import TYPE_CHECKING
 
-from ...runtime import listeners
 from ...runtime.fabric import FabricLifecycle
 from .. import EngineBackend
 from .connector import MooncakeConnector, SglangNixlConnector
@@ -21,9 +20,6 @@ class SglangFabric(FabricLifecycle):
     # A consumer holds a producer's KV only for one rendezvous, so no peer needs a release.
     release_after_s = ()
     release_retry_s = 0.0
-
-    def check_engine_bind(self, host: str, port: int, *, fabric: bool = False) -> None:
-        listeners.check_engine_bind(host, port, dual_stack=False)
 
 
 def _launcher() -> EngineLauncher:

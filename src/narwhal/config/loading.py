@@ -14,12 +14,15 @@ from ..serving.policy import ServingPolicy
 from ..types import Role
 from .environment import resolve_endpoint
 from .model import (
+    CONTRACT_LAYOUT_FLAGS,
     EngineContract,
     EngineSpec,
     FleetConfig,
     HardwareSpec,
     ProfileValidationPolicy,
     SharedDeviceAllocation,
+    attested_contract_fields,
+    checks_handshake,
     current_contract_names,
 )
 
@@ -188,16 +191,16 @@ def load(path: str | Path) -> FleetConfig:
         except ValueError as exc:
             problems.append(str(exc))
         _check_unknown(problems, "engine_contract", contract_raw, _ENGINE_CONTRACT_KEYS)
-        attested = _attested_fields(engine_raw)
+        attested = attested_contract_fields(str(engine_raw.get("backend", DEFAULT_BACKEND)))
         # A backend without a handshake check leaves the field null.
-        checks_handshake = attested is None or "enforce_handshake_compat" in attested
-        handshake_raw = contract_raw.get("enforce_handshake_compat", checks_handshake or None)
+        handshake_checked = checks_handshake(attested)
+        handshake_raw = contract_raw.get("enforce_handshake_compat", handshake_checked or None)
         handshake = (
             None
-            if handshake_raw is None and not checks_handshake
+            if handshake_raw is None and not handshake_checked
             else _read_bool(problems, "engine_contract.enforce_handshake_compat", handshake_raw)
         )
-        for name in ("cross_layers_blocks", "hybrid_kv_cache_manager"):
+        for name in CONTRACT_LAYOUT_FLAGS:
             value = contract_raw.get(name)
             if value is not None and not isinstance(value, bool):
                 problems.append(f"engine_contract.{name} must be a boolean or null")
@@ -628,37 +631,10 @@ _HEALTH_KEYS = {
 _PROFILE_KEYS = {"path", "max_decode_fit_mape", "max_decode_cv_mape"}
 
 
-_ENGINE_CONTRACT_KEYS = {
-    "engine_version",
-    "image_digest",
-    "transfer_version",
-    "connector_version",
-    "model_architecture",
-    "model_dtype",
-    "kv_heads",
-    "head_size",
-    "hidden_layers",
-    "attention_backend",
-    "kv_cache_dtype",
-    "cross_layers_blocks",
-    "hybrid_kv_cache_manager",
-    "connector",
-    "kv_role",
-    "transfer_mode",
-    "speculative_config",
-    "enforce_handshake_compat",
-}
+_ENGINE_CONTRACT_KEYS = {f.name for f in fields(EngineContract)}
 
 
 _HARDWARE_KEYS = {"accelerator", "accelerators_per_engine", "tensor_parallel"}
-
-
-def _attested_fields(engine_raw: dict[str, Any]) -> frozenset[str] | None:
-    try:
-        backend = load_backend(str(engine_raw.get("backend", DEFAULT_BACKEND)))
-        return backend.identity.contract_fields
-    except ValueError:
-        return None
 
 
 def _contract_connector(engine_raw: dict[str, Any]) -> str:

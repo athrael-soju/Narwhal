@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Collection
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -68,26 +68,7 @@ class EngineContract:
     enforce_handshake_compat: bool | None = True
 
     def fields(self) -> dict[str, str | int | bool | None]:
-        return {
-            "engine_version": self.engine_version,
-            "image_digest": self.image_digest,
-            "transfer_version": self.transfer_version,
-            "connector_version": self.connector_version,
-            "model_architecture": self.model_architecture,
-            "model_dtype": self.model_dtype,
-            "kv_heads": self.kv_heads,
-            "head_size": self.head_size,
-            "hidden_layers": self.hidden_layers,
-            "attention_backend": self.attention_backend,
-            "kv_cache_dtype": self.kv_cache_dtype,
-            "cross_layers_blocks": self.cross_layers_blocks,
-            "hybrid_kv_cache_manager": self.hybrid_kv_cache_manager,
-            "connector": self.connector,
-            "kv_role": self.kv_role,
-            "transfer_mode": self.transfer_mode,
-            "speculative_config": self.speculative_config,
-            "enforce_handshake_compat": self.enforce_handshake_compat,
-        }
+        return asdict(self)
 
     def fingerprint(self) -> str:
         return canonical_digest(self.fields())[7:23]
@@ -120,6 +101,21 @@ class EngineContract:
                 or (not isinstance(fields[key], bool) and fields[key] == 0)
             )
         )
+
+
+CONTRACT_INT_FIELDS = ("connector_version", "kv_heads", "head_size", "hidden_layers")
+CONTRACT_LAYOUT_FLAGS = ("cross_layers_blocks", "hybrid_kv_cache_manager")
+
+
+def attested_contract_fields(backend: str) -> frozenset[str] | None:
+    try:
+        return load_backend(backend).identity.contract_fields
+    except ValueError:
+        return None
+
+
+def checks_handshake(attested: Collection[str] | None) -> bool:
+    return attested is None or "enforce_handshake_compat" in attested
 
 
 @dataclass(frozen=True)
@@ -248,7 +244,7 @@ class FleetConfig:
     # Role changes preserve this live-decode floor. Breaker ejections may breach it.
     min_decode: int = 1
     backend: str = DEFAULT_BACKEND
-    # Empty selects the backend's default connector and its dialect.
+    # Empty selects the backend's dialect and default connector.
     connector: str = ""
     dialect: str = ""
     engine_contract: EngineContract | None = None
@@ -272,10 +268,7 @@ class FleetConfig:
         self.dialect = self.dialect or backend.dialect.name
 
     def attested_fields(self) -> frozenset[str] | None:
-        try:
-            return load_backend(self.backend).identity.contract_fields
-        except ValueError:
-            return None
+        return attested_contract_fields(self.backend)
 
     def contract_missing(self) -> list[str] | None:
         if self.engine_contract is None:

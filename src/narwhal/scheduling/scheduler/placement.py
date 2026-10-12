@@ -365,17 +365,19 @@ class GlobalScheduler:
                 excluded |= held
         return excluded
 
-    def _fresh_producers(self, candidates: list[Instance]) -> list[Instance]:
-        """Return the prefill candidates with a decode engine that can take their handoff."""
+    def has_fresh_consumer(self, producer: str, decodes: list[Instance]) -> bool:
+        """Return whether `producer` can hand off to an engine in `decodes` other than itself."""
         stale = self.stale_handoff
         if stale is None:
+            return True
+        return any(d.iid != producer and not stale(producer, d.iid) for d in decodes)
+
+    def _fresh_producers(self, candidates: list[Instance]) -> list[Instance]:
+        """Return the prefill candidates with a decode engine that can take their handoff."""
+        if self.stale_handoff is None:
             return candidates
         decodes = self.role_pool(Role.DECODE, self.live_instances())
-        fresh = [
-            inst
-            for inst in candidates
-            if any(d.iid != inst.iid and not stale(inst.iid, d.iid) for d in decodes)
-        ]
+        fresh = [inst for inst in candidates if self.has_fresh_consumer(inst.iid, decodes)]
         return fresh or candidates
 
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:

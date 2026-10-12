@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard
 from uuid import uuid4
 
 import httpx
 
+from ..backends import load as load_backend
 from ..types import (
     LEG_CONNECTION,
     LEG_INFERENCE_STATUS,
@@ -24,6 +24,9 @@ from .connector import KvConnector, KvHandoff, PrefillResult, RendezvousConnecto
 from .dialect import EngineDialect
 from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
 from .wire import Dial, WireClient, WireResponse, dial_tcp
+
+if TYPE_CHECKING:
+    from ..config import FleetConfig
 
 
 class EngineError(RuntimeError):
@@ -127,7 +130,6 @@ class PairedHandoff:
     connector: str
     result: PrefillResult | None = None
     rendezvous: dict[str, Any] | None = None
-    decode_wait_s: float | None = None
     prefill_seconds: float | None = None
     # A rendezvous prefill leg runs while its decode leg streams.
     prefill: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -151,6 +153,28 @@ def _prefill_failure(task: asyncio.Task[None]) -> BaseException | None:
 
 def _status_class(status: int) -> str:
     return LEG_OVERLOAD if status in (408, 429) else LEG_INFERENCE_STATUS
+
+
+def _descriptor_kv(kv: KvHandoff) -> KvConnector:
+    if not isinstance(kv, KvConnector):
+        raise TypeError(f"connector {kv.name!r} has no prefill descriptor")
+    return kv
+
+
+def prefill_leg(
+    body: dict[str, Any],
+    kv: KvHandoff,
+    dialect: EngineDialect,
+    rendezvous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    leg = {**body, "max_tokens": 1, "stream": False}
+    if isinstance(kv, RendezvousConnector):
+        leg = kv.prefill_body(leg, rendezvous or {})
+    else:
+        leg.update(_descriptor_kv(kv).prefill_params())
+    for name in dialect.prefill_incompatible:
+        leg.pop(name, None)
+    return leg
 
 
 class EngineClient:
@@ -302,21 +326,12 @@ class EngineClient:
 
     @property
     def descriptor_kv(self) -> KvConnector:
-        if not isinstance(self.kv, KvConnector):
-            raise TypeError(f"connector {self.kv.name!r} has no prefill descriptor")
-        return self.kv
+        return _descriptor_kv(self.kv)
 
     def _prefill_leg(
         self, body: dict[str, Any], rendezvous: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        leg = {**body, "max_tokens": 1, "stream": False}
-        if isinstance(self.kv, RendezvousConnector):
-            leg = self.kv.prefill_body(leg, rendezvous or {})
-        else:
-            leg.update(self.descriptor_kv.prefill_params())
-        for name in self.dialect.prefill_incompatible:
-            leg.pop(name, None)
-        return leg
+        return prefill_leg(body, self.kv, self.dialect, rendezvous)
 
     def _tag(
         self, leg: dict[str, Any], headers: dict[str, str], request_id: str | None
@@ -362,9 +377,7 @@ class EngineClient:
         started = time.monotonic()
         if isinstance(self.kv, RendezvousConnector):
             rendezvous = self.kv.rendezvous(producer or {})
-            handoff = PairedHandoff(
-                self.kv.name, rendezvous=rendezvous, decode_wait_s=self.kv.decode_wait_s
-            )
+            handoff = PairedHandoff(self.kv.name, rendezvous=rendezvous)
 
             async def run() -> None:
                 await self.rendezvous_prefill(url, endpoint, body, headers, rendezvous)
@@ -387,7 +400,7 @@ class EngineClient:
         first_token_timeout_s: float | None = None,
     ) -> AsyncGenerator[list[SseEvent], None]:
         task = handoff.prefill
-        if task is None:
+        if task is None or not isinstance(self.kv, RendezvousConnector):
             async for batch in self.decode(
                 url,
                 endpoint,
@@ -398,7 +411,6 @@ class EngineClient:
             ):
                 yield batch
             return
-        limit = min(first_token_timeout_s or math.inf, handoff.decode_wait_s or math.inf)
         finished = False
         try:
             async for batch in self.decode(
@@ -407,7 +419,7 @@ class EngineClient:
                 body,
                 headers,
                 None,
-                first_token_timeout_s=None if math.isinf(limit) else limit,
+                first_token_timeout_s=self.kv.first_token_bound(first_token_timeout_s),
                 rendezvous=handoff.rendezvous,
             ):
                 yield batch
@@ -626,7 +638,7 @@ class EngineClient:
             except TimeoutError:
                 return ProbeLeg(failed=late)
 
-        decode_limit = min(deadline_s or math.inf, kv.decode_wait_s)
+        decode_limit = kv.first_token_bound(deadline_s)
         prefill, decode = await asyncio.gather(
             bounded(
                 self._probe_prefill(prefill_url, prompt=prompt, rendezvous=rendezvous),
@@ -730,6 +742,25 @@ class EngineClient:
             return ProbeLeg(inconclusive=True)
         except httpx.HTTPError as exc:
             return ProbeLeg(failed=leg_failure_class(exc))
+
+
+def client_options(cfg: FleetConfig) -> dict[str, Any]:
+    # The fleet's serving timeouts, pools, backend and credential; callers add transport and dial.
+    backend = load_backend(cfg.backend)
+    return {
+        "timeout_s": cfg.request_timeout_s,
+        "prefill_timeout_s": cfg.prefill_timeout_s,
+        "read_timeout_s": cfg.decode_read_timeout_s,
+        "max_connections": cfg.max_connections,
+        "control_connections": cfg.resolved_control_connections(),
+        "pool_timeout_s": cfg.pool_timeout_s,
+        "connect_timeout_s": cfg.connect_timeout_s,
+        "health_timeout_s": cfg.health_timeout_s,
+        "kv": backend.connector(cfg.connector),
+        "dialect": backend.dialect,
+        "model": cfg.model,
+        "engine_api_key": cfg.resolve_engine_key(),
+    }
 
 
 def _first_token_detail(budget_s: float, metadata: int) -> str:

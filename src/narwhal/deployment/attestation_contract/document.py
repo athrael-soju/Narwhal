@@ -10,6 +10,19 @@ from ..launch_engine.backend import plan_launcher
 from .evidence import read_json, write_private_json
 
 
+def launch_args(args: list[str], per_launch: frozenset[str]) -> list[str]:
+    """Return engine arguments with the values of the `per_launch` flags removed."""
+    kept: list[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        kept.append(arg)
+        skip = arg in per_launch
+    return kept
+
+
 def generate(run: Path, startup_log: Path) -> Path:
     plan = read_json(run / "launch.json")
     record = plan_launcher(plan).engine_document(run, startup_log)

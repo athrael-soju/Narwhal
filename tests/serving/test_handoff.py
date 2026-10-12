@@ -8,53 +8,39 @@ from narwhal.serving.handoff import handoff_bound
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.seats import decode_seats
 from narwhal.types import Phase, Request
+from tests.backends.fixtures.vllm import launch, nixl_config
 from tests.serving.test_http_accounting import HttpHarness
-
-
-def attestation(*args):
-    return {"launch": {"args": list(args)}}
-
-
-def connector(**extra):
-    return json.dumps(
-        {
-            "kv_connector": "NixlConnector",
-            "kv_role": "kv_both",
-            "kv_connector_extra_config": {"backends": ["UCX"], **extra},
-        }
-    )
 
 
 class AttestedLeaseTests(unittest.TestCase):
     def test_the_lease_comes_from_the_attested_connector_configuration(self):
         for payload, lease in (
-            (attestation("--kv-transfer-config", connector(kv_lease_duration=30)), 30),
-            (attestation(f"--kv-transfer-config={connector(kv_lease_duration=6)}"), 6),
-            (attestation("--kv-transfer-config", connector()), None),
-            (attestation("--kv-transfer-config", connector(kv_lease_duration="30")), None),
-            (attestation("--kv-transfer-config", connector(kv_lease_duration=0)), None),
-            (attestation("--kv-transfer-config", "{"), None),
-            (attestation("--kv-transfer-config", "[]"), None),
-            (attestation("--kv-transfer-config", '"NixlConnector"'), None),
-            (attestation("--kv-transfer-config", 30), None),
-            (attestation("--kv-transfer-config"), None),
-            (attestation("--max-num-seqs", "64"), None),
+            (launch("--kv-transfer-config", json.dumps(nixl_config(30, ucx=True))), 30),
+            (launch(f"--kv-transfer-config={json.dumps(nixl_config(6, ucx=True))}"), 6),
+            (launch("--kv-transfer-config", json.dumps(nixl_config(None, ucx=True))), None),
+            (launch("--kv-transfer-config", json.dumps(nixl_config("30", ucx=True))), None),
+            (launch("--kv-transfer-config", json.dumps(nixl_config(0, ucx=True))), None),
+            (launch("--kv-transfer-config", "{"), None),
+            (launch("--kv-transfer-config", "[]"), None),
+            (launch("--kv-transfer-config", '"NixlConnector"'), None),
+            (launch("--kv-transfer-config", 30), None),
+            (launch("--kv-transfer-config"), None),
+            (launch("--max-num-seqs", "64"), None),
             ({"launch": {}}, None),
             (None, None),
         ):
             with self.subTest(payload=payload):
                 self.assertEqual(VllmIdentity().kv_lease(payload), lease)
-        other = json.loads(connector(kv_lease_duration=30))
-        other["kv_connector"] = "LMCacheConnector"
+        other = {**nixl_config(30, ucx=True), "kv_connector": "LMCacheConnector"}
         self.assertIsNone(
-            VllmIdentity().kv_lease(attestation("--kv-transfer-config", json.dumps(other)))
+            VllmIdentity().kv_lease(launch("--kv-transfer-config", json.dumps(other)))
         )
 
 
 class HandoffExpiryTests(HttpHarness):
     def lease(self, iid, seconds):
         self.router.attested(
-            iid, attestation("--kv-transfer-config", connector(kv_lease_duration=seconds))
+            iid, launch("--kv-transfer-config", json.dumps(nixl_config(seconds, ucx=True)))
         )
 
     def assert_handoff_expiry(self, response, error):

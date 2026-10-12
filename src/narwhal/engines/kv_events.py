@@ -3,7 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
+
+import msgpack  # type: ignore[import-untyped]
 
 from .prefix import CacheNamespace, block_identities
 
@@ -101,6 +103,12 @@ def matched_identities(event: StoredBlocks, known: dict[Hashable, bytes]) -> lis
     return [known.get(block_hash) for block_hash in event.block_hashes]
 
 
+def block_hashes(values: Any) -> tuple[Hashable, ...]:
+    if not isinstance(values, list) or not all(isinstance(v, bytes | int) for v in values):
+        raise ValueError("block hashes must be a list of bytes or integers")
+    return tuple(values)
+
+
 class KvEventDecoder(ABC):
     # The engine always computes a prompt's final token, so a cached prefix never covers it.
     recomputes_final_token: ClassVar[bool] = True
@@ -109,3 +117,44 @@ class KvEventDecoder(ABC):
 
     @abstractmethod
     def decode_batch(self, payload: bytes) -> list[CacheEvent | None]: ...
+
+
+class MsgpackKvEvents(KvEventDecoder):
+    # The batch layout the shape error names.
+    batch_shape: ClassVar[str] = "[timestamp, events, ...]"
+
+    @abstractmethod
+    def stored(
+        self, item: dict[str, Any], parent: Hashable | None, tokens: list[int]
+    ) -> StoredBlocks: ...
+
+    def removed_group(self, item: dict[str, Any]) -> int | None:
+        return None
+
+    def decode_batch(self, payload: bytes) -> list[CacheEvent | None]:
+        try:
+            batch = msgpack.unpackb(payload, raw=False, strict_map_key=False)
+            if not isinstance(batch, list) or len(batch) < 2 or not isinstance(batch[1], list):
+                raise ValueError(f"event batch must be {self.batch_shape}")
+            return [self._event(item) for item in batch[1]]
+        except (msgpack.UnpackException, KeyError, TypeError) as exc:
+            raise ValueError(f"malformed cache event batch: {exc}") from exc
+
+    def _event(self, item: Any) -> CacheEvent | None:
+        if not isinstance(item, dict):
+            raise ValueError("cache event must be a map")
+        kind = item.get("type")
+        if kind == "AllBlocksCleared":
+            return CacheCleared()
+        if kind == "BlockRemoved":
+            hashes = block_hashes(item["block_hashes"])
+            return RemovedBlocks(hashes, self.removed_group(item), item.get("medium"))
+        if kind != "BlockStored":
+            return None
+        parent = item.get("parent_block_hash")
+        tokens = item["token_ids"]
+        if not isinstance(tokens, list) or any(type(t) is not int for t in tokens):
+            raise ValueError("stored-block token IDs must be integers")
+        if parent is not None and not isinstance(parent, bytes | int):
+            raise ValueError("parent block hash must be bytes or an integer")
+        return self.stored(item, parent, tokens)

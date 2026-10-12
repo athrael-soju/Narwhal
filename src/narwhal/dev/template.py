@@ -14,13 +14,15 @@ from importlib import metadata, resources
 from pathlib import Path
 from typing import Any
 
-from narwhal.backends import renamed_fields
+from narwhal.backends import current_fields
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.launch_engine.runtime import write_private
 from narwhal.deployment.launch_engine.start import gpu_memory
 from narwhal.runtime.listeners import check_engine_bind
+
+_PORT_RANGE_OFFSETS = {"engine_first": 1, "attestation_first": 101, "side_channel_first": 201}
 
 
 def reference() -> dict:
@@ -34,8 +36,7 @@ def default_template() -> dict:
 def current_ports(document: dict) -> dict:
     ports = document.get("ports")
     if isinstance(ports, dict):
-        renamed = renamed_fields("dev_ports")
-        document["ports"] = {renamed.get(key, key): value for key, value in ports.items()}
+        document["ports"] = current_fields("dev_ports", ports)
     return document
 
 
@@ -119,7 +120,7 @@ def _port_layout(template: dict, count: int) -> tuple[dict[str, int], set[int]]:
     used = {ports["router"]}
     if not 1 <= ports["router"] <= 65535:
         raise ValueError("router port is invalid")
-    for key in ("engine_first", "attestation_first", "side_channel_first"):
+    for key in _PORT_RANGE_OFFSETS:
         first = ports[key]
         if type(first) is not int or not 1 <= first <= 65536 - count:
             raise ValueError(f"{key} cannot fit {count} engine ports")
@@ -195,9 +196,7 @@ def materialize(
     if port_base is not None:
         spec["ports"].update(
             router=port_base,
-            engine_first=port_base + 1,
-            attestation_first=port_base + 101,
-            side_channel_first=port_base + 201,
+            **{key: port_base + offset for key, offset in _PORT_RANGE_OFFSETS.items()},
         )
     if existing is not None and saved is not None:
         conflicts = []
@@ -225,7 +224,7 @@ def materialize(
         )
         if port_base is not None and any(
             spec["ports"][field] != existing["ports"][field]
-            for field in ("router", "engine_first", "attestation_first", "side_channel_first")
+            for field in ("router", *_PORT_RANGE_OFFSETS)
         ):
             conflicts.append("--port-base")
         if template is not None:

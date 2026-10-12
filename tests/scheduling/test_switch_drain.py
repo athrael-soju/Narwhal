@@ -2,33 +2,21 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 
-from narwhal.profiling.store import ProfileStore
-from narwhal.scheduling.control import SLO, Thresholds
-from narwhal.scheduling.monitor import InstanceMonitor
-from narwhal.scheduling.scheduler.placement import GlobalScheduler
-from narwhal.types import Instance, Phase, Request, Role
-from tests.fixtures import profile
+from narwhal.types import Phase, Request, Role
+from tests.fixtures import role_scheduler
 
 
 class SwitchDrainTests(unittest.TestCase):
     def setUp(self):
         self.now = 100.0
-        with tempfile.TemporaryDirectory() as folder:
-            profiles = ProfileStore(Path(folder) / "profiles.json")
-        monitor = InstanceMonitor(profiles=profiles)
-        for iid, role in (("p1", Role.PREFILL), ("p2", Role.PREFILL), ("d1", Role.DECODE)):
-            profiles.put(profile(iid))
-            monitor.add(Instance(iid, f"http://{iid}", role))
-        profiles.put(profile("d2"))
-        monitor.add(Instance("d2", "http://d2", Role.DECODE))
-        self.scheduler = GlobalScheduler(
-            monitor, profiles, SLO(2.0, 0.05), Thresholds(), clock=lambda: self.now
-        )
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        roles = {"p1": Role.PREFILL, "p2": Role.PREFILL, "d1": Role.DECODE, "d2": Role.DECODE}
+        self.scheduler = role_scheduler(folder.name, roles, clock=lambda: self.now)
         self.scheduler.availability.roles_bound = True
         self.scheduler.switch_requires_idle = True
-        self.decodes = {iid: monitor.instances[iid].decode for iid in ("d1", "d2")}
+        self.decodes = {iid: self.scheduler.monitor.instances[iid].decode for iid in ("d1", "d2")}
         self.decodes["d1"].update(r1=Request("r1", 128), r2=Request("r2", 128))
         self.decodes["d2"]["r3"] = Request("r3", 128)
 

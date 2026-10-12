@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
+
+from ...deployment.launch_engine.backend import run_import_check
 
 IMPORT_CHECK = "from sglang.srt.server_args import ServerArgs\n"
 
@@ -33,14 +33,4 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
 
 
 def check_imports() -> None:
-    try:
-        subprocess.run(
-            [sys.executable, "-c", IMPORT_CHECK],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        detail = exc.stderr[-800:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        raise ValueError(f"native SGLang import failed: {detail}") from exc
+    run_import_check(IMPORT_CHECK, "SGLang")

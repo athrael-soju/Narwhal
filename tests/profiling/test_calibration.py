@@ -16,7 +16,7 @@ import httpx
 
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.config.model import SharedDeviceAllocation
-from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
@@ -24,7 +24,7 @@ from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe.fleet import device_key
 from narwhal.types import Role
 from tests.fixtures import ROOT, DescriptorHandoffs, calibration_document
-from tests.wire import engine_transports
+from tests.wire import engine_clients
 
 TOKEN = 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
 
@@ -661,11 +661,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
         output = Path(self.folder.name) / "boundary.json"
         with (
-            patch.object(
-                calibration,
-                "EngineClient",
-                side_effect=lambda **kwargs: EngineClient(**kwargs, **engine_transports(handle)),
-            ),
+            engine_clients(calibration, handle),
             patch.object(
                 calibration,
                 "read_generation",

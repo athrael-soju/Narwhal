@@ -154,6 +154,8 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 continue
             with self.subTest(connector=key):
                 self.assertTrue(0 < kv.decode_wait_s < math.inf)
+                self.assertEqual(kv.first_token_bound(None), kv.decode_wait_s)
+                self.assertEqual(kv.first_token_bound(kv.decode_wait_s / 2), kv.decode_wait_s / 2)
                 first, second = kv.rendezvous({}), kv.rendezvous({})
                 self.assertNotEqual(first, second)
                 for leg in (kv.prefill_body(body, first), kv.decode_body(body, first)):
@@ -252,6 +254,21 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 )
                 launcher.validate_runtime(runtime)
                 self.assertGreater(launcher.sequence_limit(runtime), 0)
+
+    def test_launcher_rejects_invalid_discovery_settings(self):
+        launcher, fixture = self.backend.launcher(), self.fixtures
+        observed = {"packages": fixture.image_packages, "image_environment": {}}
+        for name, value, message in (
+            ("MODEL_DTYPE", "float32", "set MODEL_DTYPE to bfloat16 or float16 in .env"),
+            ("ENGINE_ARGS", "{}", "ENGINE_ARGS must be a JSON array"),
+            ("ENGINE_ENV", "[]", "ENGINE_ENV must be a JSON object"),
+        ):
+            settings = {**fixture.discovery_settings, name: value}
+            for connector in self.backend.connectors:
+                with self.subTest(name=name, connector=connector):
+                    with self.assertRaises(ValueError) as raised:
+                        launcher.discovered_runtime(observed, settings.get, connector, "prefill")
+                    self.assertEqual(str(raised.exception), message)
 
     async def test_role_switch_capability(self):
         switcher = self.backend.role_switch

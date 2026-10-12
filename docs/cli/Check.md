@@ -59,7 +59,7 @@ Each probe sends the prompt `"benchmark " * 64`, tokenized for the model under t
 
 On engines that switch roles themselves, such as SGLang over Mooncake, preflight switches each pair into place. When it finishes, it returns every engine to the role it served when preflight started.
 
-A transfer passes when the consumer's transfer histogram count and sum both grow. The histogram is `vllm:nixl_xfer_time_seconds` on vLLM, and the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. The pair record names it in `transfer_metric`, with `transfer_count_delta` and `transfer_seconds`.
+With `--evidence-out`, a transfer passes when the consumer's transfer histogram count and sum both grow. The histogram is `vllm:nixl_xfer_time_seconds` on vLLM, and the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. The pair record names it in `transfer_metric`, with `transfer_count_delta` and `transfer_seconds`.
 
 The first-token deadline is `engine.first_token_timeout_s`, and the probe deadline is `serving.request_timeout_s`. A probe succeeds when its stream ends before the probe deadline.
 
@@ -160,7 +160,7 @@ The artifact is valid evidence when all of these hold:
 - the candidate deadline is strictly below `serving.request_timeout_s`
 - `engine.first_token_timeout_s` is above the candidate deadline
 
-When the fleet configuration sets `engine_contract`, an engine's identity during calibration is its attestation digest. Otherwise, it is the vLLM version and process start time.
+When the fleet configuration sets `engine_contract`, an engine's identity during calibration is its attestation digest. Otherwise, it is the engine version and process start time. On SGLang, `narwhal-check` reads the process start from the engine's [attestation sidecar](Attest.md#process-route).
 
 The artifact is incomplete when any of these happens:
 
@@ -176,7 +176,7 @@ The `calibration` gate checks the artifact at `engine.first_token_calibration_pa
 | --- | --- |
 | `engine_contract` set, sidecar reports launch evidence | `launch_digest` |
 | `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
-| `engine_contract` unset | vLLM version and process start time |
+| `engine_contract` unset | Engine version and process start time |
 
 The gate labels each running engine:
 

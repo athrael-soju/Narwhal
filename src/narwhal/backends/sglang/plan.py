@@ -4,12 +4,20 @@ import json
 import math
 import re
 
+from ...deployment.launch_engine.plan import (
+    check_environment,
+    check_extra_args,
+    check_versions_and_dtype,
+    option,
+)
+
 CONNECTORS = ("mooncake", "nixl")
 # Only these transfer backends switch roles at runtime.
 ROLE_SWITCH_CONNECTORS = ("mooncake",)
 TRANSFER_PACKAGES = {"mooncake": "mooncake-transfer-engine", "nixl": "nixl"}
 # Images install CUDA builds under suffixed names, such as mooncake-transfer-engine-cuda13.
-_CUDA_BUILD = re.compile(r"-cu(?:da)?[0-9]+")
+CUDA_BUILD_SUFFIX = r"-cu(?:da)?[0-9]+"
+_CUDA_BUILD = re.compile(CUDA_BUILD_SUFFIX)
 # Both roles must agree on page size, and some hybrid models force page 1 with Triton in prefill.
 PAGE_SIZE = 1
 ATTENTION_BACKEND = "triton"
@@ -69,13 +77,7 @@ def validate_runtime(runtime: dict) -> None:
             f"runtime.expected_packages requires pinned sglang and {TRANSFER_PACKAGES[name]} "
             "versions"
         )
-    if any(not isinstance(v, str) or not v or "<" in v for v in packages.values()):
-        raise ValueError("runtime.expected_packages requires resolved version strings")
-    if (
-        runtime.get("model_dtype") not in ("bfloat16", "float16")
-        or runtime.get("kv_cache_dtype") != "auto"
-    ):
-        raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
+    check_versions_and_dtype(runtime)
     if name not in ROLE_SWITCH_CONNECTORS and runtime.get("role") not in ("prefill", "decode"):
         raise ValueError(
             f"runtime.role must be prefill or decode; {name} engines keep their launch role"
@@ -95,33 +97,14 @@ def validate_runtime(runtime: dict) -> None:
                 "engine reserves it when it switches to decode"
             )
     args = runtime.get("extra_args", [])
-    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
-        raise ValueError("runtime.extra_args must be an argument list")
-    index = 0
-    while index < len(args):
-        flag = args[index]
-        if flag in VALUE_OPTIONS and index + 1 < len(args) and not args[index + 1].startswith("--"):
-            index += 2
-        elif flag in FLAG_OPTIONS:
-            index += 1
-        else:
-            raise ValueError(f"unsupported or incomplete runtime option: {flag}")
+    check_extra_args(args, VALUE_OPTIONS, FLAG_OPTIONS)
     if "--max-running-requests" in args:
         cap = option(args, "--max-running-requests")
         if cap is None or not cap.isdigit() or not 1 <= int(cap) <= MAX_RUNNING_REQUESTS:
             raise ValueError(
                 f"--max-running-requests must be set once, from 1 to {MAX_RUNNING_REQUESTS}"
             )
-    for name, value in runtime.get("environment", {}).items():
-        if (
-            not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
-            or name in MANAGED_ENV
-            or not (name.startswith(ENV_PREFIXES) or name in ("LD_LIBRARY_PATH", "PYTHONPATH"))
-            or any(word in name for word in ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH"))
-            or not isinstance(value, str)
-            or any(c in value for c in "\r\n\0")
-        ):
-            raise ValueError(f"unsupported runtime environment field: {name}")
+    check_environment(runtime.get("environment", {}), MANAGED_ENV, ENV_PREFIXES)
 
 
 def transfer_package(connector_name: str, packages: dict) -> str | None:
@@ -226,13 +209,6 @@ def serve_args(
         *extra,
     ]
     return args, transfer
-
-
-def option(args: list[str], name: str) -> str | None:
-    positions = [i for i, arg in enumerate(args) if arg == name]
-    if len(positions) != 1 or positions[0] + 1 >= len(args):
-        return None
-    return args[positions[0] + 1]
 
 
 def memory_fraction(args: list[str]) -> str | None:

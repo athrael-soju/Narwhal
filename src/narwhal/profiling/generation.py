@@ -5,14 +5,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from ..config.model import EngineContract, EngineSpec
+from ..config.model import EngineSpec, FleetConfig
 from ..contracts import canonical_digest
-from ..engines.attestation import (
-    EngineIdentity,
-    EngineIdentityReader,
-    fetch_engine_identity,
-    verify_attestation,
-)
+from ..engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 
 if TYPE_CHECKING:
     from .store import ProfileStore
@@ -43,22 +38,16 @@ def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
 
 
 async def read_generation(
+    cfg: FleetConfig,
     spec: EngineSpec,
-    contract: EngineContract | None,
     *,
-    timeout_s: float,
-    headers: dict[str, str] | None = None,
+    timeout_s: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
-    reader: EngineIdentityReader,
 ) -> GenerationEvidence:
-    identity = await fetch_engine_identity(
-        spec.url,
-        timeout_s=timeout_s,
-        headers=headers,
-        transport=transport,
-        reader=reader,
-        attestation_url=spec.attestation_url,
-    )
+    contract = cfg.engine_contract
+    if timeout_s is None:
+        timeout_s = cfg.health_timeout_s
+    identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
     if contract is None:
         return identity_generation(identity)
     if not spec.attestation_url:

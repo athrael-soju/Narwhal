@@ -3,7 +3,6 @@ from __future__ import annotations
 from importlib import resources
 from typing import TYPE_CHECKING
 
-from ...runtime import listeners
 from ...runtime.fabric import FabricLifecycle
 from ...runtime.role_switch import RouterRoleSwitch
 from .. import EngineBackend
@@ -24,10 +23,8 @@ class VllmFabric(FabricLifecycle):
     release_after_s = (65.0, 125.0, 245.0, 485.0, 965.0, 1925.0, 3845.0)
     # vLLM sends lease heartbeats at most every 5 s.
     release_retry_s = 5.0
-
-    def check_engine_bind(self, host: str, port: int, *, fabric: bool = False) -> None:
-        # NIXL's ZeroMQ listener enables IPv6 dual-stack.
-        listeners.check_engine_bind(host, port, dual_stack=fabric)
+    # NIXL's ZeroMQ listener enables IPv6 dual-stack.
+    fabric_dual_stack = True
 
 
 def _launcher() -> EngineLauncher:

@@ -86,12 +86,3 @@ async def restore_roles(
     for base, (role, launch) in ordered:
         if role is Role.DECODE and any(switcher.stale_handoff(p, base) for p in producers):
             await switcher.refresh(client, base, role, launch)
-
-
-async def place_pair(
-    switcher: RoleSwitcher,
-    client: httpx.AsyncClient,
-    producer: tuple[str, Mapping[str, Any] | None],
-    consumer: tuple[str, Mapping[str, Any] | None],
-) -> None:
-    await switcher.place(client, producer, consumer)

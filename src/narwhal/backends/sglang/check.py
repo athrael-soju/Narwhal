@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from pathlib import Path
 
-from ...deployment import stages
-from ...deployment.launch_engine.check import require_checked
+from ...deployment.launch_engine.check import (
+    inspect_image,
+    run_native_check,
+    start_check,
+    write_checked,
+)
 from ...deployment.launch_engine.docker import docker
 from ...deployment.launch_engine.plan import (
-    append_private,
     container_options,
     env_file_name,
-    kv_events_directory,
     read_env,
     requires_remote_code,
 )
-from ...deployment.launch_engine.runtime import digest, write_once
 from .runtime import SETTINGS_TAG
 
 
@@ -27,18 +26,7 @@ def engine_arguments(plan: dict) -> list[str]:
 
 def check(run: Path, plan: dict) -> None:
     native = plan.get("backend") == "native"
-    log = "runtime-check.log" if native else "image-check.log"
-    if (run / "checked.json").exists():
-        require_checked(run, plan)
-    kv_events_directory(plan)
-    append_private(
-        run / log,
-        "\n"
-        + json.dumps(
-            {"check_attempt": uuid.uuid4().hex, "plan_sha256": digest(run / "launch.json")}
-        )
-        + "\n",
-    )
+    log = start_check(run, plan)
     if requires_remote_code(Path(plan["model_dir"])) and "--trust-remote-code" not in plan["args"]:
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     arguments = [
@@ -48,29 +36,15 @@ def check(run: Path, plan: dict) -> None:
     ]
     inspection = None
     if native:
-        result = stages.run(
-            [plan["python_executable"], str(run / "hook/launch_engine.py"), *arguments],
-            env={**os.environ, **read_env(run / env_file_name(plan))},
-            stage="native-runtime-check",
-            log=run / log,
+        output = run_native_check(
+            run,
+            plan,
+            log,
+            [str(run / "hook/launch_engine.py"), *arguments],
+            read_env(run / env_file_name(plan)),
         )
-        if result.returncode:
-            detail = result.stderr.strip().splitlines()
-            raise ValueError(
-                f"native runtime check exited {result.returncode}: "
-                f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
-            )
-        output = result.stdout
     else:
-        inspection = json.loads(docker(["image", "inspect", plan["image"]], run, log))[0]
-        expected = plan["image"]
-        matches = (
-            inspection["Id"] == expected
-            if expected.startswith("sha256:")
-            else expected in inspection.get("RepoDigests", [])
-        )
-        if not matches:
-            raise ValueError("local image identity differs from the launch plan")
+        inspection = inspect_image(run, plan, log)
         output = docker(
             [
                 "run",
@@ -107,25 +81,11 @@ def check(run: Path, plan: dict) -> None:
             f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
         )
     evidence = {
-        "plan_sha256": digest(run / "launch.json"),
         "sglang_version": version,
         "prefix_caching": record["prefix_caching"],
         "kv_events": record["kv_events"],
     }
-    if native:
-        evidence.update(
-            backend="native",
-            python_executable=plan["python_executable"],
-            expected_packages=plan["expected_packages"],
-        )
-    else:
-        assert inspection is not None
-        evidence["image_id"] = inspection["Id"]
-    write_once(
-        run / "checked.json",
-        json.dumps(evidence),
-        "runtime identity changed; prepare a fresh launch directory",
-    )
+    write_checked(run, plan, evidence, inspection)
     print("Runtime identity, package pins and server arguments passed.")
     if not evidence["prefix_caching"]:
         print("The radix cache is off; the engine publishes no cache events.")

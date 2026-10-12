@@ -4,7 +4,7 @@ import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import httpx
 
@@ -14,6 +14,7 @@ from narwhal.engines.validation import validation_pairs
 from narwhal.runtime.lifecycle import identity, readmission
 from narwhal.runtime.lifecycle.records import DrainRecord, LifecycleError, ValidationOutcome
 from narwhal.runtime.monitoring import readmit
+from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.serving.app import create_app
 from narwhal.types import Role
 from tests.fixtures import fleet
@@ -58,9 +59,8 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 replace(self.router.profiles.get(iid), generation_digest=digest)
             )
 
-    async def identity(self, url, **kwargs):
-        iid = next(spec.iid for spec in self.cfg.engines if spec.url == url)
-        return EngineIdentity(self.cfg.engine_contract.engine_version, self.starts[iid])
+    async def identity(self, cfg, spec, **kwargs):
+        return EngineIdentity(self.cfg.engine_contract.engine_version, self.starts[spec.iid])
 
     async def decode(self, *args, **kwargs):
         yield [parse_event('data: {"choices":[{"token_ids":[1,2],"text":"ok"}]}')]
@@ -93,7 +93,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         return httpx.Response(200, json=response)
 
     async def validate(self, *, wave=False, engines=None):
-        with patch.object(readmission, "fetch_engine_identity", self.identities):
+        with patch.object(readmission, "fetch_spec_identity", self.identities):
             return await readmission.validate_readmission(
                 self.router, engines or ["e0"], wave=wave, transport=self.transport
             )
@@ -361,7 +361,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.profiles.put(
             replace(self.router.profiles.get("e0"), generation_digest="sha256:" + "0" * 64)
         )
-        with patch.object(readmission, "fetch_engine_identity", self.identities):
+        with patch.object(readmission, "fetch_spec_identity", self.identities):
             self.assertEqual(await readmit(self.router, 0), [])
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertIn("e0", self.router.scheduler.draining)
@@ -374,7 +374,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.manager.records.clear()
         self.router.scheduler.finish_drain("e0")
         self.router.scheduler.eject("e0", "liveness")
-        with patch.object(readmission, "fetch_engine_identity", self.identities):
+        with patch.object(readmission, "fetch_spec_identity", self.identities):
             self.assertEqual(await readmit(self.router, 0), ["e0"])
         self.assertEqual(self.manager.records["e0"].state, "active")
         self.assertIn("profile generation", self.manager.records["e0"].checks)
@@ -384,7 +384,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.finish_drain("e0")
         self.manager.process_starts["e0"] = 101
         self.router.profiles.put(replace(self.router.profiles.get("e0"), generation_digest=None))
-        with patch.object(identity, "fetch_engine_identity", self.identities):
+        with patch.object(identity, "fetch_spec_identity", self.identities):
             self.assertEqual(await identity.check_process_identities(self.router), ["e0"])
         self.assertIn("e0", self.router.scheduler.ejected)
         self.assertIn("has no generation evidence", self.manager.events[-1]["reason"])
@@ -426,6 +426,32 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.engines[0].attestation_url = ""
         outcome = await self.validate()
         self.assertIn("attestation_url is not configured", outcome.failures["e0"])
+        self.router.engines.prefill.assert_not_awaited()
+
+    def bind_roles(self):
+        # An engine-side switcher binds each engine to its router role.
+        self.router.scheduler.availability.roles_bound = True
+        self.router.role_switch = Mock(spec=RoleSwitcher)
+        instances = self.router.monitor.instances
+        instances["e0"].role, instances["e3"].role = Role.DECODE, Role.PREFILL
+        return self.router.role_switch
+
+    async def test_role_bound_readmission_switches_only_the_target_once(self):
+        switcher = self.bind_roles()
+        with patch.object(
+            self.router, "switch_role", AsyncMock(wraps=self.router.switch_role)
+        ) as switch:
+            outcome = await self.validate()
+        self.assertTrue(outcome.passed, outcome.failures)
+        # The replacement gets its router role back once, and the peer keeps its role.
+        switch.assert_awaited_once_with("e0", Role.DECODE)
+        url = self.router.monitor.instances["e0"].url
+        switcher.switch.assert_awaited_once_with(ANY, url, Role.DECODE, ANY)
+
+    async def test_failed_readmission_role_switch_blocks_the_fabric_check(self):
+        self.bind_roles().switch.side_effect = httpx.ConnectError("refused")
+        outcome = await self.validate()
+        self.assertIn("role switch failed: ConnectError: refused", outcome.failures["e0"])
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_mid_validation_identity_change_ejects_before_decode(self):
@@ -499,7 +525,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_capture_identity_reports_each_unreadable_engine(self):
         with patch.object(
             identity,
-            "fetch_engine_identity",
+            "fetch_spec_identity",
             side_effect=[
                 EngineIdentity(self.cfg.engine_contract.engine_version, 100),
                 httpx.ReadTimeout("identity"),
@@ -520,7 +546,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.manager.process_starts.pop("e0", None)
         self.bind_profiles()
         with (
-            patch.object(identity, "fetch_engine_identity", self.identities),
+            patch.object(identity, "fetch_spec_identity", self.identities),
             patch.object(self.router, "switch_role", AsyncMock(return_value=None)) as switch,
         ):
             await identity.check_process_identities(self.router)
@@ -536,7 +562,7 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.finish_drain("e0")
         self.starts["e0"] = 100
         self.bind_profiles()
-        with patch.object(identity, "fetch_engine_identity", self.identities):
+        with patch.object(identity, "fetch_spec_identity", self.identities):
             self.assertEqual(await identity.check_process_identities(self.router), [])
             self.starts["e0"] = 101
             self.assertEqual(await identity.check_process_identities(self.router), ["e0"])

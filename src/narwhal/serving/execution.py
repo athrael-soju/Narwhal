@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -49,6 +49,8 @@ from .seats import decode_seat_map, decode_seats
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -256,6 +258,25 @@ def price_waiting(state: RequestLifecycle) -> float | None:
     return state.arrived + budget - placements[cheapest.iid]
 
 
+async def _run_prefill(
+    state: RequestLifecycle, prefill: Instance, call: Callable[[], Awaitable[T]]
+) -> T:
+    """Run a prefill leg under the request deadline and record its answer."""
+    router = state.router
+    began = router._clock()
+    try:
+        result = await state.wait(call)
+    except Exception as exc:
+        _failed_leg(state, prefill, exc, decode=False, started=began)
+        raise
+    finally:
+        state.record_upstream_time("prefill", began)
+    state.prefilled_at = router._clock()
+    router.scheduler.record_answer(prefill.iid, "prefill")
+    router.monitor.first_token(prefill.iid, state.request.rid)
+    return result
+
+
 async def _prepare_once(
     state: RequestLifecycle,
     endpoint: str,
@@ -305,24 +326,16 @@ async def _prepare_once(
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
-    began = router._clock()
-    try:
-        kv = await state.wait(
-            lambda: router.engines.prefill(
-                prefill.url, endpoint, body, headers, request_id=state.leg_id("prefill")
-            )
-        )
-    except Exception as exc:
-        _failed_leg(state, prefill, exc, decode=False, started=began)
-        raise
-    finally:
-        state.record_upstream_time("prefill", began)
-    state.prefilled_at = router._clock()
-    router.scheduler.record_answer(prefill.iid, "prefill")
-    router.monitor.first_token(prefill.iid, req.rid)
+    kv = await _run_prefill(
+        state,
+        prefill,
+        lambda: router.engines.prefill(
+            prefill.url, endpoint, body, headers, request_id=state.leg_id("prefill")
+        ),
+    )
     # The producer's lease starts when prefill completes.
     bound = handoff_bound(router, prefill.iid)
-    expires_at = None if bound is None else state.prefilled_at + bound
+    expires_at = None if bound is None or state.prefilled_at is None else state.prefilled_at + bound
     decode = await _place(state, prefill=False, claim=state.reserve, handoff_deadline=expires_at)
     state.decode_iid = decode.iid
     state.phase = "decode"
@@ -345,26 +358,16 @@ async def _prepare_rendezvous(
     router.note_handoff(prefill.iid, decode.iid)
     rendezvous = kv.rendezvous(router.launches.get(prefill.iid, {}))
     request_id = state.leg_id("prefill")
-
-    async def run() -> None:
-        began = router._clock()
-        try:
-            await state.wait(
-                lambda: router.engines.rendezvous_prefill(
-                    prefill.url, endpoint, body, headers, rendezvous, request_id=request_id
-                )
-            )
-        except Exception as exc:
-            _failed_leg(state, prefill, exc, decode=False, started=began)
-            raise
-        finally:
-            state.record_upstream_time("prefill", began)
-        state.prefilled_at = router._clock()
-        router.scheduler.record_answer(prefill.iid, "prefill")
-        router.monitor.first_token(prefill.iid, state.request.rid)
-
     state.phase = "decode"
-    task = asyncio.create_task(run())
+    task = asyncio.create_task(
+        _run_prefill(
+            state,
+            prefill,
+            lambda: router.engines.rendezvous_prefill(
+                prefill.url, endpoint, body, headers, rendezvous, request_id=request_id
+            ),
+        )
+    )
     return PreparedAttempt(prefill, decode, None, rendezvous=rendezvous, prefill_task=task)
 
 
@@ -555,7 +558,7 @@ async def _decode_attempt(
     first_token_timeout_s = router.cfg.first_token_timeout_s
     kv = router.engines.kv
     if prepared.rendezvous is not None and isinstance(kv, RendezvousConnector):
-        first_token_timeout_s = min(first_token_timeout_s or math.inf, kv.decode_wait_s)
+        first_token_timeout_s = kv.first_token_bound(first_token_timeout_s)
     upstream = router.engines.decode(
         prepared.decode.url,
         endpoint,

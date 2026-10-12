@@ -1,14 +1,14 @@
 ---
-description: narwhal-attest serves the attestation document of one vLLM engine over HTTP.
+description: narwhal-attest serves the attestation document of one engine over HTTP.
 ---
 
 # `narwhal-attest`
 
-`narwhal-attest` is an HTTP sidecar that serves the attestation document of one vLLM engine.
+`narwhal-attest` is an HTTP sidecar that serves the attestation document of one engine.
 
-Start the sidecar while vLLM runs. For a container engine, run it as root. For other engines, run it as the engine's user.
+Start the sidecar while the engine runs. For a container engine, run it as root. For other engines, run it as the engine's user.
 
-At startup, the sidecar exits with status 1 when the engine's vLLM version differs from the attestation document. While the sidecar runs, every route returns HTTP 503 when the engine's vLLM version or process start time changes or becomes unreadable.
+At startup, the sidecar exits with status 1 when the engine's version differs from the attestation document. While the sidecar runs, every route except `/v1/process` returns HTTP 503 when the engine's version or process start time changes or becomes unreadable.
 
 ## Options
 
@@ -16,8 +16,8 @@ At startup, the sidecar exits with status 1 when the engine's vLLM version diffe
 | --- | --- | --- |
 | `--version` | | Print the installed distribution version. |
 | `--document PATH` | required | Attestation document holding contract values and a source per field. |
-| `--engine-base URL` | required | vLLM base URL that serves `/version` and `/metrics`. |
-| `--backend NAME` | `vllm` | Engine backend that reads the engine's identity and cache events. |
+| `--engine-base URL` | required | Engine base URL that serves `/version` and `/metrics` on vLLM, or `/server_info` on SGLang. |
+| `--backend NAME` | `vllm` | Engine backend, `vllm` or `sglang`. |
 | `--host HOST` | `127.0.0.1` | Address to bind. |
 | `--port PORT` | `8010` | Port to listen on. |
 | `--timeout-s SECONDS` | `5.0` | Timeout for reading the engine's identity. |
@@ -35,13 +35,13 @@ The contract tool command is `python -m narwhal.deployment.attestation_contract.
 
 ## Process route
 
-With `--engine-container` or `--engine-pid` set, `GET /v1/process` returns `process_start_time_seconds`, the engine process start time read on the host. The router reads an SGLang engine's process start from this route, because SGLang publishes none over HTTP.
+With `--engine-container` or `--engine-pid` set, `GET /v1/process` returns `process_start_time_seconds`, the engine process start time read on the host. The router reads an SGLang engine's process start from this route.
 
 ## Residency
 
 With `--kv-events` set, the sidecar serves a bounded index of prefix blocks on the engine's GPU.
 
-SGLang engines run one-token pages. The sidecar groups their pages into 64-token blocks, and a block stays resident while its last page is resident.
+The sidecar groups an SGLang engine's one-token pages into 64-token blocks, and reports a block resident while its last page is resident.
 
 ### Routes
 

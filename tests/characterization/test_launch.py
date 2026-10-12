@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from narwhal.backends.vllm import attestation as attestation_document
-from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.backends.vllm import plan as vllm_plan
 from narwhal.backends.vllm.attestation import engine_document
 from narwhal.deployment.launch_engine import plan as launch_plan
@@ -25,10 +24,10 @@ from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
 from narwhal.dev import template
 from tests.deployment.fixtures import (
-    cache_settings_line,
     cuda_engine,
     launcher_inputs,
     patched_docker,
+    vllm_check_output,
 )
 
 from .golden import assert_golden
@@ -80,15 +79,8 @@ def env_lines(path: Path) -> list[str]:
     return path.read_text().splitlines()
 
 
-def runtime_output(plan: dict, ucx: str | None = "1.22.0") -> str:
-    return (
-        json.dumps(plan["expected_packages"])
-        + "\nNARWHAL_TOKENIZER_READY=1\n"
-        + cache_settings_line(plan)
-        + "\nNARWHAL_IMAGE_RUNTIME="
-        + json.dumps({"vllm_api_version": "0.29.0", "ucx_version": ucx})
-        + "\n"
-    )
+def runtime_output(plan: dict) -> str:
+    return vllm_check_output(plan, packages=plan["expected_packages"], ucx="1.22.0")
 
 
 def docker_calls(mock: Mock) -> list[dict]:
@@ -480,7 +472,7 @@ class DevTemplateTests(unittest.TestCase):
             ),
             patch.object(template.metadata, "version", side_effect=packages.__getitem__),
             patch.object(
-                vllm_dev.subprocess,
+                subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess([], 0, "", ""),
             ) as run,

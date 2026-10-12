@@ -1,24 +1,31 @@
+from collections.abc import Iterable
+
 import msgpack
 
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from tests.backends.contract import ContractFixtures
 
 
-def _batch(*events: object) -> bytes:
+def page_stored(
+    hashes: Iterable[object], tokens: Iterable[object], *, parent: object = None, **fields: object
+) -> dict[str, object]:
+    """SGLang's one-token-page store event."""
+    return {
+        "type": "BlockStored",
+        "block_hashes": list(hashes),
+        "parent_block_hash": parent,
+        "token_ids": list(tokens),
+        "block_size": 1,
+        **fields,
+    }
+
+
+def batch(*events: object) -> bytes:
     return msgpack.packb([1.0, list(events), 0])
 
 
 _TRANSFER = "sglang:per_stage_req_latency_seconds"
-_STORED = {
-    "type": "BlockStored",
-    "block_hashes": [11, 12],
-    "parent_block_hash": None,
-    "token_ids": [1, 2],
-    "block_size": 1,
-    "lora_id": None,
-    "medium": "GPU",
-    "cache_salt": "salt",
-}
+_STORED = page_stored([11, 12], [1, 2], lora_id=None, medium="GPU", cache_salt="salt")
 
 FIXTURES = ContractFixtures(
     metrics=(
@@ -35,12 +42,12 @@ FIXTURES = ContractFixtures(
     prefix_cache_hits=12,
     transfer_totals=(3.0, 0.25),
     kv_batches=[
-        (_batch(_STORED), [StoredBlocks]),
+        (batch(_STORED), [StoredBlocks]),
         (
-            _batch({"type": "BlockRemoved", "block_hashes": [11], "medium": "GPU"}),
+            batch({"type": "BlockRemoved", "block_hashes": [11], "medium": "GPU"}),
             [RemovedBlocks],
         ),
-        (_batch({"type": "AllBlocksCleared"}), [CacheCleared]),
+        (batch({"type": "AllBlocksCleared"}), [CacheCleared]),
     ],
     malformed_kv_batch=b"\xc1",
     attestation={"launch": {"args": ["--max-running-requests", "256"]}},

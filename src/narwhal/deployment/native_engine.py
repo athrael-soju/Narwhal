@@ -13,13 +13,18 @@ from urllib.request import urlopen
 
 import httpx
 
-from narwhal.engines.attestation import fetch_engine_identity
+from narwhal.engines.attestation import EngineIdentity, fetch_engine_identity
 from narwhal.engines.host_process import process_clock
 from narwhal.runtime.listeners import check_http_bind
 
 from . import stages
 from .launch_engine.backend import engine_backend, plan_launcher
-from .launch_engine.plan import kv_events_directory, read_env, remove_kv_events_directory
+from .launch_engine.plan import (
+    kv_events_directory,
+    launch_headers,
+    read_env,
+    remove_kv_events_directory,
+)
 from .launch_engine.runtime import digest, write_private
 from .launch_engine.start import READY_SECONDS, gpu_memory, validate_shared_runs
 
@@ -31,6 +36,19 @@ def process_identity(pid: int) -> dict[str, int | str]:
     if len(fields) < 20 or fields[0] in {"Z", "X"} or os.getpgid(pid) != pid:
         raise ValueError(f"process {pid} is not an owned process group leader")
     return {"pid": pid, "boot_id": boot_id, "start_ticks": int(fields[19])}
+
+
+def native_identity(run: Path, plan: dict, pid: int | str) -> EngineIdentity:
+    backend = engine_backend(plan.get("engine"))
+    headers = launch_headers(run, plan)
+    return asyncio.run(
+        fetch_engine_identity(
+            plan["endpoint"],
+            headers=headers,
+            reader=backend.identity,
+            process=process_clock(pid=int(pid)),
+        )
+    )
 
 
 def _owns_process(identity: dict) -> bool:
@@ -272,18 +290,8 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 identity = process_identity(process.pid)
                 write_private(run / "native-process.json", json.dumps(identity, indent=2) + "\n")
                 _wait_ready(run, plan, identity, ready_seconds)
-                backend = engine_backend(plan.get("engine"))
-                engine = backend.launcher()
-                key = _environment(run, plan).get(engine.api_key_env, "")
-                headers = {"Authorization": f"Bearer {key}"} if key else None
-                live = asyncio.run(
-                    fetch_engine_identity(
-                        plan["endpoint"],
-                        headers=headers,
-                        reader=backend.identity,
-                        process=process_clock(pid=int(identity["pid"])),
-                    )
-                )
+                engine = plan_launcher(plan)
+                live = native_identity(run, plan, identity["pid"])
                 if live.version != _checked_plan(run, plan)[engine.checked_version_field]:
                     raise ValueError("live engine version differs from the checked native runtime")
                 after = gpu_memory(gpu_uuid)

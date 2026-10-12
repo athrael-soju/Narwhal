@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
-from ...engines.client import EngineClient
+from ...engines.attestation import attested_launch
+from ...engines.client import EngineClient, client_options
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
@@ -172,22 +173,7 @@ class NarwhalRouter:
         self.lifecycle_transport = transport
         self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
         self.backend = load_backend(cfg.backend)
-        self.engines = EngineClient(
-            timeout_s=cfg.request_timeout_s,
-            prefill_timeout_s=cfg.prefill_timeout_s,
-            read_timeout_s=cfg.decode_read_timeout_s,
-            max_connections=cfg.max_connections,
-            control_connections=cfg.resolved_control_connections(),
-            pool_timeout_s=cfg.pool_timeout_s,
-            connect_timeout_s=cfg.connect_timeout_s,
-            health_timeout_s=cfg.health_timeout_s,
-            transport=transport,
-            dial=dial,
-            kv=self.backend.connector(cfg.connector),
-            dialect=self.backend.dialect,
-            model=cfg.model,
-            engine_api_key=cfg.resolve_engine_key(),
-        )
+        self.engines = EngineClient(**client_options(cfg), transport=transport, dial=dial)
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
         self.transfer_refresh = TransferRefresh()
@@ -223,7 +209,8 @@ class NarwhalRouter:
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
         self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
-        # Per-engine values from each verified attestation.
+        # Engine ID to the sequence limit, the KV producer lease in seconds and the launch
+        # record from its verified attestation.
         self.sequence_limits: dict[str, int] = {}
         self.kv_leases: dict[str, int] = {}
         self.launches: dict[str, dict[str, Any]] = {}
@@ -259,7 +246,6 @@ class NarwhalRouter:
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
-        # A switch hold lapses after three controller steps without a request.
         self.scheduler.switch_hold_s = 3 * cfg.reactive_step_s
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
@@ -341,6 +327,10 @@ class NarwhalRouter:
     async def switch_role(self, iid: str, role: Role) -> str | None:
         return await self._engine_side(iid, role, refresh=False)
 
+    async def resume_role(self, iid: str) -> str | None:
+        """Switch an engine to its router role."""
+        return await self.switch_role(iid, self.monitor.instances[iid].role)
+
     async def refresh_transfer_state(self, iid: str) -> str | None:
         """Clear the transfer state an engine holds from earlier handoffs, keeping its role."""
         return await self._engine_side(iid, self.monitor.instances[iid].role, refresh=True)
@@ -378,8 +368,7 @@ class NarwhalRouter:
 
     def attested(self, iid: str, payload: Any) -> None:
         identity = self.backend.identity
-        launch = payload.get("launch") if isinstance(payload, dict) else None
-        self.launches[iid] = launch if isinstance(launch, dict) else {}
+        self.launches[iid] = attested_launch(payload)
         for values, value in (
             (self.sequence_limits, identity.sequence_limit(payload)),
             (self.kv_leases, identity.kv_lease(payload)),

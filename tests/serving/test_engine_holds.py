@@ -117,18 +117,33 @@ class ProducerSelectionTests(HeldEngineTests):
     async def test_a_down_producer_gives_way_to_the_next_producer(self):
         """A failed producer leg tests nothing on the held engine, so another producer runs."""
         router = self.router()
-        with self.probes(router, {"e0": PRODUCER_DOWN}) as probe:
+        with (
+            self.probes(router, {"e0": PRODUCER_DOWN}) as probe,
+            self.assertLogs("narwhal", level="INFO") as logs,
+        ):
             await self.stream_failure(router, "e3", "e0")
         self.assertEqual(
             [call.kwargs["prefill_url"] for call in probe.call_args_list],
             [self.urls["e0"], self.urls["e1"]],
         )
         self.assertIn("e3", self.live(router))
-        outcomes = [
-            (row["outcome"], row["producer"], row["recorded_producer"])
-            for row in self.events(router, "engine_probe")
-        ]
+        rows = self.events(router, "engine_probe")
+        outcomes = [(row["outcome"], row["producer"], row["recorded_producer"]) for row in rows]
         self.assertEqual(outcomes, [("producer_failed", "e0", "e0"), ("passed", "e1", "e0")])
+        self.assertEqual(
+            list(rows[0].items())[-4:],
+            [
+                ("outcome", "producer_failed"),
+                ("producer_class", LEG_CONNECTION),
+                ("producer", "e0"),
+                ("recorded_producer", "e0"),
+            ],
+        )
+        self.assertIn(
+            "suspect e3 inference probe: producer e0 leg failed connection; "
+            "trying the next producer",
+            "\n".join(logs.output),
+        )
 
     async def test_without_a_live_producer_the_probe_runs_standalone(self):
         router = self.router()

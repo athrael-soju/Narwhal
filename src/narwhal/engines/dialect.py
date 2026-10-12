@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+from .prefix import non_negative_ints
+
 
 class EngineDialect(ABC):
     name: ClassVar[str]
@@ -24,6 +26,8 @@ class EngineDialect(ABC):
     choice_fields: ClassVar[tuple[str, ...]] = ()
     # Dotted client fields that would override Narwhal's engine controls.
     reserved_fields: ClassVar[tuple[str, ...]] = ()
+    # Chat template fields the tokenize route needs to count the engine's render.
+    tokenize_passthrough: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
@@ -35,22 +39,43 @@ class EngineDialect(ABC):
         """Whether streamed decode on `endpoint` carries token IDs."""
         return self.token_ids
 
-    @abstractmethod
-    def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]: ...
+    def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model}
+        if "messages" in body:
+            payload["messages"] = body["messages"]
+            for field_name in self.tokenize_passthrough:
+                if field_name in body:
+                    payload[field_name] = body[field_name]
+        else:
+            payload["prompt"] = body.get("prompt", "")
+            # The completion's own setting decides whether the engine adds BOS and similar tokens.
+            if "add_special_tokens" in body:
+                payload["add_special_tokens"] = body["add_special_tokens"]
+        return payload
 
-    @abstractmethod
-    def tokenize_response(self, payload: dict[str, Any]) -> int | None: ...
+    def tokenize_response(self, payload: dict[str, Any]) -> int | None:
+        try:
+            return int(payload["count"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
         """The served context limit in a context-limit or tokenize response."""
         limit = payload.get("max_model_len")
         return limit if type(limit) is int and limit > 0 else None
 
-    @abstractmethod
-    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None: ...
+    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
+        tokens = payload.get("tokens")
+        if (
+            not isinstance(tokens, list)
+            or not non_negative_ints(tokens)
+            or self.tokenize_response(payload) != len(tokens)
+        ):
+            return None
+        return tokens
 
-    @abstractmethod
-    def decode_probe_extras(self, tokens: int) -> dict[str, Any]: ...
+    def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
+        return {"min_tokens": tokens, "ignore_eos": True}
 
     @abstractmethod
     def cold_probe_extras(self) -> dict[str, Any]: ...

@@ -8,25 +8,26 @@ from typing import Any, cast
 import httpx
 
 from ...config import EngineContract
-from ...deployment.attestation_contract.document import generate
+from ...contracts import ATTESTATION, versioned
+from ...deployment.attestation_contract import document
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
+    live_binding,
     live_container,
     live_native,
     read_json,
     require_binding,
     write_private_json,
 )
-from ...deployment.launch_engine.plan import env_file_name, read_env
+from ...deployment.launch_engine.plan import env_file_name, launch_headers, option, read_env
 from ...deployment.launch_engine.runtime import digest, write_private
 from ...engines.host_process import container_start, native_start
-from .identity import ATTESTED_FIELDS, server_version
-from .plan import option, transfer_package
-from .runtime import API_KEY_ENV
+from .identity import ATTESTED_FIELDS, SERVER_INFO_PATH, server_version
+from .plan import transfer_package
 
 # /server_info fields that hold credentials.
 SECRET_FIELDS = ("api_key", "admin_api_key")
-# Server arguments recorded in the contract.
+# /server_info fields kept in the server evidence.
 SERVER_FIELDS = (
     "version",
     "dtype",
@@ -88,7 +89,7 @@ def capture_model_dimensions(run: Path) -> Path:
     return model_dimensions(run, plan)
 
 
-def _live(run: Path, plan: dict, checked: dict) -> object:
+def _live(run: Path, plan: dict, checked: dict) -> dict | str:
     return (
         live_native(run, plan, checked)
         if plan.get("backend") == "native"
@@ -102,11 +103,10 @@ def capture_server(run: Path) -> Path:
     destination = run / "server-info.json"
     if destination.exists():
         raise ValueError("Server evidence already exists; retain the capture")
-    key = read_env(run / env_file_name(plan)).get(API_KEY_ENV, "")
-    headers = {"Authorization": f"Bearer {key}"} if key else None
+    headers = launch_headers(run, plan)
     base = plan["endpoint"].rstrip("/")
     with httpx.Client(timeout=10, headers=headers) as client:
-        info = client.get(f"{base}/server_info")
+        info = client.get(f"{base}{SERVER_INFO_PATH}")
         info.raise_for_status()
     payload = info.json()
     if not isinstance(payload, dict):
@@ -122,11 +122,7 @@ def capture_server(run: Path) -> Path:
             else container_start(str(identity))
         ),
         "plan_sha256": plan_hash,
-        **(
-            {"process": identity}
-            if plan.get("backend") == "native"
-            else {"image_id": checked["image_id"], "container_id": identity}
-        ),
+        **live_binding(plan, checked, identity),
     }
     if any(name in json.dumps(record) for name in SECRET_FIELDS):
         raise ValueError("Server evidence must not hold credentials")
@@ -142,19 +138,11 @@ def capture_native(run: Path) -> Path:
     capture_server(run)
     snapshot = run / "startup-attestation.log"
     write_private(snapshot, (run / "startup.log").read_text())
-    return generate(run, snapshot)
+    return document.generate(run, snapshot)
 
 
 def launch_args(args: list[str]) -> list[str]:
-    kept: list[str] = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-            continue
-        kept.append(arg)
-        skip = arg in _PER_LAUNCH_VALUES
-    return kept
+    return document.launch_args(args, _PER_LAUNCH_VALUES)
 
 
 # The scheduler logs the request cap it serves with, which can sit below the requested one.
@@ -188,12 +176,9 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     )
     server_path = run / "server-info.json"
     captured = read_json(server_path)
-    binding = (
-        {"process": identity}
-        if native
-        else {"image_id": checked["image_id"], "container_id": identity}
+    require_binding(
+        captured, "Server evidence", plan_sha256=plan_hash, **live_binding(plan, checked, identity)
     )
-    require_binding(captured, "Server evidence", plan_sha256=plan_hash, **binding)
     server = captured["server"]
     transfer = plan["connector"]
     if server.get("version") != checked["sglang_version"]:
@@ -262,10 +247,4 @@ def engine_document(run: Path, startup_log: Path) -> dict:
             else {}
         ),
     }
-    return {
-        "schema": "narwhal.attestation",
-        "schema_version": 1,
-        "contract": contract,
-        "sources": sources,
-        "launch": launch,
-    }
+    return versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})

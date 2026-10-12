@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from ...engines.connector import RendezvousConnector
+from ...config import EngineSpec
+from ...engines.attestation import attested_launches
+from ...engines.client import prefill_leg
+from ...engines.connector import KvHandoff, RendezvousConnector
 from ...engines.dialect import EngineDialect
 from ...types import Role
+from ..tasks import cancel_tasks
 
 COMPLETION_PATHS = frozenset(("/v1/completions", "/v1/chat/completions"))
 
@@ -46,8 +50,7 @@ class _Joined(httpx.AsyncByteStream):
             async with asyncio.timeout(self.wait_s):
                 await asyncio.shield(self.peer)
         if not self.peer.done():
-            self.peer.cancel()
-            await asyncio.gather(self.peer, return_exceptions=True)
+            await cancel_tasks([self.peer])
 
 
 class PairedTransport(httpx.AsyncBaseTransport):
@@ -58,6 +61,10 @@ class PairedTransport(httpx.AsyncBaseTransport):
         self.kv = kv
         self.dialect = dialect
         self.pairs: dict[str, Pairing] = {}
+
+    def pair(self, url: str, role: Role, peer: str, producer: Mapping[str, Any] | None) -> None:
+        """Serve requests to `url` in `role`, with `peer` serving the other leg."""
+        self.pairs[origin(url)] = Pairing(role, origin(peer), producer or {})
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         pairing = self.pairs.get(origin(request.url))
@@ -70,10 +77,7 @@ class PairedTransport(httpx.AsyncBaseTransport):
             peer = self.kv.decode_body(body, rendezvous)
         else:
             own = {**self.kv.decode_body(body, rendezvous), "stream": bool(body.get("stream"))}
-            leg = {**body, "max_tokens": 1, "stream": False}
-            for name in self.dialect.prefill_incompatible:
-                leg.pop(name, None)
-            peer = self.kv.prefill_body(leg, rendezvous)
+            peer = prefill_leg(body, self.kv, self.dialect, rendezvous)
         task = asyncio.create_task(
             self._drain(_rebuilt(request, pairing.peer + request.url.raw_path.decode(), peer))
         )
@@ -82,8 +86,7 @@ class PairedTransport(httpx.AsyncBaseTransport):
                 _rebuilt(request, str(request.url), own)
             )
         except BaseException:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await cancel_tasks([task])
             raise
         response.stream = _Joined(response.stream, task, self.kv.decode_wait_s)  # type: ignore[arg-type]
         return response
@@ -98,6 +101,21 @@ class PairedTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self.inner.aclose()
+
+
+async def paired_transport(
+    inner: Callable[[], httpx.AsyncBaseTransport],
+    kv: KvHandoff,
+    dialect: EngineDialect,
+    specs: list[EngineSpec],
+    *,
+    timeout_s: float,
+) -> tuple[PairedTransport | None, dict[str, dict[str, Any]]]:
+    """Pair requests over `inner()` for a rendezvous `kv`, with the launches of `specs`."""
+    if not isinstance(kv, RendezvousConnector):
+        return None, {}
+    pairing = PairedTransport(inner(), kv, dialect)
+    return pairing, await attested_launches(specs, timeout_s=timeout_s)
 
 
 def _rebuilt(request: httpx.Request, url: str, body: dict[str, Any]) -> httpx.Request:

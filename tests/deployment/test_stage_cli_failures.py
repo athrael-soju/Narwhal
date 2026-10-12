@@ -93,6 +93,7 @@ class SharedStageFailureTests(unittest.TestCase):
                             run,
                             {
                                 "role": f"engine-{number}",
+                                "backend": "native",
                                 "endpoint": "http://127.0.0.1:1",
                                 "python_executable": sys.executable,
                                 "args": ["-m", "vllm"],

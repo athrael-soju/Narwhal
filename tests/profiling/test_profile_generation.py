@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 
-from narwhal.backends import load as load_backend
 from narwhal.diagnostics.check.profiles import gate_profile_generation
 from narwhal.diagnostics.check.report import Report
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
@@ -15,8 +14,6 @@ from narwhal.profiling.generation import read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.serving.app import create_app
 from tests.fixtures import calibration_document, fleet, profile
-
-VLLM_IDENTITY = load_backend("vllm").identity
 
 LAUNCH = {"image_id": "sha256:" + "a" * 64, "args": ["--max-num-seqs", "64"]}
 
@@ -40,11 +37,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         store = ProfileStore(self.cfg.profiles_path)
         for spec in self.cfg.engines:
             generation = await read_generation(
-                spec,
-                self.cfg.engine_contract,
-                timeout_s=1,
-                transport=self.transport,
-                reader=VLLM_IDENTITY,
+                self.cfg, spec, timeout_s=1, transport=self.transport
             )
             store.put(replace(profile(spec.iid), generation_digest=generation.digest))
 
@@ -69,13 +62,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def _calibrate(self):
         live = {
-            spec.iid: await read_generation(
-                spec,
-                self.cfg.engine_contract,
-                timeout_s=1,
-                transport=self.transport,
-                reader=VLLM_IDENTITY,
-            )
+            spec.iid: await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
             for spec in self.cfg.engines
         }
         document = calibration_document(
@@ -268,11 +255,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         generation = await read_generation(
-            self.cfg.engines[1],
-            self.cfg.engine_contract,
-            timeout_s=1,
-            transport=self.transport,
-            reader=VLLM_IDENTITY,
+            self.cfg, self.cfg.engines[1], timeout_s=1, transport=self.transport
         )
         store.put(replace(profile("e3"), generation_digest=generation.digest))
         report = Report()
@@ -287,16 +270,11 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.documents["e3"], launch={"args": ["--max-num-seqs", "64"]}
         )
         spec = self.cfg.engines[1]
-        contract = self.cfg.engine_contract
-        before = await read_generation(
-            spec, contract, timeout_s=1, transport=self.transport, reader=VLLM_IDENTITY
-        )
+        before = await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
         store = ProfileStore(self.cfg.profiles_path)
         store.put(replace(profile("e3"), generation_digest=before.digest))
         self.starts["e3"] = 101.0
-        after = await read_generation(
-            spec, contract, timeout_s=1, transport=self.transport, reader=VLLM_IDENTITY
-        )
+        after = await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
         self.assertEqual(after.digest, before.digest)
         self.assertNotEqual(after.process_digest, before.process_digest)
         report = Report()
@@ -343,9 +321,8 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "e0: attestation: engine process started"):
             await read_generation(
+                self.cfg,
                 self.cfg.engines[0],
-                self.cfg.engine_contract,
                 timeout_s=1,
                 transport=httpx.MockTransport(stale_response),
-                reader=VLLM_IDENTITY,
             )

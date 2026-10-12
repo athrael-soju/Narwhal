@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-import json
+import re
 from collections.abc import Callable
 
-from .plan import MAX_RUNNING_REQUESTS, ROLE_SWITCH_CONNECTORS, option
+from ...deployment.launch_engine.plan import discovered_settings, option
+from .plan import CUDA_BUILD_SUFFIX, MAX_RUNNING_REQUESTS, ROLE_SWITCH_CONNECTORS, TRANSFER_PACKAGES
 
-IMAGE_PACKAGES = r"sglang|torch|nixl(-cu(da)?[0-9]+)?|mooncake-transfer-engine(-cu(da)?[0-9]+)?"
+IMAGE_PACKAGES = "sglang|torch|" + "|".join(
+    f"{re.escape(name)}(?:{CUDA_BUILD_SUFFIX})?" for name in TRANSFER_PACKAGES.values()
+)
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, role: str) -> dict:
-    dtype = setting("MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
-    if dtype not in {"bfloat16", "float16"}:
-        raise ValueError("set MODEL_DTYPE to bfloat16 or float16 in .env")
-    max_len = min(int(observed.get("max_model_len") or 16384), 16384)
-    args = json.loads(setting("ENGINE_ARGS", json.dumps(["--context-length", str(max_len)])))
-    if not isinstance(args, list):
-        raise ValueError("ENGINE_ARGS must be a JSON array")
+    dtype, args, environment, _ = discovered_settings(
+        observed, setting, lambda max_len: ["--context-length", str(max_len)]
+    )
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
     if (
@@ -30,11 +29,6 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, 
         args += ["--mamba-radix-cache-strategy", "no_buffer"]
         if "--disable-overlap-schedule" not in args:
             args.append("--disable-overlap-schedule")
-    environment = dict(observed["image_environment"])
-    overrides = json.loads(setting("ENGINE_ENV", "{}"))
-    if not isinstance(overrides, dict):
-        raise ValueError("ENGINE_ENV must be a JSON object")
-    environment.update(overrides)
     record = {
         "backend": "sglang",
         "connector": connector,

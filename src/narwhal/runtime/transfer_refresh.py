@@ -15,7 +15,7 @@ log = logging.getLogger("narwhal.transfer_refresh")
 class TransferRefresh:
     def __init__(self) -> None:
         self.tasks: set[asyncio.Task[None]] = set()
-        # A busy decode engine held out of placement until it is idle enough to refresh.
+        # A busy decode engine held out of placement until its work drains and it refreshes.
         self.held: str | None = None
 
 
@@ -49,7 +49,7 @@ async def _refresh(router: NarwhalRouter, iid: str, producers: list[str]) -> Non
 
 
 def refresh_consumers(router: NarwhalRouter) -> None:
-    """Refresh one stale decode engine per pass, holding one out of placement when needed.
+    """Refresh one stale decode engine per pass.
 
     A producer that every live decode engine holds stale cannot hand off its KV, so the pass
     holds the least loaded of them out of new placements until its work drains.
@@ -71,9 +71,9 @@ def refresh_consumers(router: NarwhalRouter) -> None:
         return
     if state.held is not None:
         return
-    decodes = [inst.iid for inst in router.scheduler.live_instances() if inst.role is Role.DECODE]
+    decodes = router.scheduler.role_pool(Role.DECODE, router.scheduler.live_instances())
     owed = {p for producers in stale.values() for p in producers}
-    starved = any(all(p in stale.get(d, ()) for d in decodes if d != p) for p in owed)
+    starved = any(not router.scheduler.has_fresh_consumer(p, decodes) for p in owed)
     if starved:
         held = min(stale, key=lambda iid: (len(instances[iid].decode), iid))
         router.scheduler.availability.switching.add(held)

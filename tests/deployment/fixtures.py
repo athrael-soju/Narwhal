@@ -12,16 +12,18 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from narwhal.backends import load as load_backend
 from narwhal.backends.vllm import captures as launch_captures
-from narwhal.backends.vllm import check as launch_check
+from narwhal.backends.vllm import check as vllm_check
+from narwhal.deployment.launch_engine import check as launch_check
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import start as launch_start
 from narwhal.deployment.launch_engine.runtime import digest
 from tools.deployment.engine_launch import selected_launch
 
-ROOT = Path(__file__).resolve().parents[2]
+VLLM_HOOK = load_backend("vllm").launcher().cache_hook
 # Launcher modules whose functions call `docker`.
-DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start)
+DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start, vllm_check)
 
 
 @contextlib.contextmanager
@@ -33,15 +35,21 @@ def patched_docker(**kwargs):
         yield mock
 
 
-def cache_settings_line(plan, *, prefix_caching=True):
+# Stdout of the vLLM runtime check script in narwhal.backends.vllm.check.
+def vllm_check_output(plan, *, packages=None, prefix_caching=True, api_version="0.29.0", ucx=None):
     events = plan.get("kv_events")
-    return "NARWHAL_CACHE_SETTINGS=" + json.dumps(
-        {
-            "prefix_caching": prefix_caching,
-            "kv_events": None
-            if events is None
-            else {key: events[key] for key in ("endpoint", "replay_endpoint")},
-        }
+    settings = {
+        "prefix_caching": prefix_caching,
+        "kv_events": None
+        if events is None
+        else {key: events[key] for key in ("endpoint", "replay_endpoint")},
+    }
+    return (
+        ("" if packages is None else json.dumps(packages) + "\n")
+        + "NARWHAL_TOKENIZER_READY=1\nNARWHAL_CACHE_SETTINGS="
+        + json.dumps(settings)
+        + "\nNARWHAL_IMAGE_RUNTIME="
+        + json.dumps({"vllm_api_version": api_version, "ucx_version": ucx})
     )
 
 
@@ -204,10 +212,8 @@ def launcher_inputs(root):
         "NARWHAL_MODEL_DIR": str(model),
         "NARWHAL_MODEL_CONFIG_SHA256": hashlib.sha256(b"{}").hexdigest(),
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
-        "NARWHAL_CACHE_CAPTURE_HOOK": str(ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"),
-        "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(
-            ROOT / "src/narwhal/backends/vllm/cache_capture_hook.py"
-        ),
+        "NARWHAL_CACHE_CAPTURE_HOOK": str(VLLM_HOOK),
+        "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(VLLM_HOOK),
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",
         "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600",

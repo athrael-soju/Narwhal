@@ -193,13 +193,3 @@ def untimed(value):
     if isinstance(value, list):
         return [untimed(item) for item in value]
     return value
-
-
-def routed(handler):
-    base = httpx.AsyncClient
-
-    class Routed(base):
-        def __init__(self, *args, transport=None, **kwargs):
-            super().__init__(*args, transport=transport or httpx.MockTransport(handler), **kwargs)
-
-    return Routed

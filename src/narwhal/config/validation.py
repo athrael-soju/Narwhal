@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 from ..backends import load as load_backend
+from .model import CONTRACT_INT_FIELDS, checks_handshake
 
 if TYPE_CHECKING:
     from .model import FleetConfig, SharedDeviceAllocation
@@ -278,9 +279,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         if not contract.connector:
             problems.append("engine_contract.connector is required")
         attested = config.attested_fields()
-        if (
-            attested is None or "enforce_handshake_compat" in attested
-        ) and contract.enforce_handshake_compat is not True:
+        if checks_handshake(attested) and contract.enforce_handshake_compat is not True:
             problems.append(
                 "engine_contract.enforce_handshake_compat must stay true; "
                 "disabling the connector's compatibility check permits silent corruption"
@@ -300,12 +299,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             )
         problems.extend(
             f"engine_contract.{name} must be nonnegative"
-            for name in (
-                "connector_version",
-                "kv_heads",
-                "head_size",
-                "hidden_layers",
-            )
+            for name in CONTRACT_INT_FIELDS
             if getattr(contract, name) < 0
         )
     if config.hardware is not None:

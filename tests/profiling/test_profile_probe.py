@@ -27,6 +27,7 @@ from narwhal.profiling.probe.engine import engine_context_limit, make_prompt
 from narwhal.profiling.probe.instance import profile_instance
 from narwhal.profiling.probe.neighbours import ColocatedWorkload, NeighbourLoad
 from narwhal.profiling.probe.offline import merge_profiles, refit_saved_prefill
+from narwhal.profiling.probe.pairing import PairedTransport
 from narwhal.profiling.probe.prefill import probe_prefill
 from narwhal.profiling.probe.sweep import Sweep, bounded_sweep, load_sequence_limits
 from narwhal.profiling.store import ProfileStore
@@ -34,6 +35,7 @@ from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
+from tests.wire import routed
 
 VLLM_METRICS = load_backend("vllm").metrics
 DIALECT = load_backend("vllm").dialect
@@ -850,7 +852,8 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
         spec, peer = cfg.engines[0], cfg.engines[1]
-        dialect = load_backend("sglang").dialect
+        backend = load_backend("sglang")
+        dialect = backend.dialect
         calls = []
         status = 200
 
@@ -864,15 +867,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             async def switch(self, client, url, role, launch=None):
                 calls.append(f"{httpx.URL(url).port} {role.value}")
 
-        real = httpx.AsyncClient
-
-        def client(**kwargs):
-            return real(transport=httpx.MockTransport(answer), **kwargs)
-
-        pairing = SimpleNamespace(pairs={})
+        pairing = PairedTransport(
+            httpx.MockTransport(answer), backend.connector("mooncake"), dialect
+        )
         serve_as = fleet_probe._pair_roles(cfg, dialect, pairing, Switcher(), spec, peer, {})
         own, other = httpx.URL(spec.url).port, httpx.URL(peer.url).port
-        with patch.object(fleet_probe.httpx, "AsyncClient", client):
+        with patch.object(fleet_probe.httpx, "AsyncClient", routed(answer)):
             await serve_as(Role.DECODE)
             self.assertEqual(
                 calls,

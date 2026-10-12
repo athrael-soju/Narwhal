@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
-import sys
 from importlib import metadata
 from pathlib import Path
+
+from ...deployment.launch_engine.backend import run_import_check
 
 # The same connector API check as narwhal-engine.
 IMPORT_CHECK = """from vllm.config import KVTransferConfig
@@ -44,19 +44,7 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
 
 
 def check_imports() -> None:
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", IMPORT_CHECK],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        detail = exc.stderr[-800:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-        raise ValueError(f"native vLLM/NIXL connector import failed: {detail}") from exc
-    if result.stderr and "Traceback" in result.stderr:
-        raise ValueError(f"native vLLM/NIXL connector import reported: {result.stderr[-800:]}")
+    run_import_check(IMPORT_CHECK, "vLLM/NIXL connector", traceback_fails=True)
 
 
 def check_plugin(runtime: dict) -> None:

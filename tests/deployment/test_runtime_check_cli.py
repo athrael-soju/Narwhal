@@ -15,7 +15,7 @@ from narwhal.deployment import stages
 from narwhal.deployment.launch_engine import cli as engine_cli
 from narwhal.deployment.launch_engine.plan import append_private, load
 from narwhal.deployment.launch_engine.runtime import digest
-from tests.deployment.fixtures import cache_settings_line, launcher_inputs
+from tests.deployment.fixtures import launcher_inputs, vllm_check_output
 
 
 class RuntimeCheckCliTests(unittest.TestCase):
@@ -116,12 +116,7 @@ class RuntimeCheckCliTests(unittest.TestCase):
             if failing and failure in details:
                 return subprocess.CompletedProcess(command, 1, stdout, details[failure])
             version = "0.30.0" if failing and failure == "identity" else "0.29.0"
-            stdout += (
-                "NARWHAL_TOKENIZER_READY=1\n"
-                + cache_settings_line(json.loads(plan_bytes))
-                + "\nNARWHAL_IMAGE_RUNTIME="
-                + json.dumps({"vllm_api_version": version})
-            )
+            stdout += vllm_check_output(json.loads(plan_bytes), api_version=version)
             return subprocess.CompletedProcess(command, 0, stdout, "")
 
         def stage(command, **kwargs):

@@ -7,6 +7,7 @@ import re
 import stat
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,10 +22,82 @@ KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"
 MAX_SOCKET_PATH_BYTES = 107
 # First UCX release that unmaps CUDA IPC rkeys when the transfer library removes a remote agent.
 UCX_PEER_RELEASE = (1, 22)
+SECRET_WORDS = ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH")
+MAX_DISCOVERED_CONTEXT = 16384
 
 
 def validate_runtime(runtime: dict) -> None:
     launcher(runtime.get("backend")).validate_runtime(runtime)
+
+
+def check_versions_and_dtype(runtime: dict) -> None:
+    packages = runtime.get("expected_packages", {})
+    if any(not isinstance(v, str) or not v or "<" in v for v in packages.values()):
+        raise ValueError("runtime.expected_packages requires resolved version strings")
+    if (
+        runtime.get("model_dtype") not in ("bfloat16", "float16")
+        or runtime.get("kv_cache_dtype") != "auto"
+    ):
+        raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
+
+
+def check_extra_args(args: list[str], value_options: set[str], flag_options: set[str]) -> None:
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        raise ValueError("runtime.extra_args must be an argument list")
+    index = 0
+    while index < len(args):
+        flag = args[index]
+        if flag in value_options and index + 1 < len(args) and not args[index + 1].startswith("--"):
+            index += 2
+        elif flag in flag_options:
+            index += 1
+        else:
+            raise ValueError(f"unsupported or incomplete runtime option: {flag}")
+
+
+def check_environment(
+    environment: dict,
+    managed: set[str],
+    prefixes: tuple[str, ...],
+    forbidden: tuple[str, ...] = SECRET_WORDS,
+) -> None:
+    for name, value in environment.items():
+        if (
+            not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
+            or name in managed
+            or not (name.startswith(prefixes) or name in ("LD_LIBRARY_PATH", "PYTHONPATH"))
+            or any(word in name for word in forbidden)
+            or not isinstance(value, str)
+            or any(c in value for c in "\r\n\0")
+        ):
+            raise ValueError(f"unsupported runtime environment field: {name}")
+
+
+def option(args: list[str], name: str) -> str | None:
+    positions = [i for i, arg in enumerate(args) if arg == name]
+    if len(positions) != 1 or positions[0] + 1 >= len(args):
+        return None
+    return args[positions[0] + 1]
+
+
+def discovered_settings(
+    observed: dict, setting: Callable[[str, str], str], default_args: Callable[[int], list[str]]
+) -> tuple[str, list, dict, dict]:
+    dtype = setting("MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
+    if dtype not in {"bfloat16", "float16"}:
+        raise ValueError("set MODEL_DTYPE to bfloat16 or float16 in .env")
+    max_len = min(
+        int(observed.get("max_model_len") or MAX_DISCOVERED_CONTEXT), MAX_DISCOVERED_CONTEXT
+    )
+    args = json.loads(setting("ENGINE_ARGS", json.dumps(default_args(max_len))))
+    if not isinstance(args, list):
+        raise ValueError("ENGINE_ARGS must be a JSON array")
+    environment = dict(observed["image_environment"])
+    overrides = json.loads(setting("ENGINE_ENV", "{}"))
+    if not isinstance(overrides, dict):
+        raise ValueError("ENGINE_ENV must be a JSON object")
+    environment.update(overrides)
+    return dtype, args, environment, overrides
 
 
 def ipc_cache_off(ipc_cache: str | None) -> bool:
@@ -123,6 +196,11 @@ def env_file_name(plan: dict) -> str:
 
 def read_env(path: Path) -> dict[str, str]:
     return dict(line.split("=", 1) for line in path.read_text().splitlines())
+
+
+def launch_headers(run: Path, plan: dict) -> dict[str, str] | None:
+    key = read_env(run / env_file_name(plan)).get(plan_launcher(plan).api_key_env, "")
+    return {"Authorization": f"Bearer {key}"} if key else None
 
 
 def build(

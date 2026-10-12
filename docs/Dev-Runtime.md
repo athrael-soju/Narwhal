@@ -31,7 +31,7 @@ The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 509
     ip -brief -4 address
     ```
 
-5. Record the name of an interface with exactly one IPv4 address for NIXL/UCX (default `eth0`).
+5. Record the name of an interface with exactly one IPv4 address for KV transfer (default `eth0`).
 
 ## Installing the runtime and model
 
@@ -81,17 +81,17 @@ narwhal dev status
 
 1. Checks the model and tokenizer checksums.
 2. Selects a CUDA GPU by UUID and checks its free VRAM.
-3. Checks the runtime package versions and GGUF plugin hashes.
+3. Checks the runtime package versions and the GGUF plugin hashes that a vLLM template pins.
 4. Checks the network interface and ports.
 5. Writes the private instance.
 
 `up` runs these steps:
 
-1. Checks the model, tokenizer, and GGUF plugin hashes.
+1. Checks the model and tokenizer hashes, and the GGUF plugin hashes that a vLLM template pins.
 2. Checks that the ports are free.
 3. Starts the engines.
 4. Captures attestations and starts the attestation sidecars.
-5. Profiles every role split under neighbour load. A template without neighbour load, such as the SGLang template, profiles the engines in pairs at the opening split.
+5. Profiles every role split. The SGLang template profiles only the opening split, where it measures both roles of each engine.
 6. Starts the router.
 
 `verify` runs these steps:
@@ -152,7 +152,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev verify --instance runs/dev-sglang
     ```
 
-The template's `allocation.gpu_memory_utilization` sets each engine's `--mem-fraction-static`. SGLang applies the fraction to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first. `up` profiles the engines in pairs.
+The template's `allocation.gpu_memory_utilization` sets each engine's `--mem-fraction-static`. SGLang applies the fraction to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
 ## Inspecting and stopping the instance
 
@@ -199,7 +199,7 @@ Stages and default budgets:
 | `native-start-shared` | Native shared startup | 180 seconds per engine |
 | `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
-| `profile-merge` | Merging the role-split profiles, with three or more engines under neighbour load | 300 seconds |
+| `profile-merge` | Merging the role-split profiles, when `up` profiles more than one split | 300 seconds |
 | `preflight` | Directed KV preflight during `verify` | 300 seconds |
 
 Override the startup and preflight budgets:

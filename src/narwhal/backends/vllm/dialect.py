@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, ClassVar
+from typing import Any
 
 from ...engines.dialect import EngineDialect
-from ...engines.prefix import non_negative_ints
 
 
 class VllmDialect(EngineDialect):
@@ -24,8 +23,7 @@ class VllmDialect(EngineDialect):
         "vllm_xargs.kv_transfer_params",
         "vllm_xargs.ec_transfer_params",
     )
-    # Chat template fields the tokenize route needs to count the engine's render.
-    tokenize_passthrough: ClassVar[tuple[str, ...]] = (
+    tokenize_passthrough = (
         "tools",
         "chat_template",
         "chat_template_kwargs",
@@ -39,39 +37,6 @@ class VllmDialect(EngineDialect):
 
     def token_id_fields(self) -> dict[str, Any]:
         return {"return_token_ids": True, "stream_interval": 1}
-
-    def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": model}
-        if "messages" in body:
-            payload["messages"] = body["messages"]
-            for field_name in self.tokenize_passthrough:
-                if field_name in body:
-                    payload[field_name] = body[field_name]
-        else:
-            payload["prompt"] = body.get("prompt", "")
-            # The completion's own setting decides whether vLLM adds BOS and similar tokens.
-            if "add_special_tokens" in body:
-                payload["add_special_tokens"] = body["add_special_tokens"]
-        return payload
-
-    def tokenize_response(self, payload: dict[str, Any]) -> int | None:
-        try:
-            return int(payload["count"])
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
-        tokens = payload.get("tokens")
-        if (
-            not isinstance(tokens, list)
-            or not non_negative_ints(tokens)
-            or self.tokenize_response(payload) != len(tokens)
-        ):
-            return None
-        return tokens
-
-    def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
-        return {"min_tokens": tokens, "ignore_eos": True}
 
     def cold_probe_extras(self) -> dict[str, Any]:
         # vLLM hashes cache_salt into the first block; later block hashes chain from it.

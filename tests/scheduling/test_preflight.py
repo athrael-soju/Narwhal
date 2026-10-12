@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.backends import load as load_backend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
@@ -35,8 +34,6 @@ from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import HandoffClient, calibration_document, fleet, profile
 from tests.wire import engine_transports, vllm_engine
-
-VLLM_IDENTITY = load_backend("vllm").identity
 
 UNCALIBRATED = (
     "first-token deadline has no calibration evidence; run narwhal-check "
@@ -460,9 +457,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
         transport = httpx.MockTransport(handle)
         live = {
-            spec.iid: await read_generation(
-                spec, contract, timeout_s=1, transport=transport, reader=VLLM_IDENTITY
-            )
+            spec.iid: await read_generation(self.cfg, spec, timeout_s=1, transport=transport)
             for spec in self.cfg.engines
         }
         path = self.cfg.profiles_path.parent / "calibration.json"
@@ -742,6 +737,32 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(report.pairs[0]["status"], "failed")
         self.assertIn("process or attestation changed", report.failed[0])
+
+    async def test_pair_snapshot_reads_legacy_source_names(self):
+        contract = self.cfg.engine_contract
+        identity = EngineIdentity(contract.engine_version, 100.0)
+        sources = {name: f"{name} source" for name in contract.fields()}
+        sources["nixl_connector_version"] = sources.pop("connector_version")
+        payload = make_attestation(AttestationDocument(contract, sources), identity)
+        metrics = (
+            'vllm:nixl_xfer_time_seconds_count{engine="0"} 1.0\n'
+            'vllm:nixl_xfer_time_seconds_sum{engine="0"} 0.2\n'
+        )
+
+        def respond(request):
+            if request.url.path == "/v1/attestation":
+                return httpx.Response(200, json=payload)
+            return httpx.Response(200, text=metrics)
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        with (
+            patch.object(evidence, "fetch_spec_identity", new=AsyncMock(return_value=identity)),
+            patch.object(httpx, "AsyncClient", return_value=client),
+        ):
+            snapshot = await evidence.pair_snapshot(self.cfg, self.cfg.engines[0].iid)
+        self.assertEqual(snapshot["connector_source"], "connector_version source")
+        self.assertEqual(snapshot["transfer_mode_source"], "transfer_mode source")
+        self.assertEqual(snapshot["transfer_count"], 1.0)
 
     async def test_consume_bounds_stalled_stream_when_gap_timeout_is_disabled(self):
         self.cfg.request_timeout_s = 0.02

@@ -3,28 +3,18 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
-from narwhal.profiling.store import ProfileStore
 from narwhal.runtime import transfer_refresh
 from narwhal.runtime.transfer_refresh import TransferRefresh
-from narwhal.scheduling.control import SLO, Thresholds
-from narwhal.scheduling.monitor import InstanceMonitor
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
-from narwhal.types import Instance, Phase, Request, Role
-from tests.fixtures import profile
+from narwhal.types import Phase, Request, Role
+from tests.fixtures import role_scheduler
 
 
 def fleet(folder: str, stale: set[tuple[str, str]]) -> GlobalScheduler:
-    profiles = ProfileStore(Path(folder) / "profiles.json")
-    monitor = InstanceMonitor(profiles=profiles)
-    for iid, role in (("p1", Role.PREFILL), ("p2", Role.PREFILL), ("d1", Role.DECODE)):
-        profiles.put(profile(iid))
-        monitor.add(Instance(iid, f"http://{iid}", role))
-    profiles.put(profile("d2"))
-    monitor.add(Instance("d2", "http://d2", Role.DECODE))
-    scheduler = GlobalScheduler(monitor, profiles, SLO(2.0, 0.05), Thresholds())
+    roles = {"p1": Role.PREFILL, "p2": Role.PREFILL, "d1": Role.DECODE, "d2": Role.DECODE}
+    scheduler = role_scheduler(folder, roles)
     scheduler.availability.roles_bound = True
     scheduler.stale_handoff = lambda producer, consumer: (producer, consumer) in stale
     return scheduler
@@ -50,6 +40,11 @@ class StalePlacementTests(unittest.TestCase):
             scheduler = fleet(folder, {("p1", "d1"), ("p1", "d2")})
         for _ in range(3):
             self.assertEqual(scheduler.schedule(Request("r", 128)).iid, "p2")
+
+    def test_a_prefill_leg_keeps_its_pool_when_every_producer_is_starved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scheduler = fleet(folder, {(p, d) for p in ("p1", "p2") for d in ("d1", "d2")})
+        self.assertEqual(scheduler.schedule(Request("r", 128)).iid, "p1")
 
 
 def replace_producer(request: Request, producer: str) -> Request:

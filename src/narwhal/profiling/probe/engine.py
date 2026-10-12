@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -38,6 +39,27 @@ async def prefix_cache_hits(
     return None if text is None else metrics.prefix_cache_hits(text)
 
 
+async def _probe_json(
+    send: Awaitable[httpx.Response],
+    url: str,
+    probe: str,
+    unreadable: Callable[[httpx.Response], str],
+) -> dict:
+    try:
+        r = await send
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"{probe} failed on {url}: {exc}") from exc
+    if r.status_code != 200:
+        raise RuntimeError(f"{probe} failed on {url} ({r.status_code}): {r.text[:200]}")
+    try:
+        body = r.json()
+    except ValueError as exc:
+        raise RuntimeError(f"{probe} returned {unreadable(r)}") from exc
+    if not isinstance(body, dict):
+        raise RuntimeError(f"{probe} returned an invalid response on {url}")
+    return body
+
+
 async def _tokenize_response(
     client: httpx.AsyncClient,
     url: str,
@@ -49,23 +71,13 @@ async def _tokenize_response(
     path = dialect.tokenize_path
     if path is None:
         raise RuntimeError(f"the {dialect.name} dialect has no exact-count route")
-    try:
-        r = await client.post(
-            f"{url}{path}",
-            json=dialect.tokenize_request(model, {"prompt": prompt}),
-            timeout=timeout_s,
-        )
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"tokenize probe failed on {url}: {exc}") from exc
-    if r.status_code != 200:
-        raise RuntimeError(f"tokenize probe failed on {url} ({r.status_code}): {r.text[:200]}")
-    try:
-        body = r.json()
-    except ValueError as exc:
-        raise RuntimeError(f"tokenize probe returned no count on {url}: {r.text[:200]}") from exc
-    if not isinstance(body, dict):
-        raise RuntimeError(f"tokenize probe returned an invalid response on {url}")
-    return body
+    request = dialect.tokenize_request(model, {"prompt": prompt})
+    return await _probe_json(
+        client.post(f"{url}{path}", json=request, timeout=timeout_s),
+        url,
+        "tokenize probe",
+        lambda r: f"no count on {url}: {r.text[:200]}",
+    )
 
 
 async def count_tokens(
@@ -97,28 +109,18 @@ async def engine_context_limit(
         body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)
         source = "tokenize probe"
     else:
-        body = await _get_json(client, f"{url}{path}", timeout_s)
+        target = f"{url}{path}"
+        body = await _probe_json(
+            client.get(target, timeout=timeout_s),
+            target,
+            "context limit probe",
+            lambda _: f"no JSON on {target}",
+        )
         source = f"{path} probe"
     limit = dialect.context_limit(body, model)
     if limit is None:
         raise RuntimeError(f"{source} returned no valid max_model_len for {model} on {url}")
     return limit
-
-
-async def _get_json(client: httpx.AsyncClient, url: str, timeout_s: float) -> dict:
-    try:
-        r = await client.get(url, timeout=timeout_s)
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"context limit probe failed on {url}: {exc}") from exc
-    if r.status_code != 200:
-        raise RuntimeError(f"context limit probe failed on {url} ({r.status_code}): {r.text[:200]}")
-    try:
-        body = r.json()
-    except ValueError as exc:
-        raise RuntimeError(f"context limit probe returned no JSON on {url}") from exc
-    if not isinstance(body, dict):
-        raise RuntimeError(f"context limit probe returned an invalid response on {url}")
-    return body
 
 
 async def make_prompt(

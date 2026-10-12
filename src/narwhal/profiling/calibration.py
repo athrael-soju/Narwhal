@@ -17,12 +17,18 @@ import httpx
 from ..backends import load as load_backend
 from ..config import FleetConfig
 from ..engines.attestation import attested_launches
-from ..engines.client import EngineClient, EngineError, PairedHandoff, first_output_timeout
+from ..engines.client import (
+    EngineClient,
+    EngineError,
+    PairedHandoff,
+    client_options,
+    first_output_timeout,
+)
 from ..engines.connector import RendezvousConnector
 from ..engines.dialect import EngineDialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
-from ..runtime.role_switch import RoleSwitcher, engine_side, place_pair
+from ..runtime.role_switch import RoleSwitcher, engine_side
 from .generation import read_generation
 from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
@@ -337,14 +343,7 @@ async def verify_calibration(
     live: dict[str, float] = {}
     for spec in cfg.engines:
         try:
-            current = await read_generation(
-                spec,
-                cfg.engine_contract,
-                timeout_s=cfg.health_timeout_s,
-                headers=cfg.engine_headers(),
-                reader=load_backend(cfg.backend).identity,
-                transport=transport,
-            )
+            current = await read_generation(cfg, spec, transport=transport)
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             problems.append(f"{spec.iid} calibration generation unreadable: {exc}")
             continue
@@ -449,8 +448,7 @@ class _Lockstep:
                 timeout=self.cfg.health_timeout_s, headers=self.cfg.engine_headers()
             ) as control:
                 for src, dst in pairs:
-                    await place_pair(
-                        self.switcher,
+                    await self.switcher.place(
                         control,
                         (self.urls[src], self.launches.get(src)),
                         (self.urls[dst], self.launches.get(dst)),
@@ -586,33 +584,14 @@ async def calibrate(
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
     began = time.monotonic()
     started = {
-        spec.iid: await read_generation(
-            spec,
-            cfg.engine_contract,
-            timeout_s=observation_timeout_s,
-            headers=cfg.engine_headers(),
-            reader=load_backend(cfg.backend).identity,
-        )
+        spec.iid: await read_generation(cfg, spec, timeout_s=observation_timeout_s)
         for spec in cfg.engines
     }
     generations = {iid: generation.digest for iid, generation in started.items()}
     process_starts = {
         iid: generation.process_start_time_seconds for iid, generation in started.items()
     }
-    client = EngineClient(
-        timeout_s=cfg.request_timeout_s,
-        prefill_timeout_s=cfg.prefill_timeout_s,
-        read_timeout_s=cfg.decode_read_timeout_s,
-        max_connections=cfg.max_connections,
-        control_connections=cfg.resolved_control_connections(),
-        pool_timeout_s=cfg.pool_timeout_s,
-        connect_timeout_s=cfg.connect_timeout_s,
-        health_timeout_s=cfg.health_timeout_s,
-        kv=load_backend(cfg.backend).connector(cfg.connector),
-        dialect=dialect,
-        model=cfg.model,
-        engine_api_key=cfg.resolve_engine_key(),
-    )
+    client = EngineClient(**client_options(cfg))
     try:
         async with httpx.AsyncClient(
             timeout=observation_timeout_s, headers=cfg.engine_headers()
@@ -699,13 +678,7 @@ async def calibrate(
     generation_errors: list[str] = []
     for spec in cfg.engines:
         try:
-            current = await read_generation(
-                spec,
-                cfg.engine_contract,
-                timeout_s=observation_timeout_s,
-                headers=cfg.engine_headers(),
-                reader=load_backend(cfg.backend).identity,
-            )
+            current = await read_generation(cfg, spec, timeout_s=observation_timeout_s)
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
             generation_errors.append(f"{spec.iid}: {type(exc).__name__}: {exc}")
         else:

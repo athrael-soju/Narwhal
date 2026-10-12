@@ -1,19 +1,19 @@
 import random
 import tempfile
-import threading
 import time
 import unittest
-from collections import deque
 from pathlib import Path
 
 import msgpack
-import zmq
 
 from narwhal.backends import load
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
 from narwhal.engines.residency_feed import ResidencyFeed
+from tests.backends.fixtures import sglang
+from tests.backends.fixtures.vllm import batch, stored
+from tests.residency import FakePublisher, run_feed, wait_for
 
 VLLM_EVENTS = load("vllm").kv_events
 decode_batch = VLLM_EVENTS.decode_batch
@@ -22,96 +22,8 @@ SGLANG_EVENTS = load("sglang").kv_events
 MODEL, TOKENIZER = "model", "contract"
 
 
-def stored(hashes, tokens, *, parent=None, group=0, kind="full_attention", size=4, **fields):
-    return {
-        "type": "BlockStored",
-        "block_hashes": list(hashes),
-        "parent_block_hash": parent,
-        "token_ids": list(tokens),
-        "block_size": size,
-        "lora_id": None,
-        "medium": "GPU",
-        "lora_name": None,
-        "group_idx": group,
-        "kv_cache_spec_kind": kind,
-        **fields,
-    }
-
-
-def batch(*events):
-    return msgpack.packb([1.0, list(events), None])
-
-
 def identities(tokens, size=4):
     return block_identities(CacheNamespace(MODEL, TOKENIZER), tokens, size)
-
-
-def wait_for(condition, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if condition():
-            return True
-        time.sleep(0.02)
-    return False
-
-
-class FakePublisher:
-    def __init__(self, directory, *, buffer=100, replay=True, replay_gap_s=0.0, replay_limit=None):
-        self.replay_gap_s = replay_gap_s
-        # Emulate a ROUTER that drops a long replay's tail and its end marker.
-        self.replay_limit = replay_limit
-        self.endpoint = f"ipc://{directory}/events.sock"
-        self.replay_endpoint = f"ipc://{directory}/replay.sock" if replay else None
-        self.context = zmq.Context()
-        self.pub = self.context.socket(zmq.PUB)
-        self.pub.bind(self.endpoint)
-        self.buffer = deque(maxlen=buffer)
-        self.sequence = 0
-        self.lock = threading.Lock()
-        self.stopped = threading.Event()
-        self.thread = None
-        if replay:
-            self.router = self.context.socket(zmq.ROUTER)
-            self.router.bind(self.replay_endpoint)
-            self.thread = threading.Thread(target=self.serve_replay, daemon=True)
-            self.thread.start()
-
-    def publish(self, payload, *, deliver=True):
-        with self.lock:
-            sequence = self.sequence
-            self.sequence += 1
-            self.buffer.append((sequence, payload))
-            if deliver:
-                self.pub.send_multipart([b"", sequence.to_bytes(8, "big"), payload])
-
-    def serve_replay(self):
-        while not self.stopped.is_set():
-            if not self.router.poll(50):
-                continue
-            client, _, start = self.router.recv_multipart()
-            with self.lock:
-                sent = 0
-                for sequence, payload in list(self.buffer):
-                    if sequence >= int.from_bytes(start, "big"):
-                        if self.replay_limit is not None and sent == self.replay_limit:
-                            break
-                        time.sleep(self.replay_gap_s)
-                        self.router.send_multipart(
-                            [client, b"", sequence.to_bytes(8, "big"), payload]
-                        )
-                        sent += 1
-                else:
-                    self.router.send_multipart(
-                        [client, b"", (-1).to_bytes(8, "big", signed=True), b""]
-                    )
-
-    def close(self):
-        self.stopped.set()
-        if self.thread is not None:
-            self.thread.join()
-            self.router.close(0)
-        self.pub.close(0)
-        self.context.term()
 
 
 class DecodeTests(unittest.TestCase):
@@ -339,24 +251,12 @@ class ResidencyIndexTests(unittest.TestCase):
         self.assertIn("feed stopped", lost.reason)
 
 
-def page_stored(hashes, tokens, *, parent=None, **fields):
-    """SGLang's one-token-page store event."""
-    return {
-        "type": "BlockStored",
-        "block_hashes": list(hashes),
-        "parent_block_hash": parent,
-        "token_ids": list(tokens),
-        "block_size": 1,
-        **fields,
-    }
-
-
 class PageRunTests(unittest.TestCase):
     def setUp(self):
         self.index = ResidencyIndex(MODEL, TOKENIZER, min_block_tokens=4)
 
     def apply(self, sequence, *events, index=None):
-        payload = msgpack.packb([1.0, list(events), 0])
+        payload = sglang.batch(*events)
         (index or self.index).apply(sequence, SGLANG_EVENTS.decode_batch(payload))
 
     def test_sglang_pages_publish_as_runs_of_its_minimum_block(self):
@@ -364,8 +264,8 @@ class PageRunTests(unittest.TestCase):
         self.assertIsNone(VLLM_EVENTS.min_block_tokens)
         prompt = tuple(range(100, 110))
         # The second store continues the first mid-run.
-        self.apply(0, page_stored(range(1, 7), prompt[:6]))
-        self.apply(1, page_stored(range(7, 11), prompt[6:], parent=6))
+        self.apply(0, sglang.page_stored(range(1, 7), prompt[:6]))
+        self.apply(1, sglang.page_stored(range(7, 11), prompt[6:], parent=6))
         names = identities(prompt[:8])
         snapshot = self.index.snapshot()
         self.assertEqual(snapshot["block_size"], 4)
@@ -378,7 +278,7 @@ class PageRunTests(unittest.TestCase):
     def test_a_run_leaves_when_its_last_page_is_evicted(self):
         prompt = tuple(range(8))
         names = identities(prompt)
-        self.apply(0, page_stored(range(1, 9), prompt))
+        self.apply(0, sglang.page_stored(range(1, 9), prompt))
         self.apply(1, {"type": "BlockRemoved", "block_hashes": [7]})
         self.assertEqual(self.index.cached_prefix_blocks(names), 2)
         self.apply(2, {"type": "BlockRemoved", "block_hashes": [8]})
@@ -387,7 +287,7 @@ class PageRunTests(unittest.TestCase):
             self.index.changes_after(1).changes[0]["groups"]["None"]["removed"], [names[1].hex()]
         )
         # A second copy of a page keeps its run until both copies leave.
-        self.apply(3, page_stored([4], prompt[3:4], parent=3))
+        self.apply(3, sglang.page_stored([4], prompt[3:4], parent=3))
         self.apply(4, {"type": "BlockRemoved", "block_hashes": [4]})
         self.assertEqual(self.index.cached_prefix_blocks(names), 1)
         self.apply(5, {"type": "BlockRemoved", "block_hashes": [4]})
@@ -395,20 +295,20 @@ class PageRunTests(unittest.TestCase):
 
     def test_the_first_run_keeps_the_root_salt_and_adapter(self):
         prompt = tuple(range(8))
-        self.apply(0, page_stored(range(1, 9), prompt, lora_id="a", cache_salt="s"))
+        self.apply(0, sglang.page_stored(range(1, 9), prompt, lora_id="a", cache_salt="s"))
         names = block_identities(CacheNamespace(MODEL, TOKENIZER, "a", "s"), prompt, 4)
         self.assertEqual(self.index.cached_prefix_blocks(names), 2)
         self.assertEqual(self.index.cached_prefix_blocks(identities(prompt)), 0)
 
     def test_pages_under_an_unknown_parent_and_a_reset(self):
         prompt = tuple(range(8))
-        self.apply(0, page_stored(range(5, 9), prompt[4:], parent=4))
+        self.apply(0, sglang.page_stored(range(5, 9), prompt[4:], parent=4))
         self.assertEqual(self.index.snapshot()["groups"], [])
-        self.apply(1, page_stored(range(1, 5), prompt[:4]), {"type": "AllBlocksCleared"})
-        self.apply(2, page_stored(range(1, 9), prompt))
+        self.apply(1, sglang.page_stored(range(1, 5), prompt[:4]), {"type": "AllBlocksCleared"})
+        self.apply(2, sglang.page_stored(range(1, 9), prompt))
         self.assertEqual(self.index.cached_prefix_blocks(identities(prompt)), 2)
         bounded = ResidencyIndex(MODEL, TOKENIZER, min_block_tokens=4, max_pages=6)
-        self.apply(0, page_stored(range(1, 9), prompt), index=bounded)
+        self.apply(0, sglang.page_stored(range(1, 9), prompt), index=bounded)
         self.assertFalse(bounded.known)
         self.assertIn("more than 6 cache pages", bounded.reason)
 
@@ -419,19 +319,6 @@ class ResidencyFeedTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.directory = Path(folder.name)
 
-    def run_feed(self, publisher, index):
-        feed = ResidencyFeed(
-            index,
-            publisher.endpoint,
-            publisher.replay_endpoint,
-            replay_timeout_s=1,
-            poll_s=0.02,
-            decoder=VLLM_EVENTS,
-        )
-        feed.start()
-        self.addCleanup(feed.stop)
-        return feed
-
     def test_replay_rebuilds_history_and_live_batches_follow(self):
         publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
@@ -439,7 +326,7 @@ class ResidencyFeedTests(unittest.TestCase):
         publisher.publish(batch(stored([1], prompt[:4])))
         publisher.publish(batch(stored([2], prompt[4:], parent=1)))
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.sequence == 1))
         self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 2)
         publisher.publish(batch())
@@ -458,7 +345,7 @@ class ResidencyFeedTests(unittest.TestCase):
         for _ in range(6):
             publisher.publish(batch())
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.sequence == 5, timeout=6))
         self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
 
@@ -466,7 +353,7 @@ class ResidencyFeedTests(unittest.TestCase):
         publisher = FakePublisher(self.directory, replay_gap_s=0.3)
         self.addCleanup(publisher.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.snapshot()["known"]))
         publisher.publish(batch())
         self.assertTrue(wait_for(lambda: index.sequence == 0))
@@ -517,16 +404,7 @@ class ResidencyFeedTests(unittest.TestCase):
         for _ in range(8):
             publisher.publish(batch())
         index = ResidencyIndex(MODEL, TOKENIZER)
-        feed = ResidencyFeed(
-            index,
-            publisher.endpoint,
-            publisher.replay_endpoint,
-            replay_timeout_s=0.3,
-            poll_s=0.02,
-            decoder=VLLM_EVENTS,
-        )
-        feed.start()
-        self.addCleanup(feed.stop)
+        run_feed(self, publisher, index, VLLM_EVENTS, replay_timeout_s=0.3)
         self.assertTrue(wait_for(lambda: index.sequence is not None and index.sequence >= 1))
         snapshot = index.snapshot()
         self.assertEqual(
@@ -544,16 +422,7 @@ class ResidencyFeedTests(unittest.TestCase):
         for _ in range(12):
             publisher.publish(batch())
         index = ResidencyIndex(MODEL, TOKENIZER)
-        feed = ResidencyFeed(
-            index,
-            publisher.endpoint,
-            publisher.replay_endpoint,
-            replay_timeout_s=0.3,
-            poll_s=0.02,
-            decoder=VLLM_EVENTS,
-        )
-        feed.start()
-        self.addCleanup(feed.stop)
+        run_feed(self, publisher, index, VLLM_EVENTS, replay_timeout_s=0.3)
         self.assertTrue(wait_for(lambda: index.sequence == 12, timeout=8))
         self.assertTrue(index.known)
         self.assertEqual(index.cached_prefix_blocks(identities(prompt)), 1)
@@ -564,7 +433,7 @@ class ResidencyFeedTests(unittest.TestCase):
         for _ in range(3):
             publisher.publish(batch(stored([1], range(4))))
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.sequence == 2))
         self.assertFalse(index.known)
         cleared = batch({"type": "AllBlocksCleared"})
@@ -575,7 +444,7 @@ class ResidencyFeedTests(unittest.TestCase):
         publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.known))
         with self.assertLogs("narwhal.residency", level="ERROR"):
             self.assertTrue(
@@ -587,7 +456,7 @@ class ResidencyFeedTests(unittest.TestCase):
         publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.known))
         self.assertEqual(index.snapshot()["sequence"], -1)
         other = self.directory / "no-replay"
@@ -595,7 +464,7 @@ class ResidencyFeedTests(unittest.TestCase):
         silent = FakePublisher(other, replay=False)
         self.addCleanup(silent.close)
         blind = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(silent, blind)
+        run_feed(self, silent, blind, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: "replay is unavailable" in blind.reason))
         self.assertFalse(blind.known)
 

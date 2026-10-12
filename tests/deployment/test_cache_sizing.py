@@ -19,7 +19,7 @@ from narwhal.backends.vllm.runtime import (
     runtime_model_dimensions,
     write_once,
 )
-from tests.deployment.fixtures import launcher_inputs, patched_docker
+from tests.deployment.fixtures import VLLM_HOOK, launcher_inputs, patched_docker
 from tools.deployment.fabric_budget import main, runtime_payload
 
 
@@ -378,10 +378,6 @@ class CacheSizingTests(unittest.TestCase):
                 if str(path) == "/model/config.json"
                 else plan["launcher_sha256"]
             )
-            hook_path = (
-                Path(__file__).resolve().parents[2]
-                / "src/narwhal/backends/vllm/cache_capture_hook.py"
-            )
             worker_module = ModuleType("vllm.v1.worker.gpu_worker")
             worker_module.Worker = type("Worker", (), {"init_device": lambda self: None})
             with (
@@ -402,7 +398,7 @@ class CacheSizingTests(unittest.TestCase):
                     },
                 ),
             ):
-                runpy.run_path(str(hook_path))
+                runpy.run_path(str(VLLM_HOOK))
                 core = Core()
                 config = SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
                 self.assertEqual(core._initialize_kv_caches(config), "model-ready")
@@ -422,9 +418,6 @@ class CacheSizingTests(unittest.TestCase):
             self.assertIsNot(Core._initialize_kv_caches, original)
 
     def test_live_hook_waits_for_peer_held_memory_before_device_init(self):
-        hook_path = (
-            Path(__file__).resolve().parents[2] / "src/narwhal/backends/vllm/cache_capture_hook.py"
-        )
         gib = 2**30
         for readings, polls, ready in (
             ([(10 * gib, 100 * gib), (95 * gib, 100 * gib)], 1, True),
@@ -474,7 +467,7 @@ class CacheSizingTests(unittest.TestCase):
                     patch("time.monotonic", side_effect=lambda clock=clock: clock[0]),
                     contextlib.redirect_stderr(io.StringIO()) as waited,
                 ):
-                    hook = runpy.run_path(str(hook_path))
+                    hook = runpy.run_path(str(VLLM_HOOK))
                     Worker().init_device()
                 self.assertEqual(calls, ["init"])
                 if polls is not None:

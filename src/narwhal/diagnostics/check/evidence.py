@@ -9,10 +9,11 @@ from pathlib import Path
 
 import httpx
 
+from ...backends import current_fields
 from ...backends import load as load_backend
-from ...backends import renamed_fields
 from ...config import FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...config.model import CONTRACT_LAYOUT_FLAGS
+from ...engines.attestation import fetch_spec_identity, verify_attestation
 from ...engines.validation import validation_pairs
 from ...profiling.generation import binding_digest, generation_problem
 from ...profiling.store import ProfileStore
@@ -25,13 +26,7 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
     spec = next(spec for spec in cfg.engines if spec.iid == iid)
     if not spec.attestation_url:
         raise ValueError(f"{iid} has no attestation URL")
-    identity = await fetch_engine_identity(
-        spec.url,
-        timeout_s=cfg.health_timeout_s,
-        headers=cfg.engine_headers(),
-        reader=load_backend(cfg.backend).identity,
-        attestation_url=spec.attestation_url,
-    )
+    identity = await fetch_spec_identity(cfg, spec)
     async with httpx.AsyncClient(timeout=cfg.health_timeout_s) as client:
         attestation = await client.get(spec.attestation_url)
         attestation.raise_for_status()
@@ -47,8 +42,7 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
     count, seconds = totals
     if not math.isfinite(count) or not math.isfinite(seconds):
         raise ValueError(f"{iid} returned non-finite KV transfer metrics")
-    renamed = renamed_fields("contract")
-    sources = {renamed.get(k, k): v for k, v in payload["sources"].items()}
+    sources = current_fields("contract", payload["sources"])
     return {
         "iid": iid,
         "engine_version": identity.version,
@@ -56,9 +50,7 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         "attestation_digest": payload["attestation_digest"],
         **({"launch_digest": payload["launch_digest"]} if "launch_digest" in payload else {}),
         "contract_fingerprint": cfg.engine_contract.fingerprint(),
-        "cache_layout_sources": {
-            name: sources.get(name) for name in ("cross_layers_blocks", "hybrid_kv_cache_manager")
-        },
+        "cache_layout_sources": {name: sources.get(name) for name in CONTRACT_LAYOUT_FLAGS},
         "connector_source": sources.get("connector_version"),
         "transfer_mode_source": sources.get("transfer_mode"),
         "transfer_count": count,

@@ -78,7 +78,7 @@ Otherwise `ttft_split` is `null`.
 
 A decode cell is one combination of decode input length and concurrency.
 
-Before the first cell, the profiler runs one unmeasured cohort at each concurrency value, so an engine's first-use kernel compilation at each batch size stays out of the fit.
+Before the first cell, the profiler runs one unmeasured cohort at each concurrency value.
 
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency values, including one stream and the intended operating range.

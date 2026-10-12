@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -110,6 +112,22 @@ class EngineLauncher(ABC):
 
     @abstractmethod
     def check_dev_files(self, runtime: dict) -> None: ...
+
+
+def run_import_check(script: str, label: str, *, traceback_fails: bool = False) -> None:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = exc.stderr[-800:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise ValueError(f"native {label} import failed: {detail}") from exc
+    if traceback_fails and result.stderr and "Traceback" in result.stderr:
+        raise ValueError(f"native {label} import reported: {result.stderr[-800:]}")
 
 
 def engine_backend(name: str | None = None) -> EngineBackend:

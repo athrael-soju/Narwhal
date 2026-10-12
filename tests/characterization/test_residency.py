@@ -1,24 +1,22 @@
 import tempfile
-import threading
-import time
 import unittest
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 
 import httpx
 import msgpack
-import zmq
 
 from narwhal.backends import load
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, build_app
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex, cached_prefix_blocks
-from narwhal.engines.residency_feed import ResidencyFeed
 from narwhal.runtime.residency import ResidencySubscriptions
 from narwhal.serving.router.sizing import _hash_prompt
+from tests.backends.fixtures.vllm import batch, stored
 from tests.characterization.golden import assert_golden
-from tests.fixtures import ROOT
+from tests.fixtures import ROOT, vllm_identity_engine
+from tests.residency import FakePublisher, run_feed, wait_for
 
 VLLM_EVENTS = load("vllm").kv_events
 decode_batch = VLLM_EVENTS.decode_batch
@@ -29,22 +27,6 @@ ENGINE = "http://engine:8000"
 EPOCH = "<epoch>"
 
 
-def stored(hashes, tokens, *, parent=None, group=0, kind="full_attention", size=4, **extra):
-    return {
-        "type": "BlockStored",
-        "block_hashes": list(hashes),
-        "parent_block_hash": parent,
-        "token_ids": list(tokens),
-        "block_size": size,
-        "lora_id": None,
-        "medium": "GPU",
-        "lora_name": None,
-        "group_idx": group,
-        "kv_cache_spec_kind": kind,
-        **extra,
-    }
-
-
 def removed(hashes, *, group=0, medium="GPU"):
     return {
         "type": "BlockRemoved",
@@ -52,10 +34,6 @@ def removed(hashes, *, group=0, medium="GPU"):
         "group_idx": group,
         "medium": medium,
     }
-
-
-def batch(*events):
-    return msgpack.packb([1.0, list(events), None])
 
 
 def names(tokens, size=4, **namespace):
@@ -76,64 +54,6 @@ def plain(value):
             **{f.name: plain(getattr(value, f.name)) for f in fields(value)},
         }
     raise TypeError(type(value).__name__)
-
-
-def wait_for(condition, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if condition():
-            return True
-        time.sleep(0.02)
-    return False
-
-
-class Publisher:
-    def __init__(self, directory, *, replay=True):
-        self.endpoint = f"ipc://{directory}/events.sock"
-        self.replay_endpoint = f"ipc://{directory}/replay.sock" if replay else None
-        self.context = zmq.Context()
-        self.pub = self.context.socket(zmq.PUB)
-        self.pub.bind(self.endpoint)
-        self.buffer = []
-        self.requests = []
-        self.lock = threading.Lock()
-        self.stopped = threading.Event()
-        self.thread = None
-        if replay:
-            self.router = self.context.socket(zmq.ROUTER)
-            self.router.bind(self.replay_endpoint)
-            self.thread = threading.Thread(target=self.serve, daemon=True)
-            self.thread.start()
-
-    def publish(self, payload, *, deliver=True):
-        with self.lock:
-            sequence = len(self.buffer)
-            self.buffer.append(payload)
-            if deliver:
-                self.pub.send_multipart([b"", sequence.to_bytes(8, "big"), payload])
-
-    def serve(self):
-        while not self.stopped.is_set():
-            if not self.router.poll(50):
-                continue
-            client, *request = self.router.recv_multipart()
-            with self.lock:
-                self.requests.append([frame.hex() for frame in request])
-                start = int.from_bytes(request[-1], "big")
-                for sequence, payload in enumerate(self.buffer):
-                    if sequence >= start:
-                        self.router.send_multipart(
-                            [client, b"", sequence.to_bytes(8, "big"), payload]
-                        )
-                self.router.send_multipart([client, b"", (-1).to_bytes(8, "big", signed=True), b""])
-
-    def close(self):
-        self.stopped.set()
-        if self.thread is not None:
-            self.thread.join()
-            self.router.close(0)
-        self.pub.close(0)
-        self.context.term()
 
 
 class CacheEventDecodingTests(unittest.TestCase):
@@ -293,9 +213,7 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
         self.requests = []
 
     def engine(self, request):
-        if request.url.path == "/version":
-            return httpx.Response(200, json={"version": self.identity.version})
-        return httpx.Response(200, text="process_start_time_seconds 100.0\n")
+        return vllm_identity_engine(request, self.identity.version, 100.0)
 
     def sidecar(self, index):
         app = build_app(
@@ -381,26 +299,14 @@ class ResidencyFeedTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.directory = Path(folder.name)
 
-    def run_feed(self, publisher, index):
-        feed = ResidencyFeed(
-            index,
-            publisher.endpoint,
-            publisher.replay_endpoint,
-            replay_timeout_s=1,
-            poll_s=0.02,
-            decoder=VLLM_EVENTS,
-        )
-        feed.start()
-        self.addCleanup(feed.stop)
-
     def test_replay_and_live_frames(self):
-        publisher = Publisher(self.directory)
+        publisher = FakePublisher(self.directory)
         self.addCleanup(publisher.close)
         prompt = tuple(range(8))
         publisher.publish(batch(stored([1], prompt[:4])), deliver=False)
         publisher.publish(batch(stored([2], prompt[4:], parent=1)), deliver=False)
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(publisher, index)
+        run_feed(self, publisher, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.sequence == 1 and index.snapshot()["known"]))
         states = {"replayed": index.snapshot()}
         publisher.publish(batch(removed([2])), deliver=False)
@@ -413,10 +319,10 @@ class ResidencyFeedTests(unittest.TestCase):
 
     def test_feed_failure_states(self):
         states = {}
-        idle = Publisher(self.folder("idle"))
+        idle = FakePublisher(self.folder("idle"))
         self.addCleanup(idle.close)
         index = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(idle, index)
+        run_feed(self, idle, index, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: index.known))
         states["idle"] = index.snapshot()
         with self.assertLogs("narwhal.residency", level="ERROR"):
@@ -424,10 +330,10 @@ class ResidencyFeedTests(unittest.TestCase):
                 wait_for(lambda: idle.pub.send_multipart([b"", b"short"]) or not index.known)
             )
         states["short frame"] = index.snapshot()
-        silent = Publisher(self.folder("silent"), replay=False)
+        silent = FakePublisher(self.folder("silent"), replay=False)
         self.addCleanup(silent.close)
         blind = ResidencyIndex(MODEL, TOKENIZER)
-        self.run_feed(silent, blind)
+        run_feed(self, silent, blind, VLLM_EVENTS)
         self.assertTrue(wait_for(lambda: "replay is unavailable" in blind.reason))
         states["no replay"] = blind.snapshot()
         assert_golden(self, "residency_feed_failures", states)

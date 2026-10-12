@@ -201,7 +201,6 @@ class ResidencyIndex:
         self.model = model
         self.tokenizer = tokenizer
         self.max_blocks = max_blocks
-        # Engine pages shorter than `min_block_tokens` publish as runs of pages.
         self._runs = None if min_block_tokens is None else PageRuns(min_block_tokens)
         self.max_pages = max_pages
         self._lock = threading.Lock()

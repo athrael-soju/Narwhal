@@ -151,6 +151,14 @@ def handoff(params: object) -> bool:
     )
 
 
+def _room_error(payload: dict[str, Any]) -> Reply | None:
+    if type(payload.get("bootstrap_room")) is not int:
+        return error(
+            400, "Disaggregated request received without bootstrap room id", "BadRequestError"
+        )
+    return None
+
+
 class VllmWire:
     def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
         if (method, path) == ("GET", "/version"):
@@ -243,20 +251,15 @@ class SglangWire:
         return rid if isinstance(rid, str) else None
 
     def decode_error(self, payload: dict[str, Any]) -> Reply | None:
-        if type(payload.get("bootstrap_room")) is not int:
-            return error(
-                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
-            )
-        return None
+        return _room_error(payload)
 
     async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
         if engine.rooms is None:
             return None
-        room = payload.get("bootstrap_room")
-        if type(room) is not int:
-            return error(
-                400, "Disaggregated request received without bootstrap room id", "BadRequestError"
-            )
+        refused = _room_error(payload)
+        if refused is not None:
+            return refused
+        room = payload["bootstrap_room"]
         if engine.role == "prefill" and payload.get("stream"):
             return error(400, "a prefill instance returns no stream", "BadRequestError")
         started = time.monotonic()
@@ -300,7 +303,6 @@ class Rooms:
                 del self.waiting[room]
 
 
-# One wire protocol per engine backend name.
 PROTOCOLS = {"sglang": SglangWire(), "vllm": VllmWire()}
 
 

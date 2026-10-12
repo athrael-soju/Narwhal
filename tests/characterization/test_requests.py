@@ -1,20 +1,13 @@
 import json
 import re
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
 import httpx
 
-from narwhal.config import SLO, EngineSpec, FleetConfig
-from narwhal.profiling.model import Profile
-from narwhal.serving.app import create_app
 from narwhal.serving.handoff import handoff_bound
-from narwhal.serving.router.routing import NarwhalRouter
-from narwhal.types import Role
+from tests.backends.fixtures.vllm import launch, nixl_config
 from tests.characterization.golden import assert_golden
-from tests.wire import engine_transports
+from tests.wire import serving_app
 
 PROMPT_IDS = [10, 11, 12]
 REQUEST_ID = re.compile(r"^(.+)-a(\d+)-(prefill|decode)$")
@@ -24,30 +17,8 @@ def chunk(choice, **fields):
     return {"id": "fixture-id", "created": 123, "model": "stub", "choices": [choice], **fields}
 
 
-def lease_attestation(seconds):
-    connector = {
-        "kv_connector": "NixlConnector",
-        "kv_role": "kv_both",
-        "kv_connector_extra_config": {"backends": ["UCX"], "kv_lease_duration": seconds},
-    }
-    return {"launch": {"args": ["--kv-transfer-config", json.dumps(connector)]}}
-
-
 class RouterWireTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        cfg = FleetConfig(
-            model="stub",
-            slo=SLO(ttft_s=10.0, tpot_s=0.5),
-            engines=[
-                EngineSpec("p", "http://stub-0", Role.PREFILL),
-                EngineSpec("d", "http://stub-1", Role.DECODE),
-            ],
-            profiles_path=Path(directory.name) / "profiles.json",
-            tokenize=True,
-            admission="open",
-        )
         self.calls = []
         self.prefill_payload = {
             "kv_transfer_params": {"remote_engine_id": "p", "remote_block_ids": [1, 2]}
@@ -96,36 +67,9 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
                 200, text=wire + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"}
             )
 
-        def router(*args, **kwargs):
-            return NarwhalRouter(*args, **engine_transports(engine), **kwargs)
-
-        with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
-            app = create_app(cfg)
-        self.router = app.state.router
-        self.addAsyncCleanup(self.router.engines.aclose)
-        for iid in ("p", "d"):
-            self.router.profiles.put(
-                Profile(
-                    iid,
-                    2e-8,
-                    6e-5,
-                    0.005,
-                    3e-6,
-                    0.012,
-                    decode_min_requests=1,
-                    decode_max_requests=4,
-                    decode_min_kv_tokens=1,
-                    decode_max_kv_tokens=1024,
-                    decode_fit_mape=0.0,
-                    decode_cv_mape=0.0,
-                )
-            )
-        self.router.journal.open()
-        self.addCleanup(self.router.journal.close)
-        self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://router"
+        self.router, self.client = serving_app(
+            self, engine, urls=("http://stub-0", "http://stub-1"), tokenize=True
         )
-        self.addAsyncCleanup(self.client.aclose)
 
     def record(self, response):
         replacements = {}
@@ -263,7 +207,8 @@ class RouterWireTests(unittest.IsolatedAsyncioTestCase):
     async def test_handoff_bound_from_attested_lease(self):
         record = {}
         for seconds in (6, 7, 30, 60):
-            self.router.attested("p", lease_attestation(seconds))
+            payload = launch("--kv-transfer-config", json.dumps(nixl_config(seconds, ucx=True)))
+            self.router.attested("p", payload)
             state = (await self.client.get("/narwhal/state")).json()["handoff"]["p"]
             record[str(seconds)] = {"bound": handoff_bound(self.router, "p"), "state": state}
         assert_golden(self, "requests_handoff_bound", record)

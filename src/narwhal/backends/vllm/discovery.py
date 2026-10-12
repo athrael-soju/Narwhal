@@ -1,41 +1,28 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
+
+from ...deployment.launch_engine.plan import discovered_settings
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
-    dtype = setting("MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
-    if dtype not in {"bfloat16", "float16"}:
-        raise ValueError("set MODEL_DTYPE to bfloat16 or float16 in .env")
-    max_len = min(int(observed.get("max_model_len") or 16384), 16384)
-    args = json.loads(
-        setting(
-            "ENGINE_ARGS",
-            json.dumps(
-                [
-                    "--max-model-len",
-                    str(max_len),
-                    "--max-num-seqs",
-                    "8",
-                    "--gpu-memory-utilization",
-                    "0.9",
-                    "--enforce-eager",
-                ]
-            ),
-        )
+    dtype, args, environment, overrides = discovered_settings(
+        observed,
+        setting,
+        lambda max_len: [
+            "--max-model-len",
+            str(max_len),
+            "--max-num-seqs",
+            "8",
+            "--gpu-memory-utilization",
+            "0.9",
+            "--enforce-eager",
+        ],
     )
-    if not isinstance(args, list):
-        raise ValueError("ENGINE_ARGS must be a JSON array")
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
-    environment = dict(observed["image_environment"])
-    overrides = json.loads(setting("ENGINE_ENV", "{}"))
-    if not isinstance(overrides, dict):
-        raise ValueError("ENGINE_ENV must be a JSON object")
-    environment.update(overrides)
     if observed.get("requires_ds_conv_state_layout"):
         if (
             "VLLM_SSM_CONV_STATE_LAYOUT" in overrides

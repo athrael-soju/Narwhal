@@ -96,7 +96,7 @@ Print the installed distribution version with `narwhal --version`.
 | Router | `P` |
 | Engine HTTP range start | `P+1` |
 | Attestation range start | `P+101` |
-| NIXL range start | `P+201` |
+| KV side-channel range start | `P+201` |
 
 Selected ports must be distinct and fit 1..65535.
 

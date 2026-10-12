@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import httpx
 
-from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document as config_document
 from narwhal.engines.attestation import (
@@ -26,22 +25,16 @@ from narwhal.runtime.lifecycle import readmission
 from narwhal.runtime.lifecycle.identity import capture_process_identities
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.serving.router.routing import NarwhalRouter
+from tests.backends.fixtures.vllm import nixl_config
 from tests.characterization.golden import assert_golden
-from tests.fixtures import ROOT, fleet
+from tests.fixtures import ROOT, fleet, vllm_identity_engine
 from tests.wire import EngineWire
-
-VLLM_IDENTITY = load_backend("vllm").identity
 
 ENGINE = "http://stub-0:8000"
 # Headers that carry engine protocol; transport headers vary with the HTTP library.
 KEPT_HEADERS = ("authorization", "content-type", "x-request-id")
 KEY_ENV = "NARWHAL_TEST_ENGINE_KEY"
-TRANSFER_CONFIG = {
-    "kv_connector": "NixlConnector",
-    "kv_role": "kv_both",
-    "kv_connector_extra_config": {"kv_lease_duration": 30},
-}
-LAUNCH = {"args": ["--max-num-seqs", "64", "--kv-transfer-config", json.dumps(TRANSFER_CONFIG)]}
+LAUNCH = {"args": ["--max-num-seqs", "64", "--kv-transfer-config", json.dumps(nixl_config(30))]}
 
 
 def recorded(request: httpx.Request) -> dict:
@@ -54,21 +47,6 @@ def recorded(request: httpx.Request) -> dict:
         },
         "json": json.loads(body) if body else None,
     }
-
-
-def version_and_metrics(request: httpx.Request, version: str, start: float) -> httpx.Response:
-    if request.url.path == "/version":
-        return httpx.Response(200, json={"version": version})
-    if request.url.path == "/metrics":
-        return httpx.Response(
-            200,
-            text=(
-                "# HELP process_start_time_seconds Start time of the process.\n"
-                "# TYPE process_start_time_seconds gauge\n"
-                f"process_start_time_seconds {start}\n"
-            ),
-        )
-    raise AssertionError(f"unexpected request: {request.url}")
 
 
 class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
@@ -101,7 +79,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             requests.append(recorded(request))
             if state["failed"]:
                 return httpx.Response(503)
-            return version_and_metrics(request, self.version, state["start"])
+            return vllm_identity_engine(request, self.version, state["start"])
 
         transport = httpx.MockTransport(handle)
         index = ResidencyIndex(self.cfg.model, self.contract.fingerprint())
@@ -173,16 +151,12 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         def transfer(config):
             return ["--kv-transfer-config", json.dumps(config)]
 
-        no_lease = copy.deepcopy(TRANSFER_CONFIG)
-        del no_lease["kv_connector_extra_config"]["kv_lease_duration"]
-        zero_lease = copy.deepcopy(TRANSFER_CONFIG)
-        zero_lease["kv_connector_extra_config"]["kv_lease_duration"] = 0
         launches = {
             "separate_values": LAUNCH["args"],
             "equals_values": ["--max-num-seqs=32", "--kv-transfer-config=" + LAUNCH["args"][3]],
-            "other_connector": transfer({**TRANSFER_CONFIG, "kv_connector": "OtherConnector"}),
-            "missing_lease": transfer(no_lease),
-            "zero_lease": transfer(zero_lease),
+            "other_connector": transfer({**nixl_config(30), "kv_connector": "OtherConnector"}),
+            "missing_lease": transfer(nixl_config(None)),
+            "zero_lease": transfer(nixl_config(0)),
             "unparsable_transfer_config": ["--kv-transfer-config", "{"],
             "zero_sequences": ["--max-num-seqs", "0"],
             "no_launch": None,
@@ -211,7 +185,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             host = request.url.host
             if request.url.path == "/v1/attestation":
                 return httpx.Response(200, json=payloads[host])
-            return version_and_metrics(request, self.version, starts[host])
+            return vllm_identity_engine(request, self.version, starts[host])
 
         transport = httpx.MockTransport(handle)
         engines = [
@@ -234,12 +208,10 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             records["capture_requests"], requests[:] = list(requests), []
             for name, contract in (("contract_free", None), ("attested", self.contract)):
                 generation = await read_generation(
+                    replace(self.cfg, engine_contract=contract),
                     engines[0],
-                    contract,
                     timeout_s=1.0,
-                    headers=self.cfg.engine_headers(),
                     transport=transport,
-                    reader=VLLM_IDENTITY,
                 )
                 records[name] = {
                     "digest": generation.digest,
@@ -298,7 +270,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
                         headers={"content-type": "text/event-stream"},
                     )
                 return httpx.Response(200, json={"choices": [{"text": "ok"}]})
-            return version_and_metrics(request, self.version, starts[iid])
+            return vllm_identity_engine(request, self.version, starts[iid])
 
         transport = httpx.MockTransport(handle)
         router = await self.router(transport, EngineWire(handle).dial)

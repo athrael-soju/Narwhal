@@ -8,6 +8,7 @@ import httpx
 from ...config import EngineContract
 from ...engines.attestation import EngineIdentity, EngineIdentityReader
 
+SERVER_INFO_PATH = "/server_info"
 # vLLM's connector, cache manager and handshake fields have no SGLang counterpart.
 ATTESTED_FIELDS = frozenset(EngineContract().fields()) - {
     "connector_version",
@@ -19,6 +20,14 @@ ATTESTED_FIELDS = frozenset(EngineContract().fields()) - {
 }
 
 
+async def server_info(
+    client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
+) -> Any:
+    info = await client.get(f"{base.rstrip('/')}{SERVER_INFO_PATH}", headers=headers)
+    info.raise_for_status()
+    return info.json()
+
+
 def server_version(payload: Any) -> str:
     version = payload.get("version") if isinstance(payload, dict) else None
     if not isinstance(version, str) or not version.strip():
@@ -26,27 +35,16 @@ def server_version(payload: Any) -> str:
     return version.strip()
 
 
-def launch_option(payload: Any, name: str) -> str | None:
-    launch = payload.get("launch") if isinstance(payload, dict) else None
-    args = launch.get("args") if isinstance(launch, dict) else None
-    if not isinstance(args, list) or name not in args:
-        return None
-    index = args.index(name)
-    value = args[index + 1] if index + 1 < len(args) else None
-    return value if isinstance(value, str) else None
-
-
 class SglangIdentity(EngineIdentityReader):
     reports_process_start = False
     contract_fields = ATTESTED_FIELDS
+    sequence_flag = "--max-running-requests"
 
     async def version(
         self, client: httpx.AsyncClient, base: str, headers: Mapping[str, str] | None = None
     ) -> str:
         # /server_info also carries the engine's API keys; only the version leaves this call.
-        info = await client.get(f"{base.rstrip('/')}/server_info", headers=headers)
-        info.raise_for_status()
-        return server_version(info.json())
+        return server_version(await server_info(client, base, headers))
 
     async def read(
         self,
@@ -59,12 +57,6 @@ class SglangIdentity(EngineIdentityReader):
         if process_start is None:
             raise ValueError("SGLang publishes no process start; its sidecar reads it on the host")
         return EngineIdentity(await self.version(client, base, headers), process_start)
-
-    def sequence_limit(self, attestation: Any) -> int | None:
-        value = launch_option(attestation, "--max-running-requests")
-        if value is not None and value.isdigit() and int(value) > 0:
-            return int(value)
-        return None
 
     def kv_lease(self, attestation: Any) -> int | None:
         # SGLang holds a producer's KV for its rendezvous, not for a lease.

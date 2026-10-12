@@ -11,7 +11,7 @@ from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.attestation import attested_launches
-from ...engines.client import EngineClient
+from ...engines.client import EngineClient, client_options
 from ...runtime.role_switch import RoleSwitcher, engine_side, restore_roles
 from ...types import Role
 from .engines import (
@@ -74,21 +74,7 @@ async def run(
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
-    # Preflight uses the serving timeouts.
-    client = EngineClient(
-        timeout_s=cfg.request_timeout_s,
-        prefill_timeout_s=cfg.prefill_timeout_s,
-        read_timeout_s=cfg.decode_read_timeout_s,
-        max_connections=cfg.max_connections,
-        control_connections=cfg.resolved_control_connections(),
-        pool_timeout_s=cfg.pool_timeout_s,
-        connect_timeout_s=cfg.connect_timeout_s,
-        health_timeout_s=cfg.health_timeout_s,
-        kv=load_backend(cfg.backend).connector(cfg.connector),
-        dialect=load_backend(cfg.backend).dialect,
-        model=cfg.model,
-        engine_api_key=cfg.resolve_engine_key(),
-    )
+    client = EngineClient(**client_options(cfg))
     # The gates switch engines to place each pair; a running router keeps the roles it set.
     switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
     roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}

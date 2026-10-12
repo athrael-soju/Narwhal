@@ -8,7 +8,7 @@ from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.engines.residency import ResidencyIndex
 from narwhal.runtime.residency import ResidencySubscriptions
-from tests.fixtures import ROOT, hold_prefix
+from tests.fixtures import ROOT, hold_prefix, vllm_identity_engine
 
 SIDECAR = "http://sidecar:8010"
 
@@ -30,9 +30,7 @@ class ResidencySubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.client = self.sidecar(self.index)
 
     def engine(self, request):
-        if request.url.path == "/version":
-            return httpx.Response(200, json={"version": self.identity.version})
-        return httpx.Response(200, text=f"process_start_time_seconds {self.start}\n")
+        return vllm_identity_engine(request, self.identity.version, self.start)
 
     def sidecar(self, index):
         app = build_app(

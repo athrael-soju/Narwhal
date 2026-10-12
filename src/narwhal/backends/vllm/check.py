@@ -2,41 +2,30 @@ from __future__ import annotations
 
 import inspect
 import json
-import os
-import uuid
 from pathlib import Path
 
-from ...deployment import stages
-from ...deployment.launch_engine.check import require_checked
+from ...deployment.launch_engine.check import (
+    inspect_image,
+    run_native_check,
+    start_check,
+    write_checked,
+)
 from ...deployment.launch_engine.docker import docker
 from ...deployment.launch_engine.plan import (
-    append_private,
     container_options,
     env_file_name,
-    kv_events_directory,
     read_env,
     releases_peers,
     requires_remote_code,
 )
-from ...deployment.launch_engine.runtime import digest, write_once
+from ...deployment.launch_engine.runtime import digest
 from .plan import requires_ds_conv_state_layout
 from .runtime import engine_arguments
 
 
 def check(run: Path, plan: dict) -> None:
     native = plan.get("backend") == "native"
-    log = "runtime-check.log" if native else "image-check.log"
-    if (run / "checked.json").exists():
-        require_checked(run, plan)
-    kv_events_directory(plan)
-    append_private(
-        run / log,
-        "\n"
-        + json.dumps(
-            {"check_attempt": uuid.uuid4().hex, "plan_sha256": digest(run / "launch.json")}
-        )
-        + "\n",
-    )
+    log = start_check(run, plan)
     default_tokenizer = plan["model_dir"] if native else "/model"
     tokenizer_path = default_tokenizer
     for index, argument in enumerate(plan["args"]):
@@ -62,16 +51,7 @@ def check(run: Path, plan: dict) -> None:
             raise ValueError("native model file changed after launch preparation")
         inspection = None
     else:
-        inspection = json.loads(
-            docker(["image", "inspect", plan["image"]], run, "image-check.log")
-        )[0]
-        expected = plan["image"]
-        if expected.startswith("sha256:"):
-            matches = inspection["Id"] == expected
-        else:
-            matches = expected in inspection.get("RepoDigests", [])
-        if not matches:
-            raise ValueError("local image identity differs from the launch plan")
+        inspection = inspect_image(run, plan, log)
     # Tokenizer metadata resolves in the serving namespace, including image-local paths.
     script = (
         "from pathlib import Path\n"
@@ -149,19 +129,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         json.dumps(engine_arguments(plan)),
     ]
     if native:
-        result = stages.run(
-            [plan["python_executable"], *arguments],
-            env={**os.environ, **environment},
-            stage="native-runtime-check",
-            log=run / log,
-        )
-        if result.returncode:
-            detail = result.stderr.strip().splitlines()
-            raise ValueError(
-                f"native runtime check exited {result.returncode}: "
-                f"{detail[-1] if detail else 'empty stderr'}; inspect {run / log}"
-            )
-        output = result.stdout
+        output = run_native_check(run, plan, log, arguments, environment)
     else:
         output = docker(
             [
@@ -209,27 +177,13 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         "cuda_ipc_peers", "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
     )
     evidence = {
-        "plan_sha256": digest(run / "launch.json"),
         "vllm_api_version": api_version,
         "prefix_caching": settings[0]["prefix_caching"],
         "kv_events": settings[0]["kv_events"],
         "ucx_version": ucx,
         "peer_release": not ipc_peers or releases_peers(ucx, ipc_cache),
     }
-    if native:
-        evidence.update(
-            backend="native",
-            python_executable=plan["python_executable"],
-            expected_packages=plan["expected_packages"],
-        )
-    else:
-        assert inspection is not None
-        evidence["image_id"] = inspection["Id"]
-    write_once(
-        run / "checked.json",
-        json.dumps(evidence),
-        "runtime identity changed; prepare a fresh launch directory",
-    )
+    write_checked(run, plan, evidence, inspection)
     print("Runtime identity, package pins, connector import and tokenizer passed.")
     if ipc_peers and evidence["peer_release"]:
         print(

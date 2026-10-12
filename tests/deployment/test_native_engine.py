@@ -158,6 +158,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         run,
                         {
                             "role": f"engine-{number}",
+                            "backend": "native",
                             "endpoint": f"http://127.0.0.1:{8000 + number}",
                             "python_executable": sys.executable,
                             "args": ["-m", "vllm.entrypoints.openai.api_server"],
@@ -266,6 +267,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         run,
                         {
                             "role": f"engine-{number}",
+                            "backend": "native",
                             "endpoint": f"http://127.0.0.1:{8000 + number}",
                             "python_executable": sys.executable,
                             "args": ["-m", "vllm.entrypoints.openai.api_server"],

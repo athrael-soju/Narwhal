@@ -4,7 +4,7 @@ import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint, entry_points
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from ..deployment.launch_engine.backend import EngineLauncher
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 GROUP = "narwhal.backends"
 DEFAULT_BACKEND = "vllm"
+
+V = TypeVar("V")
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,7 @@ class EngineBackend:
     role_switch: RoleSwitcher | None = None
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
-    # Earlier field names this backend wrote, by section ("contract", "engine").
+    # Earlier field names this backend wrote, by section ("contract", "engine", "dev_ports").
     renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def role_switcher(self, connector: str) -> RoleSwitcher | None:
@@ -84,3 +86,8 @@ def renamed_fields(section: str) -> dict[str, str]:
         for name in names()
         for old, new in load(name).renamed_fields.get(section, {}).items()
     }
+
+
+def current_fields(section: str, raw: Mapping[str, V]) -> dict[str, V]:
+    renamed = renamed_fields(section)
+    return {renamed.get(key, key): value for key, value in raw.items()}

@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
+
+from ...deployment.launch_engine.plan import (
+    SECRET_WORDS,
+    check_environment,
+    check_extra_args,
+    check_versions_and_dtype,
+    option,
+)
 
 VALUE_OPTIONS = {
     "--max-model-len",
@@ -61,47 +68,19 @@ def validate_runtime(runtime: dict) -> None:
     packages = runtime.get("expected_packages", {})
     if not packages.get("vllm") or not any(name in packages for name in ("nixl", "nixl-rocm")):
         raise ValueError("runtime.expected_packages requires pinned vLLM and NIXL versions")
-    if any(not isinstance(v, str) or not v or "<" in v for v in packages.values()):
-        raise ValueError("runtime.expected_packages requires resolved version strings")
-    if (
-        runtime.get("model_dtype") not in ("bfloat16", "float16")
-        or runtime.get("kv_cache_dtype") != "auto"
-    ):
-        raise ValueError("this launcher uses a two-byte model dtype with kv_cache_dtype=auto")
+    check_versions_and_dtype(runtime)
     if type(runtime.get("block_size")) is not int or runtime["block_size"] < 1:
         raise ValueError("runtime.block_size must be positive")
     lease = runtime.get("kv_lease_s", KV_LEASE_S)
     if type(lease) is not int or lease < MIN_KV_LEASE_S:
         raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
-    args = runtime.get("extra_args", [])
-    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
-        raise ValueError("runtime.extra_args must be an argument list")
-    index = 0
-    while index < len(args):
-        option = args[index]
-        if (
-            option in VALUE_OPTIONS
-            and index + 1 < len(args)
-            and not args[index + 1].startswith("--")
-        ):
-            index += 2
-        elif option in FLAG_OPTIONS:
-            index += 1
-        else:
-            raise ValueError(f"unsupported or incomplete runtime option: {option}")
-    for name, value in runtime.get("environment", {}).items():
-        if (
-            not re.fullmatch(r"[A-Z][A-Z0-9_]*", name)
-            or name in MANAGED_ENV
-            or not (name.startswith(ENV_PREFIXES) or name in ("LD_LIBRARY_PATH", "PYTHONPATH"))
-            or any(
-                word in name
-                for word in ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH", "SKIP_COMPAT")
-            )
-            or not isinstance(value, str)
-            or any(c in value for c in "\r\n\0")
-        ):
-            raise ValueError(f"unsupported runtime environment field: {name}")
+    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
+    check_environment(
+        runtime.get("environment", {}),
+        MANAGED_ENV,
+        ENV_PREFIXES,
+        forbidden=(*SECRET_WORDS, "SKIP_COMPAT"),
+    )
 
 
 def publishes_kv_events(args: list[str]) -> bool:
@@ -189,10 +168,7 @@ def serve_args(
 
 
 def memory_fraction(args: list[str]) -> str | None:
-    positions = [i for i, arg in enumerate(args) if arg == "--gpu-memory-utilization"]
-    if len(positions) != 1 or positions[0] + 1 >= len(args):
-        return None
-    return args[positions[0] + 1]
+    return option(args, "--gpu-memory-utilization")
 
 
 def requires_ds_conv_state_layout(model_dir: Path) -> bool:

@@ -20,11 +20,10 @@ import httpx
 from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import attested_launches
 from ...engines.connector import RendezvousConnector
 from ...engines.dialect import EngineDialect
 from ...provenance import stamp
-from ...runtime.role_switch import RoleSwitcher, engine_side, place_pair
+from ...runtime.role_switch import RoleSwitcher, engine_side
 from ...types import Role
 from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
@@ -33,7 +32,7 @@ from ..tasks import cancel_tasks
 from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
-from .pairing import PairedTransport, Pairing, origin
+from .pairing import PairedTransport, paired_transport
 from .sweep import Sweep, bounded_sweep, load_sequence_limits
 
 
@@ -117,9 +116,9 @@ def _pair_roles(
         async with httpx.AsyncClient(
             timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
         ) as control:
-            await place_pair(switcher, control, producer, consumer)
+            await switcher.place(control, producer, consumer)
             await _reset_caches(control, dialect, (spec.url, peer.url))
-        pairing.pairs[origin(spec.url)] = Pairing(role, origin(peer.url), producer[1] or {})
+        pairing.pair(spec.url, role, peer.url, producer[1])
 
     return serve_as
 
@@ -208,7 +207,8 @@ async def _run_lanes_apart(
                 if phases is None:
                     continue
                 if outcomes[-1] != 0 or len(outcomes) == len(futures):
-                    # The first failure stops the lanes waiting for it at a phase switch.
+                    # The first failure stops the lanes waiting for it at a phase switch, and
+                    # the last lane to finish stops the stand-ins.
                     phases.abort()
                 else:
                     stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
@@ -322,17 +322,12 @@ async def run(
         )
     connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
-    pairing = (
-        PairedTransport(httpx.AsyncHTTPTransport(limits=pool), kv, dialect)
-        if isinstance(kv, RendezvousConnector)
-        else None
-    )
-    launches = (
-        await attested_launches(
-            cfg.engines, timeout_s=observation_timeout_s or cfg.health_timeout_s
-        )
-        if pairing is not None
-        else {}
+    pairing, launches = await paired_transport(
+        lambda: httpx.AsyncHTTPTransport(limits=pool),
+        kv,
+        dialect,
+        cfg.engines,
+        timeout_s=observation_timeout_s or cfg.health_timeout_s,
     )
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(
@@ -403,11 +398,7 @@ async def run(
                 if neighbour_load is not None:
                     await neighbour_load.start()
                 generation = await read_generation(
-                    spec,
-                    cfg.engine_contract,
-                    timeout_s=observation_timeout_s or cfg.health_timeout_s,
-                    headers=cfg.engine_headers(),
-                    reader=load_backend(cfg.backend).identity,
+                    cfg, spec, timeout_s=observation_timeout_s or cfg.health_timeout_s
                 )
                 engine_evidence["generation_evidence"] = generation.document
                 roles = None
@@ -460,11 +451,7 @@ async def run(
                         colocated_decode_rps=float(measured["decode_rps"]),
                     )
                 current = await read_generation(
-                    spec,
-                    cfg.engine_contract,
-                    timeout_s=observation_timeout_s or cfg.health_timeout_s,
-                    headers=cfg.engine_headers(),
-                    reader=load_backend(cfg.backend).identity,
+                    cfg, spec, timeout_s=observation_timeout_s or cfg.health_timeout_s
                 )
                 if generation.process_digest != current.process_digest:
                     raise ValueError(f"{spec.iid}: engine generation changed during profiling")

@@ -17,12 +17,12 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
-from ..backends import DEFAULT_BACKEND, renamed_fields
+from ..backends import DEFAULT_BACKEND, current_fields
 from ..backends import load as load_backend
 from ..backends import names as backend_names
 from ..cli_support import add_version_argument
-from ..config import EngineContract, EngineSpec
-from ..config.model import current_contract_names
+from ..config import EngineContract, EngineSpec, FleetConfig
+from ..config.model import CONTRACT_INT_FIELDS, CONTRACT_LAYOUT_FLAGS, current_contract_names
 from ..contracts import (
     ATTESTATION,
     ContractVersionError,
@@ -53,6 +53,8 @@ class EngineIdentityReader(ABC):
     reports_process_start: ClassVar[bool] = True
     # The contract fields the backend attests; None means every field.
     contract_fields: ClassVar[frozenset[str] | None] = None
+    # The launch flag that carries the sequence limit; None means the backend attests none.
+    sequence_flag: ClassVar[str | None] = None
 
     @abstractmethod
     async def version(
@@ -69,8 +71,13 @@ class EngineIdentityReader(ABC):
         process_start: float | None = None,
     ) -> EngineIdentity: ...
 
-    @abstractmethod
-    def sequence_limit(self, attestation: Any) -> int | None: ...
+    def sequence_limit(self, attestation: Any) -> int | None:
+        if self.sequence_flag is None:
+            return None
+        value = attested_option(attestation, self.sequence_flag)
+        if value is not None and value.isdigit() and int(value) > 0:
+            return int(value)
+        return None
 
     @abstractmethod
     def kv_lease(self, attestation: Any) -> int | None: ...
@@ -113,21 +120,16 @@ def _read_contract(raw: Any) -> EngineContract:
     if unknown:
         raise ValueError(f"unknown attestation contract field(s): {', '.join(unknown)}")
 
-    bool_fields = {
-        "cross_layers_blocks",
-        "hybrid_kv_cache_manager",
-        "enforce_handshake_compat",
-    }
-    int_fields = {"connector_version", "kv_heads", "head_size", "hidden_layers"}
+    bool_fields = (*CONTRACT_LAYOUT_FLAGS, "enforce_handshake_compat")
     for name in bool_fields:
         value = raw.get(name, defaults[name])
         if value is not None and not isinstance(value, bool):
             raise ValueError(f"contract.{name} must be a boolean or null")
-    for name in int_fields:
+    for name in CONTRACT_INT_FIELDS:
         value = raw.get(name, defaults[name])
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"contract.{name} must be a nonnegative integer")
-    for name in set(defaults) - bool_fields - int_fields:
+    for name in set(defaults) - set(bool_fields) - set(CONTRACT_INT_FIELDS):
         value = raw.get(name, defaults[name])
         if not isinstance(value, str):
             raise ValueError(f"contract.{name} must be a string")
@@ -169,8 +171,7 @@ def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
         isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
     ):
         raise ValueError("attestation sources must map field names to nonempty strings")
-    renamed = renamed_fields("contract")
-    raw = {renamed.get(k, k): v for k, v in raw.items()}
+    raw = current_fields("contract", raw)
     unknown_sources = sorted(set(raw) - set(contract.fields()))
     if unknown_sources:
         raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
@@ -215,6 +216,25 @@ async def fetch_engine_identity(
         return await reader.read(client, engine_base, process_start=start)
 
 
+async def fetch_spec_identity(
+    cfg: FleetConfig,
+    spec: EngineSpec,
+    *,
+    timeout_s: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    headers: dict[str, str] | None = None,
+) -> EngineIdentity:
+    # None takes the fleet's health timeout and engine key headers; {} sends no headers.
+    return await fetch_engine_identity(
+        spec.url,
+        timeout_s=cfg.health_timeout_s if timeout_s is None else timeout_s,
+        transport=transport,
+        headers=cfg.engine_headers() if headers is None else headers,
+        reader=load_backend(cfg.backend).identity,
+        attestation_url=spec.attestation_url,
+    )
+
+
 async def read_process_start(
     attestation_url: str,
     *,
@@ -229,6 +249,28 @@ async def read_process_start(
     if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError(f"{url} returned no process start time")
     return float(value)
+
+
+def attested_launch(payload: Any) -> dict[str, Any]:
+    launch = payload.get("launch") if isinstance(payload, dict) else None
+    return launch if isinstance(launch, dict) else {}
+
+
+def attested_option(payload: Any, name: str) -> str | None:
+    # The first value of a launch flag, given as `name value` or `name=value`.
+    args = attested_launch(payload).get("args")
+    if not isinstance(args, list):
+        return None
+    for index, arg in enumerate(args):
+        if not isinstance(arg, str):
+            continue
+        flag, equals, value = arg.partition("=")
+        if flag != name:
+            continue
+        if not equals:
+            value = args[index + 1] if index + 1 < len(args) else ""
+        return value if isinstance(value, str) else None
+    return None
 
 
 async def attested_launches(
@@ -329,8 +371,7 @@ def verify_attestation(
     if not isinstance(engine, dict):
         failures.append("engine identity is not an object")
         return failures
-    renamed = renamed_fields("engine")
-    engine = {renamed.get(k, k): v for k, v in engine.items()}
+    engine = current_fields("engine", engine)
     version = engine.get("version")
     if version != live.version:
         failures.append(f"engine version is {version!r}, the live engine reports {live.version!r}")

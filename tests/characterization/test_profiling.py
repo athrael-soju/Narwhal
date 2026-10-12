@@ -12,7 +12,6 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
-from narwhal.engines.client import EngineClient
 from narwhal.profiling import calibration
 from narwhal.profiling.probe.decode import probe_decode
 from narwhal.profiling.probe.engine import (
@@ -28,9 +27,9 @@ from narwhal.profiling.probe.sweep import Sweep
 from narwhal.profiling.probe.warm import probe_cached_prefill
 from narwhal.types import Role
 from tests.characterization.golden import assert_golden
-from tests.characterization.vllm_fake import ENGINES, FakeVllm, routed, untimed
+from tests.characterization.vllm_fake import ENGINES, FakeVllm, untimed
 from tests.fixtures import ROOT
-from tests.wire import engine_transports
+from tests.wire import engine_clients, routed
 
 VLLM_METRICS = load_backend("vllm").metrics
 
@@ -152,13 +151,7 @@ class ProfilingCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder) / "calibration.json"
             with (
-                patch.object(
-                    calibration,
-                    "EngineClient",
-                    side_effect=lambda **kwargs: EngineClient(
-                        **kwargs, **engine_transports(self.engine)
-                    ),
-                ),
+                engine_clients(calibration, self.engine),
                 patch("httpx.AsyncClient", routed(self.engine)),
             ):
                 code = await calibration.calibrate(

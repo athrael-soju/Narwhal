@@ -1,5 +1,6 @@
 """Fleet and profile fixtures for contract tests."""
 
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,11 @@ from narwhal.profiling.generation import identity_generation
 from narwhal.profiling.model import Profile
 from narwhal.profiling.probe.fleet import device_key
 from narwhal.profiling.store import ProfileStore
+from narwhal.scheduling.control import SLO, Thresholds
+from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.scheduler.placement import GlobalScheduler
+from narwhal.serving.app import create_app
+from narwhal.types import Instance
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -98,6 +104,30 @@ def fleet(root, engines=("e0", "e3"), pinned=()):
     return cfg
 
 
+def role_scheduler(root, roles, *, clock=time.monotonic):
+    """Return a scheduler over the engines in `roles`, with profiles written under `root`."""
+    profiles = ProfileStore(Path(root) / "profiles.json")
+    monitor = InstanceMonitor(profiles=profiles)
+    for iid, role in roles.items():
+        profiles.put(profile(iid))
+        monitor.add(Instance(iid, f"http://{iid}", role))
+    return GlobalScheduler(monitor, profiles, SLO(2.0, 0.05), Thresholds(), clock=clock)
+
+
+def contract_free_router(case, root):
+    """Return a router for the test fleet with no engine contract and its files under `root`."""
+    cfg = FleetConfig.load(ROOT / "tests/data/fleet.json")
+    cfg.engine_contract = None
+    cfg.liveness_every = 0
+    cfg.state_path = root / "handoff.json"
+    cfg.profiles_path = root / "profiles.json"
+    router = create_app(cfg).state.router
+    for spec in cfg.engines:
+        router.profiles.put(profile(spec.iid))
+    case.addAsyncCleanup(router.engines.aclose)
+    return router
+
+
 def calibration_document(cfg, generations, starts, seconds=0.25):
     """Return complete first-token calibration evidence with every sample at `seconds`."""
     pairs = validation_pairs(cfg.engines, mesh=True)
@@ -156,6 +186,22 @@ def calibration_document(cfg, generations, starts, seconds=0.25):
             for attempt in range(1, 101)
         ],
     }
+
+
+def vllm_identity_engine(request: httpx.Request, version: str, start: float) -> httpx.Response:
+    """Answer the default (vLLM) identity reader's /version and /metrics requests."""
+    if request.url.path == "/version":
+        return httpx.Response(200, json={"version": version})
+    if request.url.path == "/metrics":
+        return httpx.Response(
+            200,
+            text=(
+                "# HELP process_start_time_seconds Start time of the process.\n"
+                "# TYPE process_start_time_seconds gauge\n"
+                f"process_start_time_seconds {start}\n"
+            ),
+        )
+    raise AssertionError(f"unexpected request: {request.url}")
 
 
 def bind_identity_profiles(router):
