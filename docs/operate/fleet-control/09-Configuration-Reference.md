@@ -84,7 +84,7 @@ Hooks run in the service's working directory, so relative paths in `argv` resolv
 }
 ```
 
-`narwhal-engine start` writes the container ID to `container.id` in the launch directory. The hook reads that ID. It then runs `docker pause`, `docker unpause`, `docker stop` or `docker start` on the container.
+`narwhal-engine start` writes the container ID to `container.id` in the launch directory. The hook reads that ID. It then runs `docker pause`, `docker unpause`, `docker stop` or `docker start` on the container. Keep each engine's launch directory in place while the engine runs.
 
 After `docker start`, the hook polls the health route of the endpoint in `launch.json`. It polls every 2 seconds. The start succeeds when the route returns `200`. The start fails if the container stops. The start also fails if the route does not return `200` within `--health-timeout` seconds (600 by default).
 
