@@ -6,7 +6,7 @@ description: Deploy Narwhal on a multi-node vLLM or SGLang fleet with NIXL or Mo
 
 ## Requirements
 
-Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector by default, or through `nixl`.
+Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector.
 
 | Host | Responsibilities | Required software and inputs |
 | --- | --- | --- |

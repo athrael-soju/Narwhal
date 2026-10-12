@@ -370,11 +370,11 @@ class ContractFieldTests(unittest.TestCase):
         self.assertEqual(self.cfg.contract_missing(), [])
         self.assertNotIn("engine_contract", self.problems())
 
-    def test_fixed_roles_need_every_engine_pinned(self):
+    def test_mooncake_is_the_only_connector(self):
         self.cfg.connector = "nixl"
-        self.assertIn("set pin on every engine", self.problems())
-        self.cfg.engines = [replace(spec, pin=True) for spec in self.cfg.engines]
-        self.assertNotIn("set pin on every engine", self.problems())
+        problems = self.problems()
+        self.assertIn("backend 'sglang' has no connector 'nixl'", problems)
+        self.assertNotIn("set pin on every engine", problems)
 
 
 class ProcessRouteTests(unittest.IsolatedAsyncioTestCase):

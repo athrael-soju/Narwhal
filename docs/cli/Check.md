@@ -64,7 +64,7 @@ Between `reach` and `calibration`, preflight on vLLM warns about host-sharing pr
 
 When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`, because a stalled transfer can stop a healthy peer's engine core.
 
-On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. With Mooncake, the peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and returns every engine to its starting role at the end, and a failed return prints `role restore failed` and exits with status 1. With NIXL, roles stay fixed: `pace` times only engines that can produce, each beside the first live engine pinned to decode, and skips an engine without one.
+On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. The peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and returns every engine to its starting role at the end, and a failed return prints `role restore failed` and exits with status 1.
 
 ### KV transfer probes
 

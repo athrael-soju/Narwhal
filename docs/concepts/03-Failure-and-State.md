@@ -10,18 +10,18 @@ The router learns that an engine is failing from the requests it sends and from 
 
 A monitoring pass runs the stages below. When a stage fails, the router records the failure and carries on with the rest of the pass.
 
-| Stage | Work |
-| --- | --- |
-| `controller` | Role-controller evaluation |
-| `health` | Decode performance-drift checks against each engine's profile |
-| `drains` | Closing the drain of each role change whose remaining work has finished |
-| `rollover` | Closing the interval's telemetry windows and opening the next |
-| `readmission` | Readmission and [peer release](#peer-memory-release) rounds |
-| `transfer_refresh` | [Transfer state refresh](#transfer-state-refresh) of SGLang decode engines on Mooncake |
-| `liveness` | [Liveness](#liveness) probes every `recovery.liveness_every` intervals |
-| `residency` | Prefix residency refresh from attestation sidecars, on its own loop once per interval |
-| `handoff` | Writing the [state handoff](#durable-control-plane-state) |
-| `telemetry` | Floor-state refresh and loop logging |
+| Stage              | Work                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `controller`       | Role-controller evaluation                                                            |
+| `health`           | Decode performance-drift checks against each engine's profile                         |
+| `drains`           | Closing the drain of each role change whose remaining work has finished               |
+| `rollover`         | Closing the interval's telemetry windows and opening the next                         |
+| `readmission`      | Readmission and [peer release](#peer-memory-release) rounds                           |
+| `transfer_refresh` | [Transfer state refresh](#transfer-state-refresh) of SGLang decode engines            |
+| `liveness`         | [Liveness](#liveness) probes every `recovery.liveness_every` intervals                |
+| `residency`        | Prefix residency refresh from attestation sidecars, on its own loop once per interval |
+| `handoff`          | Writing the [state handoff](#durable-control-plane-state)                             |
+| `telemetry`        | Floor-state refresh and loop logging                                                  |
 
 Consecutive passes with a failed stage form the monitor-failure streak. When the streak reaches `controller.monitor_failure_limit`, the router degrades. It stops admitting requests and placing prefill legs, so new requests and requests waiting for prefill receive HTTP 503, while requests past prefill keep decoding. `/ready` returns HTTP 503 with the reason `monitoring degraded: <stage> <class>`, naming the stage and error class of the streak's first failure. Monitoring continues, and a warm standby counts each degraded readiness answer as a missed probe toward its takeover threshold.
 
@@ -135,7 +135,7 @@ With `engine_contract` set and the `individual` restart policy, `narwhal-check` 
 
 ### Transfer state refresh
 
-On SGLang with Mooncake, a decode engine keeps the transfer endpoint it learned from each prefill engine until the decode engine itself switches roles, and a prefill engine opens a new endpoint every time it enters prefill. Once a producer has re-entered prefill, a decode engine that took handoffs from its earlier prefill period holds a stale endpoint, and handoffs between the two time out after 30 seconds.
+On SGLang, a decode engine keeps the transfer endpoint it learned from each prefill engine until the decode engine itself switches roles, and a prefill engine opens a new endpoint every time it enters prefill. Once a producer has re-entered prefill, a decode engine that took handoffs from its earlier prefill period holds a stale endpoint, and handoffs between the two time out after 30 seconds.
 
 The router tracks staleness per pair. A decode engine becomes stale for a producer when it takes a handoff from an earlier prefill period of that producer, and starts out stale for every producer until the router first switches it. The router refreshes a stale decode engine by switching it to prefill and back:
 

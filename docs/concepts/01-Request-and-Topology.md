@@ -23,7 +23,7 @@ A vLLM engine with the effective `kv_both` role transfers KV across the configur
 
 ### KV transfer for SGLang engines
 
-An SGLang engine transfers KV through Mooncake, the default connector, or NIXL, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. A Mooncake engine starts as prefill and changes roles at runtime, and a NIXL engine keeps the prefill or decode role it was launched with. For each request, the router sends the prefill and decode legs together, both carrying the producer's bootstrap host and port from its attestation and a random bootstrap room that pairs the two legs. The decode leg waits at most 30 seconds for its first token.
+An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. For each request, the router sends the prefill and decode legs together, both carrying the producer's bootstrap host and port from its attestation and a random bootstrap room that pairs the two legs. The decode leg waits at most 30 seconds for its first token.
 
 ## Request execution
 

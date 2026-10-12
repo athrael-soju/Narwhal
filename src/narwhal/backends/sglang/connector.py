@@ -44,8 +44,3 @@ def _lengths(body: dict[str, Any]) -> dict[str, Any]:
 class MooncakeConnector(SglangRendezvous):
     name = "mooncake"
     contract_name = "mooncake"
-
-
-class SglangNixlConnector(SglangRendezvous):
-    name = "nixl"
-    contract_name = "nixl"

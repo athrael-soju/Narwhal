@@ -76,14 +76,14 @@ Set both targets from measurements on the deployed engine shape.
 
 Each engine entry takes these fields:
 
-| Field             | Default    | Notes                                                                                                                                                                  |
-| ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iid`             | required   | Scheduler identity, unique within `engines`.                                                                                                                           |
-| `url`             | required   | The engine HTTP base URL.                                                                                                                                              |
-| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`.                                                                     |
-| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                                                                                          |
-| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume. Required on every engine of an SGLang fleet with the `nixl` connector. |
-| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                                                                                                   |
+| Field             | Default    | Notes                                                                                              |
+| ----------------- | ---------- | -------------------------------------------------------------------------------------------------- |
+| `iid`             | required   | Scheduler identity, unique within `engines`.                                                       |
+| `url`             | required   | The engine HTTP base URL.                                                                          |
+| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`. |
+| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                      |
+| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume.    |
+| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                               |
 
 ```json
 {
@@ -135,7 +135,7 @@ The attestation generator derives each field from the deployed engine. Fields th
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `engine_version`           | required          | The exact version each engine reports: `/version` on vLLM, `/server_info` on SGLang.                                                           |
 | `image_digest`             | `""`              | The engine's local container image ID, `sha256:<64 hex>`. Empty for a native engine.                                                           |
-| `transfer_version`         | `""`              | The pinned transfer package version: `nixl` or `nixl-rocm` on vLLM, the connector's Mooncake or NIXL package on SGLang.                        |
+| `transfer_version`         | `""`              | The pinned transfer package version: `nixl` or `nixl-rocm` on vLLM, the Mooncake package on SGLang.                                            |
 | `connector_version`        | `0`               | vLLM only. A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's module.                                                     |
 | `model_architecture`       | `""`              | The model implementation name: vLLM's resolved architecture, or the first `architectures` entry in the model's `config.json` on SGLang.        |
 | `model_dtype`              | `""`              | The dtype the model runs in: the `--dtype` launch argument on vLLM, `dtype` from `/server_info` on SGLang.                                     |

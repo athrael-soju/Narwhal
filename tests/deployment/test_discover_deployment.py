@@ -238,23 +238,14 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(plan["engine"], "sglang")
                 self.assertIn("--tp-size", plan["args"])
 
-    def test_fixed_role_connector_pins_each_engine_to_its_launch_role(self):
+    def test_sglang_engines_need_the_mooncake_connector_and_graph_memory(self):
         env = sglang_environment(Path("/synthetic"))
-        env["NARWHAL_ENGINE_CONNECTOR"] = "nixl"
         hosts = derive_hosts(env)
         observations = {f"engine-{i}": sglang_observation(f"10.0.0.{i}") for i in (1, 2)}
-        fleet, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
-        self.assertEqual(fleet["engine"], {"backend": "sglang", "connector": "nixl"})
-        self.assertEqual([e["role"] for e in fleet["engines"]], ["prefill", "decode"])
-        self.assertTrue(all(e["pin"] for e in fleet["engines"]))
-        self.assertEqual(
-            [launches["engines"][f"engine-{i}"]["runtime"]["role"] for i in (1, 2)],
-            ["prefill", "decode"],
-        )
-        self.assertNotIn("decode_cuda_graph_memory_gb", launches["engines"]["engine-1"]["runtime"])
-        env["NARWHAL_ENGINE_CONNECTOR"] = "unknown"
-        with self.assertRaisesRegex(ValueError, "no connector 'unknown'"):
-            build_records(hosts, env, observations, Path("/synthetic"))
+        for connector in ("nixl", "unknown"):
+            env["NARWHAL_ENGINE_CONNECTOR"] = connector
+            with self.assertRaisesRegex(ValueError, f"no connector '{connector}'"):
+                build_records(hosts, env, observations, Path("/synthetic"))
         env["NARWHAL_ENGINE_CONNECTOR"] = "mooncake"
         del env["NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB"]
         with self.assertRaisesRegex(ValueError, "engine-1: set DECODE_CUDA_GRAPH_MEMORY_GB"):
@@ -283,9 +274,6 @@ class DiscoveryTests(unittest.TestCase):
         )
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
         self.assertEqual(extra_args(), ["--disable-radix-cache"])
-        env["NARWHAL_ENGINE_CONNECTOR"] = "nixl"
-        del env["NARWHAL_ENGINE_ARGS"]
-        self.assertEqual(extra_args(), ["--context-length", "16384"])
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):

@@ -6,7 +6,7 @@ description: How Narwhal decides which engines process prompts and which generat
 
 Narwhal splits its engines between two roles: prefill engines process incoming prompts, and decode engines generate the output tokens. The role controller moves engines between the roles as demand changes and keeps a minimum number of engines in each.
 
-Every vLLM engine runs with the `kv_both` role, so a vLLM role change takes effect in the router, which sends the engine the legs of its new role. On SGLang with Mooncake, the router switches the engine's role through its `POST /pd_role_switch` route. An SGLang engine on NIXL keeps its launch role, and the role controller treats it as pinned.
+Every vLLM engine runs with the `kv_both` role, so a vLLM role change takes effect in the router, which sends the engine the legs of its new role. On SGLang, the router switches the engine's role through its `POST /pd_role_switch` route.
 
 ## Role control
 
@@ -87,7 +87,7 @@ While an engine is ejected, quarantined, draining, or recovering, the role contr
 
 Requests already running on a vLLM engine finish there after the engine changes role.
 
-An SGLang engine on Mooncake changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle if the controller still selects the move. The controller renews the hold each time it asks for the move, and at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs, and a failed switch ejects it.
+An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle if the controller still selects the move. The controller renews the hold each time it asks for the move, and at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs, and a failed switch ejects it.
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 

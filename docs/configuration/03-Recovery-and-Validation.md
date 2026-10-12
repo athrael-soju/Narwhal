@@ -136,7 +136,7 @@ The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`
 
 Use the same authentication mode for workload measurement and production serving.
 
-`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang. An SGLang fleet can also use the `"nixl"` connector. A `nixl` SGLang engine keeps its launch role, so the fleet must set `pin` on every engine.
+`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang.
 
 
 ## Profile validation

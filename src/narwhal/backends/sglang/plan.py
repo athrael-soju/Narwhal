@@ -11,10 +11,10 @@ from ...deployment.launch_engine.plan import (
     option,
 )
 
-CONNECTORS = ("mooncake", "nixl")
-# Only these transfer backends switch roles at runtime.
-ROLE_SWITCH_CONNECTORS = ("mooncake",)
-TRANSFER_PACKAGES = {"mooncake": "mooncake-transfer-engine", "nixl": "nixl"}
+CONNECTORS = ("mooncake",)
+# Engines on these transfer backends switch roles at runtime.
+ROLE_SWITCH_CONNECTORS = CONNECTORS
+TRANSFER_PACKAGES = {"mooncake": "mooncake-transfer-engine"}
 # Images install CUDA builds under suffixed names, such as mooncake-transfer-engine-cuda13.
 CUDA_BUILD_SUFFIX = r"-cu(?:da)?[0-9]+"
 _CUDA_BUILD = re.compile(CUDA_BUILD_SUFFIX)
@@ -79,24 +79,19 @@ def validate_runtime(runtime: dict) -> None:
             "versions"
         )
     check_versions_and_dtype(runtime)
-    if name not in ROLE_SWITCH_CONNECTORS and runtime.get("role") not in ("prefill", "decode"):
-        raise ValueError(
-            f"runtime.role must be prefill or decode; {name} engines keep their launch role"
-        )
-    if name in ROLE_SWITCH_CONNECTORS and "role" in runtime:
+    if "role" in runtime:
         raise ValueError(f"runtime.role is set by the router for {name} engines")
-    if name in ROLE_SWITCH_CONNECTORS:
-        memory = runtime.get("decode_cuda_graph_memory_gb")
-        if (
-            not isinstance(memory, int | float)
-            or isinstance(memory, bool)
-            or not math.isfinite(memory)
-            or memory <= 0
-        ):
-            raise ValueError(
-                "runtime.decode_cuda_graph_memory_gb must be positive; a prefill-launched "
-                "engine reserves it when it switches to decode"
-            )
+    memory = runtime.get("decode_cuda_graph_memory_gb")
+    if (
+        not isinstance(memory, int | float)
+        or isinstance(memory, bool)
+        or not math.isfinite(memory)
+        or memory <= 0
+    ):
+        raise ValueError(
+            "runtime.decode_cuda_graph_memory_gb must be positive; a prefill-launched "
+            "engine reserves it when it switches to decode"
+        )
     args = runtime.get("extra_args", [])
     check_extra_args(args, VALUE_OPTIONS, FLAG_OPTIONS)
     if "--max-running-requests" in args:
@@ -157,19 +152,14 @@ def serve_args(
         index = extra.index("--max-running-requests")
         del extra[index : index + 2]
     name = connector(runtime)
-    switches = name in ROLE_SWITCH_CONNECTORS
-    # A switching engine starts as prefill and the router switches decode engines at admission:
+    # Every engine starts as prefill and the router switches decode engines at admission:
     # an engine launched as decode fails after a decode-prefill-decode round trip.
-    role = "prefill" if switches else runtime["role"]
+    role = "prefill"
     transfer = {
         "transfer_backend": name,
         "launch_role": role,
-        "role_switch": switches,
-        **(
-            {"decode_cuda_graph_memory_gb": float(runtime["decode_cuda_graph_memory_gb"])}
-            if switches
-            else {}
-        ),
+        "role_switch": True,
+        "decode_cuda_graph_memory_gb": float(runtime["decode_cuda_graph_memory_gb"]),
     }
     args = [
         "-m",
@@ -203,14 +193,10 @@ def serve_args(
         role,
         "--disaggregation-transfer-backend",
         name,
-        *(["--enable-pd-role-switch"] if switches else []),
+        "--enable-pd-role-switch",
         # A switched decode engine keeps the prefill launch's radix cache. Without this flag,
         # decode admission neither counts nor evicts its finished requests and stops admitting.
-        *(
-            ["--disaggregation-decode-enable-radix-cache"]
-            if switches and radix_cache(extra)
-            else []
-        ),
+        *(["--disaggregation-decode-enable-radix-cache"] if radix_cache(extra) else []),
         *(
             []
             if kv_events is None

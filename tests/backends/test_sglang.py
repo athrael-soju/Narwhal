@@ -54,15 +54,6 @@ def runtime_record(**changes):
     }
 
 
-def nixl_record(**changes):
-    return runtime_record(
-        connector="nixl",
-        expected_packages={"sglang": "0.5.21", "nixl": "1.5.0"},
-        decode_cuda_graph_memory_gb=None,
-        **changes,
-    )
-
-
 def serve(record, *, tp=1, kv_events=None):
     return plan.serve_args(
         {"runtime": record, "tensor_parallel_size": tp},
@@ -391,9 +382,9 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((switcher._generations, switcher._received), ({}, {"http://engine": {}}))
 
-    def test_only_mooncake_switches_roles(self):
+    def test_mooncake_is_the_only_connector_and_switches_roles(self):
+        self.assertEqual(list(BACKEND.connectors), ["mooncake"])
         self.assertIsNotNone(BACKEND.role_switcher("mooncake"))
-        self.assertIsNone(BACKEND.role_switcher("nixl"))
 
 
 class LaunchTests(unittest.TestCase):
@@ -401,6 +392,7 @@ class LaunchTests(unittest.TestCase):
         plan.validate_runtime(runtime_record())
         for record, message in (
             (runtime_record(connector="ib"), "connector"),
+            (runtime_record(connector="nixl"), "runtime.connector must be one of mooncake"),
             (runtime_record(expected_packages={"sglang": "0.5.21"}), "mooncake"),
             (runtime_record(decode_cuda_graph_memory_gb=0), "decode_cuda_graph_memory_gb"),
             (runtime_record(extra_args=["--page-size", "64"]), "--page-size"),
@@ -408,7 +400,6 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(environment={"SGLANG_SECRET": "x"}), "SGLANG_SECRET"),
             (runtime_record(environment={"VLLM_FOO": "1"}), "VLLM_FOO"),
             (runtime_record(role="decode"), "runtime.role is set by the router"),
-            (nixl_record(), "runtime.role must be prefill or decode"),
             (runtime_record(extra_args=["--max-running-requests", "512"]), "from 1 to 256"),
             (
                 runtime_record(
@@ -442,20 +433,10 @@ class LaunchTests(unittest.TestCase):
             plan.transfer_package("mooncake", {"mooncake-transfer-engine-extra": "1"})
         )
         # Discovery pins the same CUDA builds that validation accepts.
-        for name, package in (
-            ("mooncake", "mooncake-transfer-engine-cuda13"),
-            ("nixl", "nixl-cu13"),
-        ):
-            self.assertTrue(re.fullmatch(discovery.IMAGE_PACKAGES, package), package)
-            self.assertEqual(plan.transfer_package(name, {package: "1"}), package)
+        package = "mooncake-transfer-engine-cuda13"
+        self.assertTrue(re.fullmatch(discovery.IMAGE_PACKAGES, package), package)
+        self.assertEqual(plan.transfer_package("mooncake", {package: "1"}), package)
         self.assertIsNone(re.fullmatch(discovery.IMAGE_PACKAGES, "mooncake-transfer-engine-extra"))
-        plan.validate_runtime(nixl_record(role="decode"))
-
-    def test_a_fixed_role_engine_launches_in_its_role(self):
-        args, transfer = serve(nixl_record(role="decode"))
-        self.assertEqual(args[args.index("--disaggregation-mode") + 1], "decode")
-        self.assertNotIn("--enable-pd-role-switch", args)
-        self.assertEqual((transfer["launch_role"], transfer["role_switch"]), ("decode", False))
 
     def test_a_switching_engine_without_the_radix_cache_needs_no_decode_radix_flag(self):
         args, _ = serve(runtime_record(extra_args=["--disable-radix-cache"]))
@@ -949,12 +930,6 @@ class RouterRoleTests(unittest.IsolatedAsyncioTestCase):
         journal.open()
         self.addCleanup(journal.close)
         return NarwhalRouter(cfg, journal, httpx.MockTransport(handle))
-
-    async def test_fixed_roles_pin_every_engine(self):
-        router = self.router("nixl", lambda request: httpx.Response(500))
-        self.assertEqual(router.scheduler.pinned, frozenset(router.monitor.instances))
-        self.assertTrue(router.scheduler.availability.roles_bound)
-        self.assertIsNone(router.scheduler.roles.flip(Role.PREFILL, "test", bypass_dwell=True))
 
     async def test_a_flip_holds_the_engine_until_its_switch_completes(self):
         released = asyncio.Event()

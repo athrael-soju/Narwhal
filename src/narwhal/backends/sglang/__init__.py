@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from ...runtime.fabric import FabricLifecycle
 from .. import EngineBackend
-from .connector import MooncakeConnector, SglangNixlConnector
+from .connector import MooncakeConnector
 from .dialect import SglangDialect
 from .identity import SglangIdentity
 from .kv_events import SglangKvEvents
@@ -33,7 +33,7 @@ def backend() -> EngineBackend:
         name="sglang",
         label="SGLang",
         dialect=SglangDialect(),
-        connectors={"mooncake": MooncakeConnector(), "nixl": SglangNixlConnector()},
+        connectors={"mooncake": MooncakeConnector()},
         default_connector="mooncake",
         identity=SglangIdentity(),
         kv_events=SglangKvEvents(),

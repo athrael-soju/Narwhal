@@ -217,13 +217,14 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             backend.connector(config.connector)
         except ValueError as exc:
             problems.append(str(exc))
-        if backend.role_switcher(config.connector) is None and not all(
-            spec.pin for spec in config.engines
-        ):
-            problems.append(
-                f"engine.connector {config.connector!r} keeps {backend.label} engine roles "
-                "fixed; set pin on every engine"
-            )
+        else:
+            if backend.role_switcher(config.connector) is None and not all(
+                spec.pin for spec in config.engines
+            ):
+                problems.append(
+                    f"engine.connector {config.connector!r} keeps {backend.label} engine roles "
+                    "fixed; set pin on every engine"
+                )
         if config.dialect != backend.dialect.name:
             problems.append(
                 f"backend {backend.name!r} has no dialect {config.dialect!r}: "
