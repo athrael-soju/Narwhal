@@ -15,7 +15,7 @@ from unittest.mock import patch
 import h11
 import httpx
 
-from narwhal.backends import load
+from narwhal.backends import DEFAULT_BACKEND, load
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import RendezvousConnector
@@ -176,6 +176,7 @@ def serving_app(
     *,
     urls: tuple[str, str] = ("http://prefill", "http://decode"),
     tokenize: bool = False,
+    backend: str = DEFAULT_BACKEND,
 ) -> tuple[NarwhalRouter, httpx.AsyncClient]:
     """Serve a profiled stub prefill and decode pair over handler; register its cleanups."""
     directory = tempfile.TemporaryDirectory()
@@ -190,6 +191,7 @@ def serving_app(
         profiles_path=Path(directory.name) / "profiles.json",
         tokenize=tokenize,
         admission="open",
+        backend=backend,
     )
 
     def wired_router(*args, **kwargs):
