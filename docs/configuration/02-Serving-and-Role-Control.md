@@ -423,7 +423,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval |
+| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval. An open gap belongs to a decode stream that has emitted a token and not yet ended. A stream ends when the engine sends a finish reason or closes it |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |

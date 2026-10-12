@@ -16,6 +16,7 @@ from ..engines.connector import HandoffExpired, PrefillResult, RendezvousConnect
 from ..engines.stream import (
     SseEvent,
     rewrite_sse,
+    sse_finished,
     sse_token_bearing,
     sse_token_count,
     sse_token_ids,
@@ -577,6 +578,7 @@ async def _decode_attempt(
             try:
                 batch = await state.wait(lambda: anext(upstream))
             except StopAsyncIteration:
+                router.monitor.output_ended(state.rid)
                 break
             frames: list[str] = []
             events: list[SseEvent] = []
@@ -599,6 +601,8 @@ async def _decode_attempt(
                         state.last_at = now
                     for _ in range(n):
                         router.monitor.output_token(prepared.decode.iid, state.rid)
+                    if sse_finished(event):
+                        router.monitor.output_ended(state.rid)
                     state.tokens += n
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n
