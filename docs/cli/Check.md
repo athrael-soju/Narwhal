@@ -85,9 +85,23 @@ narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 
 With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when the consumer's transfer histogram grows in both count and sum: `vllm:nixl_xfer_time_seconds` on vLLM, or the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. Each pair record names the histogram in `transfer_metric` and the growth in `transfer_count_delta` and `transfer_seconds`.
 
-The run fails when a pair has fewer passing probes than `--repeats`, when an engine's process changes during or after the probes, when an engine's profiles no longer match its live generation, or when the fleet or profile file changes during the run. The evidence file is written either way, with `status` `passed` or `failed`.
+The run fails in any of these cases:
 
-`--verify-evidence` runs in place of preflight. It fails when the saved file has failed or skipped gates, when the fleet file, profile store, engine contract or eligible pairs have changed, when a pair has fewer passing records than the saved repeat count or lacks token and transfer evidence, or when an engine's process changed during the saved run or differs from it now. An engine restart or a configuration change therefore calls for new evidence.
+- A pair has fewer passing probes than `--repeats`.
+- An engine's process changes during or after the probes.
+- An engine's profiles no longer match its live generation.
+- The fleet or profile file changes during the run.
+
+`narwhal-check` writes the evidence file either way, with `status` `passed` or `failed`.
+
+`--verify-evidence` runs in place of preflight. It fails in any of these cases:
+
+- The saved file contains failed or skipped gates.
+- The fleet file, profile store, engine contract or eligible pairs changed.
+- A pair has fewer passing records than the saved repeat count, or lacks token and transfer evidence.
+- An engine's process changed during the saved run or differs from it now.
+
+An engine restart or a configuration change therefore calls for new evidence.
 
 ## First-token calibration
 
@@ -128,11 +142,25 @@ The artifact at `--calibration-out` holds these fields:
 
 A group's candidate deadline is the larger of its maximum and 1.2 times its p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
 
-The artifact is `complete` when every group completed every sample with zero failures, `--samples` is at least 100, no engine's process changed and every final identity read succeeded, and the largest candidate is below `serving.request_timeout_s`. An engine's process counts as changed when its attestation digest changes, or with `engine_contract` unset, its engine version or process start time. On SGLang, `narwhal-check` reads the process start from the engine's [attestation sidecar](Attest.md#routes).
+The artifact is `complete` when all of these hold:
+
+- Every group completed every sample with zero failures.
+- `--samples` is at least 100.
+- No engine's process changed, and every final identity read succeeded.
+- The largest candidate is below `serving.request_timeout_s`.
+
+An engine's process counts as changed when its attestation digest changes, or with `engine_contract` unset, its engine version or process start time. On SGLang, `narwhal-check` reads the process start from the engine's [attestation sidecar](Attest.md#routes).
 
 ## The `calibration` gate
 
-The `calibration` gate reads the artifact at `engine.first_token_calibration_path` and warns when the path is unset. It rejects an artifact that is not `complete`, that names a different model, contract or set of engine addresses, whose groups and attempts fail to cover every directed pair and input length, or whose recomputed p99, maximum and candidate differ from the recorded ones. It also rejects an artifact without a capture time, a run duration, a process start for every engine or a round for every attempt, and an artifact for which `engine.first_token_timeout_s` is at or below the candidate deadline.
+The `calibration` gate reads the artifact at `engine.first_token_calibration_path` and warns when the path is unset. It rejects an artifact in any of these cases:
+
+- The artifact is not `complete`.
+- The artifact names a different model, contract or set of engine addresses.
+- Its groups and attempts fail to cover every directed pair and input length.
+- Its recomputed p99, maximum and candidate differ from the recorded ones.
+- It lacks a capture time, a run duration, a process start for every engine or a round for every attempt.
+- `engine.first_token_timeout_s` is at or below its candidate deadline.
 
 It then compares each running engine's [process generation](../Core-Concepts.md#terms) with `generations`:
 

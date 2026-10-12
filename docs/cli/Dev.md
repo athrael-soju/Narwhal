@@ -4,7 +4,7 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet of native vLLM or SGLang engines, their attestation sidecars and a router on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. [Narwhal dev](../Dev-Runtime.md) walks through host setup. A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
+`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. [Narwhal dev](../Dev-Runtime.md) walks through host setup. A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
@@ -100,11 +100,25 @@ The RTX 5090 reference template's `role_cycle` holds three seeded workloads that
 python -m tools.measurement.dev_cycle --instance runs/dev
 ```
 
-The replay writes its records to a new `cycle-*` directory in the instance, or to `--out`. Its `summary.json` sets `passed` when the controller's reactive moves produce exactly the expected splits on the same engine processes, and each workload runs on schedule with every request completed or rejected for its TTFT and meets the SLO where the recipe requires it. The command exits with code `0` when the replay passes and `2` when it fails.
+The replay writes its records to a new `cycle-*` directory in the instance, or to `--out`. Its `summary.json` sets `passed` when all of these hold:
+
+- The controller's reactive moves produce exactly the expected splits on the same engine processes.
+- Each workload runs on schedule with every request completed or rejected for its TTFT.
+- Each workload meets the SLO where the recipe requires it.
+
+The command exits with code `0` when the replay passes and `2` when it fails.
 
 ## Run directories and recovery
 
-Each `up` writes a `run-*` directory in the instance. It holds the router's fleet configuration with the engine contract, the command line and log of each stage, one launch directory per engine, the profiles, whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`, and the request journal. On vLLM, each launch directory also holds the engine's `cache-layout.json`.
+Each `up` writes a `run-*` directory in the instance. It holds:
+
+- the router's fleet configuration with the engine contract
+- the command line and log of each stage
+- one launch directory per engine
+- the profiles
+- whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`
+- the request journal
+ On vLLM, each launch directory also holds the engine's `cache-layout.json`.
 
 Each `verify` writes a `verify-*` directory in the run directory with the preflight log, the KV evidence in `kv.json`, the routed response in `completion.json`, and the router and engine metrics.
 
