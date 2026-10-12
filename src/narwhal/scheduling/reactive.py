@@ -302,13 +302,25 @@ class ReactivePolicy:
                     key=lambda projection: projection.projected_ttft_s,
                 )
 
+        # A move toward decode also prices the short-horizon prefill demand, so a move that a
+        # rising burst would reverse within the next steps stays held.
+        short_ttft = {p: score.ttft_ratio for p, score in (short.adjacent if short else {}).items()}
+        # Projected prefill pressure above shrink lets a move toward prefill skip the evidence
+        # window that a move to decode re-arms, and the rising-demand trend. A first-token
+        # timeout keeps its risk window.
+        prefill_relief = (
+            not urgent_ready
+            and max(current.ttft_ratio, short_current.ttft_ratio) > th.shrink
+            and (evidence.blocked_gate != "risk" or evidence.risk_kind == "p_to_d_recovery")
+        )
+
         def evaluate(candidate: SplitScore, base: SplitScore) -> Evaluation:
             return (
                 candidate,
                 (
                     max(candidate.tpot_ratio, candidate.decode_queue_ratio)
                     if candidate.prefill > current_p
-                    else candidate.ttft_ratio
+                    else max(candidate.ttft_ratio, short_ttft.get(candidate.prefill, 0.0))
                 ),
                 base.objective - candidate.objective,
                 (
@@ -384,7 +396,7 @@ class ReactivePolicy:
                 capacity_safe
                 and covered
                 and floors
-                and (candidate.prefill < current_p or evidence.allowed)
+                and (candidate.prefill < current_p or evidence.allowed or prefill_relief)
                 and candidate.prefill not in held_reverse
             ):
                 return False
@@ -419,6 +431,7 @@ class ReactivePolicy:
             )
             if candidate.prefill > current_p:
                 details.update(evidence.details())
+                details["prefill_relief"] = prefill_relief
             details["eligibility_rule"] = rule(row)
             details["demand_horizon_s"] = rounded(
                 confirmation_s if departure_move else controller.window_s
@@ -477,7 +490,7 @@ class ReactivePolicy:
             elif candidate.prefill in held_reverse:
                 toward = "decode" if candidate.prefill > current_p else "prefill"
                 reason = f"departure toward {toward} holds the reverse move"
-            elif candidate.prefill > current_p and not evidence.allowed:
+            elif candidate.prefill > current_p and not (evidence.allowed or prefill_relief):
                 reason = evidence.reason
             elif mixed_pressure and not snapshot.profiles_complete:
                 reason = "mixed pressure requires fleet profiles"

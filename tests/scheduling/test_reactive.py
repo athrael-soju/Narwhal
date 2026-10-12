@@ -20,7 +20,7 @@ from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.controller import ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
-from narwhal.scheduling.reactive import Departure
+from narwhal.scheduling.reactive import Departure, ReactivePolicy
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
@@ -763,14 +763,52 @@ class MixedPressureTests(unittest.TestCase):
         fleet.advance(60)
         self.assertIsNotNone(fleet.confirm())
 
-    def test_rising_decode_demand_blocks_move(self) -> None:
+    def test_rising_decode_demand_yields_to_prefill_pressure(self) -> None:
         fleet = self.fleet
         # The trend gate compares the burst's short-horizon rate with a filled long window.
         fleet.advance(60)
         for index in range(200):
             fleet.controller.saw_arrival(100, wanted_len=100, at=fleet.now - 5 + index / 100)
-        self.assertIsNone(fleet.confirm())
-        self.assertEqual(fleet.scheduler.roles._last_decision["evidence_blocked_gate"], "trend")
+        # Prefill pressure above shrink moves toward prefill through the trend gate.
+        self.assertIsNotNone(fleet.confirm())
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["evidence_blocked_gate"], "trend")
+        self.assertTrue(decision["prefill_relief"])
+        self.assertGreater(decision["projected_ttft_ratio"], 0.0)
+
+    def test_short_horizon_prefill_pressure_holds_a_move_toward_decode(self) -> None:
+        original = ReactivePolicy._short_view
+        moved = {}
+        for burst in (False, True):
+
+            def short_view(*args, burst=burst, **kwargs):
+                view = original(*args, **kwargs)
+                if view is None or not burst:
+                    return view
+                # Short-horizon demand puts the decode-ward split above its TTFT target.
+                adjacent = {
+                    p: replace(score, ttft_ratio=2.0) if p == 1 else score
+                    for p, score in view.adjacent.items()
+                }
+                return replace(view, adjacent=adjacent)
+
+            directory = tempfile.TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+            fleet = Fleet(directory.name)
+            self.addCleanup(fleet.telemetry.stop)
+            fleet.monitor.instances["e1"].role = Role.PREFILL
+            fleet.pressure = {Role.PREFILL: 0.2, Role.DECODE: 6.0}
+            with patch.object(ReactivePolicy, "_short_view", side_effect=short_view):
+                for _ in range(4):
+                    fleet.step()
+            moved[burst] = len(fleet.monitor.pool(Role.PREFILL)) < 2
+            if burst:
+                decision = fleet.scheduler.roles._last_decision
+                self.assertEqual(decision["prefill"], 1)
+                self.assertEqual(
+                    decision["reason"], "projected prefill pressure blocks consolidation"
+                )
+        self.assertEqual(moved, {False: True, True: False})
 
     def test_floor_diagnostic_retains_lower_objective_candidate(self) -> None:
         fleet = self.fleet

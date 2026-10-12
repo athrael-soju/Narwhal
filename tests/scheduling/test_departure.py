@@ -361,7 +361,7 @@ class SustainedShiftTests(unittest.TestCase):
 
 
 class PostMoveHoldTests(unittest.TestCase):
-    """A departure toward decode restarts the evidence hold on decode consolidation."""
+    """A departure toward decode re-arms the evidence window that prefill pressure can bypass."""
 
     def test_evidence_hold_outlasts_the_departure_hold(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -380,23 +380,21 @@ class PostMoveHoldTests(unittest.TestCase):
             self.assertGreater(row["objective_delta"], sim.controller.movement_margin)
             ControllerDecisionOut.model_validate({k: v for k, v in row.items() if k != "event"})
 
-            # A departure one window old holds no reverse move.
+            # A departure one window old holds no reverse move, and projected prefill pressure
+            # above shrink moves back toward prefill inside the re-armed evidence window.
             sim.controller.reactive.departure = Departure(
                 -1, sim.now - sim.controller.window_s, moved=True
             )
             sim.run(50, PREFILL_HEAVY)
-            row = sim.decisions[-1]
-            self.assertIsNone(sim.controller.reactive.departure)
-            self.assertEqual(row["evidence_blocked_gate"], "risk")
-            self.assertTrue(row["reason"].startswith("p to d recovery"))
-            self.assertEqual(len(sim.scheduler.roles.flips), 1)
-
-            sim.run(30, PREFILL_HEAVY)
             sim.close()
+        self.assertIsNone(sim.controller.reactive.departure)
         move = [d for d in sim.decisions if d["result"] == "applied"][-1]
         self.assertEqual((move["current_prefill"], move["prefill"]), (6, 7))
-        self.assertEqual(move["evidence_blocked_gate"], "none")
-        self.assertGreaterEqual(move["risk_age_s"], sim.controller.safety.evidence_span_s)
+        self.assertEqual(move["evidence_blocked_gate"], "risk")
+        self.assertEqual(move["risk_kind"], "p_to_d_recovery")
+        self.assertTrue(move["prefill_relief"])
+        self.assertLess(move["risk_age_s"], sim.controller.safety.evidence_span_s)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
 
 class AlternationTests(unittest.TestCase):

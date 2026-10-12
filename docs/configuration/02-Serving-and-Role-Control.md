@@ -628,7 +628,7 @@ Any of these resets the confirmation sequence:
 
 Prefill-to-decode moves require:
 
-- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`
+- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`, on both window demand and confirmation-span demand
 - an elapsed `controller.thresholds.cooldown_s`, or an armed cooldown bypass
 
 The cooldown bypass arms after `controller.thresholds.sustained_intervals` consecutive passes with both:
@@ -650,6 +650,8 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 ```
 
 A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
+
+When the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.shrink`, a decode-to-prefill move skips both the window that a prefill-to-decode move resets and the short-horizon pause. A window that a first-token timeout resets still holds the move. The decision records this in `prefill_relief`, and `evidence_blocked_gate` names the gate it skipped.
 
 The `source_shrink` and `settled_departure` rules move engines toward decode while the window is open.
 

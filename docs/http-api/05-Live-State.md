@@ -383,6 +383,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                      |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
 | `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or whether `mixed_pressure` or `steady_demand` applies                                                      |
+| `prefill_relief`                                  | Whether projected prefill load above `shrink` let a decode-to-prefill move skip the arrival-evidence window and short-horizon pause |
 
 These decisions add fields to `control.last_decision`:
 
