@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/athrael-soju/Narwhal/compare/v0.6.0...v0.7.0) (2026-10-12)
+
+
+### Features
+
+* SGLang engine backend and engine-neutral backend interfaces ([#336](https://github.com/athrael-soju/Narwhal/issues/336)) ([c7ccf28](https://github.com/athrael-soju/Narwhal/commit/c7ccf2852f207e00b94c1acea2a30ff42307e7e9))
+
+
+### Documentation
+
+* fit fleet walkthrough to viewport ([#330](https://github.com/athrael-soju/Narwhal/issues/330)) ([0457952](https://github.com/athrael-soju/Narwhal/commit/0457952c34c956489b475b89394417d6bdcae130))
+* replace dashboard screenshots with a walkthrough ([#333](https://github.com/athrael-soju/Narwhal/issues/333)) ([055f547](https://github.com/athrael-soju/Narwhal/commit/055f547fc565c7c807fac9669985cb5ff27e24b5))
+* trim duplicated documentation ([#325](https://github.com/athrael-soju/Narwhal/issues/325)) ([cdeadb8](https://github.com/athrael-soju/Narwhal/commit/cdeadb8ebc9ca38126e5d3e88426680b02b7e438))
+
 ## [0.6.0](https://github.com/athrael-soju/Narwhal/compare/v0.5.0...v0.6.0) (2026-10-10)
 
 
