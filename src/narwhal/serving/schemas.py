@@ -298,6 +298,9 @@ class ControllerDecisionOut(BaseModel):
     recovery_prefill_ratio: float | None = None
     observed_decode_ratio: float | None = None
     recovery_decode_ratio: float | None = None
+    stalled_decode_gap_s: float | None = None
+    stalled_decode_gap_engine: str | None = None
+    ended_decode_gap_s: float | None = None
     eligibility_rule: str | None = None
     demand_horizon_s: float | None = None
     steady_horizon_s: float | None = None
