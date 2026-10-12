@@ -7,8 +7,11 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 
 def positive(value: float, name: str) -> float:
@@ -127,6 +130,77 @@ def runtime_payload(layout: dict, tp: int, prompt_tokens: int) -> int:
                 raise ValueError("runtime cache extra_blocks must be a nonnegative integer")
             payload += (((prompt_tokens + block - 1) // block) + extra) * page
     return payload
+
+
+TRANSFER_SERIES = re.compile(
+    r"^sglang:kv_transfer_total_mb_(sum|count)(\{[^}]*\})?\s+([0-9.eE+-]+)\s*$", re.MULTILINE
+)
+
+
+def transfer_series(metrics: str) -> dict[str, dict[str, float]]:
+    series: dict[str, dict[str, float]] = {}
+    for kind, labels, value in TRANSFER_SERIES.findall(metrics):
+        series.setdefault(labels, {})[kind] = float(value)
+    return series
+
+
+def transfer_payload(before: str, after: str) -> tuple[int, int]:
+    """Sum each TP rank's mean transfer between two SGLang prefill /metrics snapshots."""
+    start, end = transfer_series(before), transfer_series(after)
+    if not end:
+        raise ValueError("the metrics hold no sglang:kv_transfer_total_mb series")
+    payload = 0.0
+    handoffs = set()
+    for labels, totals in end.items():
+        previous = start.get(labels, {"sum": 0.0, "count": 0.0})
+        count = totals.get("count", 0.0) - previous.get("count", 0.0)
+        mib = totals.get("sum", 0.0) - previous.get("sum", 0.0)
+        if count < 1 or mib <= 0:
+            raise ValueError(f"no KV transfer recorded between the snapshots for {labels or '{}'}")
+        handoffs.add(count)
+        payload += mib / count
+    if len(handoffs) != 1:
+        raise ValueError("TP ranks recorded different handoff counts between the snapshots")
+    return math.ceil(payload * 1024 * 1024), int(handoffs.pop())
+
+
+def measure_transfer(args: argparse.Namespace) -> tuple[int, int]:
+    """Send cold SGLang handoffs of one prompt length and save the prefill /metrics around them."""
+    integer({"prompt_tokens": args.prompt_tokens}, "prompt_tokens")
+    integer({"handoffs": args.handoffs}, "handoffs")
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get(args.api_key_env):
+        headers["Authorization"] = "Bearer " + os.environ[args.api_key_env]
+
+    def call(url: str, body: dict | None = None) -> bytes:
+        data = json.dumps(body).encode() if body is not None else None
+        with urlopen(Request(url, data=data, headers=headers), timeout=120) as response:
+            return response.read()
+
+    metrics_url = args.prefill.rstrip("/") + "/metrics"
+    args.out_dir.mkdir(mode=0o700)
+    before = call(metrics_url)
+    draw = random.SystemRandom()
+    for _ in range(args.handoffs):
+        # A fresh first token keeps every prompt out of the radix cache.
+        body = {
+            "model": args.model,
+            "prompt": [draw.randrange(100, 10000) for _ in range(args.prompt_tokens)],
+            "max_tokens": 1,
+            "temperature": 0,
+            "bootstrap_host": args.bootstrap_host,
+            "bootstrap_port": args.bootstrap_port,
+            "bootstrap_room": draw.getrandbits(63),
+        }
+        with ThreadPoolExecutor(2) as legs:
+            decode = legs.submit(call, args.decode.rstrip("/") + "/v1/completions", body)
+            call(args.prefill.rstrip("/") + "/v1/completions", body)
+            decode.result()
+    after = call(metrics_url)
+    for name, data in (("before.prom", before), ("after.prom", after)):
+        with (args.out_dir / name).open("xb") as stream:
+            stream.write(data)
+    return transfer_payload(before.decode(), after.decode())
 
 
 def received_gbps(sample: dict) -> float:
@@ -292,6 +366,13 @@ def main(argv: list[str] | None = None) -> int:
     sizing.add_argument(
         "--bytes-per-token", type=int, help="measured total across TP ranks for a uniform layout"
     )
+    sizing.add_argument(
+        "--transfer-metrics",
+        type=Path,
+        nargs=2,
+        metavar=("BEFORE", "AFTER"),
+        help="SGLang prefill /metrics saved before and after handoffs of --prompt-tokens",
+    )
     budget.add_argument("--prompt-tokens", type=int, required=True)
     budget.add_argument("--block-tokens", type=int)
     budget.add_argument("--handoffs-per-s", type=float, required=True)
@@ -299,6 +380,19 @@ def main(argv: list[str] | None = None) -> int:
     budget.add_argument("--transfer-budget-s", type=float, required=True)
     budget.add_argument("--headroom", type=float, required=True)
     budget.add_argument("--out", type=Path, required=True)
+    measure = commands.add_parser(
+        "measure-transfer",
+        help="measure SGLang handoff payloads between a prefill and decode engine",
+    )
+    measure.add_argument("--prefill", required=True, help="prefill engine base URL")
+    measure.add_argument("--decode", required=True, help="decode engine base URL")
+    measure.add_argument("--bootstrap-host", required=True)
+    measure.add_argument("--bootstrap-port", type=int, required=True)
+    measure.add_argument("--model", required=True)
+    measure.add_argument("--prompt-tokens", type=int, required=True)
+    measure.add_argument("--handoffs", type=int, default=8)
+    measure.add_argument("--api-key-env", default="NARWHAL_ENGINE_API_KEY")
+    measure.add_argument("--out-dir", type=Path, required=True)
     compare = commands.add_parser("compare", help="compare a sample with its workload budget")
     compare.add_argument("--budget", type=Path, required=True)
     measurement = compare.add_mutually_exclusive_group(required=True)
@@ -363,6 +457,22 @@ def main(argv: list[str] | None = None) -> int:
                     image=runtime["image"],
                     plan_sha256=runtime["plan_sha256"],
                 )
+            elif args.transfer_metrics:
+                if args.block_tokens is not None or args.element_bytes is not None:
+                    raise ValueError("measured transfers supply their own page sizes and state")
+                before, after = (path.read_bytes() for path in args.transfer_metrics)
+                payload, handoffs = transfer_payload(before.decode(), after.decode())
+                result = workload_budget(
+                    payload, args.handoffs_per_s, args.burst, args.transfer_budget_s, args.headroom
+                )
+                result.update(
+                    layout="measured_transfer",
+                    prompt_tokens=args.prompt_tokens,
+                    measured_handoffs=handoffs,
+                    transfer_metrics_sha256=[
+                        hashlib.sha256(data).hexdigest() for data in (before, after)
+                    ],
+                )
             else:
                 if args.element_bytes is None or args.block_tokens is None:
                     raise ValueError("uniform sizing requires --element-bytes and --block-tokens")
@@ -386,6 +496,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             write_private(args.out, result)
             print(f"Required per directed edge: {result['required_gbps']:.6f} Gbit/s")
+        elif args.command == "measure-transfer":
+            payload, handoffs = measure_transfer(args)
+            print(json.dumps({"payload_bytes_per_handoff": payload, "handoffs": handoffs}))
         elif args.command == "compare":
             required = positive(
                 float(json.loads(args.budget.read_text())["required_gbps"]), "required_gbps"

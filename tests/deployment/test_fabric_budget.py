@@ -3,11 +3,20 @@
 import contextlib
 import io
 import json
+import math
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from tools.deployment.fabric_budget import cache_shape, calculate, main, received_gbps
+from tools.deployment.fabric_budget import (
+    cache_shape,
+    calculate,
+    main,
+    received_gbps,
+    transfer_payload,
+)
 
 
 class FabricBudgetTests(unittest.TestCase):
@@ -256,3 +265,150 @@ class FabricBudgetTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     main(args)
                 self.assertEqual(out.read_bytes(), initial)
+
+    def test_measured_sglang_transfers_sum_each_rank_mean(self):
+        def metrics(rank0: tuple[float, int], rank1: tuple[float, int]) -> str:
+            lines = ["# TYPE sglang:kv_transfer_total_mb histogram"]
+            for rank, (mib, count) in enumerate((rank0, rank1)):
+                labels = f'{{engine_type="dynamic",tp_rank="{rank}"}}'
+                lines += [
+                    f'sglang:kv_transfer_total_mb_bucket{{le="1.0",tp_rank="{rank}"}} {count}',
+                    f"sglang:kv_transfer_total_mb_sum{labels} {mib}",
+                    f"sglang:kv_transfer_total_mb_count{labels} {count}",
+                ]
+            return "\n".join(lines) + "\n"
+
+        before = metrics((1.0, 1), (1.0, 1))
+        after = metrics((7.0, 5), (5.0, 5))
+        self.assertEqual(transfer_payload(before, after), (math.ceil(2.5 * 1024 * 1024), 4))
+        self.assertEqual(transfer_payload("", metrics((3.0, 2), (3.0, 2)))[1], 2)
+        for start, end in (
+            (before, "sglang:num_running_reqs 0\n"),
+            (before, before),
+            (before, metrics((7.0, 5), (5.0, 4))),
+        ):
+            with self.subTest(end=end), self.assertRaises(ValueError):
+                transfer_payload(start, end)
+
+    def test_cli_sizes_the_budget_from_measured_transfers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            model, launch, before, after, out = (
+                root / name
+                for name in ("model.json", "launch.json", "before", "after", "budget.json")
+            )
+            model.write_text(json.dumps({"layer_types": ["linear_attention", "full_attention"]}))
+            launch.write_text(json.dumps({"tensor_parallel_size": 1}))
+            before.write_text(
+                "sglang:kv_transfer_total_mb_sum 0.0\nsglang:kv_transfer_total_mb_count 0.0\n"
+            )
+            after.write_text(
+                "sglang:kv_transfer_total_mb_sum 20.0\nsglang:kv_transfer_total_mb_count 4.0\n"
+            )
+            args = [
+                "calculate",
+                "--transfer-metrics",
+                str(before),
+                str(after),
+                "--model-config",
+                str(model),
+                "--launch-config",
+                str(launch),
+                "--prompt-tokens",
+                "1024",
+                "--handoffs-per-s",
+                "1",
+                "--burst",
+                "1",
+                "--transfer-budget-s",
+                "1",
+                "--headroom",
+                "1.25",
+                "--out",
+                str(out),
+            ]
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit:
+                main([*args, "--block-tokens", "64"])
+            self.assertEqual(exit.exception.code, 2)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(args), 0)
+            budget = json.loads(out.read_text())
+            self.assertEqual(budget["payload_bytes_per_handoff"], 5 * 1024 * 1024)
+            self.assertEqual(budget["layout"], "measured_transfer")
+            self.assertEqual(budget["measured_handoffs"], 4)
+            self.assertEqual(budget["prompt_tokens"], 1024)
+            self.assertAlmostEqual(budget["required_gbps"], 8 * 5 * 1024 * 1024 * 1.25 / 1e9)
+
+    def test_measure_transfer_sends_cold_paired_legs_and_saves_the_snapshots(self):
+        bodies: dict[str, list[dict]] = {"prefill": [], "decode": []}
+
+        def engine(role: str) -> ThreadingHTTPServer:
+            class Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    count = len(bodies["prefill"])
+                    text = (
+                        f'sglang:kv_transfer_total_mb_sum{{tp_rank="0"}} {2.0 * count}\n'
+                        f'sglang:kv_transfer_total_mb_count{{tp_rank="0"}} {count}\n'
+                    )
+                    self._reply(text.encode())
+
+                def do_POST(self):
+                    length = int(self.headers["Content-Length"])
+                    bodies[role].append(json.loads(self.rfile.read(length)))
+                    self._reply(b"{}")
+
+                def _reply(self, data: bytes) -> None:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+
+                def log_message(self, *args):
+                    pass
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            return server
+
+        prefill, decode = engine("prefill"), engine("decode")
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "transfer"
+            args = [
+                "measure-transfer",
+                "--prefill",
+                f"http://127.0.0.1:{prefill.server_port}",
+                "--decode",
+                f"http://127.0.0.1:{decode.server_port}",
+                "--bootstrap-host",
+                "prefill.invalid",
+                "--bootstrap-port",
+                "8998",
+                "--model",
+                "model",
+                "--prompt-tokens",
+                "300",
+                "--handoffs",
+                "3",
+                "--out-dir",
+                str(out),
+            ]
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main(args), 0)
+            self.assertEqual(
+                json.loads(stdout.getvalue()),
+                {"payload_bytes_per_handoff": 2 * 1024 * 1024, "handoffs": 3},
+            )
+            self.assertEqual(
+                sorted(path.name for path in out.iterdir()), ["after.prom", "before.prom"]
+            )
+        self.assertEqual(bodies["prefill"], bodies["decode"])
+        self.assertEqual(len({body["bootstrap_room"] for body in bodies["prefill"]}), 3)
+        for body in bodies["prefill"]:
+            self.assertEqual(len(body["prompt"]), 300)
+            self.assertEqual(
+                (body["bootstrap_host"], body["bootstrap_port"]), ("prefill.invalid", 8998)
+            )
+            self.assertEqual(body["max_tokens"], 1)
