@@ -64,12 +64,13 @@ class QueueWaitHarness(HttpHarness):
     def assert_held_503(self, response, reason):
         self.assertEqual(response.status_code, 503, response.text)
         self.assertEqual(response.headers["retry-after"], "1")
-        self.assertEqual(response.json()["error"], {"message": reason, **STANDBY})
+        self.assertEqual(response.json()["error"], {"message": "Router is not ready", **STANDBY})
         row = self.row(response.headers["x-request-id"])
         self.assertEqual(
             (row["terminal"], row["reason"], row["status"], row["error_type"]),
             ("rejected", "not_ready", 503, "standby"),
         )
+        self.assertEqual(row["readiness_reason"], reason)
         self.assertEqual(row["readiness_reason"], reason)
 
 

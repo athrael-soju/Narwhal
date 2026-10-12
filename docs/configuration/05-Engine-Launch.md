@@ -141,9 +141,9 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 
 `expected_packages` must pin `sglang` and the connector's transfer package, `mooncake-transfer-engine`, or one CUDA build of it such as `mooncake-transfer-engine-cuda13`. `environment` accepts the prefixes `SGLANG_`, `MOONCAKE_`, `MC_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `SGLANG_HOST_IP`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT`, `NARWHAL_SGLANG_BOOTSTRAP_HOST`, `NARWHAL_SGLANG_BOOTSTRAP_PORT` and `NARWHAL_SGLANG_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
 
-The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy`, `--kv-events-config` with the value in [Prefix caching and cache events](#prefix-caching-and-cache-events), and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`.
+The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy` and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`.
 
-The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-requests 256` unless `extra_args` sets it, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It adds `--kv-events-config` unless `--disable-radix-cache` or `extra_args` turns cache events off. At engine start it passes `--disaggregation-bootstrap-port` from `NARWHAL_SGLANG_BOOTSTRAP_PORT` and the engine credential, when one is configured, as `--api-key`.
+The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-requests 256` unless `extra_args` sets it, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It adds `--kv-events-config` unless `--disable-radix-cache` turns prefix caching off. At engine start it passes `--disaggregation-bootstrap-port` from `NARWHAL_SGLANG_BOOTSTRAP_PORT` and the engine credential, when one is configured, as `--api-key`.
 
 Every engine launches as prefill with `--enable-pd-role-switch`, and the router switches its role at runtime through `POST /pd_role_switch`. Unless `--disable-radix-cache` is set, the launcher also adds `--disaggregation-decode-enable-radix-cache`, so that a switched decode engine evicts cached KV to admit requests.
 
@@ -207,19 +207,13 @@ Stopping a native engine removes its plan directory. For a container engine, rem
 
 Preparation, the check and engine start fail when either directory belongs to another user or grants group or other access.
 
-To keep prefix caching on and turn event publishing off, add the backend's event setting to `extra_args`. On vLLM:
+On vLLM, to keep prefix caching on and turn event publishing off, add this to `extra_args`:
 
 ```json
 ["--kv-events-config", "{\"enable_kv_cache_events\": false}"]
 ```
 
-On SGLang:
-
-```json
-["--kv-events-config", "{\"publisher\": \"null\"}"]
-```
-
-The launcher rejects every other `--kv-events-config` value.
+The launcher rejects every other `--kv-events-config` value. On SGLang, an engine with prefix caching on always publishes cache events.
 
 ### Resetting prefix caches
 

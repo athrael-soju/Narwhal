@@ -41,7 +41,6 @@ VALUE_OPTIONS = {
     "--max-mamba-cache-size",
     "--max-running-requests",
     "--mamba-radix-cache-strategy",
-    "--kv-events-config",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -118,21 +117,6 @@ def radix_cache(args: list[str]) -> bool:
 
 
 def publishes_kv_events(args: list[str]) -> bool:
-    # The radix cache publishes events unless --kv-events-config selects the null publisher.
-    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
-    if len(supplied) > 1:
-        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
-    if supplied:
-        try:
-            value = json.loads(supplied[0])
-        except ValueError:
-            value = None
-        if value != {"publisher": "null"}:
-            raise ValueError(
-                "runtime.extra_args --kv-events-config may only set "
-                '{"publisher": "null"}; the launcher selects event endpoints'
-            )
-        return False
     return radix_cache(args)
 
 

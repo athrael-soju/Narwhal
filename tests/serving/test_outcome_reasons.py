@@ -85,7 +85,7 @@ class OutcomeReasonTests(HttpHarness):
         )
         self.assertEqual(rows[-1]["error_code"], not_ready.json()["error"]["code"])
         self.assertEqual(rows[-1]["readiness_reason"], "engine identity validation pending")
-        self.assertEqual(rows[-1]["readiness_reason"], not_ready.json()["error"]["message"])
+        self.assertEqual(not_ready.json()["error"]["message"], "Router is not ready")
         self.assertTrue(all(row["terminal"] == "rejected" for row in rows))
         text = await self.metrics(client)
         for reason, count in (("saturated", 1), ("inflight_limit", 2), ("not_ready", 1)):

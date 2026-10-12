@@ -443,18 +443,11 @@ class LaunchTests(unittest.TestCase):
         self.assertIn("--enable-pd-role-switch", args)
         self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
 
-    def test_the_null_publisher_keeps_the_radix_cache_without_events(self):
-        null = ["--kv-events-config", '{"publisher": "null"}']
-        plan.validate_runtime(runtime_record(extra_args=null))
-        self.assertFalse(plan.publishes_kv_events(null))
-        self.assertTrue(plan.publishes_kv_events([]))
-        args, _ = serve(runtime_record(extra_args=null))
-        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
-        self.assertEqual(args.count("--kv-events-config"), 1)
-        self.assertEqual(json.loads(option(args, "--kv-events-config")), {"publisher": "null"})
-        for value in ('{"publisher": "zmq"}', "{}"):
-            with self.assertRaisesRegex(ValueError, "may only set"):
-                plan.publishes_kv_events(["--kv-events-config", value])
+    def test_extra_args_cannot_configure_cache_events(self):
+        with self.assertRaisesRegex(ValueError, "unsupported or incomplete runtime option"):
+            plan.validate_runtime(
+                runtime_record(extra_args=["--kv-events-config", '{"publisher": "null"}'])
+            )
 
     def test_every_engine_launches_as_prefill_with_the_pins(self):
         events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
@@ -878,7 +871,7 @@ class EngineDocumentTests(unittest.TestCase):
                 native = backend == "native"
                 run = self.evidence(backend, connector)
                 with (run / ("engine.env" if native else "container.env")).open("a") as env:
-                    env.write(f"{runtime.API_KEY_ENV}=secret\n")
+                    env.write("NARWHAL_SGLANG_API_KEY=secret\n")
                 captured = json.loads((run / "server-info.json").read_text())
                 (run / "server-info.json").unlink()
                 requests, serving = self.server_info(captured["server"])

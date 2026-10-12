@@ -40,8 +40,6 @@ def settings(expected: dict[str, str], args: list[str]) -> dict:
     ServerArgs.add_cli_args(parser)
     parsed = parser.parse_args([*args, "--disaggregation-bootstrap-port", "1"])
     events = json.loads(parsed.kv_events_config) if parsed.kv_events_config else None
-    if events is not None and events.get("publisher", "null") == "null":
-        events = None
     return {
         "sglang_version": sglang.__version__,
         "prefix_caching": not parsed.disable_radix_cache,
