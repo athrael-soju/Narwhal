@@ -11,6 +11,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 4096,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -25,23 +26,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "4096",
             "--gpu-memory-utilization",
             "0.1",
-            "--max-num-seqs",
-            "4",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "bfloat16"
+          "max_sequences": 4,
+          "model_dtype": "bfloat16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.5,
@@ -72,6 +69,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 4096,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -86,23 +84,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "4096",
             "--gpu-memory-utilization",
             "0.1",
-            "--max-num-seqs",
-            "4",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "bfloat16"
+          "max_sequences": 4,
+          "model_dtype": "bfloat16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.5,
@@ -133,6 +127,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 4096,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -147,23 +142,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "4096",
             "--gpu-memory-utilization",
             "0.1",
-            "--max-num-seqs",
-            "4",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "bfloat16"
+          "max_sequences": 4,
+          "model_dtype": "bfloat16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.5,
@@ -194,6 +185,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 4096,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -208,23 +200,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "4096",
             "--gpu-memory-utilization",
             "0.1",
-            "--max-num-seqs",
-            "4",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "bfloat16"
+          "max_sequences": 4,
+          "model_dtype": "bfloat16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.5,

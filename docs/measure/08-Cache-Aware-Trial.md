@@ -17,7 +17,7 @@ Record these in the private execution record before the first measured run:
 - the workload shape, family count, and profile lengths
 - the rate pilot rule, the seeds, and the run order
 
-The arms differ only in the cache-event entry of `runtime.extra_args`.
+The arms differ only in `runtime.kv_events`.
 
 Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusals and failures count as misses.
 
@@ -47,7 +47,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 
 ## Preparing each arm
 
-The baseline arm adds the backend's [event setting](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `runtime.extra_args`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
+The baseline arm sets [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
 
 For each arm:
 

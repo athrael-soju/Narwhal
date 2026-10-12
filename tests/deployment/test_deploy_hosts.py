@@ -171,8 +171,12 @@ class HostDeploymentTests(unittest.TestCase):
         sglang["runtime"]["extra_args"] = ["--max-running-requests", "32"]
         limits = profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
         self.assertEqual(limits["engines"]["n2"], 32)
-        vllm["runtime"]["extra_args"] = []
-        with self.assertRaisesRegex(ValueError, "engine-1: .* one positive --max-num-seqs"):
+        sglang["runtime"] = {"backend": "sglang", "max_sequences": 24, "extra_args": []}
+        vllm["runtime"] = {**runtime(), "max_sequences": 6, "extra_args": []}
+        limits = profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
+        self.assertEqual(limits["engines"], {"n1": 6, "n2": 24})
+        del vllm["runtime"]["max_sequences"]
+        with self.assertRaisesRegex(ValueError, "engine-1: .* max_sequences or one --max-num-seqs"):
             profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
 
     def test_roles_resolve_to_one_authentication_entry(self):

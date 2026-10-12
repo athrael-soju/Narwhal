@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 
 ENGINE_FIELDS = (
     "ENGINE_IMAGE",
@@ -72,7 +73,14 @@ def select_values(
         values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
-        for field in engine_fields(fleet):
+        neutral = KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_")
+        fields = engine_fields(fleet)
+        for field in fields:
+            # The neutral side-channel variable replaces the backend's earlier name when set.
+            if field == fields[-1] and (
+                env.get(f"NARWHAL_NODE_{node}_{neutral}") or env.get(f"NARWHAL_{neutral}")
+            ):
+                field = neutral
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
             include(name, override if override in env else name)

@@ -234,6 +234,7 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
 | `deployment/launch_engine/runtime.py`                                        | Standard-library code for the engine image and serving hook              |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
+| `deployment/launch_engine/settings.py`                                       | Engine-neutral launch settings and serve-argument rendering              |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
 | `deployment/launch_engine/captures.py`                                       | Model dimension, cache layout, cache registration and handshake captures |

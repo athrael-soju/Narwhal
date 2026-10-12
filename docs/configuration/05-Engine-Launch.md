@@ -110,18 +110,36 @@ Variable names in `environment` must be uppercase, and values must fit on one li
 
 When the model's `config.json` or `tokenizer_config.json` contains an `auto_map`, discovery adds `--trust-remote-code` to the engine arguments.
 
+### Engine-neutral launch settings
+
+These `runtime` fields hold settings that every backend applies. The launcher passes each one with the backend's own flag:
+
+| Runtime field    | Value                                                     | vLLM                                                                                         | SGLang                                                                 |
+| ---------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `context_length` | Positive context length in tokens                         | `--max-model-len`                                                                            | `--context-length`                                                     |
+| `max_sequences`  | Positive cap on concurrently running sequences            | `--max-num-seqs`                                                                             | `--max-running-requests`, from 1 to 256, `256` when unset              |
+| `prefix_caching` | `true` or `false`                                         | `--enable-prefix-caching` or `--no-enable-prefix-caching`                                    | `--disable-radix-cache` when `false`                                   |
+| `kv_events`      | `true` or `false`; `true` requires prefix caching         | `--kv-events-config` with `{"enable_kv_cache_events": false}` when `false`                   | No `--kv-events-config` when `false`                                   |
+| `tokenizer`      | Tokenizer path                                            | `--tokenizer`                                                                                | `--tokenizer-path`                                                     |
+| `block_size`     | Tokens per KV cache block                                 | `--block-size`, required                                                                     | `--page-size`, fixed at `1`                                            |
+
+When a field is unset, the launcher passes no flag for it and the engine uses its own default, except for SGLang's `max_sequences` and `block_size`. Prefix caching and event publishing are on unless a field or `extra_args` turns them off.
+
+`extra_args` rejects a flag for a setting that the record also sets as a field. A record that sets these flags in `extra_args` instead launches with the same arguments as before.
+
+The GPU memory fraction is an `extra_args` option: `--gpu-memory-utilization` on vLLM and `--mem-fraction-static` on SGLang. With `shared_device`, the launcher requires exactly one such option, equal to `shared_device.gpu_memory_utilization`.
+
 ### vLLM runtime fields
 
 A vLLM record adds these fields:
 
 | Runtime field | Value                                                                                                                                                                                                                           |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `block_size`  | Positive cache block size, passed as `--block-size`.                                                                                                                                                                            |
 | `kv_lease_s`  | Optional NIXL producer lease in whole seconds, at least 6, default `30`. The launcher passes it as `kv_lease_duration`, and the router derives the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it. |
 
 `expected_packages` must pin `vllm` and either `nixl` or `nixl-rocm`. `environment` accepts the prefixes `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
 
-The `extra_args` allowlist accepts these options with a value: `--max-model-len`, `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--max-num-seqs`, `--reasoning-parser`, `--attention-backend`, `--tokenizer`, `--hf-config-path`, `--load-format` and `--kv-events-config`. It accepts these flags: `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager`, `--no-disable-hybrid-kv-cache-manager`, `--enable-prefix-caching` and `--no-enable-prefix-caching`. `deploy_hosts.py prepare` requires exactly one positive `--max-num-seqs`.
+The `extra_args` allowlist accepts these options with a value: `--max-model-len`, `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--max-num-seqs`, `--reasoning-parser`, `--attention-backend`, `--tokenizer`, `--hf-config-path`, `--load-format` and `--kv-events-config`. It accepts these flags: `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager`, `--no-disable-hybrid-kv-cache-manager`, `--enable-prefix-caching` and `--no-enable-prefix-caching`. `deploy_hosts.py prepare` requires `max_sequences` or exactly one positive `--max-num-seqs`.
 
 The launcher configures `NixlConnector` with `kv_role` `kv_both`, the UCX backend, `kv_load_failure_policy` `fail`, `enforce_handshake_compat` `true` and `kv_lease_duration`.
 
@@ -140,9 +158,9 @@ With `NARWHAL_ENGINE_BACKEND=sglang`, [discovery](../deploy/01-Discover.md#confi
 
 The `extra_args` allowlist accepts these options with a value: `--context-length`, `--mem-fraction-static`, `--chunked-prefill-size`, `--max-total-tokens`, `--max-prefill-tokens`, `--tokenizer-path`, `--reasoning-parser`, `--load-format`, `--disaggregation-ib-device`, `--mamba-ssm-dtype`, `--max-mamba-cache-size`, `--mamba-radix-cache-strategy` and `--max-running-requests`, set once from 1 to 256. It accepts these flags: `--trust-remote-code`, `--disable-radix-cache`, `--disable-cuda-graph`, `--enable-mixed-chunk` and `--disable-overlap-schedule`.
 
-The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-requests 256` unless `extra_args` sets it, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It adds `--kv-events-config` unless `--disable-radix-cache` turns prefix caching off. At engine start it passes `--disaggregation-bootstrap-port` from `NARWHAL_SGLANG_BOOTSTRAP_PORT` and the engine credential, when one is configured, as `--api-key`.
+The launcher sets `--page-size 1`, `--attention-backend triton`, `--max-running-requests` from `max_sequences` or `extra_args`, `256` when neither sets it, `--stream-interval 1`, `--enable-metrics`, `--enable-cache-report`, `--disaggregation-mode` with the launch role, and `--disaggregation-transfer-backend` with the connector. It adds `--kv-events-config` while prefix caching and `kv_events` are on. At engine start it passes `--disaggregation-bootstrap-port` from `NARWHAL_SGLANG_BOOTSTRAP_PORT` and the engine credential, when one is configured, as `--api-key`.
 
-Every engine launches as prefill with `--enable-pd-role-switch`, and the router switches its role at runtime through `POST /pd_role_switch`. Unless `--disable-radix-cache` is set, the launcher also adds `--disaggregation-decode-enable-radix-cache`, so that a switched decode engine evicts cached KV to admit requests.
+Every engine launches as prefill with `--enable-pd-role-switch`, and the router switches its role at runtime through `POST /pd_role_switch`. While prefix caching is on, the launcher also adds `--disaggregation-decode-enable-radix-cache`, so that a switched decode engine evicts cached KV to admit requests.
 
 For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to every SGLang engine, unless the engine arguments already set `--mamba-radix-cache-strategy` or `--disable-radix-cache`. When your `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`, set it to `no_buffer` and add `--disable-overlap-schedule`. While the overlap scheduler is on, SGLang's default strategy selects `extra_buffer` for a model that supports it, and a switched decode engine exits under sustained load.
 
@@ -185,9 +203,9 @@ Record the application revision, launcher digest and container ID with each depl
 
 ### Prefix caching and cache events
 
-On vLLM, `--no-enable-prefix-caching` in `extra_args` turns prefix caching off, and `checked.json` records whether vLLM's resolved engine configuration keeps it on. On SGLang, `--disable-radix-cache` in `extra_args` turns prefix caching off.
+`prefix_caching: false` turns prefix caching off, as does vLLM's `--no-enable-prefix-caching` or SGLang's `--disable-radix-cache` in `extra_args`. On vLLM, `checked.json` records whether vLLM's resolved engine configuration keeps it on.
 
-With prefix caching on, the engine publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. `events.sock` carries published event batches, each with a sequence number. `replay.sock` takes replay requests for batches held in the engine's replay buffer. With prefix caching off, the engine publishes no cache events.
+With prefix caching and `kv_events` on, the engine publishes KV cache events over two ZeroMQ IPC sockets in `/tmp/narwhal-<uid>/<plan name>/`. `events.sock` carries published event batches, each with a sequence number. `replay.sock` takes replay requests for batches held in the engine's replay buffer. With prefix caching off, the engine publishes no cache events.
 
 In the path, `<uid>` is the effective user ID of the launching user and `<plan name>` is `narwhal-engine-<n>-<12 hex>`.
 
@@ -204,13 +222,13 @@ Stopping a native engine removes its plan directory. For a container engine, rem
 
 Preparation, the check and engine start fail when either directory belongs to another user or grants group or other access.
 
-On vLLM, to keep prefix caching on and turn event publishing off, add this to `extra_args`:
+To keep prefix caching on and turn event publishing off, set `runtime.kv_events` to `false`. On vLLM, a record can instead add this to `extra_args`:
 
 ```json
 ["--kv-events-config", "{\"enable_kv_cache_events\": false}"]
 ```
 
-The launcher rejects every other `--kv-events-config` value. On SGLang, an engine with prefix caching on always publishes cache events.
+The launcher rejects every other `--kv-events-config` value in `extra_args`.
 
 ### Resetting prefix caches
 

@@ -20,11 +20,11 @@ Each action refuses to overwrite an output it has already written. To start an e
 
 `prepare` reads the model from `NARWHAL_MODEL_DIR` and checks its `config.json` against `NARWHAL_MODEL_CONFIG_SHA256`. A container engine mounts that directory read-only at `/model`.
 
-For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory or, on vLLM, a GGUF file; `prepare` records a file's SHA-256, and `start-shared` refuses the file once it changes. SGLang takes only a checkpoint directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`. The vLLM dev template loads a GGUF file with `--tokenizer` and `--hf-config-path` in `runtime.extra_args`, both set to the directory that holds the tokenizer and `config.json`.
+For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory or, on vLLM, a GGUF file; `prepare` records a file's SHA-256, and `start-shared` refuses the file once it changes. SGLang takes only a checkpoint directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`. The vLLM dev template loads a GGUF file with `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args`, both set to the directory that holds the tokenizer and `config.json`.
 
 ## Engine environment
 
-`prepare` writes the engine's environment file from the record's `runtime.environment` and `environment`, `UCX_TLS`, `UCX_TCP_PORT_RANGE` from `NARWHAL_UCX_TCP_PORT_RANGE`, and the KV side channel. It reads the engine credential, when set, from `NARWHAL_ENGINE_API_KEY` and the side-channel port from `NARWHAL_NIXL_SIDE_CHANNEL_PORT` on vLLM or `NARWHAL_SGLANG_BOOTSTRAP_PORT` on SGLang.
+`prepare` writes the engine's environment file from the record's `runtime.environment` and `environment`, `UCX_TLS`, `UCX_TCP_PORT_RANGE` from `NARWHAL_UCX_TCP_PORT_RANGE`, and the KV side channel. It reads the engine credential, when set, from `NARWHAL_ENGINE_API_KEY` and the side-channel port from `NARWHAL_KV_SIDE_CHANNEL_PORT`, or, while that is unset, from `NARWHAL_NIXL_SIDE_CHANNEL_PORT` on vLLM or `NARWHAL_SGLANG_BOOTSTRAP_PORT` on SGLang.
 
 A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to `NARWHAL_NODE_<n>_IP`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, and the credential as `VLLM_API_KEY`.
 

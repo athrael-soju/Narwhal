@@ -23,6 +23,7 @@ from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
@@ -397,9 +398,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(hook),
             "NARWHAL_ENGINE_PORT": str(config["ports"]["engine_first"] + index),
             "NARWHAL_ATTEST_PORT": str(config["ports"]["attestation_first"] + index),
-            engine_launcher.side_channel_port_env: str(
-                config["ports"]["side_channel_first"] + index
-            ),
+            KV_SIDE_CHANNEL_PORT_ENV: str(config["ports"]["side_channel_first"] + index),
             "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],
