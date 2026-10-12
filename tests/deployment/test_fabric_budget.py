@@ -340,11 +340,27 @@ class FabricBudgetTests(unittest.TestCase):
             self.assertAlmostEqual(budget["required_gbps"], 8 * 5 * 1024 * 1024 * 1.25 / 1e9)
 
     def test_measure_transfer_sends_cold_paired_legs_and_saves_the_snapshots(self):
+        for found, switches in (
+            ("prefill", [("decode", 4.0), ("prefill", None)]),
+            ("decode", [("prefill", None), ("decode", 2.5)]),
+        ):
+            with self.subTest(found=found):
+                self._measure_transfer(found, switches)
+
+    def _measure_transfer(self, found: str, switches: list) -> None:
         bodies: dict[str, list[dict]] = {"prefill": [], "decode": []}
+        modes = {"prefill": "prefill", "decode": found}
+        switched: list[tuple[str, float | None]] = []
 
         def engine(role: str) -> ThreadingHTTPServer:
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self):
+                    if self.path == "/server_info":
+                        state = {"disaggregation_mode": modes[role]}
+                        if modes[role] == "decode":
+                            state["decode_cuda_graph_memory_gb"] = 2.5
+                        self._reply(json.dumps({"internal_states": [state]}).encode())
+                        return
                     count = len(bodies["prefill"])
                     text = (
                         f'sglang:kv_transfer_total_mb_sum{{tp_rank="0"}} {2.0 * count}\n'
@@ -354,7 +370,13 @@ class FabricBudgetTests(unittest.TestCase):
 
                 def do_POST(self):
                     length = int(self.headers["Content-Length"])
-                    bodies[role].append(json.loads(self.rfile.read(length)))
+                    body = json.loads(self.rfile.read(length))
+                    if self.path == "/pd_role_switch":
+                        switched.append((body["new_role"], body.get("decode_cuda_graph_memory_gb")))
+                        modes[role] = body["new_role"]
+                        self._reply(b'{"success": true}')
+                        return
+                    bodies[role].append(body)
                     self._reply(b"{}")
 
                 def _reply(self, data: bytes) -> None:
@@ -375,6 +397,8 @@ class FabricBudgetTests(unittest.TestCase):
         prefill, decode = engine("prefill"), engine("decode")
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder) / "transfer"
+            launch = Path(folder) / "launch.json"
+            launch.write_text(json.dumps({"runtime": {"decode_cuda_graph_memory_gb": 4.0}}))
             args = [
                 "measure-transfer",
                 "--prefill",
@@ -387,6 +411,8 @@ class FabricBudgetTests(unittest.TestCase):
                 "8998",
                 "--model",
                 "model",
+                "--launch-config",
+                str(launch),
                 "--prompt-tokens",
                 "300",
                 "--handoffs",
@@ -404,6 +430,8 @@ class FabricBudgetTests(unittest.TestCase):
             self.assertEqual(
                 sorted(path.name for path in out.iterdir()), ["after.prom", "before.prom"]
             )
+        self.assertEqual(switched, switches)
+        self.assertEqual(modes["decode"], found)
         self.assertEqual(bodies["prefill"], bodies["decode"])
         self.assertEqual(len({body["bootstrap_room"] for body in bodies["prefill"]}), 3)
         for body in bodies["prefill"]:

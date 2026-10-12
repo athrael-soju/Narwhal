@@ -351,7 +351,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-SGLang engines report their KV cache over HTTP, and `narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget with `--uniform-cache` or `--bytes-per-token` in place of `--runtime-layout`.
+SGLang engines report their KV cache over HTTP, and `narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 

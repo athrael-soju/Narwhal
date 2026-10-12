@@ -165,7 +165,8 @@ def transfer_payload(before: str, after: str) -> tuple[int, int]:
 
 
 def measure_transfer(args: argparse.Namespace) -> tuple[int, int]:
-    """Send cold SGLang handoffs of one prompt length and save the prefill /metrics around them."""
+    """Send cold SGLang handoffs of one prompt length and save the prefill /metrics around them.
+    The decode engine serves the decode role for the handoffs and returns to its role after."""
     integer({"prompt_tokens": args.prompt_tokens}, "prompt_tokens")
     integer({"handoffs": args.handoffs}, "handoffs")
     headers = {"Content-Type": "application/json"}
@@ -177,6 +178,37 @@ def measure_transfer(args: argparse.Namespace) -> tuple[int, int]:
         with urlopen(Request(url, data=data, headers=headers), timeout=120) as response:
             return response.read()
 
+    def scheduler(base: str) -> dict:
+        info = json.loads(call(base.rstrip("/") + "/server_info"))
+        return (info.get("internal_states") or [{}])[0]
+
+    def switch(base: str, role: str, memory: float | None = None) -> None:
+        body: dict = {"new_role": role}
+        if memory is not None:
+            body["decode_cuda_graph_memory_gb"] = memory
+        result = json.loads(call(base.rstrip("/") + "/pd_role_switch", body))
+        if result.get("success") is not True:
+            raise ValueError(f"{base} refused the switch to {role}: {result.get('message')}")
+
+    if scheduler(args.prefill).get("disaggregation_mode") != "prefill":
+        raise ValueError("--prefill must select an engine serving the prefill role")
+    state = scheduler(args.decode)
+    found = state.get("disaggregation_mode")
+    memory = state.get("decode_cuda_graph_memory_gb") or json.loads(args.launch_config.read_text())[
+        "runtime"
+    ].get("decode_cuda_graph_memory_gb")
+    if found == "decode":
+        # A decode engine keeps each producer's transfer endpoint until it switches itself.
+        switch(args.decode, "prefill")
+    switch(args.decode, "decode", float(memory) if memory else None)
+    try:
+        return send_handoffs(args, call)
+    finally:
+        if found == "prefill":
+            switch(args.decode, "prefill")
+
+
+def send_handoffs(args: argparse.Namespace, call) -> tuple[int, int]:
     metrics_url = args.prefill.rstrip("/") + "/metrics"
     args.out_dir.mkdir(mode=0o700)
     before = call(metrics_url)
@@ -389,6 +421,12 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--bootstrap-host", required=True)
     measure.add_argument("--bootstrap-port", type=int, required=True)
     measure.add_argument("--model", required=True)
+    measure.add_argument(
+        "--launch-config",
+        type=Path,
+        required=True,
+        help="engine launch record of the decode engine",
+    )
     measure.add_argument("--prompt-tokens", type=int, required=True)
     measure.add_argument("--handoffs", type=int, default=8)
     measure.add_argument("--api-key-env", default="NARWHAL_ENGINE_API_KEY")

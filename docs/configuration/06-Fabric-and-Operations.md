@@ -28,13 +28,13 @@ Engines with matching captured cache layouts share one budget from a representat
 
 To compute the budget:
 
-1. Capture each engine's `cache-layout.json` in its engine-role shell:
+1. On vLLM, capture each engine's `cache-layout.json` in its engine-role shell:
 
     ```bash
     narwhal-engine capture-cache --run "$ENGINE_RUN"
     ```
 
-2. Run `calculate` in the shell of each representative engine role:
+2. Run `calculate` in the shell of each representative engine role. On SGLang, give it `--transfer-metrics` from [measured handoffs](../deploy/04-Qualify-Fabric.md#building-the-source-budget) in place of `--runtime-layout`:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
@@ -50,19 +50,35 @@ To compute the budget:
 
 `calculate` accepts these options:
 
-| Option                        | Default          | Description                                                                         |
-| ----------------------------- | ---------------- | ----------------------------------------------------------------------------------- |
-| `--model-config PATH`         | required         | Model configuration file whose hash matches the runtime layout.                     |
-| `--launch-config PATH`        | required         | Engine launch record that supplies the TP size and matches the runtime layout hash. |
-| `--runtime-layout PATH`       | one cache source | Captured `cache-layout.json`.                                                       |
-| `--prompt-tokens N`           | required         | Prompt length, in tokens.                                                           |
-| `--handoffs-per-s RATE`       | required         | Peak remote KV handoff rate, in handoffs per second.                                |
-| `--burst N`                   | required         | Number of KV handoffs in a burst.                                                   |
-| `--transfer-budget-s SECONDS` | required         | Time budget for transferring one burst.                                             |
-| `--headroom FACTOR`           | required         | Multiplier of at least 1 applied to the required rate.                              |
-| `--out PATH`                  | required         | Fresh private output path for the budget.                                           |
+| Option                            | Default          | Description                                                                             |
+| --------------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `--model-config PATH`             | required         | Model configuration file, whose hash must match a runtime layout.                       |
+| `--launch-config PATH`            | required         | Engine launch record that supplies the TP size, whose hash must match a runtime layout. |
+| `--runtime-layout PATH`           | one cache source | Captured `cache-layout.json`.                                                           |
+| `--transfer-metrics BEFORE AFTER` | one cache source | SGLang prefill `/metrics` saved by `measure-transfer` before and after its handoffs.    |
+| `--prompt-tokens N`               | required         | Prompt length, in tokens.                                                               |
+| `--handoffs-per-s RATE`           | required         | Peak remote KV handoff rate, in handoffs per second.                                    |
+| `--burst N`                       | required         | Number of KV handoffs in a burst.                                                       |
+| `--transfer-budget-s SECONDS`     | required         | Time budget for transferring one burst.                                                 |
+| `--headroom FACTOR`               | required         | Multiplier of at least 1 applied to the required rate.                                  |
+| `--out PATH`                      | required         | Fresh private output path for the budget.                                               |
 
-Give `calculate` one cache source: `--runtime-layout`, `--uniform-cache`, or `--bytes-per-token`.
+Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--uniform-cache`, or `--bytes-per-token`.
+
+`measure-transfer` puts the decode engine in the decode role, switching it out and back first when it already serves decode, so that it takes the prefill engine's current transfer endpoint. It then sends handoffs whose prompts are random token IDs, each asking for one output token, and returns the decode engine to the role it found. `calculate --transfer-metrics` sums each TP rank's mean `sglang:kv_transfer_total_mb` between the two snapshots. `measure-transfer` accepts these options:
+
+| Option                  | Default                  | Description                                                                                                     |
+| ----------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `--prefill URL`         | required                 | Base URL of an idle engine serving the prefill role.                                                            |
+| `--decode URL`          | required                 | Base URL of another idle engine of the same cache group.                                                        |
+| `--bootstrap-host HOST` | required                 | Address of the prefill engine's bootstrap server.                                                               |
+| `--bootstrap-port PORT` | required                 | The prefill engine's `NARWHAL_SGLANG_BOOTSTRAP_PORT`.                                                           |
+| `--model NAME`          | required                 | Served model name.                                                                                              |
+| `--launch-config PATH`  | required                 | Launch record whose `runtime.decode_cuda_graph_memory_gb` sizes the decode switch when the engine reports none. |
+| `--prompt-tokens N`     | required                 | Prompt length of each handoff, the same as the budget's `--prompt-tokens`.                                      |
+| `--handoffs N`          | 8                        | Number of handoffs.                                                                                             |
+| `--api-key-env NAME`    | `NARWHAL_ENGINE_API_KEY` | Environment variable whose value, when set, goes to both engines as a bearer token.                             |
+| `--out-dir PATH`        | required                 | New directory for `before.prom` and `after.prom`.                                                               |
 
 ### Retained budget evidence
 
@@ -70,10 +86,10 @@ Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engin
 
 The budget file holds:
 
-- the model, launch, and runtime-layout hashes
-- the image identity, launch-plan hash, and TP size
+- the model and launch hashes, and the runtime-layout or transfer-metrics hashes
+- the TP size, and from a runtime layout the image identity and launch-plan hash
 - the prompt length
-- the padded-page payload bound per handoff
+- the payload per handoff, a padded-page bound or a measured mean
 - the sizing assumptions
 - the required decimal Gbit/s
 
@@ -85,7 +101,7 @@ The captured layout holds per-layer page bytes for each TP rank, the token block
 
 ### Uniform-cache options
 
-Deployments use `--runtime-layout` for every model.
+Deployments use `--runtime-layout` on vLLM and `--transfer-metrics` on SGLang, for every model.
 
 Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
 
