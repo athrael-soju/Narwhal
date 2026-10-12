@@ -1,5 +1,3 @@
-"""Render expected command failures while retaining their operation and input."""
-
 from __future__ import annotations
 
 import subprocess
@@ -9,7 +7,6 @@ import httpx
 
 
 def failure(command: str, operation: str, error: Exception, status: int) -> int:
-    """Write an operator diagnostic and return its exit category."""
     # Timeouts carry no message; their type names the failure.
     detail = str(error) or type(error).__name__
     if isinstance(error, httpx.HTTPError):

@@ -176,6 +176,8 @@ With `recovery.engine_restart_policy: individual`, `peer_release` has one entry 
 | `rounds`       | Release rounds sent since the ejection or the last state change |
 | `next_round_s` | Seconds until the next round, `null` after the last round       |
 
+On SGLang, the router sends no release rounds, so each entry reports `rounds: 0` and `next_round_s: null`.
+
 ### `residency`
 
 Each engine's `residency` entry reports the router's view of the engine's resident prefix blocks, synchronized from its attestation sidecar:

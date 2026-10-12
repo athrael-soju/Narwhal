@@ -29,7 +29,6 @@ class RoleSwitcher(ABC):
         producer: tuple[str, Mapping[str, Any] | None],
         consumer: tuple[str, Mapping[str, Any] | None],
     ) -> None:
-        """Serve `producer` as prefill and `consumer` as decode for a handoff between them."""
         await self.switch(client, producer[0], Role.PREFILL, producer[1])
         await self.switch(client, consumer[0], Role.DECODE, consumer[1])
 
@@ -38,7 +37,6 @@ class RoleSwitcher(ABC):
         return False
 
     def record_handoff(self, producer: str, consumer: str) -> None:
-        """Note a handoff placed from `producer` to `consumer`."""
         return None
 
     async def refresh(
@@ -52,7 +50,7 @@ class RoleSwitcher(ABC):
         return None
 
     async def role(self, client: httpx.AsyncClient, base: str) -> Role | None:
-        """The role `base` serves now, when the engine reports it."""
+        """The role `base` serves now, or None when the engine does not report it."""
         return None
 
 

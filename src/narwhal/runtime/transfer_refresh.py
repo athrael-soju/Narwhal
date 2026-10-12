@@ -20,7 +20,6 @@ class TransferRefresh:
 
 
 def stale_consumers(router: NarwhalRouter) -> dict[str, list[str]]:
-    """Map each decode engine to the live producers whose handoffs it must refresh for."""
     held = router.transfer_refresh.held
     live = router.scheduler.live_instances()
     if held is not None and held in router.monitor.instances:
@@ -49,9 +48,7 @@ async def _refresh(router: NarwhalRouter, iid: str, producers: list[str]) -> Non
 
 
 def refresh_consumers(router: NarwhalRouter) -> None:
-    """Refresh one stale decode engine per pass.
-
-    A producer that every live decode engine holds stale cannot hand off its KV, so the pass
+    """A producer that every live decode engine holds stale cannot hand off its KV, so the pass
     holds the least loaded of them out of new placements until its work drains.
     """
     state = router.transfer_refresh
@@ -82,7 +79,6 @@ def refresh_consumers(router: NarwhalRouter) -> None:
 
 
 async def refresh_idle_consumers(router: NarwhalRouter) -> None:
-    """Refresh every idle stale decode engine in turn, before the router serves."""
     if router.role_switch is None:
         return
     instances = router.monitor.instances

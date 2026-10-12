@@ -77,6 +77,7 @@ Incompatible handoff versions need a maintenance window.
 | `vllm_version` contract field               | `engine_version`           |
 | `nixl_version` contract field               | `transfer_version`         |
 | `nixl_connector_version` contract field     | `connector_version`        |
+| `engine.vllm_version` attestation field     | `engine.version`           |
 | `capture-nixl` contract tool action         | `capture-connector`        |
 | `nixl_transfer_*` preflight evidence fields | `transfer_*`               |
 | `ports.nixl_first` dev template port        | `ports.side_channel_first` |

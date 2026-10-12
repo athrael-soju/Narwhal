@@ -1,5 +1,5 @@
 ---
-description: Recover failed vLLM engines and whole engine waves in a Narwhal fleet.
+description: Recover failed engines and whole engine waves in a Narwhal fleet.
 ---
 
 # Engine and whole-wave recovery

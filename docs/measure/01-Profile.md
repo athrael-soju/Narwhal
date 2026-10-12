@@ -122,7 +122,7 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. An SGLang engine counts zero hits until it exports `sglang:cached_tokens_total`.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit, so the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs` without it.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
@@ -177,7 +177,7 @@ With `--overwrite`, `narwhal-profile` writes a new output pair for the selected 
 
 ### KV capacity source
 
-The KV capacity source is the physical KV constraint when vLLM `cache_config_info` reports `kv_cache_size_tokens`, and the TPOT-derived limit when it omits `kv_cache_size_tokens`. On SGLang, the physical constraint is the smallest `sglang:max_total_num_tokens`.
+The KV capacity source is the physical KV constraint when the engine reports its KV capacity, and the TPOT-derived limit otherwise. vLLM reports it as `kv_cache_size_tokens` in `vllm:cache_config_info`, and SGLang as `sglang:max_total_num_tokens`. When the engine exports several values, the profiler takes the smallest.
 
 ## Validating the profile before using it
 

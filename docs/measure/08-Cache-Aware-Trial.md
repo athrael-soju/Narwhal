@@ -6,7 +6,7 @@ description: Compare SLO-qualified throughput between cold and cache-aware prefi
 
 The trial compares the throughput of requests that meet the service-level objectives (SLOs) between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices each engine that holds the request's prefix at its warm fit.
 
-Both arms run with the backend's prefix caching on.
+The trial needs a vLLM fleet, and both arms run with prefix caching on. The baseline arm turns off cache events with `--kv-events-config`, which the SGLang launcher rejects in `runtime.extra_args`. SGLang publishes cache events whenever its radix cache is on.
 
 ## Freezing the comparison
 
@@ -23,7 +23,7 @@ Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusa
 
 ## Choosing the workload shape
 
-`L` is the input token count of every request in a workload. `B` is the residency block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`. On vLLM, `B` is the engine's cache block size. On SGLang, residency groups the engine's pages into runs of at least 64 tokens, so `B` is 64 with the launcher's one-token pages.
+`L` is the input token count of every request in a workload. `B` is the residency block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
 
 For a prompt of `L = k*B + s` tokens with `0 < s < B`, an engine with boundary-state groups, such as Mamba state, keeps its boundary state at `k*B`.
 

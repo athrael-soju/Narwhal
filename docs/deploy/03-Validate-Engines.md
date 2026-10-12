@@ -169,12 +169,12 @@ To add the flag after launch:
 3. Restart each engine.
 4. Repeat the work for an engine restart with a changed attested `launch_digest` from the [deployment sequence](../Deploy.md#deployment-sequence).
 
-For a separate tokenizer at `PATH`, set `runtime.extra_args` to `["--tokenizer", "PATH", ...]` before preparing the launch plan.
+For a separate tokenizer at `PATH`, add vLLM's `--tokenizer PATH` or SGLang's `--tokenizer-path PATH` to `runtime.extra_args` before preparing the launch plan.
 
 When the image, model, dtype, cache policy, TP allocation, or model arguments change:
 
 1. Derive the groups.
-2. Capture the live cache layout.
+2. For vLLM, capture the live cache layout.
 
 When the workload assumptions change, recalculate the fabric budget.
 
@@ -320,15 +320,15 @@ Before you reuse a failed deployment:
     assert os.environ["NARWHAL_ENGINE_MODEL_NAME"] in {m["id"] for m in models["data"]}
     if sglang:
         print("Engine health, version and model passed.")
-        raise SystemExit
-    metrics = probe("/metrics", "metrics.txt").decode()
-    assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
-    completion = json.loads(probe("/v1/completions", "completion.json", {
-        "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
-        "max_tokens": 32, "temperature": 0,
-    }))
-    assert completion["choices"][0]["text"]
-    print("Engine health, version, model, process identity and completion passed.")
+    else:
+        metrics = probe("/metrics", "metrics.txt").decode()
+        assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
+        completion = json.loads(probe("/v1/completions", "completion.json", {
+            "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
+            "max_tokens": 32, "temperature": 0,
+        }))
+        assert completion["choices"][0]["text"]
+        print("Engine health, version, model, process identity and completion passed.")
     PY_ENGINE
     ```
 
@@ -341,18 +341,25 @@ If the probe reports another version, compare the container that serves the endp
 
 ## Capturing the live cache layout
 
-In each engine-role shell, capture the cache layout and create the fabric run directory:
+For a vLLM engine, capture the cache layout in each engine-role shell:
 
 ```bash
 narwhal-engine capture-cache --run "$ENGINE_RUN"
-umask 077
-mkdir -p runs
-export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
-test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
 ```
 
 `capture-cache` writes `cache-layout.json` with one record per TP rank.
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
+
+SGLang engines report their KV cache over HTTP, and `narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget with `--uniform-cache` or `--bytes-per-token` in place of `--runtime-layout`.
+
+In each engine-role shell, create the fabric run directory and check the budget tool:
+
+```bash
+umask 077
+mkdir -p runs
+export FABRIC_RUN="$(mktemp -d runs/fabric-XXXXXX)"
+test "$(sha256sum "$NARWHAL_FABRIC_BUDGET_TOOL" | cut -d' ' -f1)" = "$NARWHAL_FABRIC_BUDGET_SHA256"
+```
 
 [Qualify the transfer fabric](04-Qualify-Fabric.md)

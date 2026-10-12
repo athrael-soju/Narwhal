@@ -39,14 +39,14 @@ Non-null values of these fields have these required types:
 | `prompt`                | String or array  |
 | `messages`              | Array of objects |
 
-Other fields reach the engine as sent.
+Other fields reach the engine as sent. On SGLang, the router sets `rid` and `bootstrap_room` on each engine leg, replacing any value the client sent.
 
 Invalid requests return HTTP `400` in an OpenAI error envelope:
 
 - malformed JSON
 - a JSON array or scalar body
 - a field of the wrong type
-- a `vllm_xargs` object that sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`
+- on vLLM, a `vllm_xargs` object that sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`
 
 Each invalid request writes one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
 

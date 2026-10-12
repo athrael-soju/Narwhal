@@ -17,7 +17,7 @@ On the router, confirm that `runs/deployment/fleet.json` lists:
 Each engine's `ENGINE_RUN` directory supplies:
 
 - `container.id` and the container logs.
-- `cache-layout.json`.
+- `cache-layout.json`, for a vLLM engine.
 
 ## Capturing the attestation inputs
 
@@ -41,7 +41,7 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 
 For a vLLM engine, `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.
 
-For an SGLang engine, the capture saves the live engine's `/server_info` to `server-info.json`, which supplies `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package.
+For an SGLang engine, the capture saves selected `/server_info` fields and the process start time, read from the engine's container or PID on the host, to `server-info.json`. The `/server_info` fields supply `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package.
 
 Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `--max-running-requests` to the logged value, or raise the capacity the log names, such as `--max-mamba-cache-size`, and relaunch the engine.
 
@@ -53,7 +53,7 @@ umask 077
 cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
-The capture requires the live container's plan and launcher hashes to match `launch.json`.
+For a vLLM engine, the capture reads the dimensions from the live engine into `model-dimensions.live.json`, and requires the live container's plan and launcher hashes to match `launch.json`.
 
 | Dimension            | Source                                                                                                         |
 | -------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ The capture requires the live container's plan and launcher hashes to match `lau
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
 | `model_architecture` | Resolved architecture                                                                                          |
 
-For an SGLang engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`. `config.json` must match `model_config_sha256` in `launch.json`.
+For an SGLang engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`, the file to read in place of `model-dimensions.live.json`. `config.json` must match `model_config_sha256` in `launch.json`.
 
 ### Capturing the cache grouping
 
@@ -195,7 +195,7 @@ export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 
 ### Confirming the attested process
 
-1. Recheck the engine's `/health`, `/version`, and `process_start_time_seconds`.
+1. Recheck the engine's `/health` and version: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, or `version` in `/server_info` on SGLang.
 2. Confirm the document describes the running process.
 
 ### Starting the sidecar
@@ -232,6 +232,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import httpx
+from narwhal.backends import load as load_backend
 from narwhal.engines.attestation import (
     AttestationDocument, fetch_engine_identity, verify_attestation,
 )
@@ -251,7 +252,11 @@ for response in responses.values():
 plan = json.loads((Path(os.environ["ENGINE_RUN"]) / "launch.json").read_text())
 key = os.environ.get("NARWHAL_ENGINE_API_KEY")
 headers = {"authorization": "Bearer " + key} if key else {}
-identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
+options = {}
+if plan.get("engine") == "sglang":
+    # SGLang publishes no process start; the sidecar reads it on the host.
+    options = {"reader": load_backend("sglang").identity, "attestation_url": base + "/v1/attestation"}
+identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers, **options))
 (out / "identity.json").write_text(json.dumps(asdict(identity), indent=2) + "\n")
 document = AttestationDocument.load(os.environ["ATTEST_DOCUMENT"])
 failures = verify_attestation(responses["attestation"].json(), document.contract, identity)

@@ -185,7 +185,7 @@ Raising `serving.queue_timeout_s` lengthens waits without adding seats.
 
 Check: `narwhal_waiting_decode` stays above `0`, and the expired rows' `queue_waits.decode` approaches the producer's `narwhal_handoff_bound_seconds`.
 
-Cause: every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks, so the router ends the attempt instead of dispatching its decode leg.
+Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks, so the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so requests reach no handoff expiry.
 
 Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, as in the default of `2`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
 
@@ -199,7 +199,7 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 | `engine_timeout` | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
 | `local_pool` | A wait for a router data connection to the engine reached `engine.pool_timeout_s`. |
 
-Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats. [SGLang decode legs](configuration/02-Serving-and-Role-Control.md#engine-seats) still go to engines with a free decode seat.
+Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats. On SGLang, a decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat.
 
 Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 

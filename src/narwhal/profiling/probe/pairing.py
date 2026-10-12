@@ -111,7 +111,6 @@ async def paired_transport(
     *,
     timeout_s: float,
 ) -> tuple[PairedTransport | None, dict[str, dict[str, Any]]]:
-    """Pair requests over `inner()` for a rendezvous `kv`, with the launches of `specs`."""
     if not isinstance(kv, RendezvousConnector):
         return None, {}
     pairing = PairedTransport(inner(), kv, dialect)

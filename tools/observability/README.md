@@ -23,7 +23,7 @@ The dashboard expects these label contracts:
   engine metrics endpoint.
 - SGLang exposes `sglang:num_running_reqs`, `sglang:num_queue_reqs`,
   `sglang:token_usage`, `sglang:cached_tokens_total`, `sglang:prompt_tokens_total`
-  and `sglang:generation_tokens_total`.
+  and `sglang:generation_tokens_total` on each engine metrics endpoint.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
 Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
@@ -101,4 +101,4 @@ Alert rules in `tools/observability/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
-- Target relabelling keeps the `job`, `iid` and `backend` labels for engine reachability, scoped alert rows and the engine table's **Backend** column.
+- Engine targets carry `job="engines"`, their `iid` and the fleet's `backend` label for engine reachability, scoped alert rows and the engine table's **Backend** column.

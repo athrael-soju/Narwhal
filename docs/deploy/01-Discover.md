@@ -88,7 +88,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`.
+Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM. On an SGLang `mooncake` engine, it adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, unless `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy` or `--disable-radix-cache`.
 
 Discovery detects convolutional SSM transfer state from any of these fields in `text_config`, or in the root configuration otherwise:
 
@@ -169,7 +169,7 @@ Override the policy in `.env` before discovery:
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
-With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch`, `nixl` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The default SGLang arguments set `--context-length` to the maximum context and `--max-running-requests` to 256. The cache block, execution, maximum sequence and GPU memory settings apply to vLLM only. With `NARWHAL_ENGINE_CONNECTOR=nixl`, discovery writes each engine's role to `runtime.role` and sets `pin` on every engine.
+With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch`, `nixl` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The default SGLang arguments set `--context-length` to the maximum context, and the launcher sets `--max-running-requests` to 256 unless `NARWHAL_ENGINE_ARGS` sets a value from 1 to 256. The cache block, execution, maximum sequence and GPU memory settings apply to vLLM only. With `NARWHAL_ENGINE_CONNECTOR=nixl`, discovery writes each engine's role to `runtime.role` and sets `pin` on every engine.
 
 ## Access failure handling
 

@@ -54,7 +54,7 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | `tools/deployment/fabric_budget.py`                    | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256`      |
 | `src/narwhal/backends/<backend>/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
-`<backend>` is the fleet's `engine.backend`.
+`<backend>` is the fleet's `engine.backend`, `vllm` by default.
 
 ## Installing engine 1 and the remaining hosts
 

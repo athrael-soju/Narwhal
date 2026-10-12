@@ -1,5 +1,3 @@
-"""Profile binding, generation and SLO gates."""
-
 from __future__ import annotations
 
 import httpx
@@ -32,11 +30,6 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
 
 
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
-    """Check the store binds the fleet and meets the decode error policy.
-
-    Every row must span a measured decode domain on both axes and stay
-    inside the fleet's profile-validation error limits.
-    """
     print("profile")
     store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
@@ -81,7 +74,6 @@ async def gate_profile_generation(
     rep: Report,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
-    """Fence profiles whose measured engine generation differs from the live one."""
     unsafe: set[str] = set()
     for spec in cfg.engines:
         profiles = store.profiles_for_engine(spec.iid)
@@ -111,7 +103,6 @@ async def gate_profile_generation(
 
 
 def gate_slo(cfg: FleetConfig, store: ProfileStore, rep: Report) -> None:
-    """Price the smallest measured decode cohort against the configured targets."""
     print("slo")
     for spec in cfg.engines:
         p = store.get(spec.iid)

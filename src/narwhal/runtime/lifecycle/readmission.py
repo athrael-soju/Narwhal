@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def role_bound_pairs(target: str, role: Role, live: list[Instance]) -> list[tuple[str, str]]:
-    """Pair `target` with the first live engine serving the other role, prefill first."""
+    """Pair `target` with the first live engine in the other role, as `(prefill, decode)`."""
     peer = next((inst.iid for inst in live if inst.role is not role and inst.iid != target), None)
     if peer is None:
         return []

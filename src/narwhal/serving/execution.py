@@ -183,9 +183,7 @@ async def _place(
 
 
 def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set[str]) -> set[str]:
-    """Return the decode engines a rendezvous decode leg must skip.
-
-    A rendezvous producer holds its prefill until the consumer admits the decode leg, so a leg
+    """A rendezvous producer holds its prefill until the consumer admits the decode leg, so a leg
     placed on a full engine waits on both engines. The leg skips full engines while one has a
     free seat, and otherwise goes to the engine whose seat is projected to free first.
     """
@@ -261,7 +259,6 @@ def price_waiting(state: RequestLifecycle) -> float | None:
 async def _run_prefill(
     state: RequestLifecycle, prefill: Instance, call: Callable[[], Awaitable[T]]
 ) -> T:
-    """Run a prefill leg under the request deadline and record its answer."""
     router = state.router
     began = router._clock()
     try:

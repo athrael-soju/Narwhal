@@ -26,7 +26,7 @@ Run these steps from the router shell.
 
 8. Compare each printed effective sweep with every checked serving plan.
 
-`deploy_hosts.py prepare` writes each engine's sequence limit to `profiling-limits.json`: `--max-num-seqs` on vLLM, `--max-running-requests` on SGLang.
+`deploy_hosts.py prepare` writes each engine's sequence limit to `profiling-limits.json`: `--max-num-seqs` on vLLM, and `--max-running-requests` on SGLang, 256 when unset.
 
 The effective sweep has these bounds:
 
@@ -37,6 +37,8 @@ The effective sweep has these bounds:
 | Decode input lengths | Input plus 64 output tokens fits the live `max_model_len` |
 
 Prefix caching can stay on during profiling.
+
+On an SGLang fleet, `narwhal-profile` pairs each engine with a peer and switches their roles to measure both legs of each engine. It requires the `mooncake` connector and at least two engines, and rejects `--colocated`.
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
 
@@ -132,7 +134,7 @@ The full preflight runs these gates:
 | `model`       | Every engine serves the configured model                                                                                                                     |
 | `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
 | `tokenize`    | Exact input sizing succeeds when `engine.tokenize` is on                                                                                                     |
-| `produce`     | Every tested producer can export a KV handoff                                                                                                                |
+| `produce`     | Every tested vLLM producer can export a KV handoff; an SGLang producer passes here, and its consume pairs check the transfer                                 |
 | `consume`     | Every tested peer can consume that KV handoff                                                                                                                |
 | `slo`         | The configured TTFT and TPOT targets are feasible against the measured profiles                                                                              |
 
@@ -181,7 +183,7 @@ When three or more engines probe successfully, the gate compares each engine aga
 
 In the consume gate, a transfer across a role-permitted engine pair passes when:
 
-- Decode produces its first generated token within `engine.first_token_timeout_s`.
+- Decode produces its first generated token within `engine.first_token_timeout_s`. On SGLang, the deadline is at most 30 seconds, the bootstrap timeout that the launcher sets for the prefill leg.
 - Decode finishes a valid stream with output.
 - Prefill and decode complete within `serving.request_timeout_s`.
 

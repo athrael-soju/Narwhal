@@ -6,6 +6,8 @@ description: How Narwhal decides which engines process prompts and which generat
 
 Narwhal splits its engines between two roles: prefill engines process incoming prompts, and decode engines generate the output tokens. The role controller moves engines between the roles as demand changes and keeps a minimum number of engines in each.
 
+Every vLLM engine runs with the `kv_both` role, so a vLLM role change takes effect in the router, which sends the engine the legs of its new role. On SGLang with Mooncake, the router switches the engine's role through its `POST /pd_role_switch` route. An SGLang engine on NIXL keeps its launch role, and the role controller treats it as pinned.
+
 ## Role control
 
 During normal operation, the role controller runs at most one evaluation every `controller.reactive.step_s`. Each evaluation scores the current split of engines and every split that differs from it by one engine. A split's score is the worst of three ratios, each a projected value divided by its service-level objective (SLO) target: time to first token (TTFT), time per output token (TPOT), and the wait for a decode slot.
@@ -24,7 +26,7 @@ The trigger clears once every queued request is projected to finish within `slo.
 
 ### Expansion and consolidation
 
-Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds prefill capacity by moving decode engines to prefill while prefill load stays at or above `controller.thresholds.expand`. Both kinds of move must pass the profile, safety, and confirmation checks.
+Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds prefill capacity once prefill load reaches `controller.thresholds.expand`: with complete demand, a move from decode to prefill then needs one confirmation, and the [`mixed_pressure` rule](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) allows it while decode load is above `controller.thresholds.shrink`. Both kinds of move must pass the profile, safety, and confirmation checks.
 
 A move from decode to prefill needs stable decode demand and a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation), the period in which the router collects enough arrivals to judge demand. While the window is open, the role controller may still move a prefill engine to decode when the source load is at or below `controller.thresholds.shrink`, and may repair a role's floor in either direction.
 
@@ -79,15 +81,15 @@ While [demand is incomplete](../http-api/06-SLO-and-Demand.md#demand-completenes
 
 A pinned engine keeps its configured role. Moves keep at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines while enough healthy engines are available. Draining and recovering engines are on a lifecycle hold and take no new work.
 
-`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and a moved engine stays in its new role for at least `controller.thresholds.dwell_s`. A move from decode to prefill gives up the least busy eligible decode engine, which may have at most `controller.thresholds.flip_resident_guard` requests still running.
+`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and the first such move waits the same time after the router starts. A moved engine stays in its new role for at least `controller.thresholds.dwell_s`. A move from decode to prefill gives up the least busy eligible decode engine, and with `controller.thresholds.flip_resident_guard` above `0`, that engine may have at most that many decode requests still running.
 
 While an engine is ejected, quarantined, draining, or recovering, the role controller scores splits on the remaining live engines. When that leaves a role with engines assigned and none of them live, it records a held decision.
 
-Requests already running on an engine finish there after the engine changes role.
+Requests already running on a vLLM engine finish there after the engine changes role.
 
-An SGLang engine on Mooncake changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements, and changes its role once it is idle if the controller still selects the move. The hold is renewed while the engine runs requests, and ends when any engine changes roles or three `controller.reactive.step_s` intervals after the controller last asked for the move.
+An SGLang engine on Mooncake changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle if the controller still selects the move. The controller renews the hold each time it asks for the move, and at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs, and a failed switch ejects it.
 
-A projected-TTFT recovery evaluation applies every guard above. It also checks that every engine has a profile and that enough decode capacity remains, and it weighs the consolidation evidence and the trend of decode demand.
+A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 
 ### Advisory mode
 
@@ -103,6 +105,6 @@ A readmitted engine returns to the role it last had.
 
 ### Aggregate fallback
 
-When failures or drains leave a role with no engines, the scheduler sends that role's work to a live, unpinned engine in the other role. When every live engine in the other role is pinned, the router rejects the request with HTTP 503 before prefill starts.
+On vLLM, when failures or drains leave a role with no live engines, the scheduler sends that role's work to a live, unpinned engine in the other role. When every live engine in the other role is pinned, the router rejects the request with HTTP 503 before prefill starts. On SGLang, each engine serves only its live role, so a role with no live engines makes the router reject the request with HTTP 503 before prefill starts.
 
-A decode engine that takes on prefill work is closed to new work under predictive admission until its in-progress decode requests finish. From then on, admission places prefill work on it and prices it as an engine that handles both phases.
+Under predictive admission, the router prices prefill on a decode engine only once that engine's decode requests finish. When every candidate engine still carries decode work, it refuses the request with HTTP 429 and the cause `aggregate_unpriced`.

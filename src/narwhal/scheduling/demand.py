@@ -1,5 +1,3 @@
-"""Accounting for offered work, output lengths and decode residency."""
-
 from __future__ import annotations
 
 import math
@@ -26,8 +24,6 @@ _PRICE_MEMO_SETS = 64
 
 @dataclass(frozen=True)
 class Demand:
-    """Phase work observed inside one demand window."""
-
     prefill_engines: float
     decode_engines: float
     arrivals: int
@@ -41,14 +37,13 @@ class Demand:
 
 @dataclass(frozen=True)
 class Arrival:
-    """One offered prompt: its input tokens and the tokens each engine holds cached."""
+    """`cached` pairs each engine ID with the prompt tokens it holds cached."""
 
     input_len: int
     cached: tuple[tuple[str, int], ...] = ()
 
     @classmethod
     def of(cls, input_len: int, cached_tokens: Mapping[str, int] | None = None) -> Arrival:
-        """Build an arrival from cached tokens per engine."""
         return cls(input_len, tuple(sorted((cached_tokens or {}).items())))
 
 
@@ -61,8 +56,6 @@ def _merge_arrivals(a: Arrival, b: Arrival) -> Arrival:
 
 
 class DemandModel:
-    """Offered work, observed outputs and decode-residency samples."""
-
     def __init__(
         self,
         monitor: InstanceMonitor,
@@ -117,13 +110,11 @@ class DemandModel:
         self.last_demand = Demand(0.0, 0.0, 0, 0)
 
     def resolve_unsized(self, *, at: float, retain: bool) -> None:
-        """Resolve one pending unsized offer, recording it when `retain` is set."""
         self.unsized_pending -= 1
         if retain:
             self.unsized.add(True, at=at)
 
     def arrival_count(self, since: float | None = None) -> int:
-        """Return arrivals since `since`, including unsized and pending offers."""
         return self.arrivals.count(since) + self.unsized.count(since) + self.unsized_pending
 
     def saw_arrival(
@@ -133,7 +124,6 @@ class DemandModel:
         wanted_len: int | None = None,
         at: float | None = None,
     ) -> ArrivalObservation:
-        """Record offered prefill work and requested decode work."""
         seen = self._clock() if at is None else at
         arrival = self.arrivals.add(Arrival(input_len), at=seen)
         expected = None
@@ -150,17 +140,12 @@ class DemandModel:
         at: float,
         cached_tokens: dict[str, int] | None = None,
     ) -> Cohort[Arrival] | None:
-        """Replace a local estimate with the admitted request's token counts and cache evidence.
-
-        Return the arrival's cohort.
-        """
         arrival, expected = observation
         repriced = self.arrivals.replace(arrival, Arrival.of(input_len, cached_tokens), at=at)
         self.expected_decode.replace(expected, (input_len, max(0, wanted_len)), at=at)
         return repriced
 
     def reprice_arrival(self, request: Request) -> None:
-        """Price the request's offered prefill with its rechecked cache evidence."""
         if request.demand_arrival is None or request.arrived_at is None:
             return
         request.demand_arrival = self.arrivals.replace(
@@ -177,10 +162,7 @@ class DemandModel:
         *,
         at: float | None = None,
     ) -> None:
-        """Record output delivered by one successful request.
-
-        The server calls this once after the stream closes.
-        """
+        """The server calls this once after the stream closes."""
         self.observed_decode.add((input_len, max(0, wanted_len), max(0, observed_len)), at=at)
 
     def sample(self) -> None:
@@ -200,7 +182,6 @@ class DemandModel:
         self.residency.add(resident)
 
     def _decode_correction(self) -> float:
-        """Return the fleet median live/profile decode ratio."""
         values = [
             self.monitor.decode_correction(inst.iid)
             for inst in self.monitor.instances.values()
@@ -219,11 +200,7 @@ class DemandModel:
         correction: float | None = None,
         resident_s: float | None = None,
     ) -> tuple[float, float]:
-        """Return prefill and decode demand in engine equivalents.
-
-        `horizon_s` limits offered inputs to a trailing span and skips the `last_demand` update.
-        `resident_s` limits decode residency to a trailing span.
-        """
+        """Return prefill and decode demand in engine equivalents."""
         window = horizon_s if horizon_s is not None else window_s
         profiles = tuple(
             row
@@ -246,7 +223,6 @@ class DemandModel:
         return priced.prefill_engines, priced.decode_engines
 
     def resident_demand(self, now: float, window_s: float) -> float:
-        """Return the observed decode residency in engine equivalents."""
         residents = list(self.residency.rows(now - window_s))
         count = sum(row.count for row in residents)
         return sum(row.value * row.count for row in residents) / count if count else 0.0
@@ -264,11 +240,8 @@ class DemandModel:
         prefill_iids: Collection[str] | None = None,
         resident_s: float | None = None,
     ) -> Demand:
-        """Price one demand window with the profiles measured for one role mix.
-
-        Cached arrivals take warm prices from engines in `prefill_iids`, or from every engine
-        when `prefill_iids` is None.
-        Unsized offers take the mean price of the span's parsed offers.
+        """Unsized offers take the mean price of the span's parsed offers. Cached arrivals take
+        warm prices from engines in `prefill_iids`, or from every engine when it is None.
         """
         window = horizon_s if horizon_s is not None else window_s
         span = min(window, max(step_s, now - self.started_at))
@@ -351,7 +324,6 @@ class DemandModel:
     def _prices_for(
         self, profiles: tuple[Profile, ...], prefill_iids: Collection[str] | None
     ) -> dict[tuple[int, tuple[tuple[str, int], ...]], tuple[float, bool]]:
-        """Return the arrival price memo for these profiles and prefill pool."""
         key = (
             tuple(id(p) for p in profiles),
             None if prefill_iids is None else frozenset(prefill_iids),
@@ -366,7 +338,6 @@ class DemandModel:
     def _shape_capacity(
         self, profiles: tuple[Profile, ...], key: tuple[int, int], correction: float
     ) -> float | None:
-        """Return the mean decode request rate for one input and output length."""
         input_len, output_len = key
         context = input_len + output_len / 2.0
         values = [
@@ -387,7 +358,6 @@ class DemandModel:
         cached: tuple[tuple[str, int], ...],
         prefill_iids: Collection[str] | None,
     ) -> float:
-        """Price one arrival at the lower of the mean cold and cheapest warm prefill prices."""
         cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
         tokens = dict(cached)
         warm = (
@@ -399,12 +369,10 @@ class DemandModel:
 
     @staticmethod
     def _shape_bucket(tokens: int) -> int:
-        """Place a token length in a power-of-two bucket."""
         return 1 if tokens <= 1 else 1 << (tokens - 1).bit_length()
 
     @staticmethod
     def _capacity_bucket(tokens: int) -> int:
-        """Round a token length up onto a sixteenth-octave grid."""
         if tokens <= 1:
             return 1
         step = math.ceil(math.log2(tokens) * CAPACITY_STEPS_PER_OCTAVE)
@@ -438,7 +406,6 @@ class DemandModel:
         return self._learned
 
     def history_summary(self) -> dict[str, dict[str, int | float]]:
-        """Return storage and shape-overflow counts for each demand window."""
         return {
             "unsized": {**self.unsized.summary(), "pending": self.unsized_pending},
             "arrivals": self.arrivals.summary(),
@@ -448,7 +415,6 @@ class DemandModel:
         }
 
     def refresh_output_estimates(self) -> OutputEstimates:
-        """Rebuild the output estimates and the fleet-wide delivered-output median."""
         return self._estimate_snapshot()[1]
 
     def _estimate_snapshot(self) -> tuple[float, OutputEstimates, int]:
@@ -465,10 +431,7 @@ class DemandModel:
         return self._estimates
 
     def output_estimator(self) -> Callable[[Request], int]:
-        """Return a function giving expected output tokens per request, 0 when unknown.
-
-        A request without a shape estimate takes the fleet-wide delivered-output median.
-        """
+        """The returned function gives expected output tokens, 0 when unknown."""
         _, estimates, fleet = self._current_snapshot()
         estimated = self._estimated
 
@@ -483,7 +446,6 @@ class DemandModel:
         return estimate
 
     def current_estimates(self) -> OutputEstimates:
-        """Return the controller's output estimates, rebuilt when older than the demand window."""
         return self._current_snapshot()[1]
 
     def _current_snapshot(self) -> tuple[float, OutputEstimates, int]:
@@ -498,9 +460,7 @@ class DemandModel:
         wanted_len: int,
         estimates: OutputEstimates | None = None,
     ) -> int:
-        """Estimate output length for one input and output bucket.
-
-        The requested cap applies until three matching requests finish; then the
+        """The requested cap applies until three matching requests finish; then the
         median delivered fraction applies.
         """
         input_bucket = self._shape_bucket(input_len)
@@ -517,5 +477,4 @@ class DemandModel:
 
 
 def rounded(value: float, digits: int = 6) -> float | None:
-    """Return finite telemetry values rounded for state and journal output."""
     return round(value, digits) if math.isfinite(value) else None

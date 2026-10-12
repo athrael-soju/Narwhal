@@ -124,17 +124,19 @@ Serving, profiling, preflight, cache-reset and lifecycle requests go to the engi
 
 When `engine.engine_api_key_env` names a variable at deployment export, the credential reaches the engine as:
 
-| Location                                                              | Variable                 |
-| --------------------------------------------------------------------- | ------------------------ |
-| Engine role environment                                               | `NARWHAL_ENGINE_API_KEY` |
-| Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           |
-| Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           |
+| Location                                                              | vLLM                     | SGLang                   |
+| --------------------------------------------------------------------- | ------------------------ | ------------------------ |
+| Engine role environment                                               | `NARWHAL_ENGINE_API_KEY` | `NARWHAL_ENGINE_API_KEY` |
+| Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` |
+| Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` |
+
+The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`.
 
 `/narwhal/state` reports the authentication mode in `admission.engine_auth`. The mode is `engine-credential` when `engine.engine_api_key_env` is set, and `boundary` when it is empty.
 
 Use the same authentication mode for workload measurement and production serving.
 
-`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang. An SGLang fleet can also use the `"nixl"` connector, which keeps each engine in its launch role, so set `pin` on every engine.
+`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang. An SGLang fleet can also use the `"nixl"` connector. A `nixl` SGLang engine keeps its launch role, so the fleet must set `pin` on every engine.
 
 
 ## Profile validation

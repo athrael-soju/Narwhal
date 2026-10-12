@@ -328,11 +328,9 @@ class NarwhalRouter:
         return await self._engine_side(iid, role, refresh=False)
 
     async def resume_role(self, iid: str) -> str | None:
-        """Switch an engine to its router role."""
         return await self.switch_role(iid, self.monitor.instances[iid].role)
 
     async def refresh_transfer_state(self, iid: str) -> str | None:
-        """Clear the transfer state an engine holds from earlier handoffs, keeping its role."""
         return await self._engine_side(iid, self.monitor.instances[iid].role, refresh=True)
 
     async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:

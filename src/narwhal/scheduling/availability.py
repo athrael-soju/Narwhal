@@ -1,5 +1,3 @@
-"""Engine availability, quarantine, drains, and scoped breaker recovery evidence."""
-
 from __future__ import annotations
 
 import logging
@@ -55,13 +53,10 @@ HOLD_KINDS = (HOLD_TIMED, HOLD_INFERENCE)
 
 
 def hold_kind(until: float) -> str:
-    """Return the hold kind of a quarantine expiry."""
     return HOLD_INFERENCE if math.isinf(until) else HOLD_TIMED
 
 
 class EngineAvailability:
-    """Endpoint hold-outs and the evidence that permits readmission."""
-
     def __init__(
         self,
         monitor: InstanceMonitor,
@@ -101,7 +96,6 @@ class EngineAvailability:
         self.readmissions: Counter[tuple[str, str]] = Counter()
 
     def _event(self, event: str, **fields: Any) -> None:
-        """Write one availability event row; a failed write leaves the transition in place."""
         if self.on_event is None:
             return
         try:
@@ -110,7 +104,6 @@ class EngineAvailability:
             log.exception("availability journal event write failed")
 
     def _start_hold(self, iid: str, until: float, now: float) -> None:
-        """Record the start of a hold of the kind `until` sets."""
         kind = hold_kind(until)
         self.hold_since[iid] = now
         self.hold_starts[(iid, kind)] += 1
@@ -122,7 +115,6 @@ class EngineAvailability:
         )
 
     def _end_hold(self, iid: str, cause: str) -> bool:
-        """Lift `iid`'s hold, recording why it ended; return whether one was held."""
         until = self.quarantined.pop(iid, None)
         if until is None:
             return False
@@ -139,17 +131,12 @@ class EngineAvailability:
         return True
 
     def release_hold(self, iid: str, cause: str) -> bool:
-        """Return a held engine to placement and refresh floor state."""
         released = self._end_hold(iid, cause)
         if released:
             self.refresh_floor_state()
         return released
 
     def record_failure(self, iid: str, klass: str = LEG_CONNECTION) -> str | None:
-        """Record a failed leg and return its breaker verdict, or None below `eject_after`.
-
-        Each class keeps its own consecutive streak.
-        """
         if klass not in _VERDICT_BY_CLASS:
             raise ValueError(f"unknown breaker class {klass!r}")
         counter = self.failures[klass]
@@ -162,10 +149,6 @@ class EngineAvailability:
         return verdict
 
     def quarantine(self, iid: str, seconds: float) -> bool:
-        """Hold a failed engine out of new placement for `seconds`; return whether it was held.
-
-        An engine whose removal leaves its role unserved stays live.
-        """
         if seconds <= 0 or iid in self.ejected:
             return False
         inst = self.monitor.instances.get(iid)
@@ -192,12 +175,10 @@ class EngineAvailability:
         return True
 
     def _sweep_quarantine(self, now: float) -> None:
-        """Drop quarantines that expired by `now`."""
         for iid in [k for k, until in self.quarantined.items() if until <= now]:
             self._end_hold(iid, "expired")
 
     def quarantine_list(self) -> list[str]:
-        """Remove expired quarantines and return the remaining engine IDs."""
         self._sweep_quarantine(self._clock())
         return sorted(self.quarantined)
 
@@ -207,7 +188,6 @@ class EngineAvailability:
         *,
         exclude: set[str] | frozenset[str] = frozenset(),
     ) -> list[Instance]:
-        """Instances available for new work or a controller move."""
         now = self._clock()
         self._sweep_quarantine(now)
         return [
@@ -222,7 +202,6 @@ class EngineAvailability:
         ]
 
     def eject(self, iid: str, cause: str) -> bool:
-        """Eject an engine, recording the evidence `cause` that excluded it."""
         if iid in self.ejected:
             return False
         self.ejected[iid] = self._clock()
@@ -236,7 +215,6 @@ class EngineAvailability:
         return True
 
     def drain(self, iid: str) -> None:
-        """Remove one configured engine from every new placement path."""
         if iid not in self.monitor.instances:
             raise KeyError(iid)
         self.draining.add(iid)
@@ -245,14 +223,12 @@ class EngineAvailability:
         self.refresh_floor_state()
 
     def _release_uncovered_holds(self) -> None:
-        """Return held engines whose roles no other live engine places."""
         for iid in list(self.quarantined):
             if iid in self.quarantined and not self.role_covered_without(iid):
                 self._end_hold(iid, "uncovered")
                 log.warning("released hold on %s: no other live engine places its roles", iid)
 
     def finish_drain(self, iid: str) -> None:
-        """Return a validated engine to placement."""
         if iid not in self.monitor.instances:
             raise KeyError(iid)
         self.draining.discard(iid)
@@ -260,17 +236,12 @@ class EngineAvailability:
         self.record_answer(iid, "verification", via="lifecycle")
 
     def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
-        """Return the engines in `instances` that hold `role`, else the unpinned ones."""
         matching = [i for i in instances if i.role is role]
         if matching or self.roles_bound:
             return matching
         return [i for i in instances if i.iid not in self.pinned]
 
     def role_covered_without(self, iid: str) -> bool:
-        """Return whether another live engine places every role that `iid` places.
-
-        An engine places a role's legs when it holds that role or is unpinned.
-        """
         inst = self.monitor.instances.get(iid)
         if inst is None:
             return True
@@ -282,11 +253,6 @@ class EngineAvailability:
         )
 
     def record_answer(self, iid: str, evidence: str, *, via: str | None = None) -> None:
-        """Clear failure streaks for the paths exercised by the answer.
-
-        Health and inference verification also clear ejection and quarantine.
-        `via` names the recovery path in events, `evidence` by default.
-        """
         try:
             classes = _EVIDENCE_CLASSES[evidence]
         except KeyError:
@@ -308,10 +274,6 @@ class EngineAvailability:
         self.refresh_floor_state()
 
     def breaker_snapshot(self) -> dict[str, Any]:
-        """Return per-engine breaker streaks and pending verifications.
-
-        Every configured engine reports every class, zeros included.
-        """
         streaks = {
             iid: {
                 klass: (
@@ -345,7 +307,6 @@ class EngineAvailability:
         }
 
     def holds_snapshot(self) -> dict[str, list[dict[str, Any]]]:
-        """Return current holds split into timed quarantines and inference holds."""
         now = self._clock()
         self._sweep_quarantine(now)
         out: dict[str, list[dict[str, Any]]] = {kind: [] for kind in HOLD_KINDS}
@@ -361,7 +322,6 @@ class EngineAvailability:
         return out
 
     def sweep_due(self, after_s: float) -> bool:
-        """Return whether a liveness sweep is due and advance its timestamp."""
         now = self._clock()
         if now - self._last_sweep < after_s:
             return False
@@ -369,7 +329,6 @@ class EngineAvailability:
         return True
 
     def probe_due(self, after_s: float) -> list[str]:
-        """Return due ejected engines and mark them probed."""
         now = self._clock()
         due = [
             iid

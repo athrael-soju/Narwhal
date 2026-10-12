@@ -156,19 +156,19 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone.
+The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.extra_args` sets it.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
 The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
 
-In an SGLang fleet with the queue off, decode legs still go to engines with a free decode seat. When all decode engines are full, the router picks the one the profiles expect to free a seat soonest.
+In an SGLang fleet with the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
 #### KV handoff bound
 
-After prefill, the producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
+After prefill, a vLLM producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
 
 The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#attestation). It derives the producer's handoff bound:
 
@@ -181,6 +181,8 @@ At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtim
 The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
+
+An SGLang producer holds the request's KV only for its rendezvous with the decode leg, so SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 

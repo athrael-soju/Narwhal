@@ -1,5 +1,3 @@
-"""Classify failed engine legs and verify suspect engines before lifting holds."""
-
 from __future__ import annotations
 
 import asyncio
@@ -26,8 +24,6 @@ log = logging.getLogger("narwhal.server")
 
 
 class SuspectVerifier:
-    """Record leg failures and resolve suspect engines with health or inference probes."""
-
     def __init__(self, router: NarwhalRouter) -> None:
         self.router = router
         self.sources: dict[str, set[str]] = {}
@@ -37,7 +33,6 @@ class SuspectVerifier:
         self.probes: Counter[tuple[str, str, str]] = Counter()
 
     def _probe_outcome(self, iid: str, kind: str, outcome: str, **fields: Any) -> None:
-        """Count one probe outcome and write its journal event."""
         self.probes[(iid, kind, outcome)] += 1
         try:
             self.router.journal.write(
@@ -54,7 +49,6 @@ class SuspectVerifier:
             log.exception("probe journal event write failed")
 
     def probe_counts(self) -> list[dict[str, Any]]:
-        """Return probe outcome counts for `/narwhal/state`."""
         return [
             {"iid": iid, "kind": kind, "outcome": outcome, "count": count}
             for (iid, kind, outcome), count in sorted(self.probes.items())
@@ -69,10 +63,6 @@ class SuspectVerifier:
         decode_leg: bool = False,
         progressed: bool = False,
     ) -> None:
-        """Classify a failed leg and update breaker state.
-
-        A 4xx outside 408/429 counts as transport evidence; a local pool timeout counts as none.
-        """
         if isinstance(exc, httpx.PoolTimeout):
             log.info("%s leg waited out the local HTTP pool; no breaker evidence", iid)
             return
@@ -117,13 +107,11 @@ class SuspectVerifier:
                 self.start(iid, verdict)
 
     def start(self, iid: str, kind: str) -> None:
-        """Verify `iid` in a background task."""
         task = asyncio.create_task(self._verify_suspect(iid, kind))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
     async def _verify_suspect(self, iid: str, kind: str) -> None:
-        """Resolve a suspect engine with a health or inference verification."""
         try:
             inst = self.router.monitor.instances.get(iid)
             if inst is None:
@@ -139,7 +127,6 @@ class SuspectVerifier:
             self.router.scheduler.verifying.discard((iid, kind))
 
     async def _verify_health(self, iid: str, url: str) -> None:
-        """Resolve a health-evidence suspect with an engine health probe."""
         from ...runtime.lifecycle.identity import allow_profile_recovery
 
         verdict = await self.router.engines.healthy(url)
@@ -161,7 +148,6 @@ class SuspectVerifier:
             log.warning("ejected %s: timeout-shaped failures and /health did not answer", iid)
 
     async def verify_inference(self, iid: str, url: str) -> None:
-        """Verify a suspect engine with a prefill/decode probe."""
         from ...runtime.lifecycle.identity import allow_profile_recovery
 
         sources = self.sources.get(iid, {""}).copy()
@@ -179,12 +165,7 @@ class SuspectVerifier:
         log.info("suspect %s passed inference verification; failures cleared", iid)
 
     def producers(self, iid: str, recorded: str) -> list[str]:
-        """Return the producers an inference probe of `iid` tries, in order.
-
-        The recorded producer comes first while it is live. Another live producer
-        replaces it while it is ejected, held, draining or unconfigured, and an
-        empty ID, the standalone probe, closes the list.
-        """
+        """An empty ID stands for the standalone probe."""
         if not recorded:
             return [""]
         scheduler = self.router.scheduler
@@ -202,10 +183,7 @@ class SuspectVerifier:
         return [*order, ""]
 
     async def _verify_path(self, iid: str, url: str, recorded: str) -> bool:
-        """Verify one recorded transfer path; return whether its probe passed.
-
-        A failed producer leg tests nothing on `iid`, so the next producer runs the probe.
-        """
+        """A failed producer leg tests nothing on `iid`, so the next producer runs the probe."""
         scheduler = self.router.scheduler
         if scheduler.availability.roles_bound:
             inst = self.router.monitor.instances.get(iid)
@@ -234,7 +212,6 @@ class SuspectVerifier:
         return False
 
     async def _verify_producer(self, iid: str, url: str) -> bool:
-        """Probe a prefill-bound suspect as the producer of each live decode peer in turn."""
         scheduler = self.router.scheduler
         consumers = sorted(
             scheduler.role_pool(Role.DECODE, scheduler.live_instances(exclude={iid})),
@@ -264,13 +241,11 @@ class SuspectVerifier:
         return self._no_peer(iid, "consumer")
 
     def _no_peer(self, iid: str, peer: str, **fields: Any) -> bool:
-        """Defer a role-bound suspect that has no live peer in the opposite role."""
         self._probe_outcome(iid, "verify_inference", "inconclusive", reason=f"no_{peer}", **fields)
         log.info("suspect %s inference probe needs a live %s; verdict deferred", iid, peer)
         return False
 
     def _peer_failed(self, iid: str, peer: str, peer_iid: str, klass: str, **fields: Any) -> None:
-        """Record a failed peer leg, which tested nothing on the suspect."""
         self._probe_outcome(
             iid, "verify_inference", f"{peer}_failed", **{f"{peer}_class": klass}, **fields
         )
@@ -286,7 +261,7 @@ class SuspectVerifier:
     def _resolve_inference_probe(
         self, iid: str, probe: InferenceProbe | None, **fields: Any
     ) -> bool:
-        """Resolve failure or defer an inconclusive probe without lifting its hold."""
+        """Return whether the probe passed; a pass leaves the hold for the caller to lift."""
         if probe is None:
             self._probe_outcome(iid, "verify_inference", "unavailable", **fields)
             log.warning("inference probe unavailable for %s; verification deferred", iid)

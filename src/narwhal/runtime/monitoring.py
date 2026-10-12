@@ -1,5 +1,3 @@
-"""Fleet monitoring stages, liveness sweeps, and engine readmission."""
-
 from __future__ import annotations
 
 import asyncio
@@ -43,10 +41,7 @@ MONITOR_STAGES = (
 
 @dataclass
 class MonitoringStage:
-    """Failure ledger for one monitoring stage.
-
-    State, metrics and the journal carry the exception class without its message.
-    """
+    """State, metrics and the journal carry the exception class without its message."""
 
     failures: int = 0
     consecutive: int = 0
@@ -55,9 +50,7 @@ class MonitoringStage:
 
 
 class MonitoringLedger:
-    """Per-stage failure accounting for the monitoring loop.
-
-    After `monitor_failure_limit` consecutive failed passes, the router admits no
+    """After `monitor_failure_limit` consecutive failed passes, the router admits no
     new request until a pass with zero stage failures.
     """
 
@@ -103,11 +96,9 @@ class MonitoringLedger:
             log.exception("monitoring journal event write failed")
 
     def ok(self, stage: str) -> None:
-        """Record one successful stage execution."""
         self.stages[stage].consecutive = 0
 
     def fail(self, stage: str, exc: BaseException) -> None:
-        """Record one stage failure, journal it, and log with the traceback."""
         record = self.stages[stage]
         klass = type(exc).__name__
         record.failures += 1
@@ -128,7 +119,6 @@ class MonitoringLedger:
 
     @contextlib.contextmanager
     def stage(self, name: str) -> Iterator[None]:
-        """Record the stage body's success, or record and suppress the Exception it raises."""
         try:
             yield
         except Exception as exc:
@@ -137,7 +127,6 @@ class MonitoringLedger:
             self.ok(name)
 
     def finish_pass(self, limit: int) -> None:
-        """Close one pass: update the core streak and the degraded gate."""
         failed = self._pass_failures
         self._pass_failures = []
         if not failed:
@@ -167,7 +156,6 @@ class MonitoringLedger:
                 self._on_degraded()
 
     def snapshot(self) -> dict[str, Any]:
-        """Render the ledger for `/narwhal/state`."""
         return {
             "degraded": bool(self.degraded),
             "reason": self.degraded or None,
@@ -189,9 +177,7 @@ class MonitoringLedger:
 
 
 async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
-    """Validate and readmit due ejected engines whose health probe succeeds.
-
-    A declared engine contract adds the attestation, generation and fabric gates
+    """A declared engine contract adds the attestation, generation and fabric gates
     of planned restarts.
     """
     if router.cfg.engine_restart_policy == "whole_wave" and router.scheduler.ejected:
@@ -272,7 +258,6 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
 
 
 async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
-    """Return the engines whose attestation sidecar responds, or that configure none."""
     urls = {spec.iid: spec.attestation_url for spec in router.cfg.engines}
     async with httpx.AsyncClient(
         timeout=router.cfg.health_timeout_s, transport=router.lifecycle_transport
@@ -292,7 +277,6 @@ async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
 
 
 async def sweep_liveness(router: NarwhalRouter) -> list[str]:
-    """Eject live engines after consecutive failed health sweeps."""
     misses = router.scheduler.liveness_misses
     live = [
         iid
@@ -352,9 +336,7 @@ def run_controller(
     urgent: bool = False,
     scheduled: bool = True,
 ) -> Instance | None:
-    """Run one serialized controller evaluation.
-
-    Urgent evaluations preserve the periodic demand-sampling cadence while
+    """Urgent evaluations preserve the periodic demand-sampling cadence while
     allowing a revalidated prefill-risk event through the step timer.
     """
     below_floor = router.scheduler.decode_live() < router.scheduler.min_decode
@@ -372,7 +354,6 @@ def run_controller(
 
 
 async def urgent_control_once(router: NarwhalRouter) -> Instance | None:
-    """Evaluate one coalesced prefill-risk event between monitoring passes."""
     flipped: Instance | None = None
     with router.monitoring.stage("controller"):
         flipped = run_controller(router, urgent=True, scheduled=False)
@@ -387,10 +368,6 @@ async def urgent_control_once(router: NarwhalRouter) -> Instance | None:
 
 
 async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instance | None:
-    """Run one controller, health, readmission and telemetry pass.
-
-    Each stage records its failures and the pass continues.
-    """
     interval = router.cfg.monitor_interval_s
     flipped: Instance | None = None
 
@@ -439,7 +416,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
 
 
 async def residency_loop(router: NarwhalRouter) -> None:
-    """Refresh residency views every monitor interval, apart from monitoring passes."""
     interval = router.cfg.monitor_interval_s
     while True:
         await asyncio.sleep(interval)
@@ -450,7 +426,6 @@ async def residency_loop(router: NarwhalRouter) -> None:
 
 
 async def monitor_loop(router: NarwhalRouter) -> None:
-    """Run scheduled monitoring and wake control for prefill SLO risk."""
     loop = asyncio.get_running_loop()
     interval = router.cfg.monitor_interval_s
     next_pass = loop.time() + interval

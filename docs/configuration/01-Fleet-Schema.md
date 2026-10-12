@@ -27,22 +27,22 @@ fleet.json: controller.monitor_interval_s must be a number; serving.max_connecti
 
 ### Paths
 
-The deployment workflow resolves relative fleet and profile paths from the checkout root. `narwhal-serve` resolves relative `profiles.path` and `recovery.state_path` from its working directory at startup.
+A command that loads the fleet, such as `narwhal-serve`, resolves a relative `profiles.path` or `recovery.state_path` from its working directory.
 
 ### Environment loading
 
 Set these variables in the process environment, or in the workstation `.env` that the [deployment workflow](../deploy/01-Discover.md#loading-the-private-environment) loads.
 
-| Variable                            | Use                                                                                                | Default                          |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"` |                                  |
-| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                           |                                  |
-| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                          |                                  |
-| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                | `127.0.0.1`                      |
-| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                  | `127.0.0.1:9090`                 |
-| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, opened by the dashboard's **Fleet control** link                     | `http://127.0.0.1:18020/console` |
-| `NARWHAL_CONTROL_METRICS_URL`       | Fleet control service address scraped by Prometheus. Needs `NARWHAL_CONTROL_TOKEN`                 | `http://127.0.0.1:8020`          |
-| `NARWHAL_CONTROL_TOKEN`             | Fleet control bearer token                                                                         |                                  |
+| Variable                            | Use                                                                                                                             | Default                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"`                              |                                  |
+| `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                                                        |                                  |
+| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                                                       |                                  |
+| `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                                             | `127.0.0.1`                      |
+| `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                                               | `127.0.0.1:9090`                 |
+| `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, opened by the dashboard's **Fleet control** link                                                 | `http://127.0.0.1:18020/console` |
+| `NARWHAL_CONTROL_METRICS_URL`       | Fleet control service address for Prometheus to scrape. Needs `NARWHAL_CONTROL_TOKEN`. When unset, Prometheus skips the service |                                  |
+| `NARWHAL_CONTROL_TOKEN`             | Fleet control bearer token                                                                                                      |                                  |
 
 An engine `url` or `attestation_url` expands from the environment when the entire JSON string is a single `${NAME}` reference:
 
@@ -56,7 +56,7 @@ With `NAME` set, the field takes the value of `NAME`. With `NAME` unset or blank
 
 A partial reference, default syntax such as `${NAME:-x}`, and a resolved value that contains `${` are errors. `$NAME`, and `${...}` in any other field, stay literal text.
 
-Save resolved URLs from `FleetConfig.save()` to a Git-ignored fleet path.
+`FleetConfig.save()` writes the resolved URLs. Save to a Git-ignored fleet path.
 
 
 ## Minimal fleet definition
@@ -76,14 +76,14 @@ Set both targets from measurements on the deployed engine shape.
 
 Each engine entry takes these fields:
 
-| Field             | Default    | Notes                                                                                              |
-| ----------------- | ---------- | -------------------------------------------------------------------------------------------------- |
-| `iid`             | required   | Scheduler identity, unique within `engines`.                                                       |
-| `url`             | required   | The engine HTTP base URL.                                                                          |
-| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`. |
-| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                      |
-| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume.    |
-| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                               |
+| Field             | Default    | Notes                                                                                                                                                                  |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iid`             | required   | Scheduler identity, unique within `engines`.                                                                                                                           |
+| `url`             | required   | The engine HTTP base URL.                                                                                                                                              |
+| `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`.                                                                     |
+| `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                                                                                          |
+| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume. Required on every engine of an SGLang fleet with the `nixl` connector. |
+| `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                                                                                                   |
 
 ```json
 {
@@ -113,9 +113,9 @@ The group's `gpu_memory_utilization` values sum to at most its `device_allowance
 
 Every production fleet needs a complete `engine_contract`.
 
-A complete `engine_contract` sets every [contract field](#contract-fields) that the engine backend attests to a nonempty string, positive integer or boolean. `image_digest` is optional. On SGLang, leave `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat` unset.
+An `engine_contract` needs `engine_version` and `connector`. It is complete when every other [contract field](#contract-fields) that the fleet's `engine.backend` attests holds a nonempty string, a positive integer or a boolean. `image_digest` is optional. On vLLM, `enforce_handshake_compat` defaults to `true`, the only value it accepts. On SGLang, leave `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat` unset. Loading fails when one of them is `true`, a nonempty string or a positive integer.
 
-With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`. Readmission fails with `readmission requires a complete engine_contract`.
+With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`, and readmission fails with `readmission requires a complete engine_contract`. A fleet with `recovery.engine_restart_policy` set to `whole_wave` fails to load.
 
 ### Hardware block
 
@@ -129,26 +129,30 @@ The optional `hardware` block needs all three fields when present.
 
 ### Contract fields
 
-| Field                      | Default           | Requirement                                                                                    |
-| -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
-| `engine_version`           | required          | The exact string each engine returns from `/version`, or from `/server_info` on SGLang.        |
-| `image_digest`             | `""`              | The immutable `sha256:<64 hex>` container digest from engine-side attestation.                 |
-| `transfer_version`         | `""`              | The installed transfer package version: NIXL on vLLM, Mooncake or NIXL on SGLang. |
-| `connector_version`        | `0`               | A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's metadata.              |
-| `model_architecture`       | `""`              | The model implementation name.                                                                 |
-| `model_dtype`              | `""`              | The dtype the model runs in.                                                                   |
-| `kv_heads`                 | `0`               | Positive value of `ModelConfig.get_total_num_kv_heads()` for the whole model.                  |
-| `head_size`                | `0`               | Positive value of `ModelConfig.get_head_size()`.                                               |
-| `hidden_layers`            | `0`               | Positive value of `ModelConfig.get_total_num_hidden_layers()` for the whole model.             |
-| `attention_backend`        | `""`              | The expected backend from the recorded launch.                                                 |
-| `kv_cache_dtype`           | `""`              | The KV-cache dtype.                                                                            |
-| `cross_layers_blocks`      | `null`            | Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API. |
-| `hybrid_kv_cache_manager`  | `null`            | Whether vLLM's hybrid KV-cache manager is part of the layout.                                  |
-| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. On SGLang, the default is `engine.connector`. |
-| `kv_role`                  | `""`              | The engine-side KV role, such as `kv_both`.                                                    |
-| `transfer_mode`            | `""`              | `pull` for `NixlPullConnector`, `push` for `NixlPushConnector`.                                |
-| `speculative_config`       | `""`              | The `--speculative-config` value from the recorded launch, or `disabled`.                      |
-| `enforce_handshake_compat` | `true`            | `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` for SGLang. |
+The attestation generator derives each field from the deployed engine. Fields that name only vLLM sources stay unset on SGLang.
+
+| Field                      | Default           | Requirement                                                                                                                                    |
+| -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine_version`           | required          | The exact version each engine reports: `/version` on vLLM, `/server_info` on SGLang.                                                           |
+| `image_digest`             | `""`              | The engine's local container image ID, `sha256:<64 hex>`. Empty for a native engine.                                                           |
+| `transfer_version`         | `""`              | The pinned transfer package version: `nixl` or `nixl-rocm` on vLLM, the connector's Mooncake or NIXL package on SGLang.                        |
+| `connector_version`        | `0`               | vLLM only. A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's module.                                                     |
+| `model_architecture`       | `""`              | The model implementation name: vLLM's resolved architecture, or the first `architectures` entry in the model's `config.json` on SGLang.        |
+| `model_dtype`              | `""`              | The dtype the model runs in: the `--dtype` launch argument on vLLM, `dtype` from `/server_info` on SGLang.                                     |
+| `kv_heads`                 | `0`               | Positive KV head count for the whole model: `ModelConfig.get_total_num_kv_heads()` on vLLM, `num_key_value_heads` in `config.json` on SGLang.  |
+| `head_size`                | `0`               | Positive head size: `ModelConfig.get_head_size()` on vLLM, `head_dim` in `config.json` on SGLang.                                              |
+| `hidden_layers`            | `0`               | Positive layer count for the whole model: `ModelConfig.get_total_num_hidden_layers()` on vLLM, `num_hidden_layers` in `config.json` on SGLang. |
+| `attention_backend`        | `""`              | The attention backend: from the startup log on vLLM, from `/server_info` on SGLang.                                                            |
+| `kv_cache_dtype`           | `""`              | The KV-cache dtype: the `--kv-cache-dtype` launch argument on vLLM, from `/server_info` on SGLang.                                             |
+| `cross_layers_blocks`      | `null`            | vLLM only. Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API.                                      |
+| `hybrid_kv_cache_manager`  | `null`            | vLLM only. Whether vLLM's hybrid KV-cache manager is part of the layout.                                                                       |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. On SGLang, the default and the attested value are `engine.connector`.                                     |
+| `kv_role`                  | `""`              | vLLM only. The engine-side KV role, such as `kv_both`.                                                                                         |
+| `transfer_mode`            | `""`              | vLLM only. `pull` for `NixlConnector` and `NixlPullConnector`, `push` for `NixlPushConnector`.                                                 |
+| `speculative_config`       | `""`              | The `--speculative-config` launch value on vLLM, or SGLang's `speculative_algorithm`, or `disabled`.                                           |
+| `enforce_handshake_compat` | `true`            | vLLM only. `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` on SGLang.                                   |
+
+On SGLang, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
 
 The loader and `narwhal-attest` accept these earlier names in the fleet file, the attestation document and its `sources`:
 
@@ -171,9 +175,9 @@ Check the resolved `head_size` dimensions against the live engine. On vLLM, also
 
 ### Attestation
 
-The [attestation generator](../deploy/05-Attest.md) writes `runs/engine-launch-*/engine-attestation.json`.
+The [attestation generator](../deploy/05-Attest.md) writes `engine-attestation.json` into the engine's launch directory.
 
-Fill in the fleet contract:
+To fill in the fleet contract:
 
 1. Start the sidecars.
 2. Run `finalize-fleet` in the router shell:
@@ -182,7 +186,7 @@ Fill in the fleet contract:
     .venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
     ```
 
-When the sidecar contracts are complete and identical, `finalize-fleet` writes the `engine_contract` into the `--fleet` file. When they are incomplete or differ, `finalize-fleet` exits with status 1.
+`finalize-fleet` checks each sidecar's response against its live engine. When the contracts are complete and identical, it writes the `engine_contract` into the `--fleet` file and saves the previous file as `runs/fleet.before-attestation-<id>.json`. When the file already holds that contract, it leaves the file unchanged. When a contract is incomplete, the contracts differ, or the file holds another contract, it exits with status 1.
 
 Each [attestation document](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares this identity:
 
@@ -200,10 +204,12 @@ For each contracted engine:
 1. Run one sidecar beside the engine.
 2. Set the engine's `attestation_url` to the sidecar's address.
 
-Sidecar identity values, read at startup:
+At startup, the sidecar reads two identity values:
 
-- the engine version, from `/version`, or from `/server_info` on SGLang
-- the engine process start time: the `process_start_time_seconds` metric on vLLM, or on SGLang the host start time of the process that `--engine-container` or `--engine-pid` names
+- the engine version, from `/version` on vLLM or `/server_info` on SGLang
+- the engine process start time, from the `process_start_time_seconds` metric on vLLM, or on SGLang from the host start time of the process that `--engine-container` or `--engine-pid` names
+
+An SGLang sidecar also serves the process start time at `/v1/process`, where the router reads it.
 
 When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
 
