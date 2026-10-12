@@ -1,5 +1,3 @@
-"""Simulated engine routes, frames, pacing and HTTP framing against fake transports."""
-
 import asyncio
 import io
 import json
@@ -10,8 +8,8 @@ from contextlib import redirect_stderr
 
 import h11
 
-from narwhal.engines.attestation import parse_process_start
-from narwhal.engines.connector import NixlConnector
+from narwhal.backends.vllm import NixlConnector
+from narwhal.backends.vllm.identity import parse_process_start
 from narwhal.engines.stream import event_choices, event_object, token_ids
 from tools.measurement import simulated_engine as sim
 
@@ -61,7 +59,6 @@ def stream(**options):
 
 
 def chunks(data):
-    """Split chunked transfer encoding into chunk payloads."""
     payloads = []
     while data:
         size, _, data = data.partition(b"\r\n")
@@ -243,6 +240,27 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.status, 400)
         reply = await target.handle("POST", "/v1/completions", {}, b"{")
         self.assertEqual(reply.status, 400)
+
+    async def test_sglang_refuses_legs_without_a_bootstrap_room(self):
+        refusal = {
+            "error": {
+                "message": "Disaggregated request received without bootstrap room id",
+                "type": "BadRequestError",
+                "code": 400,
+            }
+        }
+        body = {"model": "m", "prompt": "ab", "max_tokens": 1}
+        cases = [(False, True, 400), (False, False, 200), (True, True, 400), (True, False, 400)]
+        for shared, streamed, status in cases:
+            for room in ({}, {"bootstrap_room": "7"}, {"bootstrap_room": True}):
+                with self.subTest(shared=shared, stream=streamed, room=room):
+                    target = engine(backend="sglang", rooms=sim.Rooms() if shared else None)
+                    reply = await call(
+                        target, "POST", "/v1/completions", body | room | {"stream": streamed}
+                    )
+                    self.assertEqual(reply.status, status)
+                    if status == 400:
+                        self.assertEqual(json.loads(reply.body), refusal)
 
     async def test_unknown_routes_return_not_found(self):
         target = engine()

@@ -17,12 +17,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from narwhal.deployment.launch_engine.backend import launcher
 from tools.deployment.engine_launch import expose_colocated_gpus, load_launches
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
 FABRIC_BUDGET_SOURCE = Path(__file__).with_name("fabric_budget.py")
-CACHE_CAPTURE_SOURCE = Path(__file__).with_name("cache_capture_hook.py")
 
 
 def role_files(host: Host) -> list[str]:
@@ -36,19 +36,15 @@ def role_files(host: Host) -> list[str]:
 
 
 def profiling_limits(launches: dict[str, dict], fleet: dict) -> dict:
-    """Return the profiling-limits document from each engine's --max-num-seqs."""
+    """Return the profiling-limits document from each engine's sequence limit."""
     limits = {}
     for role, record in launches.items():
-        args = record.get("runtime", {}).get("extra_args", [])
-        values = []
-        for index, arg in enumerate(args):
-            if arg == "--max-num-seqs" and index + 1 < len(args):
-                values.append(args[index + 1])
-            elif isinstance(arg, str) and arg.startswith("--max-num-seqs="):
-                values.append(arg.partition("=")[2])
-        if len(values) != 1 or not str(values[0]).isdigit() or int(values[0]) < 1:
-            raise ValueError(f"{role}: runtime.extra_args needs one positive --max-num-seqs")
-        limits[f"n{role.removeprefix('engine-')}"] = int(values[0])
+        runtime = record.get("runtime", {})
+        try:
+            limit = launcher(runtime.get("backend")).sequence_limit(runtime)
+        except ValueError as error:
+            raise ValueError(f"{role}: {error}") from None
+        limits[f"n{role.removeprefix('engine-')}"] = limit
     if set(limits) != {engine["iid"] for engine in fleet["engines"]}:
         raise ValueError("Engine launch roles must match the fleet IDs for profiling")
     return {"schema": "narwhal.profiling-limits", "schema_version": 1, "engines": limits}
@@ -114,7 +110,7 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
     expose_colocated_gpus(launches, [list(host.roles) for host in hosts])
     budget_tool = FABRIC_BUDGET_SOURCE.read_bytes()
     budget_hash = hashlib.sha256(budget_tool).hexdigest()
-    capture_tool = CACHE_CAPTURE_SOURCE.read_bytes()
+    capture_tool = launcher(fleet.get("engine", {}).get("backend")).cache_hook.read_bytes()
     capture_hash = hashlib.sha256(capture_tool).hexdigest()
     for role in engine_roles:
         selected[role]["NARWHAL_FABRIC_BUDGET_SHA256"] = budget_hash

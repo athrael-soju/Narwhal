@@ -13,7 +13,9 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | Condition | HTTP | Error `type` | Error `code` | `Retry-After` |
 | --- | :---: | --- | --- | --- |
 | The body is not valid JSON or not a JSON object, with `param` null, or a field the router reads has the wrong type, with `param` naming the field | `400` | `invalid_request_error` | `null` | |
-| `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`; `param` is `vllm_xargs` | `400` | `invalid_request_error` | `null` | |
+| On vLLM, `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`; `param` is `vllm_xargs` | `400` | `invalid_request_error` | `null` | |
+| On SGLang, the body sets `rid`, `bootstrap_host`, `bootstrap_port`, or `bootstrap_room`; `param` names the field | `400` | `invalid_request_error` | `null` | |
+| On SGLang, a `/v1/chat/completions` body sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | Unsupported non-streaming audio, modality, or tool request; `param` names the option | `400` | `invalid_request_error` | `null` | |
 | `n > 1` or `best_of > 1` | `400` | `invalid_request_error` | | |
 | Requested model differs from the configured model | `404` | `invalid_request_error` | `model_not_found` | |
@@ -35,7 +37,7 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | After the first prefill dispatch, no engine outside the request's failed engines can take its decode leg or a retry's leg | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
 | The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s` before the original request deadline | `504` | `queue_expired` | | |
 | A prefill-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches the remaining `serving.queue_timeout_s` before the original request deadline | `504` | `expired` | `expired` | |
-| The KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
+| On vLLM, the KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
 | The original request deadline expires before response headers, at any stage, including a seat wait | `504` | `request_expired` | | |
 
 An engine fault before output starts returns HTTP `502` or `504` with the request phase as its error type. [Engine failure handling](03-Backend-and-Failures.md#engine-failure-handling) lists those responses and the terminal event of a stream that fails after output starts.
@@ -105,13 +107,13 @@ Assembly returns HTTP `502` when:
 
 ### Metadata and usage
 
-Assembled responses carry the engine's response metadata. `finish_reason` and `stop_reason` come from the last choice that reports each.
+Assembled responses carry the engine's response metadata. `finish_reason`, `stop_reason` and, on SGLang, `matched_stop` come from the last choice that reports each.
 
 `usage` carries the non-null engine `usage`, including one from a later usage-only frame. When the engine omits `usage`, the router computes it from the input length and the measured output token count.
 
 ## Token identity and output accounting
 
-Decode requests to supporting engines include:
+On vLLM, every decode request includes:
 
 ```json
 {
@@ -120,8 +122,10 @@ Decode requests to supporting engines include:
 }
 ```
 
-Every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
+On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true`, and the launcher sets `--stream-interval 1`. SGLang refuses `return_token_ids` on a streamed chat request, so a `/v1/chat/completions` decode request carries no token-ID field, and the router counts one token for each streamed chunk that carries text, reasoning content, or tool calls.
 
-The router reports `token_accounting: token_ids` for an engine that supplies token IDs. For an engine that omits them, it reports `token_accounting: unavailable`.
+When the decode request asks for token IDs, every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-Clients that set `return_token_ids` receive the IDs in streaming and assembled responses.
+The router reports `token_accounting: token_ids` on vLLM and SGLang.
+
+Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`, because it streams every decode leg and SGLang refuses the field on a streamed chat request.

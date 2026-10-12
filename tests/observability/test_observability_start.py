@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import stat
 import tempfile
 import unittest
@@ -258,10 +259,7 @@ class ReadinessTests(unittest.TestCase):
         self.services = observe_services.configured_services({})
         self.prometheus = _container("p" * 64, observe_services.PROMETHEUS_IMAGE)
         self.grafana = _container("g" * 64, observe_services.GRAFANA_IMAGE)
-        self.contract = TargetContract(
-            "router:8000",
-            (("e0", "engine-a:8002"), ("e1", "engine-b:8002")),
-        )
+        self.contract = TargetContract("router:8000")
 
     def _collection_get(
         self,
@@ -296,6 +294,12 @@ class ReadinessTests(unittest.TestCase):
                     },
                 ]
                 return 200, json.dumps({"data": {"activeTargets": active}})
+            if url == "http://router:8000/narwhal/targets":
+                groups = [
+                    {"targets": ["engine-a:8002"], "labels": {"iid": "e0"}},
+                    {"targets": ["engine-b:8002"], "labels": {"iid": "e1"}},
+                ]
+                return 200, json.dumps(groups)
             if "/api/v1/query?" in url:
                 result = (
                     readiness
@@ -332,6 +336,19 @@ class ReadinessTests(unittest.TestCase):
 
     def test_collection_requires_the_complete_healthy_target_set(self) -> None:
         observe_readiness._verify_targets(self.services[0], self.contract, self._collection_get())
+
+    def test_collection_requires_the_engines_the_router_lists(self) -> None:
+        collection = self._collection_get()
+
+        def get(url: str, timeout_s: float) -> tuple[int, str]:
+            if url == "http://router:8000/narwhal/targets":
+                return 200, json.dumps([{"targets": ["engine-a:8002"], "labels": {"iid": "e0"}}])
+            return collection(url, timeout_s)
+
+        with self.assertRaisesRegex(
+            observe_services.StartupError, re.escape("expected {'e0': 'engine-a:8002'}")
+        ):
+            observe_readiness._verify_targets(self.services[0], self.contract, get)
 
     def test_collection_rejects_a_failed_engine_scrape(self) -> None:
         with self.assertRaisesRegex(
@@ -383,7 +400,7 @@ class ReadinessTests(unittest.TestCase):
     def test_shipped_prometheus_config_discovers_both_target_groups(self) -> None:
         config = (observe_stack.BASE / "prometheus.yml").read_text()
         self.assertIn("/etc/prometheus/targets/router.json", config)
-        self.assertIn("/etc/prometheus/targets/engines.json", config)
+        self.assertIn("url: http://<<router>>/narwhal/targets", config)
         self.assertNotIn("static_configs:", config)
 
     def test_start_writes_targets_after_listener_ownership_check(self) -> None:
@@ -624,7 +641,7 @@ class ReadinessTests(unittest.TestCase):
             ),
             redirect_stderr(stderr),
         ):
-            code = observe_cli.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
+            code = observe_cli.main(["--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn("observability startup failed: occupied", stderr.getvalue())
 
@@ -650,7 +667,7 @@ class ReadinessTests(unittest.TestCase):
             mock.patch.object(observe_cli, "start", side_effect=timeout),
             redirect_stderr(stderr),
         ):
-            code = observe_cli.main(["--fleet", "fleet.json", "--router-url", "http://router:8000"])
+            code = observe_cli.main(["--router-url", "http://router:8000"])
         self.assertEqual(code, 1)
         self.assertIn(
             "command exceeded 300s: docker compose up -d",

@@ -40,7 +40,7 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
     ---
 
-    Serve engine identity and attestation data for one vLLM engine.
+    Serve engine identity and attestation data for one vLLM or SGLang engine.
 
 -   [`narwhal-serve`](cli/Serve.md)
 
@@ -80,7 +80,7 @@ These commands add exit codes for specific cases:
 | `narwhal dev init` | `2` | An initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
 | `narwhal-engine prepare` | `2` | Preparation fails. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-engine` | `1` | An output artifact already exists. | [narwhal-engine actions](cli/Engine.md#actions) |
-| `narwhal-check` | `1` | A gate is skipped with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |
+| `narwhal-check` | `1` | `narwhal-check` skips a gate with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |
 | `narwhal diagnostics collect` | `3` | Partial bundle. | [narwhal diagnostics manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status) |
 | `narwhal diagnostics collect` | `4` | I/O failure. | [narwhal diagnostics manifest and exit status](Diagnostic-Bundles.md#manifest-and-exit-status) |
 

@@ -17,9 +17,10 @@ from tools.deployment.deploy_hosts import (
     load_run,
     main,
     prepare,
+    profiling_limits,
 )
 from tools.deployment.host_access import SSH, Host, load_hosts
-from tools.deployment.prepare_host_env import ENGINE_FIELDS
+from tools.deployment.prepare_host_env import engine_fields
 from tools.maintenance.check_publication import private_path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,7 +85,7 @@ class HostDeploymentTests(unittest.TestCase):
             "NARWHAL_DEPLOYMENT_REVISION": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip(),
-            **{f"NARWHAL_{field}": "synthetic-value" for field in ENGINE_FIELDS},
+            **{f"NARWHAL_{field}": "synthetic-value" for field in engine_fields({})},
         }
 
     def inventory(self, path, entries=None):
@@ -160,6 +161,19 @@ class HostDeploymentTests(unittest.TestCase):
                 for role in ("engine-1", "engine-2")
             }
         self.assertEqual(visible, {"engine-1": "0,1", "engine-2": "1,0"})
+
+    def test_profiling_limits_read_each_backend_sequence_limit(self):
+        fleet = {"engines": [{"iid": "n1"}, {"iid": "n2"}]}
+        vllm = {"runtime": {**runtime(), "extra_args": ["--max-num-seqs=12"]}}
+        sglang = {"runtime": {"backend": "sglang", "extra_args": []}}
+        limits = profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
+        self.assertEqual(limits["engines"], {"n1": 12, "n2": 256})
+        sglang["runtime"]["extra_args"] = ["--max-running-requests", "32"]
+        limits = profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
+        self.assertEqual(limits["engines"]["n2"], 32)
+        vllm["runtime"]["extra_args"] = []
+        with self.assertRaisesRegex(ValueError, "engine-1: .* one positive --max-num-seqs"):
+            profiling_limits({"engine-1": vllm, "engine-2": sglang}, fleet)
 
     def test_roles_resolve_to_one_authentication_entry(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -1,15 +1,19 @@
-"""Run the preflight gates against a fleet in order."""
-
 from __future__ import annotations
 
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 from ... import command_results as results
+from ...backends import load as load_backend
 from ...config import FleetConfig
-from ...engines.client import EngineClient
-from ...engines.connector import lookup as lookup_connector
-from ...engines.dialect import lookup as lookup_dialect
+from ...engines.attestation import attested_launches
+from ...engines.client import EngineClient, client_options
+from ...runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
+from ...types import Role
 from .engines import (
     colocated_restart_risk,
     gate_calibration,
@@ -25,6 +29,19 @@ from .report import Report
 from .transfer import gate_consume, gate_produce
 
 
+async def _live_roles(
+    cfg: FleetConfig, live: set[str], switcher: RoleSwitcher
+) -> dict[str, tuple[Role, Mapping[str, Any] | None]]:
+    specs = [spec for spec in cfg.engines if spec.iid in live]
+    launches = await attested_launches(specs, timeout_s=cfg.health_timeout_s)
+    async with httpx.AsyncClient(
+        timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+    ) as control:
+        return await current_roles(
+            switcher, control, {spec.url: launches.get(spec.iid) for spec in specs}
+        )
+
+
 async def run(
     cfg: FleetConfig,
     mesh: bool,
@@ -35,7 +52,6 @@ async def run(
     evidence_out: Path | None = None,
     fleet_path: Path | None = None,
 ) -> int:
-    """Run every preflight gate and return a process exit code."""
     if evidence_out is not None:
         if not mesh or skip_kv or cfg.engine_contract is None or fleet_path is None:
             raise ValueError(
@@ -52,23 +68,14 @@ async def run(
     print(f"fleet: {len(cfg.engines)} engines, model {cfg.model}")
     print(f"slo:   ttft <= {cfg.slo.ttft_s}s, tpot <= {cfg.slo.tpot_s}s")
     rep = report or Report()
-    # Preflight uses the serving timeouts.
-    client = EngineClient(
-        timeout_s=cfg.request_timeout_s,
-        prefill_timeout_s=cfg.prefill_timeout_s,
-        read_timeout_s=cfg.decode_read_timeout_s,
-        max_connections=cfg.max_connections,
-        control_connections=cfg.resolved_control_connections(),
-        pool_timeout_s=cfg.pool_timeout_s,
-        connect_timeout_s=cfg.connect_timeout_s,
-        health_timeout_s=cfg.health_timeout_s,
-        kv=lookup_connector(cfg.connector),
-        dialect=lookup_dialect(cfg.dialect),
-        model=cfg.model,
-        engine_api_key=cfg.resolve_engine_key(),
-    )
+    client = EngineClient(**client_options(cfg))
+    # The gates switch engines to place each pair; a running router keeps the roles it set.
+    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
     try:
         live = await gate_reach(cfg, client, rep)
+        if switcher is not None:
+            roles = await _live_roles(cfg, live, switcher)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
         await gate_calibration(cfg, rep)
@@ -101,7 +108,16 @@ async def run(
                 cfg, store, rep, repeats, fleet_path, fleet_hash, profile_hash
             )
     finally:
-        await client.aclose()
+        try:
+            if switcher is not None and roles:
+                async with httpx.AsyncClient(
+                    timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                ) as control:
+                    await restore_roles(switcher, control, roles)
+        except (httpx.HTTPError, ValueError) as exc:
+            rep.fail(f"role restore: {type(exc).__name__}: {exc}")
+        finally:
+            await client.aclose()
 
     if evidence_out is not None:
         write_directed_evidence(

@@ -10,26 +10,27 @@ Follow [Setting up observability](../../docs/Observability.md) to select listene
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
-The shipped scrape configuration binds one router and one fleet to each Prometheus data source.
+The shipped scrape configuration binds one router to each Prometheus data source and discovers the engines from that router's `/narwhal/targets`.
 
 The dashboard expects these label contracts:
 
 - Router series carry `job="narwhal-router"` and the Prometheus target's `instance`.
-- Engine series carry `job="engines"` and the fleet generator's stable `iid`.
+- Engine series carry `job="engines"` and the router's stable `iid`.
 - vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting`,
   `vllm:kv_cache_usage_perc`, `vllm:prefix_cache_hits_total`,
   `vllm:prefix_cache_queries_total`, `vllm:generation_tokens_total` and
   `vllm:prompt_tokens_by_source_total` or `vllm:prompt_tokens_total` on each
   engine metrics endpoint.
-- Engines that run the vLLM NIXL connector expose
-  `vllm:nixl_num_kv_expired_reqs_total` for **Expired KV by producer**.
+- SGLang exposes `sglang:num_running_reqs`, `sglang:num_queue_reqs`,
+  `sglang:token_usage`, `sglang:cached_tokens_total`, `sglang:prompt_tokens_total`
+  and `sglang:generation_tokens_total` on each engine metrics endpoint.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
 Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
 
 ### Metric boundaries
 
-The headline **Requests** and **Latency** tables, **Dropped requests by reason** and **Failed attempts by reason** sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
+The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
 
 **Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance`, `slo` and `le`. **Request waiting time** uses the same `instance`, `slo` and `le` grouping to calculate seat-time p95, and one queue-wait p95 for each `stage` it selects. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
 
@@ -70,7 +71,9 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+`make observe` builds the staged copy with `narwhal_dashboard` in `tools/observability/artifacts.py`. A `<<name{selector}>>` placeholder becomes the `name` query from each backend's `dashboard_series`, with the selector applied, joined with `or`. `<<backend_badges>>` becomes the icon of each backend. To chart a new engine series, add it to a backend's `dashboard_series`; a panel that queries a name no backend defines is left out.
+
+The staged copy also has the **Fleet control actions** and **Load jobs** annotations from `CONTROL_ANNOTATIONS`, and a **Fleet control** link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 
@@ -93,4 +96,4 @@ Alert rules in `tools/observability/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
-- Target relabelling keeps the `job` and `iid` labels for engine reachability and scoped alert rows.
+- Engine targets carry `job="engines"`, their `iid` and the `backend` label from the router's `/narwhal/targets` for engine reachability, scoped alert rows and the engine table's **Backend** column.

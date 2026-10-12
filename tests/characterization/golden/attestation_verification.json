@@ -1,0 +1,57 @@
+{
+  "attested_limits": {
+    "equals_values": {
+      "kv_lease_s": 30,
+      "sequence_limit": 32
+    },
+    "missing_lease": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    },
+    "no_launch": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    },
+    "other_connector": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    },
+    "separate_values": {
+      "kv_lease_s": 30,
+      "sequence_limit": 64
+    },
+    "unparsable_transfer_config": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    },
+    "zero_lease": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    },
+    "zero_sequences": {
+      "kv_lease_s": null,
+      "sequence_limit": null
+    }
+  },
+  "failures": {
+    "declared_connector_differs": [
+      "contract.connector is 'NixlConnector', expected 'OtherConnector'"
+    ],
+    "declared_engine_version_differs": [
+      "contract.engine_version is '1.0.0', expected '0.0.1'"
+    ],
+    "declared_kv_role_differs": [
+      "contract.kv_role is 'kv_both', expected 'kv_consumer'"
+    ],
+    "declared_transfer_version_differs": [
+      "contract.transfer_version is 'test', expected 'other'"
+    ],
+    "live_version_differs": [
+      "engine version is '1.0.0', the live engine reports '0.0.1'"
+    ],
+    "matching": [],
+    "process_restarted": [
+      "engine process started at 100.0, the live engine reports 101.0"
+    ]
+  }
+}

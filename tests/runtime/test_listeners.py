@@ -1,5 +1,3 @@
-"""Exercise configured listener conflicts with Linux TCP sockets."""
-
 import errno
 import socket
 import unittest
@@ -82,7 +80,7 @@ class ListenerBindTests(unittest.TestCase):
         self.require_ipv6()
         with listener("127.0.0.2") as port:
             with self.assertRaises(OSError) as failure:
-                check_engine_bind("::", port, nixl=True)
+                check_engine_bind("::", port, dual_stack=True)
             self.assertEqual(failure.exception.errno, errno.EADDRINUSE)
 
     def test_localhost_resolves_both_families_for_uvicorn(self):

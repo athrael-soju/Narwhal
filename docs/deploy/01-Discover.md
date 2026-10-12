@@ -1,5 +1,5 @@
 ---
-description: Freeze the deployment inputs and discover the hosts of a Narwhal vLLM fleet.
+description: Freeze the deployment inputs and discover the hosts of a Narwhal fleet.
 ---
 
 # Discover the deployment
@@ -88,7 +88,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS`.
+Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM. On an SGLang `mooncake` engine, it adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, unless `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy` or `--disable-radix-cache`.
 
 Discovery detects convolutional SSM transfer state from any of these fields in `text_config`, or in the root configuration otherwise:
 
@@ -157,15 +157,19 @@ Override the policy in `.env` before discovery:
 
 | Field                                                                                    | Meaning                                                                                                                       |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `NARWHAL_ENGINE_BACKEND`, `NARWHAL_ENGINE_CONNECTOR`                                     | Fleet `engine.backend` (`vllm`, the default, or `sglang`) and `engine.connector`                                              |
+| `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`                                                    | GB of decode CUDA graph memory for each SGLang engine, required with the `mooncake` connector                                 |
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size                                                          |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
-| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default vLLM arguments and holds one `--max-num-seqs` value                                      |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default engine arguments, with one `--max-num-seqs` value on vLLM                                |
 | `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment                                     |
 | `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths |
 | `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds                                                                                      |
 | `NARWHAL_ENGINE_KEY`                                                                     | Engine API key that discovery names in `engine.engine_api_key_env`                                                            |
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
+
+With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The default SGLang arguments set `--context-length` to the maximum context, and the launcher sets `--max-running-requests` to 256 unless `NARWHAL_ENGINE_ARGS` sets a value from 1 to 256. The cache block, execution, maximum sequence and GPU memory settings apply to vLLM only.
 
 ## Access failure handling
 

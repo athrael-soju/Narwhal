@@ -1,5 +1,3 @@
-"""Reactive policy for adjacent splits, with the state that confirms sustained demand."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -16,14 +14,11 @@ Evaluation = tuple[SplitScore, float, float, bool, bool, bool, bool]
 
 
 def outside_tolerance(recent: float, window: float, tolerance: float) -> bool:
-    """Return whether two demands differ by more than `tolerance` times the larger."""
     return abs(recent - window) > tolerance * max(recent, window)
 
 
 @dataclass(frozen=True)
 class ShortView:
-    """Current and adjacent splits scored on demand over the confirmation span."""
-
     demand: Demand
     current: SplitScore
     adjacent: dict[int, SplitScore]
@@ -43,8 +38,6 @@ class Departure:
 
 
 class ReactivePolicy:
-    """Choose one adjacent split while the controller coordinates safety and timing."""
-
     def __init__(self) -> None:
         self.proposal: tuple[int, bool, str] | None = None
         self.confirmations = 0
@@ -59,7 +52,6 @@ class ReactivePolicy:
         self.lead_break_since: float | None = None
 
     def interrupt(self) -> None:
-        """Restart the settled and steady runs while role control is paused."""
         self.settled_since = self.balanced_since = None
 
     def step(
@@ -69,7 +61,6 @@ class ReactivePolicy:
         prefill_recovery: PrefillRecovery | None = None,
         advance_cadence: bool = True,
     ) -> Instance | None:
-        """Evaluate one adjacent role change on the cadence or an urgent wake."""
         now = controller._clock()
         adjusted = controller.restore_floor()
         if adjusted:
@@ -321,12 +312,21 @@ class ReactivePolicy:
                     or candidate.prefill < current_p
                 ),
                 candidate.decode_profile_covered,
-                (
-                    base is current
-                    and candidate.prefill > current_p
-                    and max(candidate.tpot_ratio, candidate.decode_queue_ratio)
-                    > controller.scheduler.th.shrink
-                    and (recovery_prefill >= controller.scheduler.th.expand or urgent_ready)
+                base is current
+                and (
+                    (
+                        candidate.prefill > current_p
+                        and max(candidate.tpot_ratio, candidate.decode_queue_ratio)
+                        > controller.scheduler.th.shrink
+                        and (recovery_prefill >= controller.scheduler.th.expand or urgent_ready)
+                    )
+                    or (
+                        departure is None
+                        and candidate.prefill < current_p
+                        and candidate.ttft_ratio > controller.scheduler.th.shrink
+                        and max(current.tpot_ratio, current.decode_queue_ratio)
+                        >= controller.scheduler.th.expand
+                    )
                 ),
                 controller.within_floors(candidate.prefill),
             )
@@ -446,7 +446,11 @@ class ReactivePolicy:
 
         eligible = [row for row in evaluations if admitted(row)]
         if not eligible:
-            self.proposal, self.confirmations = None, 0
+            # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
+            if controller.scheduler.held_for_switch():
+                controller.scheduler.renew_draining_holds()
+            else:
+                self.proposal, self.confirmations = None, 0
             held: Evaluation = (
                 min(evaluations, key=lambda row: (row[0].objective, row[0].prefill))
                 if evaluations
@@ -553,6 +557,9 @@ class ReactivePolicy:
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
+        if moved is None and controller.scheduler.held_for_switch():
+            # The next pass with this proposal moves the donor once it is idle.
+            self.proposal, self.confirmations = proposal, confirmations
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
@@ -574,10 +581,6 @@ class ReactivePolicy:
         estimates: OutputEstimates,
         correction: float,
     ) -> ShortView | None:
-        """Score the current and adjacent splits on demand over `short_s` seconds.
-
-        Residency covers the latest step.
-        """
         arrivals = controller.demand.arrival_count(now - short_s)
         if arrivals < controller.min_arrivals:
             return None
@@ -621,10 +624,6 @@ class ReactivePolicy:
 
     @staticmethod
     def _reverses(controller: ReactiveController, now: float, heading: int) -> bool:
-        """Return whether reactive moves in the reversal lookback all oppose `heading`.
-
-        True needs at least one such move, the latest at least one evidence span old.
-        """
         span_s = controller.safety.evidence_span_s
         target = Role.PREFILL if heading > 0 else Role.DECODE
         moves = [
@@ -649,9 +648,7 @@ class ReactivePolicy:
         *,
         confirmation_s: float,
     ) -> None:
-        """Track the settled run, open a departure when demand shifts, and end its lead.
-
-        After the first move, the lead ends when the shift ends or the best split points back
+        """After the first move, the lead ends when the shift ends or the best split points back
         for one controller step.
         """
         margin = controller.movement_margin

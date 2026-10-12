@@ -159,6 +159,25 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
         self.assertEqual(len(fleet.scheduler.roles.flips), 1)
 
+    def test_decode_recovers_above_prefill_expand_when_decode_is_over_budget(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2", "e3"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        # At 4P2D decode runs at 1.5; at 3P3D prefill projects 1.1 and decode 1.0.
+        fleet.pressure = {Role.PREFILL: 3.3, Role.DECODE: 3.0}
+        rows = []
+        for _ in range(6):
+            fleet.step()
+            rows.append(dict(fleet.scheduler.roles._last_decision))
+        applied = [row for row in rows if row["result"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        row = applied[0]
+        self.assertEqual((row["current_prefill"], row["prefill"]), (4, 3))
+        self.assertEqual(row["eligibility_rule"], "mixed_pressure")
+        self.assertGreater(row["projected_ttft_ratio"], fleet.scheduler.th.expand)
+        self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 3)
+        ControllerDecisionOut.model_validate(row)
+
     def test_configured_confirmation_count_and_transient_reset(self) -> None:
         fleet = self.fleet
         fleet.controller.confirmations_needed = 4
@@ -170,6 +189,29 @@ class MixedPressureTests(unittest.TestCase):
         for _ in range(3):
             self.assertIsNone(fleet.step())
         self.assertIsNotNone(fleet.step())
+
+    def test_a_draining_switch_donor_keeps_the_confirmed_move(self) -> None:
+        fleet = self.fleet
+        fleet.scheduler.switch_requires_idle = True
+        decodes = fleet.monitor.pool(Role.DECODE)
+        for index, inst in enumerate(decodes):
+            inst.decode[f"r{index}"] = Request(f"r{index}", 100)
+        # Scoring a move while it waits for confirmation holds no engine.
+        self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+        self.assertIsNone(fleet.confirm())
+        self.assertIn("holding", fleet.scheduler.roles._last_decision["reason"])
+        (held,) = fleet.scheduler.held_for_switch()
+        # Passes without an eligible move keep the proposal and the hold while the donor drains.
+        fleet.pressure[Role.PREFILL] = 0.9
+        for _ in range(4):
+            self.assertIsNone(fleet.step())
+        self.assertEqual(fleet.scheduler.held_for_switch(), {held})
+        fleet.pressure[Role.PREFILL] = 6.0
+        fleet.monitor.instances[held].decode.clear()
+        moved = fleet.step()
+        self.assertIsNotNone(moved)
+        self.assertEqual(moved.iid, held)
 
     def test_sustained_mixed_pressure_converges_without_oscillation(self) -> None:
         fleet = self.fleet
@@ -485,6 +527,49 @@ class MixedPressureTests(unittest.TestCase):
             fleet.controller.safety.consolidation_evidence_snapshot()
             rebuild.assert_called_once()
 
+    def test_state_snapshots_capture_evidence_once_per_demand_bucket(self) -> None:
+        fleet = self.fleet
+        safety = fleet.controller.safety
+        with patch.object(safety, "capture", wraps=safety.capture) as capture:
+            first = safety.consolidation_evidence_snapshot()
+            self.assertEqual(safety.consolidation_evidence_snapshot(), first)
+            self.assertEqual(capture.call_count, 1)
+            safety.note_risk_event("first_token_timeout", at=fleet.now)
+            self.assertEqual(
+                safety.consolidation_evidence_snapshot()["risk_events"]["first_token_timeout"], 1
+            )
+            self.assertEqual(capture.call_count, 2)
+            fleet.now += fleet.controller.demand.arrivals.bucket_s
+            safety.consolidation_evidence_snapshot()
+            self.assertEqual(capture.call_count, 3)
+
+    def test_demand_prices_each_arrival_shape_once_per_profile_set(self) -> None:
+        fleet = self.fleet
+        profiles = fleet.profiles.all_profiles()
+        demand = fleet.controller.demand
+        for index in range(20):
+            demand.saw_arrival(400 + index, wanted_len=200, at=fleet.now)
+
+        def price(prefill_iids=None) -> float:
+            return demand.price_profiles(
+                fleet.now, window_s=60.0, step_s=1.0, profiles=profiles, prefill_iids=prefill_iids
+            ).prefill_engines
+
+        with patch.object(
+            type(demand), "_arrival_price", wraps=type(demand)._arrival_price
+        ) as arrival_price:
+            first = price()
+            shapes = arrival_price.call_count
+            self.assertGreaterEqual(shapes, 20)
+            self.assertEqual(price(), first)
+            self.assertEqual(arrival_price.call_count, shapes)
+            price({profiles[0].iid})
+            self.assertEqual(arrival_price.call_count, 2 * shapes)
+            # Split scoring alternates prefill pools; each keeps its prices.
+            self.assertEqual(price(), first)
+            price({profiles[0].iid})
+            self.assertEqual(arrival_price.call_count, 2 * shapes)
+
     def test_missing_fleet_profile_blocks_mixed_pressure(self) -> None:
         fleet = self.fleet
         fleet.profiles._by_id.pop("e5")
@@ -623,6 +708,24 @@ class MixedPressureTests(unittest.TestCase):
         self.assertTrue(shrink_decode.decode_profile_covered)
         self.assertGreater(shrink_decode.decode_queue_ratio, expand_decode.decode_queue_ratio)
         self.assertEqual(shrink_decode.pending_decode_requests, 100)
+
+    def test_a_measured_handoff_delay_is_decode_pressure_scaled_by_decode_count(self) -> None:
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.monitor.instances["e2"].role = Role.PREFILL
+        engines = len(fleet.monitor.instances)
+        decode = len(fleet.monitor.pool(Role.DECODE))
+        with patch.object(fleet.scheduler, "handoff_s", return_value=fleet.scheduler.slo.ttft_s):
+            snapshot = fleet.controller.scorer.capture(
+                fleet.now,
+                Demand(0.1, 0.1, 30, 0),
+                utilization=0.8,
+                observed_load=(0.1, 0.1),
+            )
+        for prefill in (1, 2, 3):
+            self.assertAlmostEqual(
+                snapshot.score(prefill).decode_queue_ratio, decode / (engines - prefill)
+            )
 
     def test_idle_candidate_decoder_does_not_create_fractional_batch(self) -> None:
         fleet = self.fleet

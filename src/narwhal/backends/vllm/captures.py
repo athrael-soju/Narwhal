@@ -1,5 +1,3 @@
-"""Capture model dimensions, cache layouts, cache registration and handshake policy."""
-
 from __future__ import annotations
 
 import hashlib
@@ -7,10 +5,11 @@ import json
 import re
 from pathlib import Path
 
-from .check import require_checked
-from .docker import docker, run_runtime_script
-from .plan import container_options
-from .runtime import LAUNCHER, digest, write_private
+from ...deployment.launch_engine.check import require_checked
+from ...deployment.launch_engine.docker import docker, run_runtime_script
+from ...deployment.launch_engine.plan import container_options
+from ...deployment.launch_engine.runtime import digest, write_private
+from .runtime import LAUNCHER
 
 
 def model_dimensions(run: Path, plan: dict) -> None:
@@ -53,7 +52,6 @@ def model_dimensions(run: Path, plan: dict) -> None:
 
 
 def registration_layout(run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
-    """Map an explicitly resolved runtime layout to the contract's block grouping flag."""
     require_checked(run, plan)
     destination = run / "cache-registration.json"
     if destination.exists():
@@ -122,7 +120,6 @@ print('NARWHAL_CACHE_REGISTRATION=' + json.dumps({
 
 
 def handshake_policy(run: Path, plan: dict) -> None:
-    """Retain the installed worker's default and effective compatibility-check setting."""
     require_checked(run, plan)
     destination = run / "handshake-policy.json"
     if destination.exists():
@@ -234,7 +231,6 @@ def measure_cache(run: Path, plan: dict) -> None:
 
 
 def capture_cache(run: Path, plan: dict) -> None:
-    """Retain the cache pages emitted by this live serving process."""
     require_checked(run, plan)
     destination = run / "cache-layout.json"
     pending = run / "cache-layout.pending.json"

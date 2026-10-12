@@ -1,5 +1,3 @@
-"""SLO-aware request placement, pricing, availability and engine health."""
-
 from __future__ import annotations
 
 import logging
@@ -23,8 +21,6 @@ log = logging.getLogger("narwhal.scheduler")
 
 
 class GlobalScheduler:
-    """Request dispatch and instance flipping over a stateless pool."""
-
     def __init__(
         self,
         monitor: InstanceMonitor,
@@ -57,6 +53,18 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
+        # Set when engines change roles on the engine side: a donor must be idle, and the
+        # callback applies each change.
+        self.switch_requires_idle = False
+        self.on_flip: Callable[[Instance, Role], None] | None = None
+        # A busy donor held out of new placements until it is idle for an engine-side switch,
+        # with when the controller last asked for the switch. The hold lapses after
+        # `switch_hold_s` without a request.
+        self.switch_holds: dict[str, float] = {}
+        self.switch_hold_s = 15.0
+        # Whether a decode engine must refresh before it takes a handoff from a producer, by
+        # engine ID.
+        self.stale_handoff: Callable[[str, str], bool] | None = None
         # Refreshes a request's cache evidence older than the given seconds from current residency.
         self.recheck_cache_evidence: Callable[[Request, float], None] | None = None
         self.roles = RoleChanges(self, flip_history)
@@ -87,7 +95,6 @@ class GlobalScheduler:
 
     @property
     def pinned(self) -> frozenset[str]:
-        """Engines that take only their configured role's legs."""
         return self.availability.pinned
 
     @pinned.setter
@@ -96,94 +103,75 @@ class GlobalScheduler:
 
     @property
     def ejected(self) -> dict[str, float]:
-        """Ejected endpoints and their latest probe timestamps."""
+        """Latest probe time by ejected endpoint."""
         return self.availability.ejected
 
     @property
     def draining(self) -> set[str]:
-        """Operator drains that remain held out across recovery probes."""
         return self.availability.draining
 
     @property
     def quarantined(self) -> dict[str, float]:
-        """Temporary request-path hold-outs keyed by expiry."""
+        """Hold expiry by endpoint; infinite for an inference hold."""
         return self.availability.quarantined
 
     @property
     def liveness_misses(self) -> dict[str, int]:
-        """Consecutive liveness-sweep misses for each endpoint."""
         return self.availability.liveness_misses
 
     @property
     def verifying(self) -> set[tuple[str, str]]:
-        """Endpoint and evidence-kind pairs with a probe in flight."""
         return self.availability.verifying
 
     @property
     def inference_suspects(self) -> set[str]:
-        """Endpoints awaiting inference evidence before readmission."""
         return self.availability.inference_suspects
 
     def record_failure(self, iid: str, klass: str = LEG_CONNECTION) -> str | None:
-        """Record a failed leg and apply its scoped breaker verdict."""
         return self.availability.record_failure(iid, klass)
 
     def quarantine(self, iid: str, seconds: float) -> bool:
-        """Hold a failed endpoint out while preserving one aggregate candidate."""
         return self.availability.quarantine(iid, seconds)
 
     def quarantine_list(self) -> list[str]:
-        """Return the quarantine after expiring elapsed hold-outs."""
         return self.availability.quarantine_list()
 
     def eject(self, iid: str, cause: str) -> bool:
-        """Eject an endpoint for `cause` and update live floors."""
         return self.availability.eject(iid, cause)
 
     def release_hold(self, iid: str, cause: str) -> bool:
-        """Return a held endpoint to placement, recording why its hold ended."""
         return self.availability.release_hold(iid, cause)
 
     def holds_snapshot(self) -> dict[str, list[dict[str, Any]]]:
-        """Report timed quarantines and inference holds separately."""
         return self.availability.holds_snapshot()
 
     def drain(self, iid: str) -> None:
-        """Remove a configured endpoint from new request placements."""
         self.availability.drain(iid)
 
     def finish_drain(self, iid: str) -> None:
-        """Readmit an endpoint whose health and generation were validated."""
         self.availability.finish_drain(iid)
 
     def record_answer(self, iid: str, evidence: str, *, via: str | None = None) -> None:
-        """Clear only the breaker classes established by the answer evidence."""
         self.availability.record_answer(iid, evidence, via=via)
 
     def breaker_snapshot(self) -> dict[str, Any]:
-        """Report every breaker class and pending verification probe."""
         return self.availability.breaker_snapshot()
 
     def sweep_due(self, after_s: float) -> bool:
-        """Advance the liveness sweep timestamp when its interval expires."""
         return self.availability.sweep_due(after_s)
 
     def probe_due(self, after_s: float) -> list[str]:
-        """Return ejected endpoints whose recovery probe is due."""
         return self.availability.probe_due(after_s)
 
     def live_instances(
         self, role: Role | None = None, *, exclude: set[str] | frozenset[str] = frozenset()
     ) -> list[Instance]:
-        """Return endpoints eligible for new work and role changes."""
         return self.availability.live_instances(role, exclude=exclude)
 
     def role_pool(self, role: Role, instances: list[Instance]) -> list[Instance]:
-        """Return the engines in `instances` that place `role`'s legs."""
         return self.availability.role_pool(role, instances)
 
     def role_covered_without(self, iid: str) -> bool:
-        """Return whether another live engine places every role that `iid` places."""
         return self.availability.role_covered_without(iid)
 
     def cost(
@@ -194,10 +182,6 @@ class GlobalScheduler:
         warm: bool = True,
         probation: Collection[str] | None = None,
     ) -> Cost:
-        """Price a request with the current health and prefix-reuse evidence.
-
-        `probation` is the health tracker's probation set, read from it when None.
-        """
         return costs.cost(
             request,
             inst,
@@ -218,7 +202,6 @@ class GlobalScheduler:
         *,
         probation: Collection[str] | None = None,
     ) -> float:
-        """Price a decode leg on `iid` beside `requests` residents holding `tokens` tokens."""
         return costs.decode_price(
             request,
             iid,
@@ -232,87 +215,69 @@ class GlobalScheduler:
         )
 
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
-        """Compare the placement price with its phase latency budget."""
         return costs.meets_slo(request, cost, slo=self.slo, ttft_margin=ttft_margin)
 
+    def handoff_s(self) -> float:
+        delays = [self.monitor.handoff_delay(inst.iid) for inst in self.monitor.pool(Role.DECODE)]
+        return sum(delays) / len(delays) if delays else 0.0
+
     def prefill_load(self, inst: Instance) -> float:
-        """Return prefill work as a ratio to the TTFT target."""
         return costs.prefill_load(inst, monitor=self.monitor, profiles=self.profiles, slo=self.slo)
 
     def decode_load(self, inst: Instance) -> float:
-        """Return observed decode latency above the profiled idle floor."""
         return costs.decode_load(inst, monitor=self.monitor, profiles=self.profiles, slo=self.slo)
 
     @property
     def outcome_bucket_s(self) -> float:
-        """Width of one completed-outcome evidence bucket."""
         return self.outcomes.bucket_s
 
     @property
     def outcome_retained_s(self) -> float:
-        """Duration retained for SLO outcome diagnostics."""
         return self.outcomes.retained_s
 
     def note_outcome(self, ttft_ok: bool, tpot_ok: bool, *, at: float | None = None) -> None:
-        """Record one completed request in the attainment evidence window."""
         self.outcomes.note_outcome(ttft_ok, tpot_ok, at=at)
 
     def outcome_counts(self, since_s: float) -> tuple[int, int, int]:
-        """Count completed SLO outcomes since the requested time."""
         return self.outcomes.outcome_counts(since_s)
 
     def outcome_summary(self) -> dict[str, int | float]:
-        """Report retained attainment evidence and pruning counts."""
         return self.outcomes.outcome_summary()
 
     def refresh_floor_state(self) -> None:
-        """Update prefill-floor breach edges using current availability."""
         self.prefill_floor.minimum = self.min_prefill
         self.prefill_floor.on_event = self.on_floor_event
         self.prefill_floor.refresh()
 
     def floor_snapshot(self) -> dict:
-        """Report the live prefill-floor breach and elapsed duration."""
         return self.prefill_floor.snapshot()
 
     def prefill_live(self) -> int:
-        """Live prefill count used by the floor guard."""
         return len(self.live_instances(Role.PREFILL))
 
     def decode_live(self) -> int:
-        """Live decode count used by the floor guard."""
         return len(self.live_instances(Role.DECODE))
 
     def _prefill_candidates(self) -> list[Instance]:
-        """Return live prefill candidates, falling back to all live engines."""
         live = self.live_instances()
         return [i for i in live if i.role is Role.PREFILL] or live
 
     def prefill_admission_price(self, request: Request, inst: Instance) -> float:
-        """Return the prefill price for predictive admission.
-
-        Without live prefill engines, a busy decode engine prices at infinity.
-        """
         if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
             return float("inf")
         return self.cost(request, inst)[1]
 
     def role_placeable(self, role: Role) -> bool:
-        """Return whether a live engine of `role`, or a live unpinned engine, can take a leg."""
         return bool(self.role_pool(role, self.live_instances()))
 
     def prefill_ready_s(self, request: Request, inst: Instance) -> float:
-        """Return seconds until `request` finishes prefill behind `inst`'s resident queue."""
         profile = self.profiles.get(inst.iid)
         if profile is None:
             return 0.0
         return resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
 
     def cheapest_own_prefill(self, request: Request) -> float | None:
-        """Return the request's cheapest isolated prefill cost.
-
-        Resident queues and probation penalties are excluded.
-        """
+        """Resident queues and probation penalties are excluded."""
         floors = [
             prefill_seconds(profile, request)
             for inst in self._prefill_candidates()
@@ -321,10 +286,7 @@ class GlobalScheduler:
         return min(floors) if floors else None
 
     def pool_load(self, role: Role) -> float:
-        """Return mean load over engines currently doing a phase's work.
-
-        Resident work remains in phase feedback after an engine changes role.
-        """
+        """Resident work remains in phase feedback after an engine changes role."""
         doing = [
             instance
             for instance in self.live_instances()
@@ -335,20 +297,35 @@ class GlobalScheduler:
         return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
 
     def decode_exclusion(self, request: Request, exclude: Collection[str] = ()) -> set[str]:
-        """Return the request's producer when another engine can take its decode leg.
-
-        A decode leg on its own producer reuses that engine's prefix cache and never pulls
-        the KV handoff, so the producer holds the blocks until its lease expires. The
-        producer takes the decode leg only when the decode pool holds no other engine.
+        """A decode leg on its own producer reuses that engine's prefix cache and never pulls
+        the KV handoff, so the producer holds the blocks until its lease expires.
         """
         producer = request.prefill_instance
         if request.phase is not Phase.DECODE or producer is None:
             return set()
         pool = self.role_pool(Role.DECODE, self.live_instances(exclude=set(exclude)))
-        return {producer} if any(inst.iid != producer for inst in pool) else set()
+        excluded = {producer} if any(inst.iid != producer for inst in pool) else set()
+        stale = self.stale_handoff
+        if stale is not None:
+            held = {inst.iid for inst in pool if stale(producer, inst.iid)}
+            if any(inst.iid not in excluded | held for inst in pool):
+                excluded |= held
+        return excluded
+
+    def has_fresh_consumer(self, producer: str, decodes: list[Instance]) -> bool:
+        stale = self.stale_handoff
+        if stale is None:
+            return True
+        return any(d.iid != producer and not stale(producer, d.iid) for d in decodes)
+
+    def _fresh_producers(self, candidates: list[Instance]) -> list[Instance]:
+        if self.stale_handoff is None:
+            return candidates
+        decodes = self.role_pool(Role.DECODE, self.live_instances())
+        fresh = [inst for inst in candidates if self.has_fresh_consumer(inst.iid, decodes)]
+        return fresh or candidates
 
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
-        """Place one phase without changing roles, excluding failed endpoints."""
         exclude = set(exclude or ())
         exclude |= self.decode_exclusion(request, exclude)
         instances = self.live_instances(exclude=exclude)
@@ -360,7 +337,11 @@ class GlobalScheduler:
         candidates = self.role_pool(want, instances)
         if not candidates:
             raise RuntimeError("no schedulable instances for the pinned roles")
+        held = self.held_for_switch()
+        if held and any(inst.iid not in held for inst in candidates):
+            candidates = [inst for inst in candidates if inst.iid not in held]
         if request.phase is Phase.PREFILL:
+            candidates = self._fresh_producers(candidates)
             request.cache_placement = None
             self.recheck_evidence(request, 0.0)
         probation = self.health.probation_set() if self.health is not None else None
@@ -376,8 +357,24 @@ class GlobalScheduler:
             )
         return chosen
 
+    def hold_for_switch(self, iid: str) -> None:
+        self.switch_holds = {iid: self._clock()}
+
+    def renew_draining_holds(self) -> None:
+        now = self._clock()
+        for iid in self.held_for_switch():
+            inst = self.monitor.instances.get(iid)
+            if inst is not None and (inst.prefill or inst.decode):
+                self.switch_holds[iid] = now
+
+    def held_for_switch(self) -> set[str]:
+        now = self._clock()
+        self.switch_holds = {
+            iid: at for iid, at in self.switch_holds.items() if now - at <= self.switch_hold_s
+        }
+        return set(self.switch_holds)
+
     def recheck_evidence(self, request: Request, fresh_s: float) -> None:
-        """Refresh a prefill request's cache evidence older than `fresh_s` seconds."""
         if (
             request.phase is Phase.PREFILL
             and request.cached_tokens
@@ -388,7 +385,6 @@ class GlobalScheduler:
     def _cheapest(
         self, request: Request, candidates: list[Instance], prices: dict[str, Cost]
     ) -> tuple[Instance, bool]:
-        """Return the cheapest candidate within the SLO, else the cheapest, and whether it fits."""
         eligible = [i for i in candidates if self.meets_slo(request, prices[i.iid])]
         return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
 
@@ -400,7 +396,6 @@ class GlobalScheduler:
         prices: dict[str, Cost],
         probation: Collection[str] | None,
     ) -> dict[str, Any] | None:
-        """Return cache-evidence pricing details for the chosen prefill engine."""
         profile = self.profiles.get(chosen.iid)
         if profile is None:
             return None
@@ -432,7 +427,6 @@ class GlobalScheduler:
         return self._cheapest(request, candidates, cold)[0].iid
 
     def health_pass(self) -> None:
-        """Sample live engines and apply drift verdicts."""
         if self.health is None:
             return
         for inst in self.monitor.instances.values():
@@ -441,9 +435,8 @@ class GlobalScheduler:
             if not self.monitor.decode_profile_eligible(inst.iid):
                 self.health.pause_for_prefill(inst.iid)
                 continue
-            observed = max(
-                self.monitor.current_token_interval(inst.iid),
-                self.monitor.stalled_gap(inst.iid),
+            observed = self.monitor.current_token_interval(inst.iid) or self.monitor.stalled_gap(
+                inst.iid
             )
             profile = self.profiles.get(inst.iid)
             if profile is None:
@@ -468,7 +461,6 @@ class GlobalScheduler:
 
 
 def _cached_on(iid: str, request: Request, residents: Iterable[Request]) -> bool:
-    """Return whether `request` or a resident holds positive cache evidence for `iid`."""
     return request.cached_tokens.get(iid, 0) > 0 or any(
         r.cached_tokens.get(iid, 0) > 0 for r in residents
     )

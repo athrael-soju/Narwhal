@@ -1,9 +1,8 @@
-"""Router construction, request admission, and live state."""
-
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -12,12 +11,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...contracts import STATE, versioned
-from ...engines.attestation import attested_kv_lease, attested_sequence_limit
-from ...engines.client import EngineClient
-from ...engines.connector import lookup as lookup_connector
-from ...engines.dialect import lookup as lookup_dialect
+from ...engines.attestation import attested_launch
+from ...engines.client import EngineClient, client_options
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
@@ -27,7 +25,9 @@ from ...runtime.lifecycle.manager import LifecycleManager
 from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
+from ...runtime.role_switch import engine_side
 from ...runtime.standby import ready as router_ready
+from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
 from ...scheduling.health import DriftTracker
 from ...scheduling.monitor import InstanceMonitor
@@ -63,10 +63,12 @@ from .verification import SuspectVerifier
 if TYPE_CHECKING:
     from ...runtime.lease import FileLease
 
+log = logging.getLogger("narwhal.router")
+# An engine-side switch to decode captures decode graphs, which takes seconds.
+ROLE_SWITCH_TIMEOUT_S = 60.0
+
 
 class NarwhalRouter:
-    """Serve split requests against one configured fleet."""
-
     def __init__(
         self,
         cfg: FleetConfig,
@@ -170,24 +172,22 @@ class NarwhalRouter:
             )
         self.lifecycle_transport = transport
         self.residency_client = httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport)
-        self.engines = EngineClient(
-            timeout_s=cfg.request_timeout_s,
-            prefill_timeout_s=cfg.prefill_timeout_s,
-            read_timeout_s=cfg.decode_read_timeout_s,
-            max_connections=cfg.max_connections,
-            control_connections=cfg.resolved_control_connections(),
-            pool_timeout_s=cfg.pool_timeout_s,
-            connect_timeout_s=cfg.connect_timeout_s,
-            health_timeout_s=cfg.health_timeout_s,
-            transport=transport,
-            dial=dial,
-            kv=lookup_connector(cfg.connector),
-            dialect=lookup_dialect(cfg.dialect),
-            model=cfg.model,
-            engine_api_key=cfg.resolve_engine_key(),
-        )
+        self.backend = load_backend(cfg.backend)
+        self.engines = EngineClient(**client_options(cfg), transport=transport, dial=dial)
         self.verifier = SuspectVerifier(self)
-        self.peer_release = PeerRelease(self._clock)
+        self.peer_release = PeerRelease(self._clock, self.backend.fabric)
+        self.transfer_refresh = TransferRefresh()
+        switcher = self.backend.role_switcher(cfg.connector)
+        # A router-side switch lets any engine serve either leg; otherwise each serves its role.
+        self.role_switch = engine_side(switcher)
+        self.role_switches: set[asyncio.Task[None]] = set()
+        self.scheduler.availability.roles_bound = switcher is None or switcher.requires_idle
+        if switcher is None:
+            self.scheduler.pinned = frozenset(spec.iid for spec in cfg.engines)
+        elif self.role_switch is not None:
+            self.scheduler.switch_requires_idle = True
+            self.scheduler.on_flip = self._begin_switch
+            self.scheduler.stale_handoff = self.stale_handoff
         # The journal writes this into its run metadata when it opens.
         journal.extra = {
             "token_accounting": self._token_accounting(),
@@ -209,10 +209,11 @@ class NarwhalRouter:
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
         self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
-        # Engine ID to the `--max-num-seqs` its verified attestation reports.
+        # Engine ID to the sequence limit, the KV producer lease in seconds and the launch
+        # record from its verified attestation.
         self.sequence_limits: dict[str, int] = {}
-        # Engine ID to the NIXL producer lease in seconds from its verified attestation.
         self.kv_leases: dict[str, int] = {}
+        self.launches: dict[str, dict[str, Any]] = {}
         self.unsized_offered = 0
         self.expired = 0
         # Outcome counts by reason for each counted terminal state.
@@ -245,6 +246,7 @@ class NarwhalRouter:
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
         )
+        self.scheduler.switch_hold_s = 3 * cfg.reactive_step_s
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](
@@ -270,7 +272,6 @@ class NarwhalRouter:
 
     @property
     def failover_blocked(self) -> str:
-        """Why a lost or unclaimed lease fences prefill placement, empty while serving."""
         return self._failover_blocked
 
     @failover_blocked.setter
@@ -281,7 +282,6 @@ class NarwhalRouter:
 
     @property
     def lifecycle_blocked(self) -> str:
-        """The whole-wave hold reason while a lifecycle hold withdraws readiness."""
         return self._lifecycle_blocked
 
     @lifecycle_blocked.setter
@@ -291,12 +291,10 @@ class NarwhalRouter:
             self.wake_waiters()
 
     def wake_waiters(self) -> None:
-        """Wake every queued request to recheck its hold, as when a hold begins."""
         self.admission_queue.wake_all()
         self.dispatcher.wake_all()
 
     def _holds(self) -> dict[str, list[dict[str, Any]]]:
-        """Return current holds by kind, with each inference hold's recorded producers."""
         holds = self.scheduler.holds_snapshot()
         for row in holds["inference"]:
             row["recorded_producers"] = sorted(
@@ -306,22 +304,72 @@ class NarwhalRouter:
 
     @property
     def monitoring_degraded(self) -> str:
-        """`<class>:<stage>` while repeated failed passes fence admissions."""
         return self.monitoring.degraded
 
     def profile_set_diff(self) -> tuple[list[str], list[str]]:
-        """Return (missing, extra) engine IDs between the fleet and profile store."""
         return self.profiles.engine_set_diff(self.monitor.instances)
 
     def _admission_mode(self) -> dict[str, Any]:
-        """Return the admission mode and the TTFT budget margin it applies."""
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}
 
+    def _begin_switch(self, inst: Instance, role: Role) -> None:
+        self.scheduler.availability.switching.add(inst.iid)
+        task = asyncio.get_running_loop().create_task(self._apply_switch(inst.iid, role))
+        self.role_switches.add(task)
+        task.add_done_callback(self.role_switches.discard)
+
+    async def _apply_switch(self, iid: str, role: Role) -> None:
+        error = await self.switch_role(iid, role)
+        if error is not None:
+            log.warning("role switch of %s to %s failed: %s", iid, role.value, error)
+            self.scheduler.eject(iid, "role_switch")
+
+    async def switch_role(self, iid: str, role: Role) -> str | None:
+        return await self._engine_side(iid, role, refresh=False)
+
+    async def resume_role(self, iid: str) -> str | None:
+        return await self.switch_role(iid, self.monitor.instances[iid].role)
+
+    async def refresh_transfer_state(self, iid: str) -> str | None:
+        return await self._engine_side(iid, self.monitor.instances[iid].role, refresh=True)
+
+    async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:
+        switcher = self.role_switch
+        if switcher is None:
+            return None
+        self.scheduler.availability.switching.add(iid)
+        try:
+            async with httpx.AsyncClient(
+                timeout=ROLE_SWITCH_TIMEOUT_S,
+                headers=self.cfg.engine_headers(),
+                transport=self.lifecycle_transport,
+            ) as client:
+                change = switcher.refresh if refresh else switcher.switch
+                await change(client, self.monitor.instances[iid].url, role, self.launches.get(iid))
+        except (httpx.HTTPError, ValueError) as exc:
+            return f"{type(exc).__name__}: {exc}"
+        finally:
+            self.scheduler.availability.switching.discard(iid)
+            self.scheduler.refresh_floor_state()
+        return None
+
+    def stale_handoff(self, producer: str, consumer: str) -> bool:
+        switcher, instances = self.role_switch, self.monitor.instances
+        return switcher is not None and switcher.stale_handoff(
+            instances[producer].url, instances[consumer].url
+        )
+
+    def note_handoff(self, producer: str, consumer: str) -> None:
+        if self.role_switch is not None:
+            instances = self.monitor.instances
+            self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
+
     def attested(self, iid: str, payload: Any) -> None:
-        """Record the sequence limit and KV lease from an engine's verified attestation."""
+        identity = self.backend.identity
+        self.launches[iid] = attested_launch(payload)
         for values, value in (
-            (self.sequence_limits, attested_sequence_limit(payload)),
-            (self.kv_leases, attested_kv_lease(payload)),
+            (self.sequence_limits, identity.sequence_limit(payload)),
+            (self.kv_leases, identity.kv_lease(payload)),
         ):
             if value is None:
                 values.pop(iid, None)
@@ -329,7 +377,6 @@ class NarwhalRouter:
                 values[iid] = value
 
     def _token_accounting(self) -> str:
-        """Return the decode token-accounting mode the fleet's dialect guarantees."""
         return "token_ids" if self.engines.dialect.token_ids else "unavailable"
 
     async def serve(
@@ -341,7 +388,6 @@ class NarwhalRouter:
         arrived: float | None = None,
         lifecycle: RequestLifecycle | None = None,
     ) -> StreamingResponse | JSONResponse:
-        """Own admission, deadline and terminal accounting for one offered request."""
         state = lifecycle or RequestLifecycle.offered(self, headers, arrived=arrived)
         rid, arrived = state.rid, state.arrived
         req = state.request
@@ -429,7 +475,6 @@ class NarwhalRouter:
         return response
 
     def _release_seat(self, rid: str) -> None:
-        """Release admission capacity and measure its occupancy."""
         admitted_at = self._seat_since.pop(rid, None)
         if admitted_at is not None:
             self.inflight -= 1
@@ -437,7 +482,6 @@ class NarwhalRouter:
             self.admission_queue.notify()
 
     def state(self) -> dict[str, Any]:
-        """Return the live state exposed by `/narwhal/state`."""
         out = {
             "journal_run": self.journal.run,
             "served": self.served,

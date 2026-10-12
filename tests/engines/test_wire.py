@@ -1,23 +1,18 @@
-"""Check the engine data client against scripted engines on real sockets."""
-
 import asyncio
 import json
 import os
 import resource
 import socket
 import unittest
-from unittest.mock import patch
 
 import httpx
 
-from narwhal.engines import wire
 from narwhal.engines.client import leg_failure_class
 from narwhal.engines.wire import WireClient
 from narwhal.types import LEG_CONNECTION, LEG_TIMEOUT
 
 
 def chunked(*parts: bytes) -> bytes:
-    """Chunked transfer encoding of `parts`, then the terminal chunk."""
     return b"".join(b"%x\r\n%s\r\n" % (len(part), part) for part in parts) + b"0\r\n\r\n"
 
 
@@ -29,11 +24,6 @@ def head(status=200, **headers) -> bytes:
 
 
 class ScriptedEngine:
-    """Each connection reads one request per script and plays the script's steps.
-
-    A step is bytes to send, a float to sleep, or None to close the connection.
-    """
-
     def __init__(self, *scripts):
         self.scripts = list(scripts)
         self.connections = 0
@@ -89,6 +79,7 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
             "max_keepalive": 1,
             "connect_timeout_s": 1.0,
             "pool_timeout_s": 1.0,
+            "keepalive_expiry_s": 4.0,
         }
         client = WireClient(**(settings | limits), dial=engine.dial)
         self.addAsyncCleanup(client.aclose)
@@ -149,8 +140,8 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
         engine = ScriptedEngine([ok], [ok])
         client = self.client(engine)
         await client.post("http://engine/x", {}, {}, timeout_s=1.0)
-        with patch.object(wire, "KEEPALIVE_EXPIRY_S", 0.0):
-            response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
+        client.keepalive_expiry_s = 0.0
+        response = await client.post("http://engine/x", {}, {}, timeout_s=1.0)
         self.assertEqual((response.status_code, engine.connections), (200, 2))
 
     async def test_reuse_stops_before_the_engine_closes_an_idle_connection(self):
@@ -193,7 +184,12 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
             return moved
 
         client = WireClient(
-            max_connections=2, max_keepalive=1, connect_timeout_s=1.0, pool_timeout_s=1.0, dial=dial
+            max_connections=2,
+            max_keepalive=1,
+            connect_timeout_s=1.0,
+            pool_timeout_s=1.0,
+            keepalive_expiry_s=4.0,
+            dial=dial,
         )
         self.addAsyncCleanup(client.aclose)
         self.addAsyncCleanup(engine.aclose)
@@ -230,6 +226,7 @@ class WireClientTests(unittest.IsolatedAsyncioTestCase):
                     max_keepalive=1,
                     connect_timeout_s=0.05,
                     pool_timeout_s=1.0,
+                    keepalive_expiry_s=4.0,
                     dial=dial,
                 )
                 self.addAsyncCleanup(client.aclose)

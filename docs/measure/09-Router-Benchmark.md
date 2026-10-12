@@ -22,9 +22,9 @@ Router CPU seconds are the router process's user and system time from `/proc/<pi
 
 ## Simulated engines
 
-`tools/measurement/simulated_engine.py` serves one simulated vLLM engine per process.
+`tools/measurement/simulated_engine.py` serves one simulated engine per process. It speaks the vLLM protocol, or the SGLang protocol with `--backend sglang`. The benchmark driver starts every engine with the default `vllm` backend.
 
-Each engine answers these routes:
+With the default `vllm` backend, each engine answers these routes:
 
 | Route | Response |
 | --- | --- |
@@ -35,6 +35,17 @@ Each engine answers these routes:
 | `POST /v1/completions` with `stream: false` | One completion after `--prefill-seconds`, with `kv_transfer_params` for a remote-decode request |
 | `POST /v1/completions` with `stream: true` | Paced server-sent events for `max_tokens` tokens |
 | Other paths | HTTP 404 |
+
+With `--backend sglang`, each engine answers `GET /health`, `GET /metrics`, `POST /tokenize` and `POST /v1/completions` as above, except that a completion carries no `kv_transfer_params`. It also answers these routes:
+
+| Route | Response |
+| --- | --- |
+| `GET /server_info` | `version` `simulated`, and the engine's role in `internal_states[0].disaggregation_mode` |
+| `POST /pd_role_switch` | Sets the engine's role to the body's `new_role`, `prefill` or `decode` |
+| `GET /flush_cache`, `POST /flush_cache` | HTTP 200 with the body `Cache flushed.` |
+| Other paths | HTTP 404 |
+
+The engine starts in the `prefill` role. A streaming completion without an integer `bootstrap_room` returns HTTP 400.
 
 The simulated tokenizer maps each prompt character to one token ID, the character's Unicode code point.
 
@@ -65,11 +76,13 @@ These settings pace each stream:
 
 | Metric | Type | Value |
 | --- | --- | --- |
-| `process_start_time_seconds` | Gauge | Engine start time in Unix seconds |
+| `process_start_time_seconds` | Gauge | Engine start time in Unix seconds, with the `vllm` backend |
 | `simulated_engine_late_ticks_total` | Counter | Late ticks |
 | `simulated_engine_active_streams{phase="prefill"}` | Gauge | Prefill requests in progress |
 | `simulated_engine_active_streams{phase="decode"}` | Gauge | Decode streams in progress |
 | `simulated_engine_peak_streams{phase="prefill"}`, `simulated_engine_peak_streams{phase="decode"}` | Gauge | Most requests of the phase in progress at once since the engine started |
+
+With the `sglang` backend, `/metrics` also serves `sglang:max_total_num_tokens` at `131072`, `sglang:page_size` at `1`, and `sglang:cached_tokens_total{cache_source="device"}`, `sglang:per_stage_req_latency_seconds_count{stage="decode_transferred"}` and `sglang:per_stage_req_latency_seconds_sum{stage="decode_transferred"}` at `0`.
 
 ### Running one engine
 
@@ -90,6 +103,7 @@ Example ready line:
 | Flag | Default | Meaning |
 | --- | :---: | --- |
 | `--iid` | required | Engine ID |
+| `--backend` | `vllm` | Engine protocol, `vllm` or `sglang` |
 | `--host` | `127.0.0.1` | Listen address |
 | `--port` | `0`, a free port | Listen port |
 | `--token-interval` | `0.02` | Seconds between tokens of one stream |

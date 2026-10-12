@@ -1,0 +1,47 @@
+{
+  "gap recovered": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 3
+  },
+  "replay requests": [
+    [
+      "",
+      "0000000000000000"
+    ],
+    [
+      "",
+      "0000000000000002"
+    ]
+  ],
+  "replayed": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 1
+  }
+}

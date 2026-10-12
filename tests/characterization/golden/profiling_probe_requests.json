@@ -1,0 +1,308 @@
+{
+  "probes": {
+    "decode": [
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars>",
+          "ignore_eos": true,
+          "max_tokens": 8,
+          "min_tokens": 8,
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>",
+          "return_token_ids": true,
+          "stream": true,
+          "stream_interval": 1,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      }
+    ],
+    "neighbours": [
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<1 words sha256:4a0e799d8a0aa3c2>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>"
+        },
+        "engine": "e3",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<1 words sha256:4a0e799d8a0aa3c2>"
+        },
+        "engine": "e3",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars>",
+          "ignore_eos": true,
+          "max_tokens": 4,
+          "min_tokens": 4,
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e3",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      }
+    ],
+    "prefill": [
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #1>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #2>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<32 words sha256:a610b894b6f5cb95>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<48 words sha256:1c7371156f4328fd>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #3>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<48 words sha256:1c7371156f4328fd>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #4>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<48 words sha256:1c7371156f4328fd>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      }
+    ],
+    "warm": [
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<64 words sha256:e451f8d8c9657e82>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<65 words sha256:dc7d2534b17ff27f>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "model": "test-model",
+          "prompt": "<80 words sha256:8a65eda51c7c6e52>"
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/tokenize"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #1>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<65 words sha256:dc7d2534b17ff27f>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": null,
+        "engine": "e0",
+        "headers": {},
+        "method": "GET",
+        "path": "/metrics"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #1>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<80 words sha256:8a65eda51c7c6e52>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": null,
+        "engine": "e0",
+        "headers": {},
+        "method": "GET",
+        "path": "/metrics"
+      },
+      {
+        "body": {
+          "cache_salt": "<salt 43 chars #2>",
+          "ignore_eos": true,
+          "max_tokens": 1,
+          "min_tokens": 1,
+          "model": "test-model",
+          "prompt": "<80 words sha256:8a65eda51c7c6e52>",
+          "stream": false,
+          "temperature": 0.0
+        },
+        "engine": "e0",
+        "headers": {},
+        "method": "POST",
+        "path": "/v1/completions"
+      },
+      {
+        "body": null,
+        "engine": "e0",
+        "headers": {},
+        "method": "GET",
+        "path": "/metrics"
+      }
+    ]
+  },
+  "warm_samples": [
+    {
+      "prefix_tokens": 64,
+      "state": "warm",
+      "suffix_tokens": 16
+    },
+    {
+      "prefix_tokens": 0,
+      "state": "cold",
+      "suffix_tokens": 80
+    }
+  ],
+  "warm_stopped": null
+}

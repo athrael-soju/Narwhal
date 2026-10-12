@@ -1,8 +1,5 @@
-"""Engine-specific routes and request fields around the OpenAI API."""
-
 from __future__ import annotations
 
-import secrets
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -10,61 +7,42 @@ from .prefix import non_negative_ints
 
 
 class EngineDialect(ABC):
-    """Describe the HTTP details that differ between engine builds."""
-
     name: ClassVar[str]
     health_path: ClassVar[str] = "/health"
     # None selects character-ratio estimates in callers.
     tokenize_path: ClassVar[str | None] = "/tokenize"
+    # None reads the context limit from the tokenize response.
+    context_limit_path: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.
     cache_reset_path: ClassVar[str | None] = None
     # These client fields conflict with the forced one-token prefill request.
     prefill_incompatible: ClassVar[tuple[str, ...]] = ()
     # True when streamed decode honors return_token_ids and stream_interval.
     token_ids: ClassVar[bool] = False
-
-    @abstractmethod
-    def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
-        """Build the exact-token-count request."""
-
-    @abstractmethod
-    def tokenize_response(self, payload: dict[str, Any]) -> int | None:
-        """Read a token count, or return None when the response has none."""
-
-    @abstractmethod
-    def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
-        """Read the prompt token IDs, or return None when the response has none."""
-
-    @abstractmethod
-    def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
-        """Return fields that force a probe to emit exactly `tokens`."""
-
-    @abstractmethod
-    def cold_probe_extras(self) -> dict[str, Any]:
-        """Return fields that keep one probe from reusing any earlier cached prefix."""
-
-
-class VllmDialect(EngineDialect):
-    """Describe vLLM's serving API."""
-
-    name = "vllm"
-    # vLLM exposes this route only with VLLM_SERVER_DEV_MODE=1.
-    cache_reset_path = "/reset_prefix_cache"
-    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
-    # vLLM streams per-chunk token ids for return_token_ids and honors stream_interval=1.
-    token_ids = True
+    # Below the engine server's own idle close, so a reused connection is never closing.
+    keepalive_expiry_s: ClassVar[float] = 4.0
+    engine_output_fields: ClassVar[tuple[str, ...]] = ()
+    # Engine choice fields that a reassembled non-streaming choice carries from the stream.
+    choice_fields: ClassVar[tuple[str, ...]] = ()
+    # Dotted client fields that would override Narwhal's engine controls.
+    reserved_fields: ClassVar[tuple[str, ...]] = ()
     # Chat template fields the tokenize route needs to count the engine's render.
-    tokenize_passthrough: ClassVar[tuple[str, ...]] = (
-        "tools",
-        "chat_template",
-        "chat_template_kwargs",
-        "continue_final_message",
-        "add_generation_prompt",
-        "add_special_tokens",
-    )
+    tokenize_passthrough: ClassVar[tuple[str, ...]] = ()
+
+    @abstractmethod
+    def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
+
+    @abstractmethod
+    def token_id_fields(self) -> dict[str, Any]: ...
+
+    def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
+        """Client fields the engine refuses on a streamed request to `endpoint`."""
+        return ()
+
+    def streams_token_ids(self, endpoint: str) -> bool:
+        return self.token_ids
 
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
-        """Build vLLM's tokenization request from an OpenAI request body."""
         payload: dict[str, Any] = {"model": model}
         if "messages" in body:
             payload["messages"] = body["messages"]
@@ -73,20 +51,22 @@ class VllmDialect(EngineDialect):
                     payload[field_name] = body[field_name]
         else:
             payload["prompt"] = body.get("prompt", "")
-            # The completion's own setting decides whether vLLM adds BOS and similar tokens.
+            # The completion's own setting decides whether the engine adds BOS and similar tokens.
             if "add_special_tokens" in body:
                 payload["add_special_tokens"] = body["add_special_tokens"]
         return payload
 
     def tokenize_response(self, payload: dict[str, Any]) -> int | None:
-        """Read vLLM's token count when present."""
         try:
             return int(payload["count"])
         except (KeyError, TypeError, ValueError):
             return None
 
+    def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
+        limit = payload.get("max_model_len")
+        return limit if type(limit) is int and limit > 0 else None
+
     def tokenize_token_ids(self, payload: dict[str, Any]) -> list[int] | None:
-        """Read vLLM's prompt token IDs when they agree with its count."""
         tokens = payload.get("tokens")
         if (
             not isinstance(tokens, list)
@@ -97,24 +77,7 @@ class VllmDialect(EngineDialect):
         return tokens
 
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
-        """Force a decode probe to emit exactly `tokens` tokens."""
         return {"min_tokens": tokens, "ignore_eos": True}
 
-    def cold_probe_extras(self) -> dict[str, Any]:
-        """Salt the probe's first cache block with a fresh random value."""
-        # vLLM hashes cache_salt into the first block; later block hashes chain from it.
-        return {"cache_salt": secrets.token_urlsafe(32)}
-
-
-# Each registered dialect has passed the fleet checks against its build.
-_REGISTRY: dict[str, EngineDialect] = {d.name: d for d in (VllmDialect(),)}
-
-
-def lookup(name: str) -> EngineDialect:
-    """Return the registered dialect named by the fleet config."""
-    try:
-        return _REGISTRY[name]
-    except KeyError:
-        raise ValueError(
-            f"unknown dialect {name!r}: known ones are {', '.join(sorted(_REGISTRY))}"
-        ) from None
+    @abstractmethod
+    def cold_probe_extras(self) -> dict[str, Any]: ...

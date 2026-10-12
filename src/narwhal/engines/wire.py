@@ -1,5 +1,3 @@
-"""HTTP/1.1 data client for engine legs on event-loop transports and the httptools parser."""
-
 from __future__ import annotations
 
 import asyncio
@@ -17,14 +15,9 @@ import httpx
 
 Dial = Callable[[str, int], Awaitable[socket.socket]]
 GapTimeout = Callable[[], float | None]
-# Seconds an idle keep-alive connection stays reusable. vLLM closes an idle connection
-# after 5 s (VLLM_HTTP_TIMEOUT_KEEP_ALIVE), so a request sent at the same age can meet the
-# engine's close and fail without a response.
-KEEPALIVE_EXPIRY_S = 4.0
 
 
 async def dial_tcp(host: str, port: int) -> socket.socket:
-    """Connect a non-blocking TCP socket to the first reachable address of `host`."""
     loop = asyncio.get_running_loop()
     failure: OSError | None = None
     for family, kind, proto, _, address in await loop.getaddrinfo(
@@ -44,8 +37,6 @@ async def dial_tcp(host: str, port: int) -> socket.socket:
 
 
 class _Connection(asyncio.Protocol):
-    """One keep-alive connection carrying one exchange at a time."""
-
     transport: asyncio.Transport
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -147,7 +138,6 @@ class _Connection(asyncio.Protocol):
             self._timer = self.loop.call_at(due, self._check_gap)
 
     async def wait(self) -> None:
-        """Wait for parser progress, bounded by the current gap timeout."""
         if self._error is not None:
             raise self._error
         self._waiter = self.loop.create_future()
@@ -174,9 +164,8 @@ class _Connection(asyncio.Protocol):
                 return
             await self.wait()
 
-    def reusable(self, now: float) -> bool:
-        """Open, idle for less than the keep-alive expiry, and with no unread engine bytes."""
-        if self.closed or now - self.idle_at >= KEEPALIVE_EXPIRY_S:
+    def reusable(self, now: float, expiry_s: float) -> bool:
+        if self.closed or now - self.idle_at >= expiry_s:
             return False
         sock = self.transport.get_extra_info("socket")
         if sock is None:
@@ -196,8 +185,6 @@ class _Connection(asyncio.Protocol):
 
 
 class WireResponse:
-    """Status, headers and body of one engine exchange."""
-
     def __init__(self, connection: _Connection) -> None:
         self._connection = connection
         self.status_code = connection.status
@@ -205,28 +192,22 @@ class WireResponse:
         self.body = b""
 
     async def aiter_bytes(self) -> AsyncIterator[bytes]:
-        """Yield the body as received, one chunk per transport read."""
         async for chunk in self._connection.chunks():
             yield chunk
 
     async def aread(self) -> bytes:
-        """Read the rest of the body."""
         self.body += b"".join([chunk async for chunk in self._connection.chunks()])
         return self.body
 
     @property
     def text(self) -> str:
-        """The body read so far, decoded as UTF-8."""
         return self.body.decode("utf-8", "replace")
 
     def json(self) -> Any:
-        """The body read so far, decoded as JSON."""
         return json.loads(self.body)
 
 
 class _Pool:
-    """Connections to one engine endpoint under a connection and keep-alive limit."""
-
     def __init__(self, host: str, port: int, client: WireClient) -> None:
         self.host = host
         self.port = port
@@ -246,7 +227,7 @@ class _Pool:
         while True:
             while self.idle:
                 connection = self.idle.pop()
-                if connection.reusable(loop.time()):
+                if connection.reusable(loop.time(), self.client.keepalive_expiry_s):
                     if on_slot is not None:
                         on_slot()
                     return connection
@@ -319,8 +300,6 @@ class _Pool:
 
 
 class WireClient:
-    """Per-endpoint keep-alive pools for engine data legs."""
-
     def __init__(
         self,
         *,
@@ -328,8 +307,10 @@ class WireClient:
         max_keepalive: int,
         connect_timeout_s: float,
         pool_timeout_s: float,
+        keepalive_expiry_s: float,
         dial: Dial = dial_tcp,
     ) -> None:
+        self.keepalive_expiry_s = keepalive_expiry_s
         self.max_connections = max_connections
         self.max_keepalive = max_keepalive
         self.connect_timeout_s = connect_timeout_s
@@ -354,11 +335,6 @@ class WireClient:
         budget_s: float | None = None,
         on_connection: Callable[[], None] | None = None,
     ) -> AsyncIterator[WireResponse]:
-        """POST a JSON body; yield the response once its headers arrive.
-
-        `gap` bounds each wait for engine bytes; `budget_s` caps pool and connect waits;
-        `on_connection` runs once a connection slot is held, before any connect.
-        """
         parts = urlsplit(url)
         host = parts.hostname or ""
         port = parts.port or 80
@@ -402,7 +378,6 @@ class WireClient:
         timeout_s: float,
         on_connection: Callable[[], None] | None = None,
     ) -> WireResponse:
-        """POST a JSON body and read the whole response within per-read `timeout_s`."""
         async with self.stream(
             url,
             body,
@@ -415,7 +390,6 @@ class WireClient:
         return response
 
     async def aclose(self) -> None:
-        """Close idle connections."""
         for pool in self._pools.values():
             pool.close()
         self._pools.clear()

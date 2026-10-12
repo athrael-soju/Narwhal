@@ -6,39 +6,37 @@ description: Metrics for engine monitoring degradation and engine breaker state 
 
 ## Engine monitoring degradation
 
-These metrics track failed monitoring passes, monitoring-deadline delay and event-loop CPU time:
+The router runs a monitoring pass every `controller.monitor_interval_s` seconds. A pass runs a fixed sequence of stages, and a stage that raises an exception counts as a failure while the rest of the pass continues. After `controller.monitor_failure_limit` consecutive passes with a failed stage, the router admits no new requests until a pass completes with every stage successful.
+
+These metrics track failed passes, monitoring-deadline delay and event-loop CPU time:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `narwhal_monitoring_degraded` | gauge | | `1` while the router blocks new admissions after `controller.monitor_failure_limit` consecutive failed passes, otherwise `0`. |
-| `narwhal_monitoring_core_consecutive_failures` | gauge | | Consecutive failed monitoring passes. |
-| `narwhal_monitoring_core_failures_total` | counter | | Failed monitoring passes since process start. |
-| `narwhal_monitoring_stage_failures_total` | counter | `stage` | Failed passes for one monitoring stage. |
-| `narwhal_monitoring_stage_consecutive_failures` | gauge | `stage` | Consecutive failures for a monitoring stage. |
+| `narwhal_monitoring_degraded` | gauge | | `1` while failed passes block new admissions, otherwise `0`. |
+| `narwhal_monitoring_core_consecutive_failures` | gauge | | Consecutive passes with a failed stage. |
+| `narwhal_monitoring_core_failures_total` | counter | | Passes with a failed stage since router start. |
+| `narwhal_monitoring_stage_failures_total` | counter | `stage` | Failures of one stage since router start. |
+| `narwhal_monitoring_stage_consecutive_failures` | gauge | `stage` | Consecutive failures of one stage. |
 | `narwhal_event_loop_lag_seconds` | gauge | | Delay beyond the latest scheduled monitoring deadline. |
 | `narwhal_event_loop_lag_high_water_seconds` | gauge | | Largest monitoring-deadline delay since router start. |
 | `narwhal_event_loop_busy_seconds_total` | counter | | CPU seconds the router's event-loop thread used since the monitoring loop started. |
 
-`rate(narwhal_event_loop_busy_seconds_total[5m])` is the share of wall time the event-loop thread spends on CPU, from `0` to `1`.
+`rate(narwhal_event_loop_busy_seconds_total[5m])` is the share of wall time the event-loop thread spends on CPU, from `0` to `1`. The router updates the counter each time the monitoring loop wakes, at a scheduled monitoring deadline or on an urgent control wake.
 
-The router updates the counter each time the monitoring loop wakes, at a scheduled monitoring deadline or on an urgent control wake.
+Each `stage` value names the work that failed:
 
-`stage` values:
-
-```text
-controller
-health
-drains
-rollover
-readmission
-liveness
-residency
-handoff
-telemetry
-```
-
-The `telemetry` stage covers floor-state refresh and loop logs.
-
+| `stage` | Work |
+| --- | --- |
+| `controller` | Role controller evaluation, on each pass and on urgent control wakes |
+| `health` | Decode drift scoring and drift ejections |
+| `drains` | Closing the drain of each role change whose work has finished |
+| `rollover` | Publishing the current monitoring interval's measurements and opening the next interval |
+| `readmission` | Repeat inference probes, readmission of due ejected engines, and on vLLM [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) |
+| `transfer_refresh` | On SGLang with engine-side role switching, [transfer state refresh](../concepts/03-Failure-and-State.md#transfer-state-refresh) |
+| `liveness` | The `/health` sweep, every `recovery.liveness_every` monitor intervals |
+| `residency` | Refresh of each engine's residency view from its attestation sidecar, every monitor interval in its own loop |
+| `handoff` | Writing the state handoff |
+| `telemetry` | Prefill floor-state refresh and the loop log line |
 
 ## Engine breaker state
 
@@ -65,18 +63,13 @@ liveness
 
 `kind` values on `narwhal_engine_breaker_verifying`: `verify_health` or `verify_inference`.
 
-[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) maps each class to the action the breaker takes at `recovery.eject_after` consecutive failures.
+[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) maps each class to the action the breaker takes at `recovery.eject_after` consecutive failures, and defines the profile-match rule.
 
 ### Dropped connections
 
-A dropped connection is an engine connection that closes or resets after the router sent the request, before the response body completes. The router classifies it as follows:
+A dropped connection is an engine connection that closes or resets after the router sent the request and before the response body completes. The breaker counts it as `timeout` evidence on prefill and decode legs alike, so `recovery.eject_after` dropped connections in a row start a health probe and no inference hold. The request's [outcome reason](01-Journal.md#outcome-reasons) is `engine_connection`, and with `recovery.failure_quarantine_s` above `0` a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence) enters a timed quarantine.
 
-- The breaker counts `timeout` evidence against the engine, on prefill and decode legs alike, and runs a health probe at `recovery.eject_after`.
-- A dropped connection starts no inference hold.
-- The request's [outcome reason](01-Journal.md#outcome-reasons) is `engine_connection`.
-- With `recovery.failure_quarantine_s` above `0`, a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence) enters a timed quarantine.
-
-Two neighbouring failures carry other classes. A refused connection or connect timeout counts as `connection` evidence, which ejects the engine at `recovery.eject_after`. A decode response body that completes without the `[DONE]` terminator counts as `stream` evidence, which starts an inference hold.
+A refused connection or a connect timeout counts as `connection` evidence instead, and its streak ejects the engine at `recovery.eject_after`. A decode response body that ends without the `[DONE]` terminator counts as `stream` evidence, and its streak starts an inference hold at `recovery.eject_after`.
 
 ### Hold kinds
 
@@ -84,24 +77,31 @@ A hold keeps a covered engine out of new placement. `/narwhal/state` lists every
 
 | Kind | Starts when | Ends when |
 | --- | --- | --- |
-| `timed` | A request leg fails and `recovery.failure_quarantine_s` is above `0`. A local pool wait and a 4xx response other than 408 or 429 start no hold. | The deadline passes, or earlier on a health or inference verification that meets the profile-match rule. |
-| `inference` | A `stream`, `inference_status`, or `kv_handoff` streak reaches `recovery.eject_after`. | An inference probe passes and meets the profile-match rule. The hold has no deadline. |
+| `timed` | A request leg fails and `recovery.failure_quarantine_s` is above `0`. A local pool wait and an engine 4xx response other than 408 or 429 start no hold. | The deadline passes, or earlier when a `/health` answer or a passing inference probe meets the profile-match rule. |
+| `inference` | A `stream`, `inference_status`, or `kv_handoff` streak reaches `recovery.eject_after`. | An inference probe passes every recorded path and the profile-match rule holds. The hold has no deadline. |
 
-An inference hold replaces a running timed quarantine on the same engine. A hold of either kind also ends when the engine is ejected or drained, or when another engine's ejection or drain leaves it uncovered.
+An inference hold replaces a running timed quarantine on the same engine. A hold of either kind also ends when the engine is ejected or drained, when lifecycle readmission validates it, or when another engine's ejection or drain leaves it uncovered. An uncovered engine whose streak calls for an inference probe stays in placement while the probe runs.
 
-While an inference hold lasts, engine monitoring repeats the inference probe every `recovery.readmit_every` monitor intervals.
+The first inference probe starts when the streak reaches `recovery.eject_after`. While the engine remains an inference suspect, outside ejection and drain, engine monitoring repeats the probe every `recovery.readmit_every` monitor intervals.
 
 ### Inference probe producers
 
-Each `stream` failure on a decode leg records the producer of its KV transfer against the decode engine. `holds.inference[].recorded_producers` lists them. The inference probe verifies each recorded producer's path and tries producers in this order:
+Each `stream` failure on a decode leg records the leg's producer against the decode engine, and `holds.inference[].recorded_producers` lists those producers. The inference probe retests each recorded path in turn. The hold lifts once every recorded path has passed, through any producer, and the profile-match rule holds. A path recorded while a probe runs waits for the next probe.
 
-1. The recorded producer, while it is configured and live: not ejected, held, or draining.
-2. One other live engine that places prefill legs, choosing the fewest resident prefill requests and then engine ID order. Prefill-role engines place prefill legs; when none is live, unpinned engines do.
+On vLLM, the probe of each path tries producers in this order:
+
+1. The recorded producer, while it is live and places prefill legs. A live engine is configured and outside any ejection, hold or drain.
+2. One other live engine that places prefill legs, choosing the engine with the fewest resident prefill requests and then by engine ID order. Prefill-role engines place prefill legs, and unpinned engines do when no prefill-role engine is live.
 3. A standalone probe, which runs both legs on the held engine without a KV transfer.
 
-When a producer's prefill leg fails, the probe has tested nothing on the held engine. The verifier records a `producer_failed` outcome and defers to the next producer in the list. A producer leg that waits out the local control pool is inconclusive instead: the verifier keeps the hold and retries at the next probe.
+A vLLM engine held without a recorded producer, such as one held for `inference_status` evidence alone, verifies through the standalone probe.
 
-After every recorded path passes, through any producer, and the profile-match rule holds, the verifier clears the recorded producers and lifts the hold. An engine without a recorded producer, such as one held for `inference_status` evidence alone, verifies through a standalone probe.
+On SGLang, every engine serves only its current role, so the probe pairs the held engine with a live peer in the other role:
+
+- A held prefill engine runs the prefill leg for the live decode engines in turn, starting with the one that has the fewest resident decode requests and then by engine ID order. When no decode engine is live, or every one has failed its leg, the probe is `inconclusive` with the reason `no_consumer`.
+- A held decode engine tries its recorded producer while it is live, and then one other live prefill-role engine, chosen as on vLLM. A held decode engine without a recorded producer, such as one held for `inference_status` evidence alone, tries only that other engine. With no prefill-role engine live, the probe is `inconclusive` with the reason `no_producer`. When every producer it tried has failed its leg, the engine stays held until the next probe.
+
+A failed peer leg leaves the held engine untested, so the verifier records `producer_failed` or `consumer_failed` and moves to the next peer. A peer leg that waits out the router's control pool makes the probe `inconclusive`, and the verifier keeps the hold and tries again at the next probe.
 
 ### Verification probe outcomes
 
@@ -109,11 +109,12 @@ After every recorded path passes, through any producer, and the profile-match ru
 
 | `outcome` | `kind` | Meaning |
 | --- | --- | --- |
-| `passed` | both | `/health` answered, or both inference legs passed. Under the profile-match rule the probed failure evidence clears; a profile mismatch ejects the engine with cause `profile_generation`. |
-| `failed` | both | `/health` did not answer, or a leg on the probed engine failed. A covered engine is ejected; an uncovered engine leaves any hold and stays in placement. |
-| `inconclusive` | both | A probe leg waited out the local control pool. The hold and streaks stay unchanged. |
+| `passed` | both | `/health` answered, or both legs of one inference path passed. A health pass, or the pass of the last recorded path, clears the probed failure evidence when the profile-match rule holds. A profile mismatch ejects the engine with cause `profile_generation`. |
+| `failed` | both | `/health` returned an error or timed out, or a leg on the probed engine failed. A covered engine is ejected with cause `health_probe` or `inference_probe`. An uncovered engine stays in placement, and a failed inference probe also ends its hold with cause `uncovered`. |
+| `inconclusive` | both | A probe leg waited out the router's control pool, a `/health` timeout fired more than 1.5 times `engine.health_timeout_s` after its connection started, or on SGLang the probe had no peer to run with. The hold and streaks stay unchanged. |
 | `producer_failed` | `verify_inference` | The producer's prefill leg failed. The next producer runs the probe. |
-| `unavailable` | `verify_inference` | The router has no model name to probe with. The hold stays. |
+| `consumer_failed` | `verify_inference` | On SGLang, a decode engine's leg failed after the held prefill engine's leg passed. The next decode engine runs the probe. |
+| `unavailable` | `verify_inference` | The fleet configuration names no model to probe with. The hold stays. |
 
 ### Ejections, holds and readmissions
 
@@ -131,12 +132,13 @@ Ejection `cause` values:
 | `cause` | Evidence |
 | --- | --- |
 | `connection` | The `connection` streak reached `recovery.eject_after`. |
-| `liveness` | `/health` stayed silent for `recovery.liveness_misses` consecutive sweeps. |
+| `liveness` | `/health` failed on `recovery.liveness_misses` consecutive liveness sweeps. |
 | `health_probe` | A health verification probe failed on a covered engine. |
 | `inference_probe` | An inference verification probe failed on a covered engine. |
-| `drift` | Decode drift stayed outside the engine's band. |
+| `drift` | Decode drift stayed outside the engine's band on a covered engine. |
 | `process_identity` | The engine's process identity changed or could not be read. |
 | `profile_generation` | The loaded profiles do not match the live process generation. |
+| `role_switch` | On SGLang with engine-side role switching, the engine's role switch failed. |
 
 Hold-end `cause` values:
 
@@ -144,8 +146,8 @@ Hold-end `cause` values:
 | --- | --- |
 | `expired` | The timed quarantine deadline passed. |
 | `superseded` | An inference hold replaced the timed quarantine. |
-| `health` | A health answer met the profile-match rule. Inference holds ignore it. |
-| `verification` | An inference probe passed and met the profile-match rule. |
+| `health` | A `/health` answer met the profile-match rule. Inference holds ignore it. |
+| `verification` | An inference probe passed every recorded path and met the profile-match rule. |
 | `lifecycle` | Lifecycle readmission validated the engine. |
 | `ejected` | The engine was ejected. |
 | `drained` | An operator drain removed the engine from placement. |

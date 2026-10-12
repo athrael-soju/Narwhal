@@ -1,0 +1,74 @@
+{
+  "parsed": {
+    "absent": {
+      "cache_block_tokens": null,
+      "kv_capacity": null,
+      "prefix_cache_hits": null
+    },
+    "mixed_blocks": {
+      "cache_block_tokens": null,
+      "kv_capacity": null,
+      "prefix_cache_hits": null
+    },
+    "ranks": {
+      "cache_block_tokens": 16,
+      "kv_capacity": 900,
+      "prefix_cache_hits": 42
+    },
+    "unlabelled": {
+      "cache_block_tokens": null,
+      "kv_capacity": null,
+      "prefix_cache_hits": 5
+    }
+  },
+  "read": {
+    "cache_block_tokens": 16,
+    "context_limit": 8192,
+    "kv_capacity": 4096,
+    "prefix_cache_hits": 48,
+    "token_count": 3
+  },
+  "requests": [
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/metrics"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<1 words sha256:4a0e799d8a0aa3c2>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    },
+    {
+      "body": {
+        "model": "test-model",
+        "prompt": "<3 words sha256:0e9f64031fcb2bc7>"
+      },
+      "engine": "e0",
+      "headers": {},
+      "method": "POST",
+      "path": "/tokenize"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "idle": {
+    "block_size": null,
+    "groups": [],
+    "known": true,
+    "reason": "no cache events published",
+    "sequence": -1
+  },
+  "no replay": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "cache-event replay is unavailable; waiting for a cache reset",
+    "sequence": null
+  },
+  "short frame": {
+    "block_size": null,
+    "groups": [],
+    "known": false,
+    "reason": "cache-event subscription failed: ValueError; waiting for a cache reset",
+    "sequence": -1
+  }
+}

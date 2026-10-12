@@ -13,7 +13,7 @@ Each Narwhal interface uses one public namespace:
 | Completion API | `/v1/completions`, `/v1/chat/completions` |
 | Model inspection | `/v1/models` |
 | Health and readiness | `/health`, `/ready` |
-| Metrics | `/metrics` |
+| Metrics and scrape targets | `/metrics`, `/narwhal/targets` |
 | Router state | `/narwhal/state` |
 | State handoff | `/narwhal/handoff` |
 | Lifecycle control | `/narwhal/lifecycle`, `/narwhal/lifecycle/drain`, `/narwhal/lifecycle/readmit` |
@@ -47,7 +47,7 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 
     ---
 
-    `/v1/models`, `/health`, `/ready`, and `/metrics`.
+    `/v1/models`, `/health`, `/ready`, `/metrics`, and `/narwhal/targets`.
 
 -   [Live router and scheduler state](http-api/05-Live-State.md)
 
@@ -81,6 +81,7 @@ The `/metrics` response includes `narwhal_contract_info{contract="metrics",versi
 | Check whether engines are draining or awaiting readmission    | [`GET /narwhal/lifecycle`](http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle)                                                                                                                      |
 | Drain or readmit engines                                      | [`POST /narwhal/lifecycle/drain`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain), [`POST /narwhal/lifecycle/readmit`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) |
 | Scrape metrics                                                | [`GET /metrics`](http-api/04-Inspection.md#get-metrics)                                                                                                                                                    |
+| Discover engine scrape targets                                | [`GET /narwhal/targets`](http-api/04-Inspection.md#get-narwhaltargets)                                                                                                                                     |
 
 !!! warning
-    Keep `/narwhal/state`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.
+    Keep `/narwhal/state`, `/narwhal/targets`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.

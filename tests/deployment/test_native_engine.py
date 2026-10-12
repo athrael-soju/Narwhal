@@ -1,5 +1,3 @@
-"""Verify native shutdown cannot signal a reused or unrelated PID."""
-
 import json
 import os
 import socket
@@ -33,9 +31,9 @@ class NativeEngineOwnershipTests(unittest.TestCase):
         ):
             run = Path(folder)
             (run / "engine.env").write_text("")
-            self.assertEqual(_environment(run)["VLLM_API_KEY"], "")
+            self.assertEqual(_environment(run, {})["VLLM_API_KEY"], "")
             (run / "engine.env").write_text("VLLM_API_KEY=prepared-key\n")
-            self.assertEqual(_environment(run)["VLLM_API_KEY"], "prepared-key")
+            self.assertEqual(_environment(run, {})["VLLM_API_KEY"], "prepared-key")
 
     def test_shutdown_escalates_workers_after_the_leader_exits(self):
         with process_group_with_worker() as (leader, worker):
@@ -160,6 +158,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         run,
                         {
                             "role": f"engine-{number}",
+                            "backend": "native",
                             "endpoint": f"http://127.0.0.1:{8000 + number}",
                             "python_executable": sys.executable,
                             "args": ["-m", "vllm.entrypoints.openai.api_server"],
@@ -176,7 +175,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                     )
                 )
             readings = iter((1000, 6100, 6100, 11200))
-            live = SimpleNamespace(vllm_version="0.29.0", process_start_time_seconds=1234.5)
+            live = SimpleNamespace(version="0.29.0", process_start_time_seconds=1234.5)
             with (
                 patch(
                     "narwhal.deployment.native_engine.validate_shared_runs", return_value=selected
@@ -268,6 +267,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                         run,
                         {
                             "role": f"engine-{number}",
+                            "backend": "native",
                             "endpoint": f"http://127.0.0.1:{8000 + number}",
                             "python_executable": sys.executable,
                             "args": ["-m", "vllm.entrypoints.openai.api_server"],
@@ -313,7 +313,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                     "narwhal.deployment.native_engine.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=SimpleNamespace(
-                        vllm_version="0.29.0", process_start_time_seconds=1234.5
+                        version="0.29.0", process_start_time_seconds=1234.5
                     ),
                 ),
                 patch("narwhal.deployment.native_engine._group_members", return_value={102: 20}),

@@ -9,7 +9,7 @@ BOOTSTRAP := $(filter .venv/bin/python,$(VENV_PYTHON))
 TEST_ARGS ?=
 DOCS_PORT ?= 8000
 
-.PHONY: setup sync test unit lint format types links publication versions check docs-build observe
+.PHONY: setup sync test unit lint format types links publication versions boundary check docs-build observe
 .PHONY: coverage
 .PHONY: docs-setup docs-serve
 .PHONY: help fix
@@ -38,6 +38,7 @@ help:
 	  '  types        Check package types with mypy' \
 	  '  links        Check documentation paths and heading anchors' \
 	  '  publication  Check tracked files for private data' \
+	  '  boundary     Check that engine-specific code stays in backend packages' \
 	  '  versions     Check publication version metadata' \
 	  '  coverage     Run unit tests and write coverage reports under runs/' \
 	  '  docs-setup   Install constrained documentation dependencies' \
@@ -86,8 +87,11 @@ publication:
 versions:
 	$(PYTHON) tools/maintenance/release.py check
 
+boundary:
+	$(PYTHON) tools/maintenance/check_backend_boundary.py
+
 # Keep this order aligned with `.github/workflows/ci.yml`.
-check: publication versions lint format types unit links
+check: publication versions boundary lint format types unit links
 
 docs-setup: $(BOOTSTRAP)
 	$(VENV_PYTHON) -m pip install -e '.[docs]' -c constraints-dev.txt

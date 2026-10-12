@@ -10,6 +10,8 @@ import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
+from narwhal.deployment.launch_engine.backend import launcher
+
 ENGINE_FIELDS = (
     "ENGINE_IMAGE",
     "ENGINE_MODEL_NAME",
@@ -19,10 +21,14 @@ ENGINE_FIELDS = (
     "FABRIC_INTERFACE",
     "ENGINE_PORT",
     "ATTEST_PORT",
-    "NIXL_SIDE_CHANNEL_PORT",
     "UCX_TCP_PORT_RANGE",
 )
 ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
+
+
+def engine_fields(fleet: dict) -> tuple[str, ...]:
+    side_channel = launcher(fleet.get("engine", {}).get("backend")).side_channel_port_env
+    return (*ENGINE_FIELDS, side_channel.removeprefix("NARWHAL_"))
 
 
 def select_values(
@@ -66,10 +72,10 @@ def select_values(
         values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
-        for field in ENGINE_FIELDS:
+        for field in engine_fields(fleet):
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
-            include(name, override if override in env else name, required=field in ENGINE_FIELDS)
+            include(name, override if override in env else name)
         for name in env:
             if re.fullmatch(r"NARWHAL_NODE_[1-9][0-9]*_IP", name):
                 include(name)

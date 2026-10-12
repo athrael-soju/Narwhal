@@ -149,10 +149,9 @@ def decode_load(
     """
     if not inst.decode:
         return 0.0
-    observed = max(
-        monitor.mean_token_interval(inst.iid),
-        monitor.stalled_gap(inst.iid),
-    )
+    observed = monitor.mean_token_interval(inst.iid)
+    if not monitor.current_token_interval(inst.iid):
+        observed = max(observed, monitor.stalled_gap(inst.iid))
     profile = profiles.get(inst.iid)
     floor = (
         profile.token_interval(0) * monitor.decode_correction(inst.iid)

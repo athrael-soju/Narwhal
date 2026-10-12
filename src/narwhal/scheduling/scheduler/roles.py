@@ -1,5 +1,3 @@
-"""Change engine roles under pins, floors, dwell and cooldown, and record decisions."""
-
 from __future__ import annotations
 
 import logging
@@ -18,8 +16,6 @@ log = logging.getLogger("narwhal.scheduler")
 
 
 class RoleChanges:
-    """Live role changes, controller decisions and their retained history."""
-
     def __init__(self, scheduler: GlobalScheduler, flip_history: int) -> None:
         self.scheduler = scheduler
         # The opening P-to-D change also waits out the cooldown.
@@ -42,7 +38,6 @@ class RoleChanges:
         self._decision_counts: Counter[tuple[str, str]] = Counter()
 
     def decode_floor_snapshot(self) -> dict:
-        """Report live decode capacity and floor recovery."""
         live_decode = self.scheduler.decode_live()
         return {
             "min_decode": self.scheduler.min_decode,
@@ -52,7 +47,6 @@ class RoleChanges:
         }
 
     def control_snapshot(self) -> dict:
-        """Return advisory mode and the most recent controller decision."""
         return {
             "advisory": self.scheduler.advisory,
             "last_decision": dict(self._last_decision) if self._last_decision else None,
@@ -87,7 +81,6 @@ class RoleChanges:
         result: str,
         details: dict[str, object] | None = None,
     ) -> None:
-        """Retain one controller decision for state and metric output."""
         self._decision_counts[(by, result)] += 1
         self._last_decision = {
             "at": self.scheduler._clock(),
@@ -107,7 +100,6 @@ class RoleChanges:
     def allow_decode_scale_down(
         self, by: str, *, decision_details: dict[str, object] | None = None
     ) -> bool:
-        """Return whether one live decode engine may move to prefill."""
         if self.scheduler.decode_live() - 1 >= self.scheduler.min_decode:
             return True
         reason = f"min_decode keeps {self.scheduler.min_decode} live decode engines"
@@ -124,7 +116,7 @@ class RoleChanges:
         return False
 
     def flip_cost(self, inst: Instance) -> Cost:
-        """Return `(indicator, resident work)` for changing an engine's role.
+        """Return `(indicator, resident work)`.
 
         The indicator is 0 while the other phase's work is still resident.
         """
@@ -144,8 +136,8 @@ class RoleChanges:
         *,
         candidate: Instance | None = None,
         bypass_dwell: bool = False,
+        hold: bool = False,
     ) -> tuple[Instance | None, str]:
-        """Return the donor for a change toward `target`, or None and the blocking reason."""
         source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         pool = [
             inst
@@ -176,6 +168,19 @@ class RoleChanges:
             ]
             if not pool:
                 return None, "measured shared-device profiles exclude every source candidate"
+        if self.scheduler.switch_requires_idle:
+            idle = [inst for inst in pool if not inst.prefill and not inst.decode]
+            if not idle:
+                # A busy donor stops taking new work, and a later pass switches it once idle.
+                held = [inst for inst in pool if inst.iid in self.scheduler.held_for_switch()]
+                donor = held[0] if held else min(pool, key=self.flip_cost)
+                if hold:
+                    self.scheduler.hold_for_switch(donor.iid)
+                return None, (
+                    f"holding {donor.iid} out of new placements until it is idle "
+                    "for an engine-side role switch"
+                )
+            pool = idle
         return min(pool, key=self.flip_cost), ""
 
     def flip(
@@ -188,10 +193,7 @@ class RoleChanges:
         bypass_dwell: bool = False,
         decision_details: dict[str, object] | None = None,
     ) -> Instance | None:
-        """Apply a live role change toward `target`; return the moved engine or None.
-
-        Pins, availability and role floors apply even with the bypass flags.
-        """
+        """Pins, availability and role floors apply even with the bypass flags."""
         take_from = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         now = self.scheduler._clock()
 
@@ -240,7 +242,7 @@ class RoleChanges:
         ):
             return None
         chosen, donor_block = self.planned_donor(
-            target, candidate=candidate, bypass_dwell=bypass_dwell
+            target, candidate=candidate, bypass_dwell=bypass_dwell, hold=True
         )
         if chosen is None:
             blocked(donor_block)
@@ -280,6 +282,8 @@ class RoleChanges:
         self._flip_inflight[Phase.PREFILL.value] += len(chosen.prefill)
         self._flip_inflight[Phase.DECODE.value] += len(chosen.decode)
         chosen.role = target
+        # A held donor returns once any engine changes roles.
+        self.scheduler.switch_holds.clear()
         self._last_flip[chosen.iid] = now
         if target is Role.DECODE:
             self._last_p2d_flip = now
@@ -311,11 +315,12 @@ class RoleChanges:
             len(chosen.prefill),
             len(chosen.decode),
         )
+        if self.scheduler.on_flip is not None:
+            self.scheduler.on_flip(chosen, target)
         self.scheduler.refresh_floor_state()
         return chosen
 
     def restore_decode_floor(self) -> Instance | None:
-        """Restore one missing decode engine without waiting on cooldown."""
         if self.scheduler.decode_live() >= self.scheduler.min_decode:
             return None
         moved = self.flip(Role.DECODE, "decode_floor", bypass_cooldown=True)
@@ -331,7 +336,6 @@ class RoleChanges:
         return moved
 
     def settle_drains(self) -> None:
-        """Close the drain on any flip whose caught work has finished."""
         now = self.scheduler._clock()
         for f in self.flips:
             if f.drained_s is not None:
@@ -344,7 +348,6 @@ class RoleChanges:
                 f.drained_s = now - f.at
 
     def observe_control_load(self, prefill: float, decode: float) -> None:
-        """Count consecutive passes with decode at panic load and prefill at most `shrink`."""
         armed = (
             self.scheduler.th.panic_ratio > 0.0
             and decode >= self.scheduler.th.panic_ratio * self.scheduler.th.expand
@@ -353,10 +356,6 @@ class RoleChanges:
         self._panic_sustained = self._panic_sustained + 1 if armed else 0
 
     def _panic_now(self) -> bool:
-        """Return whether current loads permit a cooldown bypass.
-
-        Live loads are checked again after the sustained counter matures.
-        """
         if self.scheduler.th.panic_ratio <= 0.0:
             return False
         if self._panic_sustained < self.scheduler.th.sustained_intervals:

@@ -60,6 +60,24 @@ class MonitoringLedgerTests(unittest.TestCase):
             ledger.finish_pass(1)
         self.assertEqual(ledger.degraded, "OSError:handoff")
 
+    def test_stage_records_its_outcome_and_lets_cancellation_through(self):
+        """A failed stage logs its traceback; a cancelled stage records nothing."""
+        ledger = MonitoringLedger()
+        with (
+            self.assertLogs("narwhal.monitoring_loop", level="ERROR") as logs,
+            ledger.stage("health"),
+        ):
+            raise ValueError("probe")
+        self.assertIsNotNone(logs.records[0].exc_info)
+        self.assertEqual(ledger.stages["health"].consecutive, 1)
+        with ledger.stage("health"):
+            pass
+        self.assertEqual(ledger.stages["health"].consecutive, 0)
+        self.assertEqual(ledger.stages["health"].failures, 1)
+        with self.assertRaises(asyncio.CancelledError), ledger.stage("residency"):
+            raise asyncio.CancelledError
+        self.assertEqual(ledger.stages["residency"].failures, 0)
+
     def test_event_loop_lag_tracks_current_and_process_high_water(self):
         ledger = MonitoringLedger()
         ledger.observe_event_loop_lag(0.03)
@@ -224,6 +242,7 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             ("drains", self.router.scheduler.roles, "settle_drains"),
             ("rollover", self.router.monitor, "roll_interval"),
             ("readmission", monitoring, "readmit"),
+            ("transfer_refresh", monitoring, "refresh_consumers"),
             ("liveness", monitoring, "sweep_liveness"),
             ("telemetry", self.router.scheduler, "pool_load"),
             ("handoff", monitoring.handoff_state, "write"),

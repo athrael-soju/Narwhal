@@ -1,5 +1,3 @@
-"""Execute the documented HTTP gate with distinct distribution and API versions."""
-
 import contextlib
 import hashlib
 import io
@@ -18,7 +16,6 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 
 
 def heredoc(guide: str, marker: str) -> str:
-    """Return a documented heredoc body, including one indented inside a list step."""
     body = re.search(rf"<<'{marker}'\n(.*?)\n[ \t]*{marker}\n", guide, re.S)
     assert body is not None, marker
     return textwrap.dedent(body.group(1))
@@ -31,8 +28,8 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
         script = heredoc(guide, "PY_ATTEST_CHECK")
         document_path = root / "config/engine-attestation.example.json"
         document = AttestationDocument.load(document_path)
-        live = EngineIdentity(document.contract.vllm_version, 200.0)
-        stale = EngineIdentity(document.contract.vllm_version, 100.0)
+        live = EngineIdentity(document.contract.engine_version, 200.0)
+        stale = EngineIdentity(document.contract.engine_version, 100.0)
         for status, attested, passes in (
             (200, live, True),
             (200, stale, False),
@@ -177,7 +174,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                 self.assertEqual(log.read_bytes(), original)
 
     def test_connector_protocol_capture_reads_installed_constant_and_source_hash(self):
-        from narwhal.deployment.attestation_contract.capture import NIXL_CAPTURE, NIXL_CAPTURE_TAG
+        from narwhal.backends.vllm.attestation import NIXL_CAPTURE, NIXL_CAPTURE_TAG
 
         for version in (17, 0, "1.4.1", True):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:

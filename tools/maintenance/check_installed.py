@@ -375,7 +375,7 @@ def main(argv=None):
         )
         assert version_result.stdout == f"narwhal-inference {distribution.version}\n", entry.name
         assert version_result.stderr == "", (entry.name, version_result.stderr)
-    for name in ("small-cuda-v1.json", "reference-v1.json"):
+    for name in ("small-cuda-v1.json", "small-cuda-sglang-v1.json", "reference-v1.json"):
         packaged = importlib.resources.files("narwhal.dev").joinpath(name)
         assert packaged.read_bytes() == (args.source_root / "src/narwhal/dev" / name).read_bytes()
     for command in ("init", "up", "verify", "status", "down"):

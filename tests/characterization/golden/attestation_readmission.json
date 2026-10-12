@@ -1,0 +1,381 @@
+{
+  "engine_requests": [
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/health"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/models"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/health"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/models"
+    },
+    {
+      "headers": {
+        "content-type": "application/json"
+      },
+      "json": {
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "narwhal lifecycle generation check",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "method": "POST",
+      "url": "http://engine-0.invalid:8000/v1/completions"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {
+        "content-type": "application/json"
+      },
+      "json": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "narwhal lifecycle fabric check",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "method": "POST",
+      "url": "http://engine-0.invalid:8000/v1/completions"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {
+        "content-type": "application/json"
+      },
+      "json": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0,
+            1
+          ],
+          "remote_engine_id": "e0-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5600
+        },
+        "max_tokens": 2,
+        "min_tokens": 2,
+        "model": "test-model",
+        "prompt": "narwhal lifecycle fabric check",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "method": "POST",
+      "url": "http://engine-3.invalid:8000/v1/completions"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {
+        "content-type": "application/json"
+      },
+      "json": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "test-model",
+        "prompt": "narwhal lifecycle fabric check",
+        "stream": false,
+        "temperature": 0.0
+      },
+      "method": "POST",
+      "url": "http://engine-3.invalid:8000/v1/completions"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {
+        "content-type": "application/json"
+      },
+      "json": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0,
+            1
+          ],
+          "remote_engine_id": "e3-engine",
+          "remote_host": "127.0.0.1",
+          "remote_port": 5600
+        },
+        "max_tokens": 2,
+        "min_tokens": 2,
+        "model": "test-model",
+        "prompt": "narwhal lifecycle fabric check",
+        "stream": true,
+        "temperature": 0.0
+      },
+      "method": "POST",
+      "url": "http://engine-0.invalid:8000/v1/completions"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/health"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-0.invalid:8000/v1/attestation"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/version"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/metrics"
+    },
+    {
+      "headers": {},
+      "json": null,
+      "method": "GET",
+      "url": "http://engine-3.invalid:8000/v1/attestation"
+    }
+  ],
+  "outcome": {
+    "checks": {
+      "e0": [
+        "health",
+        "attestation f5e095959e161d2d",
+        "profile generation",
+        "model",
+        "new process identity",
+        "generation",
+        "fabric produce to e3",
+        "fabric consume from e3",
+        "final health"
+      ],
+      "e3": [
+        "health",
+        "attestation f5e095959e161d2d",
+        "profile generation",
+        "model",
+        "fabric consume from e0",
+        "fabric produce to e0"
+      ]
+    },
+    "failures": {},
+    "starts": {
+      "e0": 101.0
+    }
+  }
+}

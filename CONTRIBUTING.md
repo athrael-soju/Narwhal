@@ -53,14 +53,15 @@ make sync VENV_PYTHON=/path/to/venv/bin/python
 
 These targets run the checks:
 
-| Command                    | Action                                                                                                                       |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `make check`               | Runs publication and version metadata checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
-| `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                               |
-| `make publication`         | Scans the Git index for private files and private key material                                                               |
-| `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                              |
-| `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                    |
-| `make test`                | Runs the unit suite                                                                                                          |
+| Command                    | Action                                                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
+| `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                                                 |
+| `make publication`         | Scans the Git index for private files and private key material                                                                                 |
+| `make boundary`            | Fails when a module in `src/narwhal/` outside `backends/` imports a backend package or names an engine-specific term                           |
+| `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                                                |
+| `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
+| `make test`                | Runs the unit suite                                                                                                                            |
 
 Stage new files with `git add` before running `make publication`.
 
@@ -172,10 +173,13 @@ Each area of the Python package lives in one package or module:
 | Config models, JSON loading, validation, and serialization                          | `config/`                                             |
 | Narwhal dev templates and the local instance lifecycle                              | `dev/`                                                |
 | Engine launch plans, runtime checks, stage supervision, and attestation capture     | `deployment/`                                         |
+| Engine backend registry and backend implementations                                 | `backends/`, `backends/<name>/`                       |
 | Command results, CLI error rendering, and shared command options                    | `command_results.py`, `cli_errors.py`, `cli_support.py` |
 | Serving entry point, versioned document contracts, build identity, and shared types | `cli.py`, `contracts.py`, `provenance.py`, `types.py` |
 
 Paths are relative to `src/narwhal/`. Put each change in the package that implements the operation or holds the state.
+
+Each package defines the interfaces for the operations it owns. `backends/<name>/` implements them for one engine. Other code loads a backend with `narwhal.backends.load`.
 
 `serving/lifecycle.py` manages individual requests, while `runtime/lifecycle/` handles engine drains and replacement.
 
@@ -326,7 +330,7 @@ For each newly scoped milestone:
 6. Update dependent work from the integration branch before review.
 7. Check off each task after its PR merges and its criteria pass.
 8. Open the milestone PR from the integration branch to `main`.
-9. Merge the milestone PR after every task is checked off and the milestone criteria pass.
+9. Merge the milestone PR after you check off every task and the milestone criteria pass.
 10. Close the issue and the milestone.
 
 The issue records the outcome, scope, exclusions, dependencies, tasks, acceptance criteria, integration branch, and starting commit. Each task records its prerequisites and acceptance criteria as nested checkboxes, plus its package and required checks when they differ from the issue's defaults.
@@ -337,7 +341,7 @@ Link cross-milestone prerequisites explicitly. Deliver shared contracts through 
 
 Keep Narwhal's scope and shared contracts hardware and GPU agnostic. Milestones, issues, and tasks describe the required capabilities, topology, behaviour, and acceptance criteria.
 
-Select hardware and model inputs when the corresponding work starts, keeping those selections, pinned execution inputs, and raw evidence in the private locations under [Working files and deployment artifacts](#working-files-and-deployment-artifacts).
+Select hardware and model inputs when the corresponding work starts. Keep those selections, pinned execution inputs, and raw evidence in the private locations under [Working files and deployment artifacts](#working-files-and-deployment-artifacts).
 
 Keep hardware and model identities out of public milestone and issue text, comments, and attachments, including any copied configuration and logs.
 
@@ -349,7 +353,7 @@ A task PR targets its [milestone integration branch](#milestone-delivery). A mil
 
 Keep each branch to one coherent change, and open a draft while implementation or evidence gathering continues.
 
-The PR description should cover the problem, the resulting behaviour, and how you checked it, along with the relevant issue and, for a task, its task number. Include reproduction steps for a bug fix and note any checks that require hardware.
+The PR description should cover the problem, the resulting behaviour, and how you checked it. It should also name the relevant issue and, for a task, its task number. Include reproduction steps for a bug fix and note any checks that require hardware.
 
 Keep deployment selections in private execution records, and sanitize logs and configuration before attaching them.
 
@@ -378,7 +382,7 @@ Configure a GitHub trusted publisher on PyPI:
 | Workflow     | `release.yml`          |
 | Environment  | `pypi`                 |
 
-Prepare a release by checking the latest PyPI version, comparing the target version with the conventional commit bump, and, if they differ, putting one `Release-As` footer in the preceding squash commit. Confirm that the release PR's package, citation, manifest, and changelog versions all agree.
+Prepare a release by checking the latest PyPI version and comparing the target version with the conventional commit bump. If they differ, put one `Release-As` footer in the preceding squash commit. Confirm that the release PR's package, citation, manifest, and changelog versions all agree.
 
 After the release PR merges, the release workflow publishes the reviewed wheel and source archive to GitHub and PyPI.
 

@@ -1,20 +1,12 @@
 """Exercise endpoint-aware response assembly through HTTP and split engine legs."""
 
 import json
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
 import httpx
 
-from narwhal.config import SLO, EngineSpec, FleetConfig
-from narwhal.profiling.model import Profile
-from narwhal.serving.app import create_app
 from narwhal.serving.completion import completion_body_error, output_cap
-from narwhal.serving.router.routing import NarwhalRouter
-from narwhal.types import Role
-from tests.wire import engine_transports
+from tests.wire import serving_app
 
 
 def chunk(delta, *, token=None, finish=None, **fields):
@@ -26,19 +18,6 @@ def chunk(delta, *, token=None, finish=None, **fields):
 
 class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        cfg = FleetConfig(
-            model="stub",
-            slo=SLO(ttft_s=10.0, tpot_s=0.5),
-            engines=[
-                EngineSpec("p", "http://prefill", Role.PREFILL),
-                EngineSpec("d", "http://decode", Role.DECODE),
-            ],
-            profiles_path=Path(self.directory.name) / "profiles.json",
-            tokenize=False,
-            admission="open",
-        )
         self.calls = []
         self.frames = [chunk({"role": "assistant"}), chunk({"content": "Hi"}, token=1)]
 
@@ -69,37 +48,7 @@ class ChatCompletionTests(unittest.IsolatedAsyncioTestCase):
                 200, text=wire + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"}
             )
 
-        def router(*args, **kwargs):
-            return NarwhalRouter(*args, **engine_transports(engine), **kwargs)
-
-        with patch("narwhal.serving.app.NarwhalRouter", side_effect=router):
-            self.app = create_app(cfg)
-        self.router = self.app.state.router
-        self.addAsyncCleanup(self.router.engines.aclose)
-        for iid in ("p", "d"):
-            self.router.profiles.put(
-                Profile(
-                    iid,
-                    2e-8,
-                    6e-5,
-                    0.005,
-                    3e-6,
-                    0.012,
-                    decode_min_requests=1,
-                    decode_max_requests=4,
-                    decode_min_kv_tokens=1,
-                    decode_max_kv_tokens=1024,
-                    decode_fit_mape=0.0,
-                    decode_cv_mape=0.0,
-                )
-            )
-        self.router.journal.open()
-        self.addCleanup(self.router.journal.close)
-        # No monitoring lifespan or network fleet is needed for HTTP serving.
-        self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
-        )
-        self.addAsyncCleanup(self.client.aclose)
+        self.router, self.client = serving_app(self, engine)
 
     async def post(self, *, endpoint="/v1/chat/completions", **fields):
         body = {"model": "stub", "max_tokens": 16, **fields}

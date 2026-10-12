@@ -1,22 +1,33 @@
-"""Serve HTTPX-style engine handlers to the wire client over socket pairs."""
-
 import asyncio
 import inspect
+import itertools
+import json
 import socket
-from collections.abc import Callable
+import tempfile
+import unittest
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+from unittest.mock import patch
 
 import h11
 import httpx
+
+from narwhal.backends import load
+from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.engines.client import EngineClient
+from narwhal.engines.connector import RendezvousConnector
+from narwhal.profiling.model import Profile
+from narwhal.serving.app import create_app
+from narwhal.serving.router.routing import NarwhalRouter
+from narwhal.types import Role
 
 Handler = Callable[[httpx.Request], object]
 
 
 class EngineWire:
-    """Engine fake: each dial gets a socket pair whose far end runs `handler`.
-
-    A handler that raises drops the connection without a response.
-    """
-
     def __init__(self, handler: Handler) -> None:
         self.handler = handler
         self.dials: list[tuple[str, int]] = []
@@ -92,7 +103,6 @@ class EngineWire:
         writer: asyncio.StreamWriter,
         response: httpx.Response,
     ) -> bool:
-        """Send `response`; return False when the client closed the connection first."""
         length = response.headers.get("content-length")
         headers = [
             (name, value)
@@ -139,5 +149,125 @@ class EngineWire:
 
 
 def engine_transports(handler: Handler) -> dict:
-    """Control-pool transport and data-leg dial for one engine handler."""
     return {"transport": httpx.MockTransport(handler), "dial": EngineWire(handler).dial}
+
+
+def engine_clients(module: ModuleType, handler: Handler) -> AbstractContextManager:
+    return patch.object(
+        module,
+        "EngineClient",
+        side_effect=lambda **kwargs: EngineClient(**kwargs, **engine_transports(handler)),
+    )
+
+
+def routed(handler: Handler) -> type[httpx.AsyncClient]:
+    base = httpx.AsyncClient
+
+    class Routed(base):
+        def __init__(self, *args, transport=None, **kwargs):
+            super().__init__(*args, transport=transport or httpx.MockTransport(handler), **kwargs)
+
+    return Routed
+
+
+def serving_app(
+    case: unittest.IsolatedAsyncioTestCase,
+    handler: Handler,
+    *,
+    urls: tuple[str, str] = ("http://prefill", "http://decode"),
+    tokenize: bool = False,
+) -> tuple[NarwhalRouter, httpx.AsyncClient]:
+    """Serve a profiled stub prefill and decode pair over handler; register its cleanups."""
+    directory = tempfile.TemporaryDirectory()
+    case.addCleanup(directory.cleanup)
+    cfg = FleetConfig(
+        model="stub",
+        slo=SLO(ttft_s=10.0, tpot_s=0.5),
+        engines=[
+            EngineSpec("p", urls[0], Role.PREFILL),
+            EngineSpec("d", urls[1], Role.DECODE),
+        ],
+        profiles_path=Path(directory.name) / "profiles.json",
+        tokenize=tokenize,
+        admission="open",
+    )
+
+    def wired_router(*args, **kwargs):
+        return NarwhalRouter(*args, **engine_transports(handler), **kwargs)
+
+    with patch("narwhal.serving.app.NarwhalRouter", side_effect=wired_router):
+        app = create_app(cfg)
+    router = app.state.router
+    case.addAsyncCleanup(router.engines.aclose)
+    for iid in ("p", "d"):
+        router.profiles.put(
+            Profile(
+                iid,
+                2e-8,
+                6e-5,
+                0.005,
+                3e-6,
+                0.012,
+                decode_min_requests=1,
+                decode_max_requests=4,
+                decode_min_kv_tokens=1,
+                decode_max_kv_tokens=1024,
+                decode_fit_mape=0.0,
+                decode_cv_mape=0.0,
+            )
+        )
+    router.journal.open()
+    case.addCleanup(router.journal.close)
+    # No monitoring lifespan or network fleet is needed for HTTP serving.
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://router")
+    case.addAsyncCleanup(client.aclose)
+    return router, client
+
+
+def vllm_engine() -> dict:
+    backend = load("vllm")
+    return {"kv": backend.connector("nixl"), "dialect": backend.dialect}
+
+
+class FakeRendezvous(RendezvousConnector):
+    name = "fake"
+    decode_wait_s = 0.3
+
+    def __init__(self) -> None:
+        self.rooms = itertools.count()
+
+    def handoff_bound(self, lease_s: int) -> float:
+        return float(lease_s)
+
+    def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]:
+        return {"room": next(self.rooms)}
+
+    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
+        return {**body, "leg": "prefill", **rendezvous}
+
+    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
+        return {**body, "leg": "decode", **rendezvous}
+
+
+class RendezvousLegs:
+    def __init__(self, frames: list[dict[str, Any]]) -> None:
+        self.frames = frames
+        self.calls: list[tuple[httpx.Request, dict[str, Any]]] = []
+        self.prefill_status = 200
+        self.prefill_seen = asyncio.Event()
+        self.decode_seen = asyncio.Event()
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.calls.append((request, body))
+        if body.get("leg") == "prefill":
+            self.prefill_seen.set()
+            # Each leg waits for the other, so only concurrent legs complete.
+            await asyncio.wait_for(self.decode_seen.wait(), 5)
+            return httpx.Response(self.prefill_status, json={})
+        self.decode_seen.set()
+        if self.prefill_status != 200:
+            await asyncio.Event().wait()
+        await asyncio.wait_for(self.prefill_seen.wait(), 5)
+        wire = "".join("data: " + json.dumps(frame) + "\n\n" for frame in self.frames)
+        return httpx.Response(200, text=wire + "data: [DONE]\n\n")

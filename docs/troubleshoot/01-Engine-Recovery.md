@@ -1,5 +1,5 @@
 ---
-description: Recover failed vLLM engines and whole engine waves in a Narwhal fleet.
+description: Recover failed engines and whole engine waves in a Narwhal fleet.
 ---
 
 # Engine and whole-wave recovery
@@ -55,7 +55,7 @@ Steps for whole-wave recovery:
 6. Verify that only the intended worker processes hold accelerator memory.
 7. Launch every engine from the same immutable image and launch contract.
 8. Start a fresh attestation sidecar for each engine.
-9. While the wave is held, [activate one replacement profile store](../operate/03-Restart-Engines.md#activating-replacement-profiles) covering every engine whose process generation changed.
+9. While the hold is in effect, [activate one replacement profile store](../operate/03-Restart-Engines.md#activating-replacement-profiles) covering every engine whose process generation changed.
 10. Request whole-wave readmission.
 11. Wait for fabric validation to pass.
 12. Confirm `/ready` returns HTTP 200.

@@ -99,7 +99,8 @@ def not_ready_response(
             error_code=code,
             extra={"readiness_reason": reason},
         )
-    return error_response(503, code, reason, headers={"retry-after": "1"}, code=code)
+    message = "No engines are available" if backend_unavailable else "Router is not ready"
+    return error_response(503, code, message, headers={"retry-after": "1"}, code=code)
 
 
 def ttft_refusal_cause(router: NarwhalRouter, req: Request, priced_s: float) -> str:

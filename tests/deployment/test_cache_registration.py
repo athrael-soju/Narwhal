@@ -1,5 +1,3 @@
-"""Bind cache block grouping to explicit layout evidence and the pinned layout API."""
-
 import contextlib
 import io
 import json
@@ -11,7 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
-from narwhal.deployment.launch_engine.captures import registration_layout
+from narwhal.backends.vllm.captures import registration_layout
 from narwhal.deployment.launch_engine.plan import load, prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from tests.deployment.fixtures import launcher_inputs, patched_docker

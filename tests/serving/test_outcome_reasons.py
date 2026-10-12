@@ -85,7 +85,7 @@ class OutcomeReasonTests(HttpHarness):
         )
         self.assertEqual(rows[-1]["error_code"], not_ready.json()["error"]["code"])
         self.assertEqual(rows[-1]["readiness_reason"], "engine identity validation pending")
-        self.assertEqual(rows[-1]["readiness_reason"], not_ready.json()["error"]["message"])
+        self.assertEqual(not_ready.json()["error"]["message"], "Router is not ready")
         self.assertTrue(all(row["terminal"] == "rejected" for row in rows))
         text = await self.metrics(client)
         for reason, count in (("saturated", 1), ("inflight_limit", 2), ("not_ready", 1)):
@@ -354,10 +354,20 @@ class OutcomeReasonTests(HttpHarness):
                 self.assertEqual(price["attempt"], 1)
                 self.assertGreater(price["own_prefill_s"], 0.0)
                 self.assertGreaterEqual(price["backlog_s"], 0.0)
+                self.assertEqual(price["handoff_s"], 0.0)
                 self.assertAlmostEqual(
                     price["price_s"],
-                    price["backlog_s"] + price["own_prefill_s"] + price["elapsed_s"],
+                    price["backlog_s"]
+                    + price["own_prefill_s"]
+                    + price["elapsed_s"]
+                    + price["handoff_s"],
                 )
+        handoff = self.cfg.slo.ttft_s * 2
+        with patch.object(self.router.scheduler, "handoff_s", return_value=handoff):
+            self.assertEqual((await self.post(client)).status_code, 429)
+        price = self.terminal_rows()[-1]["admission_price"]
+        self.assertEqual(price["handoff_s"], handoff)
+        self.assertGreater(price["price_s"], handoff)
         with patch.object(
             self.router.scheduler, "prefill_admission_price", return_value=float("inf")
         ):

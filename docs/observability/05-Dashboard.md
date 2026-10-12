@@ -35,7 +35,7 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 ## Selectors
 
-The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table, **Engine role history** and **Expired KV by producer** to the engines you pick. Both selectors default to All.
+The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. Both selectors default to All.
 
 ## Colours
 
@@ -74,9 +74,9 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Orange       | `#FF9830` | rejected                                                                                                     |
 | Pink         | `#FF7383` | invalid                                                                                                      |
 | Red          | `#D44A3A` | failed, pages, SLO lines, ejected engines and headline values past their limit                               |
-| Dark red     | `#C4162A` | expired requests and expired KV                                                                              |
+| Dark red     | `#C4162A` | expired requests                                                                                             |
 | Purple       | `#B877D9` | retry attempts and retry credits                                                                             |
-| Dark purple  | `#A352CC` | admission queue and wait, the admission and queue attempt phases, and event-loop lag                         |
+| Dark purple  | `#A352CC` | admission queue and wait, and event-loop lag                                                                 |
 | Light purple | `#CA95E5` | seat time, requests in flight and event-loop busy share                                                      |
 
 ## Headline row
@@ -109,20 +109,21 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
+The engine table shows each engine's backend, current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
 
-**Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **vLLM running** bars scale to the busiest engine.
+**Role** and **State** tell you what the engine does and whether it takes placements. The engine columns read the vLLM or SGLang series the engine exports. The **Resident** and **Engine running** bars scale to the busiest engine.
 
-| Column       | Shows                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Engine       | Engine ID (`iid`)                                                                                                   |
-| Role         | Current pool assignment: Prefill, Decode or Colocated                                                               |
-| State        | The most serious [engine state](#engine-states)                                                                     |
-| Resident     | Narwhal requests currently on the engine                                                                            |
-| vLLM running | Requests vLLM reports as running                                                                                    |
-| KV cache     | vLLM KV cache use, amber from 80% and red from 95%                                                                  |
-| Prefix hits  | Share of prompt tokens served from the engine's prefix cache                                                        |
-| Tokens/s     | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines |
+| Column                       | Shows                                                                                                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Engine                       | Engine ID (`iid`)                                                                                                                                                                                      |
+| Backend                      | Logo of the engine's backend, vLLM or SGLang                                                                                                                                                           |
+| Role                         | Current pool assignment: Prefill, Decode or Colocated                                                                                                                                                  |
+| State                        | The most serious [engine state](#engine-states)                                                                                                                                                        |
+| Resident                     | Narwhal requests currently on the engine                                                                                                                                                               |
+| Engine running               | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
+| KV cache                     | KV cache use from `vllm:kv_cache_usage_perc` or `sglang:token_usage`, amber from 80% and red from 95%                                                                                                  |
+| Prefix hits                  | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, or `sglang:cached_tokens_total` over `sglang:prompt_tokens_total` |
+| Tokens/s                     | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
 
@@ -147,16 +148,6 @@ When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed mark
 
 **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`. A red or yellow bar marks the time the alert fires.
 
-## Drop reasons, failed attempts and expired KV
-
-The row under **Request outcomes** breaks its drop series down by request outcome, by attempt and by producer engine, reading left to right.
-
-**Dropped requests by reason** shows one bar for each outcome and reason that dropped at least one request during the displayed interval. Each bar counts `increase()` over the interval of `narwhal_refused_total` by `cause`, or of `narwhal_rejected_total`, `narwhal_failed_total` or `narwhal_expired_total` by `reason`, and takes its outcome's colour from **Request outcomes**. Reasons with no requests in the interval have no bar. [Outcome reasons](../telemetry/01-Journal.md#outcome-reasons) gives the condition behind each reason.
-
-**Failed attempts by reason** counts `narwhal_attempt_failures_total` over the displayed interval, by the [phase](../telemetry/01-Journal.md#attempt-failures) the attempt reached and its reason. Dark purple bars are failures in the `admission` or `queue` phase, teal bars in `prefill` and blue bars in `decode`. A failed attempt ends its request unless the router schedules a retry, so compare these bars with **completed after retry** on **Retries and early exits**.
-
-**Expired KV by producer** plots, per engine, the rate of vLLM's NIXL connector counter `vllm:nixl_num_kv_expired_reqs_total`: requests whose KV expired on that engine. vLLM records the counter on the producer side of a KV transfer, which is the prefill engine. Engines that do not export the counter have no line. Hover over a line for the engine ID.
-
 ## Pool assignments
 
 **Pool assignments** shows how many engines serve each phase over time.
@@ -171,7 +162,7 @@ These panels show how long requests take and how much work the engines complete.
 
 Both panels draw the selected router's SLO as a dashed red line. When p95 crosses it, more than 5% of requests in that window missed the SLO.
 
-**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). Prefill/s counts vLLM's `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total.
+**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). On vLLM, Prefill/s counts the `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total. On SGLang, it counts `sglang:prompt_tokens_total` on engines outside the decode and colocated roles, because an SGLang decode engine also counts the prompt of each request it decodes.
 
 ## Pool pressure, admission and queue depth
 
@@ -225,7 +216,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | ----------- | ------------------------------------------------------------------------------------------------------------------ | -------------- |
 | Serving     | Normal operation                                                                                                   | In service     |
 | Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
-| Backlogged  | vLLM reports waiting requests                                                                                      | In service     |
+| Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting` or `sglang:num_queue_reqs`                      | In service     |
 | Probation   | Placement ranks the engine lower after latency drift                                                               | In service     |
 | Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
 | Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |

@@ -16,15 +16,15 @@ import httpx
 
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.config.model import SharedDeviceAllocation
-from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineClient, EngineError
+from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe.fleet import device_key
 from narwhal.types import Role
-from tests.fixtures import ROOT, calibration_document
-from tests.wire import engine_transports
+from tests.fixtures import ROOT, DescriptorHandoffs, calibration_document
+from tests.wire import engine_clients
 
 TOKEN = 'data: {"choices":[{"text":"x","token_ids":[1]}]}'
 
@@ -42,7 +42,7 @@ def engines(count, shared=()):
     ]
 
 
-class RecordingClient:
+class RecordingClient(DescriptorHandoffs):
     """Fake engine client that records every prefill and decode call per device slot."""
 
     def __init__(
@@ -266,7 +266,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         generations=None,
         samples=2,
     ):
-        class FakeClient:
+        class FakeClient(DescriptorHandoffs):
             def __init__(self, **kwargs):
                 self.decode = decode
 
@@ -333,6 +333,36 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 out=output,
             )
         return code, json.loads(output.read_text())
+
+    async def _run_switching(self, restore):
+        async def decode(*args, **kwargs):
+            yield [parse_event(TOKEN)]
+            yield [parse_event("data: [DONE]")]
+
+        switcher = SimpleNamespace(place=AsyncMock())
+        roles = {spec.url: (Role.PREFILL, None) for spec in self.cfg.engines}
+        with (
+            patch.object(calibration, "engine_side", return_value=switcher),
+            patch.object(calibration, "attested_launches", new=AsyncMock(return_value={})),
+            patch.object(calibration, "current_roles", new=AsyncMock(return_value=roles)),
+            patch.object(calibration, "restore_roles", new=restore),
+        ):
+            code, document = await self._run_with_decode(decode, samples=100)
+        restore.assert_awaited_once()
+        self.assertIs(restore.call_args.args[0], switcher)
+        self.assertEqual(restore.call_args.args[2], roles)
+        return code, document
+
+    async def test_calibration_restores_the_roles_engines_served(self):
+        code, document = await self._run_switching(AsyncMock())
+        self.assertEqual((code, document["status"]), (0, "complete"))
+
+    async def test_a_failed_role_restore_fails_calibration(self):
+        restore = AsyncMock(side_effect=httpx.ConnectError("down"))
+        with redirect_stdout(io.StringIO()) as output:
+            code, document = await self._run_switching(restore)
+        self.assertEqual((code, document["status"]), (1, "complete"))
+        self.assertIn("role restore failed: ConnectError: down", output.getvalue())
 
     async def test_written_calibration_validates_and_labels_engines(self):
         async def decode(*args, **kwargs):
@@ -661,11 +691,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
         output = Path(self.folder.name) / "boundary.json"
         with (
-            patch.object(
-                calibration,
-                "EngineClient",
-                side_effect=lambda **kwargs: EngineClient(**kwargs, **engine_transports(handle)),
-            ),
+            engine_clients(calibration, handle),
             patch.object(
                 calibration,
                 "read_generation",

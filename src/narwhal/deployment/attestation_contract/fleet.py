@@ -1,5 +1,3 @@
-"""Write the router engine contract after verifying every live sidecar."""
-
 from __future__ import annotations
 
 import asyncio
@@ -9,8 +7,9 @@ from pathlib import Path
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import EngineContract, FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...engines.attestation import fetch_spec_identity, verify_attestation
 from .evidence import read_json, write_private_json
 
 
@@ -20,11 +19,10 @@ def finalize_fleet(path: Path) -> EngineContract:
     fleet = FleetConfig.load(path)
     contracts = []
     headers = fleet.engine_headers()
+    reader = load_backend(fleet.backend).identity
     with httpx.Client(timeout=fleet.health_timeout_s) as client:
         for engine in fleet.engines:
-            identity = asyncio.run(
-                fetch_engine_identity(engine.url, timeout_s=fleet.health_timeout_s, headers=headers)
-            )
+            identity = asyncio.run(fetch_spec_identity(fleet, engine, headers=headers))
             response = client.get(engine.attestation_url)
             response.raise_for_status()
             payload = response.json()
@@ -35,10 +33,8 @@ def finalize_fleet(path: Path) -> EngineContract:
             failures = verify_attestation(payload, contract, identity)
             if failures:
                 raise ValueError(f"{engine.iid}: " + "; ".join(failures))
-            if contract.missing():
-                raise ValueError(
-                    f"{engine.iid}: incomplete contract: " + ", ".join(contract.missing())
-                )
+            if missing := contract.missing(reader.contract_fields):
+                raise ValueError(f"{engine.iid}: incomplete contract: " + ", ".join(missing))
             contracts.append(contract)
     if not contracts or any(
         contract.fields() != contracts[0].fields() for contract in contracts[1:]

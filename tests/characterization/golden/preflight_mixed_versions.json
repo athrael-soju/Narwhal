@@ -1,0 +1,35 @@
+{
+  "failed": [
+    "mixed vLLM versions before KV transfer: e0=1.0.0, e3=1.0.1"
+  ],
+  "output": [
+    "contract",
+    "  SKIP  no engine_contract declared; checking live vLLM versions only",
+    "  ok    e0 vLLM 1.0.0",
+    "  ok    e3 vLLM 1.0.1",
+    "  FAIL  mixed vLLM versions before KV transfer: e0=1.0.0, e3=1.0.1"
+  ],
+  "requests": [
+    {
+      "body": null,
+      "engine": "e0",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    },
+    {
+      "body": null,
+      "engine": "e3",
+      "headers": {},
+      "method": "GET",
+      "path": "/version"
+    }
+  ],
+  "skipped": [
+    "no engine_contract declared; checking live vLLM versions only"
+  ],
+  "unsafe": [
+    "e0",
+    "e3"
+  ]
+}

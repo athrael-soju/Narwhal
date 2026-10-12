@@ -156,17 +156,19 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the `--max-num-seqs` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. An engine launched without `--max-num-seqs` takes its decode seats from the profile alone.
+The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.extra_args` sets it.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
 The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
 
+In an SGLang fleet with the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first.
+
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
 #### KV handoff bound
 
-After prefill, the producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
+After prefill, a vLLM producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
 
 The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#attestation). It derives the producer's handoff bound:
 
@@ -179,6 +181,8 @@ At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtim
 The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
+
+An SGLang producer holds the request's KV only for its rendezvous with the decode leg, so SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 
@@ -419,7 +423,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | Larger of the engine's mean token interval and its longest open inter-token gap                                                                               |
+| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
@@ -497,6 +501,8 @@ The split's slot count is its decode engine count times the live mean slot count
 
 A request at or past its TTFT deadline when it reaches decode contributes zero.
 
+The ratio is at least the measured [handoff delay](../telemetry/01-Journal.md#admission-price) times the current decode engine count, divided by the split's decode engine count and by `slo.ttft_s`.
+
 Adjacent-split decisions use these spans:
 
 | Span              | Length                                                                                                                   | Default |
@@ -519,10 +525,11 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-The `mixed_pressure` rule moves one decode engine to prefill when all of these hold:
+The `mixed_pressure` rule moves one engine when all of these hold:
 
 - projected source load is above `controller.thresholds.shrink`
-- the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
+- for a move to prefill, the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
+- for a move to decode, the current split's projected decode load is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile
 - the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
 

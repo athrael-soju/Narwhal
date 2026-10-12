@@ -271,29 +271,34 @@ class SplitScorer:
 
         Waiting decode requests and requests in prefill take the pool's slots in handoff order,
         as decode admission projects them. A request past its TTFT deadline at handoff adds
-        nothing.
+        nothing. The measured handoff delay, scaled to each count, is a floor over the TTFT
+        target.
         """
+        current = len(self.monitor.pool(Role.DECODE))
+        handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s
         queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
         occupancy = decode_occupancy(
             self.scheduler,
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
             expected_output=self.demand.output_estimator(),
         )
-        if occupancy is None:
-            return ()
         rows = []
         for decode in decodes:
-            started, _ = occupancy.schedule(occupancy.slots * decode // len(occupancy.engines))
-            ratio = max(
-                (
-                    (start - ready) / (deadline - ready)
-                    for (ready, _, _), (start, _, _), deadline in zip(
-                        occupancy.queued, started, occupancy.deadlines, strict=True
-                    )
-                    if start > ready and deadline > ready
-                ),
-                default=0.0,
-            )
+            ratio = handoff / decode if decode > 0 else 0.0
+            if occupancy is not None:
+                started, _ = occupancy.schedule(occupancy.slots * decode // len(occupancy.engines))
+                ratio = max(
+                    [
+                        ratio,
+                        *(
+                            (start - ready) / (deadline - ready)
+                            for (ready, _, _), (start, _, _), deadline in zip(
+                                occupancy.queued, started, occupancy.deadlines, strict=True
+                            )
+                            if start > ready and deadline > ready
+                        ),
+                    ]
+                )
             rows.append((decode, ratio))
         return tuple(rows)
 

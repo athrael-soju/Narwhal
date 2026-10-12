@@ -1,5 +1,3 @@
-"""Reject stale engine evidence and derive the router contract from live sidecars."""
-
 import contextlib
 import hashlib
 import io
@@ -15,22 +13,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
-from narwhal.config import EngineContract
-from narwhal.deployment.attestation_contract import capture as attestation_capture
-from narwhal.deployment.attestation_contract import document as attestation_document
-from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
-from narwhal.deployment.attestation_contract.capture import (
+from narwhal.backends.vllm import attestation as attestation_capture
+from narwhal.backends.vllm.attestation import (
     MODEL_DIMENSIONS_CAPTURE,
     MODEL_DIMENSIONS_CAPTURE_TAG,
+    attention_backends,
     capture_model_dimensions,
     capture_nixl,
-)
-from narwhal.deployment.attestation_contract.document import (
-    attention_backends,
     engine_document,
-    generate,
     launch_args,
 )
+from narwhal.config import EngineContract
+from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
+from narwhal.deployment.attestation_contract.document import generate
 from narwhal.deployment.attestation_contract.evidence import live_native, read_json
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
@@ -40,12 +35,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 # Attestation modules that look up `live_container`.
-LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_document, attestation_sidecar)
+LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_sidecar)
 
 
 @contextlib.contextmanager
 def patched_live_container(**kwargs):
-    """Patch `live_container` in every attestation module that calls it; yield the shared mock."""
     mock = MagicMock(**kwargs)
     with contextlib.ExitStack() as stack:
         for module in LIVE_CONTAINER_CALLERS:
@@ -157,12 +151,16 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=process,
                 ) as observed,
                 patch(
-                    "narwhal.deployment.attestation_contract.evidence.fetch_engine_identity",
+                    "narwhal.deployment.native_engine.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=identity,
-                ),
+                ) as fetch,
             ):
                 document = engine_document(run, log)
+                self.assertEqual(fetch.await_args.args, ("http://192.0.2.11:8000",))
+                self.assertEqual(
+                    fetch.await_args.kwargs["headers"], {"Authorization": "Bearer test"}
+                )
                 self.assertEqual(document["contract"]["image_digest"], "")
                 self.assertFalse(EngineContract(**document["contract"]).missing())
                 self.assertNotIn("image_digest", document["sources"])
@@ -185,7 +183,7 @@ class AttestationContractTests(unittest.TestCase):
                     return_value=process,
                 ),
                 patch(
-                    "narwhal.deployment.attestation_contract.evidence.fetch_engine_identity",
+                    "narwhal.deployment.native_engine.fetch_engine_identity",
                     new_callable=AsyncMock,
                     return_value=EngineIdentity("0.29.0", 100.0),
                 ),
@@ -255,6 +253,8 @@ class AttestationContractTests(unittest.TestCase):
             ],
             "env_sha256": "e" * 64,
             "launcher_sha256": "f" * 64,
+            "launcher_code_sha256": "f" * 64,
+            "cache_capture_code_sha256": "f" * 64,
             "connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
             "expected_packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0"},
         }
@@ -358,7 +358,7 @@ class AttestationContractTests(unittest.TestCase):
         )
 
     def test_nixl_capture_ignores_vllm_stdout_logs_and_rejects_ambiguous_output(self):
-        from narwhal.deployment.attestation_contract.capture import NIXL_CAPTURE_TAG
+        from narwhal.backends.vllm.attestation import NIXL_CAPTURE_TAG
 
         with tempfile.TemporaryDirectory() as folder:
             run, _ = self.engine_evidence(Path(folder))
@@ -379,7 +379,7 @@ class AttestationContractTests(unittest.TestCase):
             with (
                 patched_live_container(return_value="b" * 64),
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ),
             ):
@@ -388,6 +388,7 @@ class AttestationContractTests(unittest.TestCase):
                 self.assertEqual(record["nixl_connector_version"], 9)
                 self.assertEqual(record["module_sha256"], "f" * 64)
                 self.assertEqual(record["container_id"], "b" * 64)
+                self.assertEqual(list(record)[-3:], ["plan_sha256", "image_id", "container_id"])
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
                 output.unlink()
                 for stdout in (
@@ -429,7 +430,7 @@ class AttestationContractTests(unittest.TestCase):
             (run / "engine.env").write_text(f"PYTHONPATH={paths['engine']}\n")
             with (
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.live_native",
+                    "narwhal.backends.vllm.attestation.live_native",
                     return_value=process,
                 ),
                 patch.dict(
@@ -441,6 +442,71 @@ class AttestationContractTests(unittest.TestCase):
             self.assertEqual(record["nixl_connector_version"], 22)
             self.assertTrue(Path(record["module_file"]).is_relative_to(paths["engine"]))
             self.assertEqual(record["process"], process)
+            self.assertEqual(list(record)[-2:], ["plan_sha256", "process"])
+
+    def test_native_live_dimensions_bind_the_process_and_model_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, _, process = self.native_evidence(Path(folder))
+            (run / "model-dimensions.live.json").unlink()
+            plan = read_json(run / "launch.json")
+            record = {
+                **read_json(run / "model-dimensions.json"),
+                "launcher_sha256": plan["launcher_sha256"],
+            }
+            result = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=MODEL_DIMENSIONS_CAPTURE_TAG + json.dumps(record) + "\n",
+                stderr="",
+            )
+            with (
+                patch("narwhal.backends.vllm.attestation.live_native", return_value=process),
+                patch(
+                    "narwhal.backends.vllm.attestation.subprocess.run", return_value=result
+                ) as probe,
+            ):
+                live = read_json(capture_model_dimensions(run))
+            self.assertEqual(probe.call_args.args[0][0], plan["python_executable"])
+            self.assertEqual(probe.call_args.kwargs["env"]["NARWHAL_CAPTURE_CACHE"], "0")
+            self.assertEqual(live["process"], process)
+            self.assertEqual(live["model_revision"], plan["model_revision"])
+            self.assertEqual(list(live)[-3:], ["process", "model_revision", "capture_log_sha256"])
+
+    def test_native_http_capture_sends_the_recorded_engine_key(self):
+        metrics = "process_start_time_seconds 100\n"
+        requests: list[httpx.Request] = []
+        client = httpx.Client
+
+        def answer(request):
+            requests.append(request)
+            if request.url.path == "/version":
+                return httpx.Response(200, json={"version": "0.29.0"})
+            return httpx.Response(200, text=metrics)
+
+        def connect(**kwargs):
+            return client(transport=httpx.MockTransport(answer), **kwargs)
+
+        for env, authorization in (("VLLM_API_KEY=test\n", "Bearer test"), ("", None)):
+            with self.subTest(authorization=authorization), tempfile.TemporaryDirectory() as folder:
+                run, _, process = self.native_evidence(Path(folder))
+                (run / "engine.env").write_text(env)
+                (run / "version.json").unlink()
+                (run / "metrics.txt").unlink()
+                requests.clear()
+                with (
+                    patch.object(attestation_capture, "live_native", return_value=process) as live,
+                    patch("narwhal.backends.vllm.attestation.httpx.Client", connect),
+                ):
+                    attestation_capture.capture_native_http(run)
+                live.assert_called_once()
+                self.assertEqual(
+                    [str(request.url) for request in requests],
+                    ["http://192.0.2.11:8000/version", "http://192.0.2.11:8000/metrics"],
+                )
+                for request in requests:
+                    self.assertEqual(request.headers.get("Authorization"), authorization)
+                self.assertEqual(read_json(run / "version.json"), {"version": "0.29.0"})
+                self.assertEqual((run / "metrics.txt").read_text(), metrics)
 
     def test_live_dimensions_complete_an_old_plan_without_restarting_its_container(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -469,7 +535,7 @@ class AttestationContractTests(unittest.TestCase):
                     args=[], returncode=0, stdout=output, stderr=""
                 )
                 with patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ) as run_docker:
                     capture = capture_model_dimensions(run)
@@ -482,6 +548,9 @@ class AttestationContractTests(unittest.TestCase):
                 live = read_json(capture)
                 self.assertEqual(live["model_architecture"], "TestForCausalLM")
                 self.assertEqual(live["container_id"], cid)
+                self.assertEqual(
+                    list(live)[-3:], ["image_id", "container_id", "capture_log_sha256"]
+                )
                 self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
                 logs = list(run.glob("model-dimensions.live-*.log"))
                 self.assertEqual(len(logs), 1)
@@ -523,7 +592,7 @@ class AttestationContractTests(unittest.TestCase):
             with (
                 patched_live_container(return_value="b" * 64),
                 patch(
-                    "narwhal.deployment.attestation_contract.capture.subprocess.run",
+                    "narwhal.backends.vllm.attestation.subprocess.run",
                     return_value=result,
                 ),
                 self.assertRaisesRegex(ValueError, "differ from the retained plan capture"),
@@ -582,7 +651,11 @@ class AttestationContractTests(unittest.TestCase):
             run, log = self.engine_evidence(Path(folder))
             with patched_live_container(return_value="b" * 64):
                 document = engine_document(run, log)
-                self.assertEqual(document["contract"]["nixl_connector_version"], 9)
+                # The goldens sort keys, so this pins the written order.
+                self.assertEqual(
+                    list(document), ["schema", "schema_version", "contract", "sources", "launch"]
+                )
+                self.assertEqual(document["contract"]["connector_version"], 9)
                 self.assertEqual(document["contract"]["attention_backend"], "ROCM_AITER_MLA")
                 self.assertIs(document["contract"]["hybrid_kv_cache_manager"], True)
                 self.assertFalse(EngineContract(**document["contract"]).missing())
@@ -664,7 +737,7 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             sources = dict.fromkeys(contract.fields(), "test evidence")
             first = make_attestation(AttestationDocument(contract, sources), identity)
             second = make_attestation(
@@ -678,7 +751,7 @@ class AttestationContractTests(unittest.TestCase):
             ]
             with (
                 patch(
-                    "narwhal.deployment.attestation_contract.fleet.fetch_engine_identity",
+                    "narwhal.deployment.attestation_contract.fleet.fetch_spec_identity",
                     new_callable=AsyncMock,
                     return_value=identity,
                 ),
@@ -695,14 +768,14 @@ class AttestationContractTests(unittest.TestCase):
             raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
             contract = EngineContract(**raw.pop("engine_contract"))
             save(path, raw)
-            identity = EngineIdentity(contract.vllm_version, 100.0)
+            identity = EngineIdentity(contract.engine_version, 100.0)
             document = AttestationDocument(
                 contract, dict.fromkeys(contract.fields(), "test evidence")
             )
             payload = make_attestation(document, identity)
             with (
                 patch(
-                    "narwhal.deployment.attestation_contract.fleet.fetch_engine_identity",
+                    "narwhal.deployment.attestation_contract.fleet.fetch_spec_identity",
                     new_callable=AsyncMock,
                     return_value=identity,
                 ),

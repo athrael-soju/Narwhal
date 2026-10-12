@@ -1,5 +1,3 @@
-"""Serve a verified engine attestation through the sidecar."""
-
 from __future__ import annotations
 
 import os
@@ -9,12 +7,11 @@ from urllib.parse import urlsplit
 
 from ...engines.attestation import AttestationDocument
 from ...engines.attestation import main as attest_main
-from .document import engine_document
+from ..launch_engine.backend import engine_backend, plan_launcher
 from .evidence import checked_plan, live_container, live_native, read_json
 
 
 def residency_arguments(plan: dict, checked: dict) -> list[str]:
-    """Select residency serving when the checked runtime keeps caching and publishes events."""
     events = plan.get("kv_events")
     if events is None or not checked.get("prefix_caching") or not checked.get("kv_events"):
         return []
@@ -24,10 +21,11 @@ def residency_arguments(plan: dict, checked: dict) -> list[str]:
 
 def serve(run: Path) -> int:
     plan, checked, _ = checked_plan(run)
+    backend = engine_backend(plan.get("engine"))
     if plan.get("backend") == "native":
-        live_native(run, plan, checked)
+        process = ["--engine-pid", str(live_native(run, plan, checked)["pid"])]
     else:
-        live_container(run, checked)
+        process = ["--engine-container", live_container(run, checked)]
     role = plan.get("role", "")
     if not re.fullmatch(r"engine-[1-9][0-9]*", role):
         raise ValueError("Serving plan has an invalid engine role")
@@ -37,7 +35,7 @@ def serve(run: Path) -> int:
     startup_log = run / (
         "startup-attestation.log" if plan.get("backend") == "native" else "startup.log"
     )
-    if read_json(destination) != engine_document(run, startup_log):
+    if read_json(destination) != plan_launcher(plan).engine_document(run, startup_log):
         raise ValueError("Attestation document differs from current serving evidence")
     expected = os.environ.get(f"NARWHAL_NODE_{node}_ATTESTATION_URL", "")
     url = urlsplit(expected)
@@ -52,5 +50,9 @@ def serve(run: Path) -> int:
         url.hostname,
         "--port",
         str(url.port),
+        "--backend",
+        backend.name,
     ]
+    if not backend.identity.reports_process_start:
+        arguments += process
     return attest_main(arguments + residency_arguments(plan, checked))

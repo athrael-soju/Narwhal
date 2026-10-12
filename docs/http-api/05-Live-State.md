@@ -163,9 +163,9 @@ A new router process starts these counts at zero.
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
 | `iid`                | Engine                                                                                               |
 | `held_s`             | Seconds since the hold started                                                                       |
-| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when the probe runs standalone             |
+| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when none was recorded                     |
 
-The probe tries a recorded producer only while it is live, and otherwise [another live producer or a standalone probe](../telemetry/04-Failures.md#inference-probe-producers).
+[Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the order in which the probe tries producers.
 
 ### `peer_release`
 
@@ -175,6 +175,8 @@ With `recovery.engine_restart_policy: individual`, `peer_release` has one entry 
 | -------------- | --------------------------------------------------------------- |
 | `rounds`       | Release rounds sent since the ejection or the last state change |
 | `next_round_s` | Seconds until the next round, `null` after the last round       |
+
+On SGLang, the router sends no release rounds, so each entry reports `rounds: 0` and `next_round_s: null`.
 
 ### `residency`
 
@@ -263,7 +265,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `mean_input_len`            | Mean sized input length that sets prefill seats, `null` before a request is sized in the window          |
 | `engines.<iid>.prefill`     | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit           |
 | `engines.<iid>.decode`      | Decode seats, `0` for no limit                                                                          |
-| `engines.<iid>.sequence_limit` | `--max-num-seqs` from the engine's verified attestation, `null` when the launch arguments omit it    |
+| `engines.<iid>.sequence_limit` | vLLM `--max-num-seqs` or SGLang `--max-running-requests` from the engine's verified attestation, `null` when the launch arguments omit it |
 
 `handoff` fields, one entry per engine:
 
@@ -394,7 +396,7 @@ These decisions add fields to `control.last_decision`:
 | `eligibility_rule`        | Proposal                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                                  |
-| `mixed_pressure`          | Observed prefill recovery exceeds the decode shrink threshold                                                                         |
+| `mixed_pressure`          | Source load above `shrink`, and the receiving role at or above `expand`                                                               |
 | `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) first move, priced on confirmation-span demand        |
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
 | `source_shrink`           | Ordinary consolidation, and a leading departure's later confirmation-span moves                                                       |

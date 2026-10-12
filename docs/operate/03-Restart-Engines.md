@@ -64,7 +64,7 @@ Stop the engine when the check passes.
 
 1. Restart the engine and its attestation sidecar through their configured process manager.
 2. Check that the engine's `/health` returns HTTP 200.
-3. Check that `/version`, `/metrics`, and `/v1/models` describe the replacement process and model.
+3. Check that `/v1/models` lists the configured model and that the engine identity describes the replacement process: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, or `/server_info` and the attestation sidecar's `/v1/process` on SGLang.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
 6. If the engine's [process generation](../Core-Concepts.md#terms) changed, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
@@ -87,10 +87,8 @@ Readmission runs these checks in order, each named by its `checks` entry:
     - `attestation <fingerprint>`: attestation matches the live process and the `engine_contract`.
     - `profile generation`: every loaded profile variant is bound to the engine's live process generation.
     - `model`: `/v1/models` lists the configured model.
-2. The replacement engine passes two checks:
-    - `new process identity`: its process start is newer than its recorded drain identity.
-    - `generation`: a direct completion probe returns a choice.
-3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`.
+2. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 3 tests generation.
+3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router pairs the replacement engine with the first live engine in the other role. With the `mooncake` connector, the router switches the replacement engine to its router role before the handoff.
 4. The replacement engine passes `final health`: its `/health` returns HTTP 200.
 5. The identities, attestation, and profile bindings of all participants match step 1.
 
@@ -108,7 +106,7 @@ import sys
 engine = json.load(open(sys.argv[1]))["engines"]["e0"]
 assert engine["state"] == "active" and engine["accepts_new"], engine
 assert engine["new_process_start"] > engine["old_process_start"], engine
-assert {"health", "profile generation", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), engine
+assert {"health", "profile generation", "model", "new process identity", "final health"} <= set(engine["checks"]), engine
 assert any(check.startswith("attestation ") for check in engine["checks"]), engine
 print("e0 readmitted:", engine["checks"])
 PY
@@ -120,7 +118,8 @@ Fabric checks by engine role:
 | --- | --- |
 | Pinned to prefill | `fabric produce to <peer>` |
 | Pinned to decode | `fabric consume from <peer>` |
-| Unpinned | `fabric produce to <peer>` and `fabric consume from <peer>` |
+| Unpinned on vLLM | `fabric produce to <peer>` and `fabric consume from <peer>` |
+| Unpinned on SGLang | `fabric produce to <peer>` when its router role is prefill, `fabric consume from <peer>` when it is decode |
 
 Verify placement:
 
@@ -246,14 +245,14 @@ assert not state["wave"]["active"] and state["router"]["ready"], state
 for iid, engine in state["engines"].items():
     assert engine["state"] == "active" and engine["accepts_new"], (iid, engine)
     assert engine["new_process_start"] > engine["old_process_start"], (iid, engine)
-    assert {"health", "profile generation", "model", "new process identity", "generation", "final health"} <= set(engine["checks"]), (iid, engine)
+    assert {"health", "profile generation", "model", "new process identity", "final health"} <= set(engine["checks"]), (iid, engine)
     assert any(check.startswith("attestation ") for check in engine["checks"]), (iid, engine)
     print(iid, engine["checks"])
 PY
 curl -fsS -o /dev/null "$ROUTER_URL/ready"
 ```
 
-Check the recorded fabric directions against the configured role pins. Two unpinned engines require transfers in both directions. One engine pinned to prefill and one pinned to decode require a prefill-to-decode transfer.
+Check the recorded fabric directions against the configured role pins. On a vLLM fleet, two unpinned engines require transfers in both directions. One engine pinned to prefill and one pinned to decode require a prefill-to-decode transfer. On an SGLang fleet, each transfer runs from an engine in the prefill role to one in the decode role.
 
 If readmission fails:
 
@@ -496,6 +495,6 @@ When `recovery.liveness_every` is above `0`, a liveness sweep probes each engine
 
 An engine that answers the sweep leaves placement for recovery when one of these checks fails:
 
-- `/version` and `process_start_time_seconds`
+- the engine identity: `/version` and `process_start_time_seconds` on vLLM, or `/server_info` and the sidecar's process start on SGLang
 - the process-bound attestation and loaded profile bindings
 - the process start against the accepted identity

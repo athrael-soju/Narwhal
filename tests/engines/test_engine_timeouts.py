@@ -1,5 +1,3 @@
-"""Exercise decode deadlines through real HTTP transport reads."""
-
 import asyncio
 import contextlib
 import json
@@ -17,6 +15,7 @@ from narwhal.engines.client import (
     leg_failure_class,
 )
 from narwhal.types import LEG_TIMEOUT
+from tests.wire import vllm_engine
 
 TOKEN = b'data: {"choices":[{"text":"x","token_ids":[1]}]}\n\n'
 DONE = b"data: [DONE]\n\n"
@@ -27,7 +26,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
         self.header_delay = 0
         self.timeline = []
         self.handlers = set()
-        self.client = EngineClient(read_timeout_s=0.04)
+        self.client = EngineClient(**vllm_engine(), read_timeout_s=0.04)
 
         async def serve(reader, writer):
             task = asyncio.current_task()
@@ -95,7 +94,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_headers_and_first_token_share_one_deadline(self):
         await self.client.aclose()
-        self.client = EngineClient(read_timeout_s=0.3)
+        self.client = EngineClient(**vllm_engine(), read_timeout_s=0.3)
         self.header_delay = 0.08
         self.timeline = [(0.08, TOKEN + DONE)]
         with self.assertRaisesRegex(EngineError, FIRST_OUTPUT_DETAIL):
@@ -113,7 +112,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_zero_read_timeout_disables_chunk_gap_bound(self):
         await self.client.aclose()
-        self.client = EngineClient(read_timeout_s=0)
+        self.client = EngineClient(**vllm_engine(), read_timeout_s=0)
         self.timeline = [(0, TOKEN), (0.12, DONE)]
         self.assertEqual((await self.consume())[-1], "data: [DONE]")
 
@@ -123,7 +122,7 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_header_deadline_releases_connection_slot(self):
         await self.client.aclose()
-        self.client = EngineClient(read_timeout_s=0.3, max_connections=1)
+        self.client = EngineClient(**vllm_engine(), read_timeout_s=0.3, max_connections=1)
         self.header_delay = 0.12
         self.timeline = [(0, TOKEN + DONE)]
         with self.assertRaisesRegex(EngineError, FIRST_OUTPUT_DETAIL):
@@ -141,8 +140,6 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
-    """Distinguish local pool waits from engine waits on live HTTP connections."""
-
     async def asyncSetUp(self):
         self.release = asyncio.Event()
         self.requests = []
@@ -209,7 +206,9 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
     async def test_elapsed_deadline_during_pool_wait_is_not_breaker_evidence(self):
         self.release.clear()
         self.requests.clear()
-        client = EngineClient(max_connections=1, prefill_timeout_s=0.04, pool_timeout_s=1)
+        client = EngineClient(
+            **vllm_engine(), max_connections=1, prefill_timeout_s=0.04, pool_timeout_s=1
+        )
         try:
             async with client._wire.stream(
                 self.url + "/occupied", {}, {}, gap=lambda: None
@@ -228,7 +227,9 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_held_connection_to_one_engine_leaves_other_engines_free(self):
         self.release.clear()
         self.requests.clear()
-        client = EngineClient(max_connections=1, prefill_timeout_s=0.5, pool_timeout_s=0.2)
+        client = EngineClient(
+            **vllm_engine(), max_connections=1, prefill_timeout_s=0.5, pool_timeout_s=0.2
+        )
         other = self.url.replace("127.0.0.1", "localhost")
         try:
             async with client._wire.stream(
@@ -249,7 +250,7 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
         for reused_connection in (False, True):
             with self.subTest(reused_connection=reused_connection):
                 self.requests.clear()
-                client = EngineClient(prefill_timeout_s=0.5, pool_timeout_s=1)
+                client = EngineClient(**vllm_engine(), prefill_timeout_s=0.5, pool_timeout_s=1)
                 try:
                     if reused_connection:
                         await client.prefill(self.url, "/v1/completions", {"prompt": "x"}, {})
@@ -263,7 +264,6 @@ class PrefillPoolDeadlineTests(unittest.IsolatedAsyncioTestCase):
 
 class HealthProbeLatenessTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_silent_engine_fails_a_probe_that_queued_for_the_control_pool(self):
-        """Lateness counts from the request reaching a connection, not from pool entry."""
 
         async def silent(reader, writer):
             await reader.read()
@@ -273,7 +273,9 @@ class HealthProbeLatenessTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(server.wait_closed)
         self.addCleanup(server.close)
         url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-        client = EngineClient(control_connections=1, health_timeout_s=0.3, pool_timeout_s=5.0)
+        client = EngineClient(
+            **vllm_engine(), control_connections=1, health_timeout_s=0.3, pool_timeout_s=5.0
+        )
         self.addAsyncCleanup(client.aclose)
 
         async def probe(delay):

@@ -1,18 +1,18 @@
 ---
-description: Deploy Narwhal on a multi-node vLLM fleet with NIXL KV transfer, from host discovery to live serving.
+description: Deploy Narwhal on a multi-node vLLM or SGLang fleet with NIXL or Mooncake KV transfer, from host discovery to live serving.
 ---
 
 # Deploying a fleet
 
 ## Requirements
 
-Deploy one model per fleet. Its vLLM engines need a compatible KV layout, NIXL `kv_both` transfer between every eligible producer and consumer, and one active role controller.
+Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector.
 
 | Host | Responsibilities | Required software and inputs |
 | --- | --- | --- |
 | Management workstation | Generate private configuration, inspect hosts, package and install the approved revision, run trials, and retain evidence. | Git, Bash, Python 3.11+, OpenSSH, supplied access tooling, and `sshpass` for password authentication. The private `.env`, approved revision, engine image, model paths, fabric interface, run directory, ports, and credentials. |
 | Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv`, Git, Make, curl, Docker Engine, and Compose. The verified bundle and revision, engine and attestation URLs, API credential, model settings, and SLOs. |
-| Engine host | Run vLLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
+| Engine host | Run vLLM or SGLang and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
 
 ### Concurrency
 
@@ -22,7 +22,7 @@ Per-engine and per-host rules:
 
 - Compare each engine allocation with the GPU inventory collected on that engine host.
 - Install once per physical host.
-- Capture each engine's live cache layout.
+- Capture each vLLM engine's live cache layout.
 
 ### Deployment record
 
@@ -86,26 +86,26 @@ Record each gate's result before the next gate.
 | Offered rate or request count within the profiled range | Drain the router and run the next trial point with the existing profiles, fabric samples, and preflight. |
 | SLO or first-token deadline | Run `narwhal-check` with the revised limits against saved profiles and live handoffs, then load the edited fleet. |
 | Router restart with unchanged fleet configuration | Restart the router. |
-| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout and attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
-| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout and attestation, profile the new process generation, recalibrate the first-token deadline, then run full preflight. |
-| Changed cache geometry | Recalculate the fabric budget from `cache-layout.json`. |
+| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
+| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, profile the new process generation, recalibrate the first-token deadline, then run full preflight. |
+| Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM or from measured handoffs on SGLang. |
 | Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, recalibrate the first-token deadline, and exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index
 
 Record these inputs and artifacts in the private deployment record:
 
-| Stage                      | Inputs                                                                                                                    | Evidence to retain                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key                             | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`                                          |
-| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites                                                  | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker                          |
-| Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports  | Engine role env, launch record, discovery checkpoint manifests, `model_tree_sha256`, `ENGINE_RUN`, image-check and HTTP captures |
-| Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget                                     | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix                                 |
-| Attestation                | Checked live process, protocol version, model dimensions, cache layout, transfer mode, handshake policy, sidecar endpoint | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before and after attestation                                  |
-| Profiling                  | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency                                   | Fleet config, profiling limits, profile and sample files                                                                         |
-| Preflight                  | Current processes, profiles, first-token calibration, fleet contract, and SLOs                                            | Router environment, fleet config, calibration artifact, private check output                                                     |
-| Router                     | Bind address, model, engine count, and role split                                                                         | Router env, fleet config, endpoint captures                                                                                      |
-| Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime and cache policy, workload, and thresholds   | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state and network snapshots      |
+| Stage                      | Inputs                                                                                                                                          | Evidence to retain                                                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key                                                   | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`                                          |
+| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites                                                                        | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker                          |
+| Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports                        | Engine role env, launch record, discovery checkpoint manifests, `model_tree_sha256`, `ENGINE_RUN`, image-check and HTTP captures |
+| Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget                                                           | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix                                 |
+| Attestation                | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before and after attestation                                  |
+| Profiling                  | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency                                                         | Fleet config, profiling limits, profile and sample files                                                                         |
+| Preflight                  | Current processes, profiles, first-token calibration, fleet contract, and SLOs                                                                  | Router environment, fleet config, calibration artifact, private check output                                                     |
+| Router                     | Bind address, model, engine count, and role split                                                                                               | Router env, fleet config, endpoint captures                                                                                      |
+| Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime and cache policy, workload, and thresholds                         | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state and network snapshots      |
 
 Correct a failed stage from its evidence:
 

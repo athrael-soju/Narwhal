@@ -1,5 +1,3 @@
-"""Versioned fleet JSON serialization with credential references only."""
-
 from __future__ import annotations
 
 import json
@@ -14,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def document(config: FleetConfig) -> dict[str, Any]:
-    """Build the versioned fleet document with credential references."""
+    """The document holds credential references, never secret values."""
     out = {
         "model": config.model,
         "engines": [
@@ -69,6 +67,7 @@ def document(config: FleetConfig) -> dict[str, Any]:
             **asdict(config.serving),
         },
         "engine": {
+            "backend": config.backend,
             "connector": config.connector,
             "dialect": config.dialect,
             "tokenize": config.tokenize,
@@ -121,5 +120,4 @@ def document(config: FleetConfig) -> dict[str, Any]:
 
 
 def save(config: FleetConfig, path: str | Path) -> None:
-    """Write the replayable JSON configuration."""
     Path(path).write_text(json.dumps(document(config), indent=2) + "\n")

@@ -1,5 +1,3 @@
-"""Keep deadline and cancellation context through shared-engine launch cleanup."""
-
 import io
 import json
 import sys
@@ -95,6 +93,7 @@ class SharedStageFailureTests(unittest.TestCase):
                             run,
                             {
                                 "role": f"engine-{number}",
+                                "backend": "native",
                                 "endpoint": "http://127.0.0.1:1",
                                 "python_executable": sys.executable,
                                 "args": ["-m", "vllm"],
@@ -135,7 +134,7 @@ class SharedStageFailureTests(unittest.TestCase):
                         "fetch_engine_identity",
                         AsyncMock(
                             return_value=SimpleNamespace(
-                                vllm_version="test", process_start_time_seconds=1
+                                version="test", process_start_time_seconds=1
                             )
                         ),
                     ),

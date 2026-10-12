@@ -1,4 +1,4 @@
-"""Write Prometheus discovery targets from one deployed Narwhal fleet."""
+"""Write the Prometheus router discovery target for one deployed Narwhal router."""
 
 from __future__ import annotations
 
@@ -10,19 +10,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from narwhal.config.environment import resolve_endpoint
-
 DEFAULT_TARGETS_DIR = (
     Path(__file__).parents[2] / "runs" / "observability" / "mounts" / "prometheus" / "targets"
 )
+ENGINE_TARGETS_PATH = "/narwhal/targets"
 
 
 @dataclass(frozen=True)
 class TargetContract:
-    """Expected Prometheus target identities for one deployment."""
+    """Expected Prometheus router target for one deployment."""
 
     router: str
-    engines: tuple[tuple[str, str], ...]
+
+    @property
+    def engine_targets_url(self) -> str:
+        return f"http://{self.router}{ENGINE_TARGETS_PATH}"
 
 
 def metrics_authority(url: str) -> str:
@@ -43,29 +45,6 @@ def metrics_authority(url: str) -> str:
     return parsed.netloc
 
 
-def build_targets(fleet: dict[str, object], router_url: str) -> TargetContract:
-    """Build router and engine target identities from deployment inputs."""
-    raw_engines = fleet.get("engines")
-    if not isinstance(raw_engines, list) or not raw_engines:
-        raise ValueError("fleet document requires a populated engines array")
-    engines: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for index, raw_engine in enumerate(raw_engines):
-        if not isinstance(raw_engine, dict):
-            raise ValueError(f"fleet engine {index} requires an object")
-        iid = raw_engine.get("iid")
-        url = raw_engine.get("url")
-        if not isinstance(iid, str) or not iid:
-            raise ValueError(f"fleet engine {index} requires iid")
-        if iid in seen:
-            raise ValueError(f"fleet engine iid {iid!r} appears more than once")
-        if not isinstance(url, str):
-            raise ValueError(f"fleet engine {iid!r} requires url")
-        seen.add(iid)
-        engines.append((iid, metrics_authority(resolve_endpoint(url, f"engines[{index}].url"))))
-    return TargetContract(metrics_authority(router_url), tuple(engines))
-
-
 def _write_json(path: Path, value: object) -> None:
     """Replace one discovery document after its complete contents reach disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,50 +63,37 @@ def _write_json(path: Path, value: object) -> None:
         raise
 
 
-def load_contract(fleet_path: Path, router_url: str) -> TargetContract:
-    """Load and validate the expected target identities for one deployment."""
-    fleet = json.loads(fleet_path.read_text())
-    return build_targets(fleet, router_url)
+def load_contract(router_url: str) -> TargetContract:
+    """Validate the router origin Prometheus scrapes."""
+    return TargetContract(metrics_authority(router_url))
 
 
 def write_contract(
     contract: TargetContract,
     targets_dir: Path = DEFAULT_TARGETS_DIR,
 ) -> None:
-    """Write both discovery documents from a validated deployment contract."""
+    """Write the router discovery document."""
     _write_json(targets_dir / "router.json", [{"targets": [contract.router]}])
-    _write_json(
-        targets_dir / "engines.json",
-        [{"targets": [authority], "labels": {"iid": iid}} for iid, authority in contract.engines],
-    )
 
 
-def write_targets(
-    fleet_path: Path,
-    router_url: str,
-    targets_dir: Path = DEFAULT_TARGETS_DIR,
-) -> TargetContract:
-    """Generate both discovery documents and return their expected identities."""
-    contract = load_contract(fleet_path, router_url)
+def write_targets(router_url: str, targets_dir: Path = DEFAULT_TARGETS_DIR) -> TargetContract:
+    """Generate the router discovery document and return its expected identity."""
+    contract = load_contract(router_url)
     write_contract(contract, targets_dir)
     return contract
 
 
 def main() -> int:
-    """Generate discovery documents for a deployed router and fleet."""
+    """Generate the router discovery document for a deployed router."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("fleet", type=Path)
     parser.add_argument("--router-url", required=True)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_TARGETS_DIR)
     args = parser.parse_args()
     try:
-        contract = write_targets(args.fleet, args.router_url, args.output_dir)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        contract = write_targets(args.router_url, args.output_dir)
+    except (OSError, ValueError) as exc:
         parser.error(str(exc))
-    print(
-        f"wrote router {contract.router} and {len(contract.engines)} engine targets "
-        f"to {args.output_dir}"
-    )
+    print(f"wrote router {contract.router} to {args.output_dir}")
     return 0
 
 

@@ -1,5 +1,3 @@
-"""FastAPI routes and process lifespan."""
-
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +19,7 @@ from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
 from ..observability.metrics.render import render
+from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
@@ -39,6 +38,7 @@ from ..runtime.standby import (
     ready,
     standby_loop,
 )
+from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
@@ -71,7 +71,6 @@ def create_app(
     lease: FileLease | None = None,
     lifecycle_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
-    """Build the API and bind router resources to its lifespan."""
     cfg = cfg or FleetConfig.from_env()
     if standby_of and lease is None and lease_path is None:
         raise ValueError("automatic standby takeover requires a shared lease_path")
@@ -116,7 +115,6 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Open and close router resources around the ASGI lifespan."""
         calibration = await verify_calibration(cfg, transport=lifecycle_transport)
         if calibration.status == "uncalibrated":
             log.warning(
@@ -146,13 +144,7 @@ def create_app(
             if not profiles:
                 continue
             try:
-                generation = await read_generation(
-                    spec,
-                    cfg.engine_contract,
-                    timeout_s=cfg.health_timeout_s,
-                    headers=cfg.engine_headers(),
-                    transport=lifecycle_transport,
-                )
+                generation = await read_generation(cfg, spec, transport=lifecycle_transport)
             except (httpx.HTTPError, ValueError, KeyError) as exc:
                 generation_failures.append(
                     f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission"
@@ -209,6 +201,7 @@ def create_app(
         journal.open()
         if controls_fleet(router):
             await check_process_identities(router)
+            await refresh_idle_consumers(router)
         loop = asyncio.create_task(monitor_loop(router))
         lag = asyncio.create_task(measure_loop_lag(router))
         follow = asyncio.create_task(residency_loop(router))
@@ -264,7 +257,6 @@ def create_app(
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
     async def models() -> dict[str, Any]:
-        """Return the configured model in OpenAI list format."""
         return {
             "object": "list",
             "data": [{"id": cfg.model, "object": "model", "owned_by": "narwhal"}],
@@ -317,7 +309,6 @@ def create_app(
 
     @app.get("/narwhal/handoff", summary="The live control-plane handoff document")
     async def handoff() -> dict[str, Any]:
-        """Return a fresh handoff for resume or standby polling."""
         return handoff_state.snapshot(router)
 
     @app.get("/metrics", summary="Prometheus counters and latency histograms")
@@ -328,6 +319,10 @@ def create_app(
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")
+    async def targets() -> list[dict[str, Any]]:
+        return scrape_targets(cfg)
 
     @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
     async def state() -> dict[str, Any]:
@@ -452,7 +447,6 @@ def create_app(
 async def _completion_body(
     router: NarwhalRouter, request: HTTPRequest
 ) -> dict[str, Any] | JSONResponse:
-    """Parse a bounded body before reserving active or engine capacity."""
     state: RequestLifecycle | None = request.scope.get(LIFECYCLE)
     try:
         raw = json.loads(await bounded_body(request, router.cfg.serving.max_request_bytes))
@@ -467,16 +461,22 @@ async def _completion_body(
         return error_response(413, "request_too_large", "request body exceeds max_request_bytes")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _invalid_refusal(state, "the request body is not valid JSON", None)
-    problem = completion_body_error(raw)
+    dialect = router.engines.dialect
+    problem = completion_body_error(raw, dialect.reserved_fields)
     if problem is not None:
         return _invalid_refusal(state, *problem)
+    # Every decode leg streams, so a field the engine refuses on a stream fails the request.
+    for name in dialect.stream_refused_fields(request.url.path):
+        if raw.get(name):
+            return _invalid_refusal(
+                state, f"{name} is not supported on {request.url.path} by {dialect.name}", name
+            )
     return raw
 
 
 def _invalid_refusal(
     state: RequestLifecycle | None, message: str, param: str | None
 ) -> JSONResponse:
-    """Record and return the stable malformed-request 400."""
     if state is not None:
         state.finish("invalid", error=message, status=400, error_type="invalid_request_error")
     return error_response(400, "invalid_request_error", message, param=param, code=None)

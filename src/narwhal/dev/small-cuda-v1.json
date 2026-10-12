@@ -52,7 +52,7 @@
     "router": 18000,
     "engine_first": 18101,
     "attestation_first": 18201,
-    "nixl_first": 5701,
+    "side_channel_first": 5701,
     "ucx_range": "39000-39999"
   },
   "slo": {

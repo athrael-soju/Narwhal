@@ -1,5 +1,3 @@
-"""Validate drained or recovered engines before readmission."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -7,15 +5,25 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
+from ...engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 from ...engines.client import EngineError
+from ...engines.connector import RendezvousConnector
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
 from ...profiling.generation import binding_digest, profile_generation_problems
+from ...types import Instance, Role
 from .records import LifecycleError, ValidationOutcome
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
+
+
+def role_bound_pairs(target: str, role: Role, live: list[Instance]) -> list[tuple[str, str]]:
+    """Pair `target` with the first live engine in the other role, as `(prefill, decode)`."""
+    peer = next((inst.iid for inst in live if inst.role is not role and inst.iid != target), None)
+    if peer is None:
+        return []
+    return [(target, peer)] if role is Role.PREFILL else [(peer, target)]
 
 
 def _single_pairs(target: EngineSpec, peers: list[EngineSpec]) -> list[tuple[str, str]]:
@@ -32,7 +40,6 @@ async def validate_readmission(
     wave: bool,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ValidationOutcome:
-    """Run health, attestation, generation, and fabric gates before readmission."""
     outcome = ValidationOutcome()
     cfg: FleetConfig = router.cfg
     contract = cfg.engine_contract
@@ -49,7 +56,7 @@ async def validate_readmission(
             for iid in engines:
                 outcome.fail(iid, "whole-wave recovery requires recorded pre-restart identities")
             return outcome
-    if contract is None or contract.missing():
+    if contract is None or cfg.contract_missing():
         for iid in engines:
             outcome.fail(iid, "readmission requires a complete engine_contract")
         return outcome
@@ -60,15 +67,20 @@ async def validate_readmission(
         participants = list(cfg.engines)
         pairs = validation_pairs(participants)
     else:
-        peers = [
-            by_id[instance.iid]
-            for instance in router.scheduler.live_instances(exclude=set(engines))
-        ]
-        try:
-            pairs = _single_pairs(targets[0], peers)
-        except LifecycleError as exc:
-            outcome.fail(targets[0].iid, str(exc))
-            return outcome
+        live = router.scheduler.live_instances(exclude=set(engines))
+        if router.scheduler.availability.roles_bound:
+            role = router.monitor.instances[targets[0].iid].role
+            pairs = role_bound_pairs(targets[0].iid, role, live)
+            if not pairs:
+                for iid in engines:
+                    outcome.fail(iid, "fabric validation requires a peer in the opposite role")
+                return outcome
+        else:
+            try:
+                pairs = _single_pairs(targets[0], [by_id[inst.iid] for inst in live])
+            except LifecycleError as exc:
+                outcome.fail(targets[0].iid, str(exc))
+                return outcome
         peer_ids = {iid for pair in pairs for iid in pair} - set(engines)
         participants = targets + [by_id[iid] for iid in sorted(peer_ids)]
 
@@ -89,11 +101,8 @@ async def validate_readmission(
                 continue
             outcome.ok(spec.iid, "health")
             try:
-                identity = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=timeout,
-                    transport=transport,
-                    headers=router.engines._auth(None),
+                identity = await fetch_spec_identity(
+                    cfg, spec, transport=transport, headers=router.engines._auth(None)
                 )
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 outcome.fail(spec.iid, f"process identity unreadable: {type(exc).__name__}")
@@ -123,6 +132,10 @@ async def validate_readmission(
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
                 router.attested(spec.iid, payload)
+                # A replacement process starts in its launch role; the fabric check runs in the
+                # router's role for it.
+                if spec.iid in engines and (switched := await router.resume_role(spec.iid)):
+                    outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
                     router.profiles, spec.iid, binding_digest(payload)
                 )
@@ -159,6 +172,9 @@ async def validate_readmission(
                 spec.iid,
                 "new process identity" if record.restart_required else "process identity",
             )
+            if isinstance(router.engines.kv, RendezvousConnector):
+                # A rendezvous engine serves only paired legs; the fabric pairs generate.
+                continue
             try:
                 response = await client.post(
                     f"{spec.url}/v1/completions",
@@ -188,11 +204,8 @@ async def validate_readmission(
         identity_failed = False
         for spec in participants:
             try:
-                live = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=timeout,
-                    transport=transport,
-                    headers=router.engines._auth(None),
+                live = await fetch_spec_identity(
+                    cfg, spec, transport=transport, headers=router.engines._auth(None)
                 )
                 if live != identities[spec.iid]:
                     raise ValueError("process changed during validation")
@@ -229,20 +242,38 @@ async def validate_readmission(
         "temperature": 0.0,
         **router.engines.dialect.decode_probe_extras(2),
     }
+    if router.scheduler.availability.roles_bound:
+        # Each engine serves only its live role, so a pair runs from prefill to decode.
+        roles = {iid: inst.role for iid, inst in router.monitor.instances.items()}
+        pairs = [
+            (source, target)
+            for source, target in pairs
+            if roles.get(source) is Role.PREFILL and roles.get(target) is Role.DECODE
+        ]
+        if not pairs:
+            for iid in engines:
+                outcome.fail(iid, "fabric validation requires a peer in the opposite role")
+            return outcome
     for source, target in pairs:
         if not await identities_unchanged():
             return outcome
         try:
-            params = await router.engines.prefill(by_id[source].url, "/v1/completions", body, {})
+            handoff = await router.engines.start_handoff(
+                by_id[source].url,
+                "/v1/completions",
+                body,
+                {},
+                producer=router.launches.get(source),
+            )
             if not await identities_unchanged():
                 return outcome
             tokens = 0
-            async for batch in router.engines.decode(
+            async for batch in router.engines.decode_handoff(
+                handoff,
                 by_id[target].url,
                 "/v1/completions",
                 body,
                 {},
-                params,
                 first_token_timeout_s=cfg.first_token_timeout_s,
             ):
                 tokens += sum(sse_token_count(event) for event in batch)

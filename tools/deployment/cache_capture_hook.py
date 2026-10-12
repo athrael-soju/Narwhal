@@ -1,1 +1,0 @@
-../../src/narwhal/deployment/cache_capture_hook.py

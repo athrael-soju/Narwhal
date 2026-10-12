@@ -1,0 +1,195 @@
+{
+  "flat": {
+    "decode_calls": {
+      "cross_engine": {
+        "body": {
+          "kv_transfer_params": {
+            "remote_block_ids": [
+              1
+            ],
+            "remote_engine_id": "p"
+          },
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-1",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      },
+      "same_engine": {
+        "body": {
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-0",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      }
+    },
+    "descriptor": {
+      "connector": "nixl",
+      "endpoint": "/v1/completions",
+      "parameters": {
+        "remote_block_ids": [
+          1
+        ],
+        "remote_engine_id": "p"
+      },
+      "producer_request_id": "fixture-a1-prefill",
+      "producer_url": "http://stub-0"
+    },
+    "prefill_call": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "hello",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "method": "POST",
+      "path": "/v1/completions",
+      "x-request-id": "fixture-a1-prefill"
+    }
+  },
+  "grouped": {
+    "decode_calls": {
+      "cross_engine": {
+        "body": {
+          "kv_transfer_params": {
+            "remote_block_ids": [
+              [
+                1
+              ],
+              [
+                2
+              ]
+            ],
+            "remote_engine_id": "p"
+          },
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-1",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      },
+      "same_engine": {
+        "body": {
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-0",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      }
+    },
+    "descriptor": {
+      "connector": "nixl",
+      "endpoint": "/v1/completions",
+      "parameters": {
+        "remote_block_ids": [
+          [
+            1
+          ],
+          [
+            2
+          ]
+        ],
+        "remote_engine_id": "p"
+      },
+      "producer_request_id": "fixture-a1-prefill",
+      "producer_url": "http://stub-0"
+    },
+    "prefill_call": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "hello",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "method": "POST",
+      "path": "/v1/completions",
+      "x-request-id": "fixture-a1-prefill"
+    }
+  },
+  "in_choice": {
+    "decode_calls": {
+      "cross_engine": {
+        "body": {
+          "kv_transfer_params": {
+            "remote_block_ids": [
+              3
+            ],
+            "remote_engine_id": "p"
+          },
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-1",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      },
+      "same_engine": {
+        "body": {
+          "max_tokens": 4,
+          "model": "stub",
+          "prompt": "hello",
+          "stream": true
+        },
+        "engine": "stub-0",
+        "method": "POST",
+        "path": "/v1/completions",
+        "x-request-id": "fixture-a1-decode"
+      }
+    },
+    "descriptor": {
+      "connector": "nixl",
+      "endpoint": "/v1/completions",
+      "parameters": {
+        "remote_block_ids": [
+          3
+        ],
+        "remote_engine_id": "p"
+      },
+      "producer_request_id": "fixture-a1-prefill",
+      "producer_url": "http://stub-0"
+    },
+    "prefill_call": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "hello",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "method": "POST",
+      "path": "/v1/completions",
+      "x-request-id": "fixture-a1-prefill"
+    }
+  }
+}

@@ -1,5 +1,3 @@
-"""Keep saved cost curves tied to the live engine process and contract."""
-
 import json
 import tempfile
 import unittest
@@ -27,7 +25,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(folder.name)
         self.cfg = fleet(self.root)
         self.starts = {"e0": 100.0, "e3": 100.0}
-        self.version = self.cfg.engine_contract.vllm_version
+        self.version = self.cfg.engine_contract.engine_version
         self.by_host = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
         contract = self.cfg.engine_contract
         document = AttestationDocument(contract, dict.fromkeys(contract.fields(), "fixture"))
@@ -39,7 +37,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         store = ProfileStore(self.cfg.profiles_path)
         for spec in self.cfg.engines:
             generation = await read_generation(
-                spec, self.cfg.engine_contract, timeout_s=1, transport=self.transport
+                self.cfg, spec, timeout_s=1, transport=self.transport
             )
             store.put(replace(profile(spec.iid), generation_digest=generation.digest))
 
@@ -47,7 +45,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         iid = self.by_host[request.url.host]
         identity = EngineIdentity(self.version, self.starts[iid])
         if request.url.path == "/version":
-            return httpx.Response(200, json={"version": identity.vllm_version})
+            return httpx.Response(200, json={"version": identity.version})
         if request.url.path == "/metrics":
             return httpx.Response(
                 200, text=f"process_start_time_seconds {identity.process_start_time_seconds}\n"
@@ -64,9 +62,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
 
     async def _calibrate(self):
         live = {
-            spec.iid: await read_generation(
-                spec, self.cfg.engine_contract, timeout_s=1, transport=self.transport
-            )
+            spec.iid: await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
             for spec in self.cfg.engines
         }
         document = calibration_document(
@@ -259,7 +255,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         generation = await read_generation(
-            self.cfg.engines[1], self.cfg.engine_contract, timeout_s=1, transport=self.transport
+            self.cfg, self.cfg.engines[1], timeout_s=1, transport=self.transport
         )
         store.put(replace(profile("e3"), generation_digest=generation.digest))
         report = Report()
@@ -274,12 +270,11 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
             self.documents["e3"], launch={"args": ["--max-num-seqs", "64"]}
         )
         spec = self.cfg.engines[1]
-        contract = self.cfg.engine_contract
-        before = await read_generation(spec, contract, timeout_s=1, transport=self.transport)
+        before = await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
         store = ProfileStore(self.cfg.profiles_path)
         store.put(replace(profile("e3"), generation_digest=before.digest))
         self.starts["e3"] = 101.0
-        after = await read_generation(spec, contract, timeout_s=1, transport=self.transport)
+        after = await read_generation(self.cfg, spec, timeout_s=1, transport=self.transport)
         self.assertEqual(after.digest, before.digest)
         self.assertNotEqual(after.process_digest, before.process_digest)
         report = Report()
@@ -326,8 +321,8 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "e0: attestation: engine process started"):
             await read_generation(
+                self.cfg,
                 self.cfg.engines[0],
-                self.cfg.engine_contract,
                 timeout_s=1,
                 transport=httpx.MockTransport(stale_response),
             )

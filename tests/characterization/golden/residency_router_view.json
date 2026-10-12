@@ -1,0 +1,105 @@
+{
+  "matches": {
+    "16": {
+      "cached_tokens": {
+        "e1": 12
+      },
+      "hashed_blocks": 3,
+      "matched_blocks": {
+        "4": 3
+      },
+      "sequences": {
+        "e1": 0
+      }
+    },
+    "17": {
+      "cached_tokens": {
+        "e1": 16
+      },
+      "hashed_blocks": 4,
+      "matched_blocks": {
+        "4": 4
+      },
+      "sequences": {
+        "e1": 0
+      }
+    },
+    "4": {
+      "cached_tokens": {},
+      "hashed_blocks": 0,
+      "matched_blocks": {},
+      "sequences": {}
+    },
+    "5": {
+      "cached_tokens": {
+        "e1": 4
+      },
+      "hashed_blocks": 1,
+      "matched_blocks": {
+        "4": 1
+      },
+      "sequences": {
+        "e1": 0
+      }
+    },
+    "8": {
+      "cached_tokens": {
+        "e1": 4
+      },
+      "hashed_blocks": 1,
+      "matched_blocks": {
+        "4": 1
+      },
+      "sequences": {
+        "e1": 0
+      }
+    },
+    "9": {
+      "cached_tokens": {
+        "e1": 8
+      },
+      "hashed_blocks": 2,
+      "matched_blocks": {
+        "4": 2
+      },
+      "sequences": {
+        "e1": 0
+      }
+    }
+  },
+  "requests": [
+    "http://sidecar:8010/v1/residency",
+    "http://sidecar:8010/v1/residency/events?after=0"
+  ],
+  "views": {
+    "e1": {
+      "block_size": 4,
+      "epoch": "<epoch>",
+      "known": true,
+      "reason": "complete event history",
+      "resident_blocks": {
+        "0": 4
+      },
+      "resyncs": 1,
+      "sequence": 0
+    },
+    "e2": {
+      "block_size": null,
+      "epoch": null,
+      "known": false,
+      "reason": "engine has no attestation sidecar",
+      "resident_blocks": {},
+      "resyncs": 0,
+      "sequence": null
+    },
+    "e3": {
+      "block_size": null,
+      "epoch": null,
+      "known": false,
+      "reason": "engine has no attestation sidecar",
+      "resident_blocks": {},
+      "resyncs": 0,
+      "sequence": null
+    }
+  }
+}

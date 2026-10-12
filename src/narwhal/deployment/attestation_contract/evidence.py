@@ -1,17 +1,13 @@
-"""Read checked launch evidence and bind it to the live serving engine."""
-
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import subprocess
 from pathlib import Path
 
-from ...engines.attestation import fetch_engine_identity
-from ..launch_engine.plan import read_env
+from ..launch_engine.backend import plan_launcher
 from ..launch_engine.runtime import digest, write_private
-from ..native_engine import process_identity
+from ..native_engine import native_identity, process_identity
 
 
 def read_json(path: Path) -> dict:
@@ -63,31 +59,38 @@ def live_container(run: Path, checked: dict) -> str:
 
 
 def live_native(run: Path, plan: dict, checked: dict) -> dict:
-    """Bind checked native evidence to its current Linux process and vLLM instance."""
     process = read_json(run / "native-process.json")
     try:
         if process_identity(process["pid"]) != process:
             raise ValueError("Native serving process identity changed")
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Native serving process is no longer running") from error
+    engine = plan_launcher(plan)
     startup = read_json(run / "shared-start.json")
     if (
         startup.get("status") != "running"
         or startup.get("plan_sha256") != digest(run / "launch.json")
         or startup.get("process") != process
-        or startup.get("vllm_version") != checked["vllm_api_version"]
+        or startup.get(engine.version_field) != checked[engine.checked_version_field]
     ):
         raise ValueError("Native startup evidence differs from the live serving plan")
-    values = read_env(run / "engine.env")
-    key = values.get("VLLM_API_KEY", "")
-    headers = {"Authorization": f"Bearer {key}"} if key else None
-    identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers))
+    identity = native_identity(run, plan, process["pid"])
     if (
-        identity.vllm_version != startup["vllm_version"]
+        identity.version != startup[engine.version_field]
         or identity.process_start_time_seconds != startup["process_start_time_seconds"]
     ):
         raise ValueError("Native engine HTTP identity changed since launch")
     return process
+
+
+def live_binding(
+    plan: dict, checked: dict, identity: dict | str, *, model_revision: bool = False
+) -> dict:
+    if plan.get("backend") != "native":
+        return {"image_id": checked["image_id"], "container_id": identity}
+    if model_revision:
+        return {"process": identity, "model_revision": plan["model_revision"]}
+    return {"process": identity}
 
 
 def parse_tagged_capture(output: str, tag: str, label: str) -> dict:
@@ -110,7 +113,6 @@ def require_binding(record: dict, label: str, **expected: object) -> None:
 
 
 def require_prior_dimensions(run: Path, plan: dict, plan_hash: str, contract: object) -> None:
-    """Require retained plan dimensions, when present, to match the plan and `contract`."""
     original = run / "model-dimensions.json"
     if original.exists():
         previous = read_json(original)

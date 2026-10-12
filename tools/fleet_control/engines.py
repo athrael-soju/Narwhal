@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 from collections.abc import Mapping
@@ -19,6 +20,8 @@ from .config import Hook
 from .hooks import HookResult
 from .records import Action, Session
 from .service import ActionError, ControlService, Operation, refused
+
+log = logging.getLogger(__name__)
 
 # Hook for each hook action.
 HOOK_ACTIONS = {
@@ -315,7 +318,8 @@ def engine_routes(actions: EngineActions) -> APIRouter:
             try:
                 iids = configured_engines(service.config.fleet)
             except (OSError, ValueError, LookupError, TypeError) as exc:
-                detail = f"baseline fleet configuration is unreadable: {exc}"
+                log.error("baseline fleet configuration is unreadable: %s", exc)
+                detail = "baseline fleet configuration is unreadable"
                 return JSONResponse({"detail": detail}, status_code=500)
         return JSONResponse({"engines": await actions.fleet_state(iids)})
 

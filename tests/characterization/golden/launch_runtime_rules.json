@@ -1,0 +1,346 @@
+{
+  "cases": {
+    "custom_kv_lease": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 12
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_AITER_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_HIP_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_HSA_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_LD_FIXTURE": {
+      "error": "unsupported runtime environment field: LD_FIXTURE"
+    },
+    "env_NIXL_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_OTHER_FIXTURE": {
+      "error": "unsupported runtime environment field: OTHER_FIXTURE"
+    },
+    "env_PYTORCH_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_ROCM_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_SAFETENSORS_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_UCX_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "env_VLLM_FIXTURE": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "float32_model": {
+      "error": "this launcher uses a two-byte model dtype with kv_cache_dtype=auto"
+    },
+    "foreign_env": {
+      "error": "unsupported runtime environment field: OTHER_FLAG"
+    },
+    "gguf_plugin_False": {
+      "error": "GGUF launch requires a pinned vllm-gguf-plugin package"
+    },
+    "gguf_plugin_True": {
+      "model": "<root>/gguf/model/weights.gguf"
+    },
+    "kv_events_disabled": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": false
+    },
+    "kv_events_endpoint": {
+      "error": "runtime.extra_args --kv-events-config may only set {\"enable_kv_cache_events\": false}; the launcher selects event endpoints"
+    },
+    "kv_transfer_override": {
+      "error": "unsupported or incomplete runtime option: --kv-transfer-config"
+    },
+    "managed_env": {
+      "error": "unsupported runtime environment field: VLLM_API_KEY"
+    },
+    "missing_nixl_pin": {
+      "error": "runtime.expected_packages requires pinned vLLM and NIXL versions"
+    },
+    "missing_vllm_pin": {
+      "error": "runtime.expected_packages requires pinned vLLM and NIXL versions"
+    },
+    "mutable_image": {
+      "error": "NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest"
+    },
+    "nixl_rocm_pin": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "prefix_caching_off": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": false
+    },
+    "registry_digest": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "registry.example/engine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    },
+    "secret_env": {
+      "error": "unsupported runtime environment field: VLLM_SECRET"
+    },
+    "shared_ports": {
+      "error": "engine, attestation and NIXL ports must be distinct valid TCP ports"
+    },
+    "short_kv_lease": {
+      "error": "runtime.kv_lease_s must be an integer of at least 6"
+    },
+    "unknown_option": {
+      "error": "unsupported or incomplete runtime option: --port"
+    },
+    "unpinned_version": {
+      "connector": {
+        "kv_connector": "NixlConnector",
+        "kv_connector_extra_config": {
+          "backends": [
+            "UCX"
+          ],
+          "enforce_handshake_compat": true,
+          "kv_lease_duration": 30
+        },
+        "kv_load_failure_policy": "fail",
+        "kv_role": "kv_both"
+      },
+      "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": true
+    }
+  },
+  "constants": {
+    "engine_ttl_s": 60,
+    "env_prefixes": [
+      "VLLM_",
+      "UCX_",
+      "NIXL_",
+      "ROCM_",
+      "HIP_",
+      "HSA_",
+      "AITER_",
+      "PYTORCH_",
+      "SAFETENSORS_"
+    ],
+    "flag_options": [
+      "--async-scheduling",
+      "--disable-hybrid-kv-cache-manager",
+      "--enable-prefix-caching",
+      "--enforce-eager",
+      "--language-model-only",
+      "--no-disable-hybrid-kv-cache-manager",
+      "--no-enable-prefix-caching",
+      "--trust-remote-code"
+    ],
+    "kv_events_mount": "/narwhal-kv-events",
+    "kv_events_sockets": {
+      "endpoint": "events.sock",
+      "replay_endpoint": "replay.sock"
+    },
+    "kv_lease_s": 30,
+    "managed_env": [
+      "CUDA_VISIBLE_DEVICES",
+      "NIXL_HOST_IP",
+      "ROCR_VISIBLE_DEVICES",
+      "UCX_NET_DEVICES",
+      "UCX_TCP_PORT_RANGE",
+      "UCX_TLS",
+      "VLLM_API_KEY",
+      "VLLM_NIXL_SIDE_CHANNEL_HOST",
+      "VLLM_NIXL_SIDE_CHANNEL_PORT"
+    ],
+    "min_kv_lease_s": 6,
+    "value_options": [
+      "--attention-backend",
+      "--gpu-memory-utilization",
+      "--hf-config-path",
+      "--kv-events-config",
+      "--load-format",
+      "--max-model-len",
+      "--max-num-batched-tokens",
+      "--max-num-seqs",
+      "--reasoning-parser",
+      "--tokenizer"
+    ]
+  }
+}

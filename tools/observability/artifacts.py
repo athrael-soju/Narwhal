@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -10,9 +11,11 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
+from narwhal.backends import load as load_backend
+from narwhal.backends import names as backend_names
 from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
@@ -53,6 +56,10 @@ CONTROL_ANNOTATIONS = (
     },
 )
 _URL_CHARACTERS = re.compile(r"[A-Za-z0-9._~%:/\[\]-]+")
+# <<name{selector}>> takes each backend's query for that selector, joined with `or`.
+_PLACEHOLDER = re.compile(r"<<(\w+)(?:\{([^<>]*)\})?>>")
+# Value mappings that show each registered backend's icon.
+BACKEND_BADGES = "<<backend_badges>>"
 
 
 def _directory(path: Path, mode: int) -> None:
@@ -135,9 +142,72 @@ def _console_link(console: str) -> dict[str, Any]:
     }
 
 
+def _placeholders(value: object) -> set[str]:
+    if isinstance(value, str):
+        return {match[0] for match in _PLACEHOLDER.findall(value)}
+    if isinstance(value, Mapping):
+        value = list(value.values())
+    if isinstance(value, list):
+        return {name for item in value for name in _placeholders(item)}
+    return set()
+
+
+def _icon(png: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _backend_badges() -> dict[str, Any]:
+    options = {name: {"text": _icon(load_backend(name).icon)} for name in backend_names()}
+    return {"type": "value", "options": options}
+
+
+def render_dashboard(source: Mapping[str, Any]) -> dict[str, Any]:
+    mappings = [load_backend(name).metrics.dashboard_series for name in backend_names()]
+    series = {key for mapping in mappings for key in mapping}
+
+    def query(name: str, selector: str) -> str:
+        queries = [m[name].replace("@sel", selector) for m in mappings if name in m]
+        return "(" + " or ".join(f"({q})" for q in queries) + ")"
+
+    def fill(value: Any) -> Any:
+        if value == BACKEND_BADGES:
+            return _backend_badges()
+        if isinstance(value, str):
+            return _PLACEHOLDER.sub(
+                lambda match: match[0] if match[2] is None else query(match[1], match[2]),
+                value,
+            )
+        if isinstance(value, list):
+            return [fill(item) for item in value]
+        if isinstance(value, dict):
+            return {key: fill(item) for key, item in value.items()}
+        return value
+
+    dashboard = copy.deepcopy(dict(source))
+    spec = dashboard["spec"]
+    # A panel whose queries no backend maps shows nothing, so it is left out.
+    dropped = {
+        name
+        for name, element in spec["elements"].items()
+        if _placeholders(element) - series - {"backend_badges"}
+    }
+    spec["elements"] = {
+        name: element for name, element in spec["elements"].items() if name not in dropped
+    }
+    layout = spec["layout"]["spec"]
+    layout["items"] = [
+        item for item in layout["items"] if item["spec"]["element"]["name"] not in dropped
+    ]
+    rendered = fill(dashboard)
+    left = _placeholders(rendered)
+    if left:
+        raise ValueError(f"dashboard leaves fields {', '.join(sorted(left))}")
+    return cast(dict[str, Any], rendered)
+
+
 def narwhal_dashboard(source: Mapping[str, Any], console: str) -> dict[str, Any]:
     """Return the shipped dashboard with the fleet control markers and a link to `console`."""
-    dashboard = copy.deepcopy(dict(source))
+    dashboard = render_dashboard(source)
     spec = dashboard["spec"]
     spec["annotations"] = [*spec["annotations"], *map(_annotation, CONTROL_ANNOTATIONS)]
     spec["links"] = [*spec["links"], _console_link(console)]
@@ -176,7 +246,10 @@ def stage_artifacts(
     ):
         _directory(root / relative, 0o755)
     for origin, destination in FILES.items():
-        _write(root / destination, (source / origin).read_bytes())
+        data = (source / origin).read_bytes()
+        if origin == "prometheus.yml":
+            data = data.replace(b"<<router>>", contract.router.encode())
+        _write(root / destination, data)
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)
     _write(root / NARWHAL_DASHBOARD, (json.dumps(dashboard, indent=2) + "\n").encode())

@@ -1,5 +1,3 @@
-"""Bind measured profiles to the engine process and attested runtime."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,9 +5,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from ..config.model import EngineContract, EngineSpec
+from ..config.model import EngineSpec, FleetConfig
 from ..contracts import canonical_digest
-from ..engines.attestation import EngineIdentity, fetch_engine_identity, verify_attestation
+from ..engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 
 if TYPE_CHECKING:
     from .store import ProfileStore
@@ -17,12 +15,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class GenerationEvidence:
-    """Profile-binding digest, its evidence, the engine process start and process digest.
-
-    `digest` is the attested launch digest when the sidecar reports one, otherwise
-    `process_digest`.
-    """
-
     digest: str
     document: dict[str, Any]
     process_start_time_seconds: float
@@ -34,10 +26,9 @@ class GenerationEvidence:
 
 
 def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
-    """Derive the profile binding for a fleet without an attestation contract."""
     document: dict[str, Any] = {
         "engine": {
-            "vllm_version": identity.vllm_version,
+            "version": identity.version,
             "process_start_time_seconds": identity.process_start_time_seconds,
         }
     }
@@ -47,17 +38,16 @@ def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
 
 
 async def read_generation(
+    cfg: FleetConfig,
     spec: EngineSpec,
-    contract: EngineContract | None,
     *,
-    timeout_s: float,
-    headers: dict[str, str] | None = None,
+    timeout_s: float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> GenerationEvidence:
-    """Return the engine's profile generation, verifying its sidecar when `contract` is set."""
-    identity = await fetch_engine_identity(
-        spec.url, timeout_s=timeout_s, headers=headers, transport=transport
-    )
+    contract = cfg.engine_contract
+    if timeout_s is None:
+        timeout_s = cfg.health_timeout_s
+    identity = await fetch_spec_identity(cfg, spec, timeout_s=timeout_s, transport=transport)
     if contract is None:
         return identity_generation(identity)
     if not spec.attestation_url:
@@ -78,12 +68,10 @@ async def read_generation(
 
 
 def binding_digest(payload: dict[str, Any]) -> str:
-    """Return the digest profiles bind to in a verified attestation response."""
     return str(payload.get("launch_digest") or payload["attestation_digest"])
 
 
 def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
-    """Return a reprofile message when `saved` is absent or differs from `live`, else None."""
     if saved is None:
         return f"{iid} profile has no generation evidence; reprofile before admission"
     if saved != live:
@@ -92,7 +80,6 @@ def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
 
 
 def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
-    """Return reprofile messages for every loaded variant of engine `iid`."""
     profiles = store.profiles_for_engine(iid)
     if not profiles:
         return [f"{iid} has no loaded profile; reprofile before admission"]

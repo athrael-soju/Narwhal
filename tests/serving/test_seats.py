@@ -1,12 +1,10 @@
-"""Check per-engine seats from attestation, profiles and observed input lengths."""
-
 import math
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from narwhal.engines.attestation import attested_sequence_limit
+from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -34,7 +32,7 @@ class AttestedSequenceLimitTests(unittest.TestCase):
             (None, None),
         ):
             with self.subTest(payload=payload):
-                self.assertEqual(attested_sequence_limit(payload), expected)
+                self.assertEqual(VllmIdentity().sequence_limit(payload), expected)
 
 
 class InputLengthTests(unittest.TestCase):

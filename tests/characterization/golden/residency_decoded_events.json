@@ -1,0 +1,116 @@
+[
+  {
+    "adapter": null,
+    "block_hashes": [
+      "bytes:6831",
+      "bytes:6832"
+    ],
+    "block_size": 4,
+    "event": "StoredBlocks",
+    "extra_keys": [
+      [
+        "salt"
+      ],
+      null
+    ],
+    "group": 0,
+    "kind": "full_attention",
+    "medium": "GPU",
+    "parent_hash": null,
+    "sliding_window": null,
+    "token_ids": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  {
+    "adapter": null,
+    "block_hashes": [
+      7
+    ],
+    "block_size": 4,
+    "event": "StoredBlocks",
+    "extra_keys": null,
+    "group": 1,
+    "kind": "mla_attention",
+    "medium": "GPU",
+    "parent_hash": "bytes:6832",
+    "sliding_window": null,
+    "token_ids": [
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  {
+    "adapter": "adapter",
+    "block_hashes": [
+      8
+    ],
+    "block_size": 4,
+    "event": "StoredBlocks",
+    "extra_keys": [
+      [
+        "adapter"
+      ]
+    ],
+    "group": 2,
+    "kind": "sliding_window",
+    "medium": "GPU",
+    "parent_hash": null,
+    "sliding_window": 8,
+    "token_ids": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "adapter": null,
+    "block_hashes": [
+      9
+    ],
+    "block_size": 4,
+    "event": "StoredBlocks",
+    "extra_keys": null,
+    "group": 3,
+    "kind": "mamba",
+    "medium": "CPU",
+    "parent_hash": null,
+    "sliding_window": null,
+    "token_ids": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "block_hashes": [
+      "bytes:6831"
+    ],
+    "event": "RemovedBlocks",
+    "group": 0,
+    "medium": "GPU"
+  },
+  {
+    "block_hashes": [
+      7
+    ],
+    "event": "RemovedBlocks",
+    "group": null,
+    "medium": null
+  },
+  {
+    "event": "CacheCleared"
+  },
+  null
+]

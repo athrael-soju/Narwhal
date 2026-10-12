@@ -1,0 +1,207 @@
+{
+  "changes_after_0": {
+    "block_size": 4,
+    "changes": [
+      {
+        "cleared": false,
+        "groups": {
+          "0": {
+            "kind": "full_attention",
+            "removed": [],
+            "sliding_window": null,
+            "stored": [
+              "269cd80ac1cbc20477203f82be4953b01a2b7e4cf4bc1c2c7d3a593714c367bd",
+              "a8e33b7c21a0cc4d23a9101481c0b2100bebf08bc9f940ba50c47834e13518ba",
+              "74a1c38bc2e8a711fa17e1e458fee9048fb597ebfc530323dcd4b3d0aa79c150"
+            ]
+          }
+        },
+        "sequence": 1
+      },
+      {
+        "cleared": false,
+        "groups": {
+          "0": {
+            "kind": "full_attention",
+            "removed": [
+              "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+            ],
+            "sliding_window": null,
+            "stored": []
+          },
+          "1": {
+            "kind": "sliding_window",
+            "removed": [
+              "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a"
+            ],
+            "sliding_window": 8,
+            "stored": []
+          }
+        },
+        "sequence": 2
+      }
+    ],
+    "reason": "complete event history",
+    "sequence": 2
+  },
+  "changes_after_2": {
+    "block_size": 4,
+    "changes": [
+      {
+        "cleared": true,
+        "groups": {},
+        "sequence": 3
+      }
+    ],
+    "reason": "cache reset",
+    "sequence": 3
+  },
+  "cleared": {
+    "block_size": 4,
+    "groups": [],
+    "known": true,
+    "reason": "cache reset",
+    "sequence": 3
+  },
+  "hybrid": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 0
+      },
+      {
+        "group": 1,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "sliding_window",
+        "sliding_window": 8,
+        "unnamed": 0
+      },
+      {
+        "group": 2,
+        "identities": [
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "mamba",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 0
+  },
+  "mixed_block_size": {
+    "block_size": 4,
+    "groups": [],
+    "known": false,
+    "reason": "cache group 4 reports block size 8, other groups 4; waiting for a cache reset",
+    "sequence": 4
+  },
+  "names": {
+    "adapter": [
+      "a8e33b7c21a0cc4d23a9101481c0b2100bebf08bc9f940ba50c47834e13518ba"
+    ],
+    "prompt": [
+      "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+      "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a",
+      "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+    ],
+    "salt": [
+      "269cd80ac1cbc20477203f82be4953b01a2b7e4cf4bc1c2c7d3a593714c367bd"
+    ]
+  },
+  "removed": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110",
+          "269cd80ac1cbc20477203f82be4953b01a2b7e4cf4bc1c2c7d3a593714c367bd",
+          "a8e33b7c21a0cc4d23a9101481c0b2100bebf08bc9f940ba50c47834e13518ba",
+          "74a1c38bc2e8a711fa17e1e458fee9048fb597ebfc530323dcd4b3d0aa79c150"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 1
+      },
+      {
+        "group": 1,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "sliding_window",
+        "sliding_window": 8,
+        "unnamed": 0
+      },
+      {
+        "group": 2,
+        "identities": [
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "mamba",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 2
+  },
+  "salt_adapter_unnamed": {
+    "block_size": 4,
+    "groups": [
+      {
+        "group": 0,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110",
+          "269cd80ac1cbc20477203f82be4953b01a2b7e4cf4bc1c2c7d3a593714c367bd",
+          "a8e33b7c21a0cc4d23a9101481c0b2100bebf08bc9f940ba50c47834e13518ba",
+          "74a1c38bc2e8a711fa17e1e458fee9048fb597ebfc530323dcd4b3d0aa79c150"
+        ],
+        "kind": "full_attention",
+        "sliding_window": null,
+        "unnamed": 1
+      },
+      {
+        "group": 1,
+        "identities": [
+          "20de478bfc1b95225ebf2cc727951c0dedc0ddb827e6867450fb212be5392bdf",
+          "193e74d771c83fd792e5c0e8a9b0fbab2cc13684a8a1d5a8419c01107cc0275a",
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "sliding_window",
+        "sliding_window": 8,
+        "unnamed": 0
+      },
+      {
+        "group": 2,
+        "identities": [
+          "fb5f3e057e53d07ba1174796411bc9d202abfd4b74b76c3da6f97fb596e28110"
+        ],
+        "kind": "mamba",
+        "sliding_window": null,
+        "unnamed": 0
+      }
+    ],
+    "known": true,
+    "reason": "complete event history",
+    "sequence": 1
+  }
+}

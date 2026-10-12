@@ -21,6 +21,10 @@ The fleet's `engine_contract` lists the [compatibility fields](../configuration/
 
 A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh when three requirements hold. [Attestation capture](../deploy/05-Attest.md#capturing-the-attestation-inputs) reads the inputs from the live process. The attestation sidecar binds the process to its image, NIXL connector and runtime features, and [`narwhal-check`](../cli/Check.md) validates the attested process.
 
+### KV transfer for SGLang engines
+
+An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. For each request, the router sends the prefill and decode legs together, both carrying the producer's bootstrap host and port from its attestation and a random bootstrap room that pairs the two legs. The decode leg waits at most 30 seconds for its first token.
+
 ## Request execution
 
 A completion request passes through these stages:
@@ -28,7 +32,7 @@ A completion request passes through these stages:
 1. The request takes a seat under the [router in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit).
 2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#prefix-cache-pricing) for cached prefixes.
 3. With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check).
-4. The chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff.
+4. On vLLM, the chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff. On SGLang, the router also places the decode leg and sends both legs together.
 5. An eligible engine consumes the handoff and runs decode.
 6. Tokens stream to the client.
 7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.

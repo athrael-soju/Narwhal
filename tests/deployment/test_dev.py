@@ -1,5 +1,3 @@
-"""Keep local lifecycle ownership and readiness tied to the selected instance."""
-
 import contextlib
 import hashlib
 import io
@@ -16,6 +14,8 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends.sglang import dev as sglang_dev
+from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
 from narwhal.deployment import stages
 from narwhal.dev import lifecycle, template
@@ -26,7 +26,6 @@ from .fixtures import process_group_with_worker
 
 
 def synthetic_identity(pid=1):
-    """Return a complete identity for tests that substitute process inspection."""
     return {"pid": pid, "boot_id": "synthetic-boot", "start_ticks": 0}
 
 
@@ -70,25 +69,31 @@ class DevTests(unittest.TestCase):
         self.spec["runtime"].pop("gguf_plugin_python_sha256", None)
 
     def initialize(self, **overrides):
+        return self.initialize_with(
+            self.spec,
+            gpu_name=self.spec["gpu"]["product"],
+            memory={"total_mib": 32607, "used_mib": 2000},
+            model_path=self.gguf,
+            **overrides,
+        )
+
+    def initialize_with(self, spec, *, gpu_name, memory, model_path, dev=vllm_dev, **overrides):
         with (
             patch.object(
-                template,
-                "_gpu_rows",
-                return_value=[{"name": self.spec["gpu"]["product"], "uuid": "GPU-test"}],
+                template, "_gpu_rows", return_value=[{"name": gpu_name, "uuid": "GPU-test"}]
             ),
-            patch.object(
-                template, "gpu_memory", return_value={"total_mib": 32607, "used_mib": 2000}
-            ),
-            patch.object(template, "_check_runtime"),
+            patch.object(template, "gpu_memory", return_value=memory),
+            patch.object(template, "_check_packages"),
+            patch.object(dev, "check_imports"),
             patch.object(template, "_address", return_value="127.0.0.1"),
             patch.object(template, "_check_free_ports"),
         ):
             return template.materialize(
                 self.root,
                 model_dir=self.model,
-                model_path=self.gguf,
+                model_path=model_path,
                 fabric_interface="lo",
-                template=self.spec,
+                template=spec,
                 **overrides,
             )
 
@@ -127,27 +132,113 @@ class DevTests(unittest.TestCase):
         self.assertEqual(
             bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"]), sweep
         )
-        with (
-            patch.object(
-                template,
-                "_gpu_rows",
-                return_value=[{"name": "NVIDIA Test GPU", "uuid": "GPU-test"}],
-            ),
-            patch.object(template, "gpu_memory", return_value={"total_mib": 8192, "used_mib": 0}),
-            patch.object(template, "_check_runtime"),
-            patch.object(template, "_address", return_value="127.0.0.1"),
-            patch.object(template, "_check_free_ports"),
-        ):
-            template.materialize(
-                self.root,
-                model_dir=self.model,
-                model_path=self.gguf,
-                fabric_interface="lo",
-                template=self.spec,
-            )
+        self.initialize_with(
+            self.spec,
+            gpu_name="NVIDIA Test GPU",
+            memory={"total_mib": 8192, "used_mib": 0},
+            model_path=self.gguf,
+        )
         fleet = lifecycle.read(self.root / "fleet.json")
         self.assertEqual([engine["role"] for engine in fleet["engines"]], ["prefill", "decode"])
         self.assertEqual(fleet["hardware"]["accelerator"], "NVIDIA Test GPU")
+
+    def sglang_spec(self):
+        spec = template._read_template("small-cuda-sglang-v1.json")
+        (self.model / "model.safetensors").write_bytes(b"weights")
+        spec["model"].update(
+            files_sha256={
+                "config.json": hashlib.sha256(b"{}").hexdigest(),
+                "model.safetensors": hashlib.sha256(b"weights").hexdigest(),
+            },
+            tokenizer_sha256={},
+        )
+        return spec
+
+    def initialize_sglang(self, spec):
+        return self.initialize_with(
+            spec,
+            gpu_name="NVIDIA Test GPU",
+            memory={"total_mib": 8192, "used_mib": 0},
+            model_path=self.model,
+            dev=sglang_dev,
+        )
+
+    def test_sglang_template_writes_an_sglang_fleet_with_paired_profiles(self):
+        spec = self.sglang_spec()
+        self.initialize_sglang(spec)
+        fleet = FleetConfig.load(self.root / "fleet.json")
+        self.assertEqual((fleet.backend, fleet.connector), ("sglang", "mooncake"))
+        launch = lifecycle.read(self.root / "engine-launch.json")
+        runtime = launch["engines"]["engine-1"]["runtime"]
+        self.assertEqual(runtime["backend"], "sglang")
+        self.assertIn("--mem-fraction-static", runtime["extra_args"])
+        self.assertEqual(
+            runtime["extra_args"][-3:],
+            ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
+        )
+        self.assertEqual(lifecycle.instance(self.root)["model_path"], str(self.model))
+        run = self.root / "run-profiles"
+        run.mkdir()
+        (run / "profiles-1p1d.json").write_text("{}")
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
+        args = command.call_args.args[2]
+        self.assertNotIn("--colocated", args)
+        self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
+
+    def test_sglang_template_rejects_a_changed_checkpoint(self):
+        spec = self.sglang_spec()
+        (self.model / "model.safetensors").write_bytes(b"other weights")
+        with self.assertRaisesRegex(ValueError, "model file model.safetensors differs"):
+            self.initialize_sglang(spec)
+        self.initialize_sglang(self.sglang_spec())
+        (self.model / "model.safetensors").write_bytes(b"other weights")
+        with self.assertRaisesRegex(ValueError, "model file model.safetensors changed"):
+            lifecycle.up(self.root)
+
+    def test_native_import_checks_report_failures_and_engine_tracebacks(self):
+        stderr = "warning\n" * 120 + "Traceback (most recent call last):\n"
+        for module, label, traceback_fails in (
+            (vllm_dev, "vLLM/NIXL connector", True),
+            (sglang_dev, "SGLang", False),
+        ):
+            with self.subTest(label):
+                failure = subprocess.CalledProcessError(1, [], stderr=stderr)
+                with (
+                    patch.object(subprocess, "run", side_effect=failure) as run,
+                    self.assertRaises(ValueError) as caught,
+                ):
+                    module.check_imports()
+                run.assert_called_once_with(
+                    [sys.executable, "-c", module.IMPORT_CHECK],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=True,
+                )
+                self.assertEqual(
+                    str(caught.exception), f"native {label} import failed: {stderr[-800:]}"
+                )
+                for error in (subprocess.TimeoutExpired([], 60), OSError("no interpreter")):
+                    with (
+                        patch.object(subprocess, "run", side_effect=error),
+                        self.assertRaises(ValueError) as caught,
+                    ):
+                        module.check_imports()
+                    self.assertEqual(
+                        str(caught.exception), f"native {label} import failed: {error}"
+                    )
+                completed = subprocess.CompletedProcess([], 0, "", stderr)
+                with patch.object(subprocess, "run", return_value=completed):
+                    if traceback_fails:
+                        with self.assertRaises(ValueError) as caught:
+                            module.check_imports()
+                        self.assertEqual(
+                            str(caught.exception),
+                            f"native {label} import reported: {stderr[-800:]}",
+                        )
+                    else:
+                        module.check_imports()
 
     def test_measured_reference_requires_its_gpu_product(self):
         with (
@@ -252,10 +343,25 @@ class DevTests(unittest.TestCase):
         merged = [merge_args[i + 1] for i, arg in enumerate(merge_args) if arg == "--merge"]
         self.assertEqual(set(merged), {str(run / f"profiles-{p}p{4 - p}d.json") for p in (1, 2, 3)})
 
+    def test_paired_four_engine_profiles_measure_one_split(self):
+        self.initialize()
+        fleet = lifecycle.read(self.root / "fleet.json")
+        spec = json.loads(json.dumps(self.spec))
+        for key in [key for key in spec["profile"] if key.startswith("neighbour_")]:
+            spec["profile"].pop(key)
+        run = self.root / "run-profiles"
+        run.mkdir()
+        (run / "profiles-2p2d.json").write_text('{"profiles": []}')
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, fleet, spec)
+        self.assertEqual([call.args[3] for call in command.call_args_list], ["profile-2p2d"])
+        self.assertNotIn("--colocated", command.call_args.args[2])
+        self.assertEqual((run / "profiles.json").read_text(), '{"profiles": []}')
+
     def test_up_keeps_profile_progress_on_stderr_and_json_on_stdout(self):
         self.initialize()
         with (
-            patch.object(lifecycle, "check_plugin"),
+            patch.object(vllm_dev, "check_plugin"),
             patch.object(lifecycle, "_check_free_ports"),
             patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
             patch.object(lifecycle, "finalize_fleet"),
@@ -318,6 +424,16 @@ class DevTests(unittest.TestCase):
                 template=self.spec,
             )
         self.assertEqual(path.read_text(), "operator edit")
+
+    def test_reuse_reads_the_earlier_side_channel_port_name(self):
+        self.initialize(port_base=19000)
+        for name in ("instance.json", "template.json"):
+            document = lifecycle.read(self.root / name)
+            document["ports"]["nixl_first"] = document["ports"].pop("side_channel_first")
+            lifecycle.write(self.root / name, document)
+        self.assertEqual(template.materialize(self.root, port_base=19000), self.root)
+        with self.assertRaisesRegex(ValueError, "--port-base"):
+            template.materialize(self.root, port_base=19001)
 
     def test_cli_reuse_reports_all_conflicts_and_preserves_operator_edits(self):
         self.initialize()
@@ -440,7 +556,7 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "budgets exceed"):
             self.initialize()
         self.spec["allocation"]["device_allowance"] = 0.5
-        self.spec["ports"]["nixl_first"] = self.spec["ports"]["engine_first"]
+        self.spec["ports"]["side_channel_first"] = self.spec["ports"]["engine_first"]
         with self.assertRaisesRegex(ValueError, "collide"):
             self.initialize()
         self.assertFalse(self.root.exists())
@@ -484,7 +600,7 @@ class DevTests(unittest.TestCase):
     def test_model_replacement_after_init_rejects_up(self):
         self.initialize()
         self.gguf.write_bytes(b"replacement model")
-        with self.assertRaisesRegex(ValueError, "GGUF model changed"):
+        with self.assertRaisesRegex(ValueError, "model file synthetic.gguf changed"):
             lifecycle.up(self.root)
         self.assertFalse((self.root / "lifecycle.json").exists())
 
@@ -773,6 +889,11 @@ class DevTests(unittest.TestCase):
             patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(
+                    main(["dev", "verify", "--instance", str(self.root), "--format", "json"]), 4
+                )
+            self.assertEqual(json.loads(output.getvalue())["status"], "error")
             self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
             state = lifecycle.read(self.root / "lifecycle.json")
             self.assertEqual(state["phase"], "degraded")

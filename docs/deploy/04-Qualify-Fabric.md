@@ -20,7 +20,7 @@ The `calculate` command sizes the budget from these initial trial parameters:
 
 Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
-1. In the representative's engine-role shell, calculate the budget:
+1. In the representative's engine-role shell, calculate the budget. On vLLM, calculate it from the captured cache layout:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
@@ -32,7 +32,26 @@ Each outgoing directed edge from the cache group's roles carries the full handof
       --out "$FABRIC_RUN/budget.json"
     ```
 
-2. Verify that every tensor parallel (TP) rank shares one cache layout:
+    On SGLang, the representative is a prefill engine. Its `sglang:kv_transfer_total_mb` metric records the bytes of each handoff, KV pages and per-request state together. Set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine in the group, then measure eight handoffs and calculate the budget from them:
+
+    ```bash
+    export PREFILL_IP='<this engine fabric address>'
+    export DECODE_URL='http://<decode engine address>:<decode engine port>'
+    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" measure-transfer \
+      --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
+      --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_SGLANG_BOOTSTRAP_PORT" \
+      --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
+      --prompt-tokens 1024 --out-dir "$FABRIC_RUN/transfer"
+    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
+      --model-config "$NARWHAL_MODEL_DIR/config.json" \
+      --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
+      --transfer-metrics "$FABRIC_RUN/transfer/before.prom" "$FABRIC_RUN/transfer/after.prom" \
+      --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
+      --transfer-budget-s 1 --headroom 1.25 \
+      --out "$FABRIC_RUN/budget.json"
+    ```
+
+2. On vLLM, verify that every tensor parallel (TP) rank shares one cache layout:
 
     ```bash
     python3 - <<'PY_REPRESENTATIVE_BUDGET'
@@ -89,7 +108,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
 
 5. Create a new `FABRIC_RUN` for each repeat comparison.
 
-Page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`:
+On vLLM, page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`:
 
 | Attention type                                       | `extra_blocks`                                               |
 | ---------------------------------------------------- | ------------------------------------------------------------ |
@@ -97,7 +116,7 @@ Page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra
 | Mamba                                                | `1 + num_speculative_blocks + num_prefill_checkpoint_blocks` |
 | Sliding-window and chunked local attention           | `1`                                                          |
 
-Payload per handoff is page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout.
+On vLLM, payload per handoff is page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout. On SGLang, payload per handoff is each TP rank's mean `sglang:kv_transfer_total_mb` between the two snapshots, summed over the ranks.
 
 The required link rate, in decimal Gbit/s, is:
 
@@ -284,7 +303,7 @@ For every edge, retain:
 - The budget digest.
 - The sample path and exit status.
 
-Recalculate the budget from the new `cache-layout.json` when the runtime layout changes.
+When the runtime layout changes, recalculate the budget from the new `cache-layout.json` on vLLM, or from new measured handoffs on SGLang.
 
 Link inputs:
 

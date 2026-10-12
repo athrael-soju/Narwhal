@@ -1,5 +1,3 @@
-"""Exercise hybrid page budgeting and the isolated runtime probe with synthetic specs."""
-
 import contextlib
 import hashlib
 import io
@@ -13,15 +11,15 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
-from narwhal.deployment.launch_engine.captures import capture_cache, measure_cache, model_dimensions
-from narwhal.deployment.launch_engine.runtime import (
+from narwhal.backends.vllm.captures import capture_cache, measure_cache, model_dimensions
+from narwhal.backends.vllm.runtime import (
     cache_groups,
     digest,
     runtime_cache_probe,
     runtime_model_dimensions,
     write_once,
 )
-from tests.deployment.fixtures import launcher_inputs, patched_docker
+from tests.deployment.fixtures import VLLM_HOOK, launcher_inputs, patched_docker
 from tools.deployment.fabric_budget import main, runtime_payload
 
 
@@ -74,7 +72,7 @@ class CacheSizingTests(unittest.TestCase):
                 with (
                     self.subTest(use_mla=use_mla),
                     patch(
-                        "narwhal.deployment.launch_engine.runtime.runtime_config",
+                        "narwhal.backends.vllm.runtime.runtime_config",
                         return_value=SimpleNamespace(model_config=model),
                     ),
                 ):
@@ -288,7 +286,7 @@ class CacheSizingTests(unittest.TestCase):
             with (
                 patch.dict(sys.modules, modules),
                 patch(
-                    "narwhal.deployment.launch_engine.runtime.digest",
+                    "narwhal.backends.vllm.runtime.digest",
                     side_effect=lambda path: (
                         plan["model_config_sha256"]
                         if str(path) == "/model/config.json"
@@ -380,9 +378,6 @@ class CacheSizingTests(unittest.TestCase):
                 if str(path) == "/model/config.json"
                 else plan["launcher_sha256"]
             )
-            hook_path = (
-                Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
-            )
             worker_module = ModuleType("vllm.v1.worker.gpu_worker")
             worker_module.Worker = type("Worker", (), {"init_device": lambda self: None})
             with (
@@ -403,7 +398,7 @@ class CacheSizingTests(unittest.TestCase):
                     },
                 ),
             ):
-                runpy.run_path(str(hook_path))
+                runpy.run_path(str(VLLM_HOOK))
                 core = Core()
                 config = SimpleNamespace(parallel_config=SimpleNamespace(tensor_parallel_size=2))
                 self.assertEqual(core._initialize_kv_caches(config), "model-ready")
@@ -423,7 +418,6 @@ class CacheSizingTests(unittest.TestCase):
             self.assertIsNot(Core._initialize_kv_caches, original)
 
     def test_live_hook_waits_for_peer_held_memory_before_device_init(self):
-        hook_path = Path(__file__).resolve().parents[2] / "tools/deployment/cache_capture_hook.py"
         gib = 2**30
         for readings, polls, ready in (
             ([(10 * gib, 100 * gib), (95 * gib, 100 * gib)], 1, True),
@@ -473,7 +467,7 @@ class CacheSizingTests(unittest.TestCase):
                     patch("time.monotonic", side_effect=lambda clock=clock: clock[0]),
                     contextlib.redirect_stderr(io.StringIO()) as waited,
                 ):
-                    hook = runpy.run_path(str(hook_path))
+                    hook = runpy.run_path(str(VLLM_HOOK))
                     Worker().init_device()
                 self.assertEqual(calls, ["init"])
                 if polls is not None:

@@ -37,7 +37,7 @@ For each deployment:
 
 [Deploying a fleet](Deploy.md) qualifies these production inputs:
 
-- separately provisioned vLLM engines with compatible KV transfer
+- separately provisioned vLLM engines with NIXL, or SGLang engines with Mooncake
 - engine attestation
 - a fleet configuration
 - measured profiles

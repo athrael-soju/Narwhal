@@ -738,7 +738,7 @@ class RouterContractTests(unittest.IsolatedAsyncioTestCase):
         cfg = FleetConfig.load(bench_fleet.write_fleet(out, lines, shape))
         store = ProfileStore(cfg.profiles_path)
         for spec in cfg.engines:
-            generation = await read_generation(spec, None, timeout_s=1, transport=mock)
+            generation = await read_generation(cfg, spec, timeout_s=1, transport=mock)
             (profile,) = store.profiles_for_engine(spec.iid)
             self.assertIsNone(
                 generation_problem(spec.iid, profile.generation_digest, generation.digest)

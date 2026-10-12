@@ -1,0 +1,412 @@
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import httpx
+
+from narwhal.backends import load
+from narwhal.config import EngineContract
+from narwhal.config.validation import validate
+from narwhal.diagnostics.check import engines as engine_gates
+from narwhal.diagnostics.check import transfer
+from narwhal.diagnostics.check.report import Report
+from narwhal.engines.attestation import (
+    PROCESS_PATH,
+    AttestationDocument,
+    EngineIdentity,
+    build_app,
+)
+from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
+from narwhal.profiling import calibration
+from narwhal.profiling.generation import GenerationEvidence
+from narwhal.profiling.probe import fleet as fleet_probe
+from narwhal.profiling.probe import pairing as pairing_probe
+from narwhal.profiling.probe.instance import profile_instance
+from narwhal.profiling.probe.pairing import PairedTransport
+from narwhal.profiling.probe.sweep import Sweep
+from narwhal.runtime.lifecycle.readmission import role_bound_pairs
+from narwhal.serving.app import create_app
+from narwhal.types import Instance, Role
+from tests.fixtures import bind_identity_profiles, fleet, profile
+from tools.measurement import simulated_engine as sim
+
+LAUNCH = {"bootstrap": {"bootstrap_host": "127.0.0.1", "bootstrap_port": 1}}
+
+
+class PairedEngines(unittest.IsolatedAsyncioTestCase):
+    name = "sglang"
+    connector = "mooncake"
+
+    async def asyncSetUp(self):
+        self.backend = load(self.name)
+        rooms = sim.Rooms(2.0) if self.name == "sglang" else None
+        self.engines = []
+        for iid in ("e0", "e3"):
+            engine = sim.SimulatedEngine(
+                iid,
+                prefill_s=0.001,
+                token_interval_s=0.001,
+                backend=self.name,
+                rooms=rooms,
+            )
+            await engine.start()
+            self.addAsyncCleanup(engine.close)
+            self.engines.append(engine)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cfg = fleet(Path(folder.name))
+        self.cfg.backend, self.cfg.connector = self.name, self.connector
+        self.cfg.dialect = self.backend.dialect.name
+        self.cfg.engine_contract = None
+        self.cfg.engines = [
+            replace(spec, url=engine.url)
+            for spec, engine in zip(self.cfg.engines, self.engines, strict=True)
+        ]
+        self.client = EngineClient(
+            kv=self.backend.connector(self.connector),
+            dialect=self.backend.dialect,
+            model=self.cfg.model,
+            read_timeout_s=5,
+        )
+        self.addAsyncCleanup(self.client.aclose)
+        launches = patch.object(
+            transfer,
+            "attested_launches",
+            new=AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH}),
+        )
+        launches.start()
+        self.addCleanup(launches.stop)
+
+
+class SglangPreflightTests(PairedEngines):
+    async def preflight(self) -> str:
+        report, output = Report(), io.StringIO()
+        with redirect_stdout(output):
+            handoffs = await transfer.gate_produce(self.cfg, {"e0", "e3"}, self.client, report)
+            self.assertEqual(set(handoffs), {"e0", "e3"})
+            await transfer.gate_consume(
+                self.cfg, {"e0", "e3"}, handoffs, self.client, report, mesh=True
+            )
+        self.assertEqual(report.failed, [])
+        return output.getvalue()
+
+    async def test_consume_moves_kv_through_each_switched_pair(self):
+        self.assertEqual((await self.preflight()).count("moved KV"), 2)
+        self.assertEqual([engine.transfers for engine in self.engines], [1, 1])
+        # The last pair ran e3 -> e0.
+        self.assertEqual([engine.role for engine in self.engines], ["decode", "prefill"])
+
+    async def test_a_failed_prefill_leg_is_the_reported_cause(self):
+        handoff = await self.client.start_handoff(
+            "http://127.0.0.1:9", "/v1/completions", {"model": "m", "prompt": "p"}, {}
+        )
+        self.engines[1].role = "decode"
+        with self.assertRaises(httpx.ConnectError):
+            async for _ in self.client.decode_handoff(
+                handoff,
+                self.engines[1].url,
+                "/v1/completions",
+                {"model": "m", "prompt": "p", "max_tokens": 2},
+                {},
+                first_token_timeout_s=0.2,
+            ):
+                pass
+
+    async def test_calibration_step_measures_each_pair(self):
+        pairs = [("e0", "e3"), ("e3", "e0")]
+        async with httpx.AsyncClient() as sizing:
+            lockstep = calibration._Lockstep(
+                self.cfg,
+                self.client,
+                sizing,
+                self.backend.dialect,
+                5.0,
+                {"e0": 4096, "e3": 4096},
+                {"e0": LAUNCH, "e3": LAUNCH},
+                self.backend.role_switcher(self.connector),
+            )
+            for pair in pairs:
+                await lockstep.step([pair], 128, 1, None)
+        rows = list(lockstep.rows.values())
+        self.assertEqual([row["status"] for row in rows], ["completed", "completed"])
+        self.assertTrue(all(row["prefill_seconds"] > 0 for row in rows))
+
+    async def test_profile_measures_both_roles_through_a_peer(self):
+        target, peer = self.engines
+        target.prefill_s = peer.prefill_s = 0.05
+        target.token_interval_s = peer.token_interval_s = 0.02
+        pairing = PairedTransport(httpx.AsyncHTTPTransport(), self.client.kv, self.backend.dialect)
+        switcher = self.backend.role_switcher(self.connector)
+        roles = fleet_probe._pair_roles(
+            self.cfg,
+            self.backend.dialect,
+            pairing,
+            switcher,
+            *self.cfg.engines,
+            {"e0": LAUNCH, "e3": LAUNCH},
+        )
+        sweep = Sweep(
+            prefill_lens=(64, 128, 256),
+            decode_concurrency=(1, 2),
+            decode_tokens=8,
+            prefill_repeats=1,
+            decode_input_lens=(64, 128),
+        )
+        async with httpx.AsyncClient(transport=pairing, timeout=10) as client:
+            profile = await profile_instance(
+                client,
+                "e0",
+                target.url,
+                self.cfg.model,
+                self.backend.dialect,
+                sweep,
+                metrics=self.backend.metrics,
+                max_model_len=4096,
+                observation_timeout_s=10,
+                roles=roles,
+            )
+        self.assertGreater(profile.tpot_intercept, 0)
+        self.assertEqual(profile.kv_capacity_tokens, sim.MAX_MODEL_LEN)
+        self.assertEqual(peer.transfers, 3)
+        self.assertEqual(target.transfers, 9)
+
+    async def test_pace_prefills_each_engine_beside_its_decode_peer(self):
+        report = Report()
+        launches = AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH})
+        with (
+            patch.object(pairing_probe, "attested_launches", new=launches),
+            redirect_stdout(io.StringIO()),
+        ):
+            slow = await engine_gates.gate_pace(self.cfg, {"e0", "e3"}, report)
+        self.assertEqual((slow, report.failed), (set(), []))
+        launches.assert_awaited_once_with(self.cfg.engines, timeout_s=self.cfg.health_timeout_s)
+        self.assertEqual([engine.transfers for engine in self.engines], [2, 2])
+
+    async def test_profile_run_measures_each_engine_beside_its_lane_peer(self):
+        self.cfg.profiles_path = self.cfg.profiles_path.with_name("paired.json")
+        launches = AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH})
+        generation = GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
+
+        async def measured(client, iid, url, model, dialect, sweep, *args, roles, **kwargs):
+            for role in (Role.PREFILL, Role.DECODE):
+                await roles(role)
+                r = await client.post(f"{url}/v1/completions", json={"model": model, "prompt": "p"})
+                self.assertEqual(r.status_code, 200)
+            return profile(iid)
+
+        with (
+            patch.object(pairing_probe, "attested_launches", new=launches),
+            patch.object(fleet_probe, "engine_context_limit", AsyncMock(return_value=16384)),
+            patch.object(fleet_probe, "read_generation", AsyncMock(return_value=generation)),
+            patch.object(fleet_probe, "profile_instance", side_effect=measured),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(await fleet_probe.run(self.cfg, None), 0)
+        launches.assert_awaited_once_with(self.cfg.engines, timeout_s=self.cfg.health_timeout_s)
+        saved = json.loads(self.cfg.profiles_path.with_suffix(".samples.json").read_text())
+        peers = {iid: row["peer"] for iid, row in saved["engines"].items()}
+        self.assertEqual(peers, {"e0": "e3", "e3": "e0"})
+        # Each engine decoded once in its own decode phase and once in its peer's prefill phase.
+        self.assertEqual([engine.transfers for engine in self.engines], [2, 2])
+
+    async def test_paired_transport_passes_other_routes_through(self):
+        pairing = PairedTransport(httpx.AsyncHTTPTransport(), self.client.kv, self.backend.dialect)
+        pairing.pair(self.engines[0].url, Role.PREFILL, self.engines[1].url, LAUNCH)
+        async with httpx.AsyncClient(transport=pairing) as client:
+            response = await client.post(
+                f"{self.engines[0].url}/tokenize", json={"model": "m", "prompt": "abc"}
+            )
+        self.assertEqual(response.json()["count"], 3)
+        self.assertEqual(self.engines[1].transfers, 0)
+
+
+class VllmPreflightTests(PairedEngines):
+    name = "vllm"
+    connector = "nixl"
+
+    async def test_consume_runs_the_descriptor_flow(self):
+        self.assertEqual((await SglangPreflightTests.preflight(self)).count("moved KV"), 2)
+        transfer.attested_launches.assert_not_awaited()
+
+
+class RoundTests(unittest.TestCase):
+    def test_switching_engines_serve_one_leg_per_round(self):
+        pairs = [("a", "b"), ("b", "a"), ("a", "c"), ("c", "b")]
+        rounds = calibration.exclusive_rounds(pairs, {"a": "a", "b": "b", "c": "c"})
+        self.assertEqual(sorted(pair for members in rounds for pair in members), sorted(pairs))
+        for members in rounds:
+            engines = [iid for pair in members for iid in pair]
+            self.assertEqual(len(engines), len(set(engines)))
+
+    def test_each_phase_keeps_every_engine_in_one_role(self):
+        engines = [f"n{i}" for i in range(1, 9)]
+        pairs = [(src, dst) for src in engines for dst in engines if src != dst]
+        phases = calibration.role_phases(pairs)
+        self.assertEqual(sorted(pair for phase in phases for pair in phase), sorted(pairs))
+        self.assertEqual(len(phases), 6)
+        for phase in phases:
+            producers = {src for src, _ in phase}
+            self.assertFalse(producers & {dst for _, dst in phase})
+
+
+class RoleBoundReadmissionPairTests(unittest.TestCase):
+    def test_the_peer_serves_the_other_role(self):
+        live = [
+            Instance("n1", "http://n1", Role.PREFILL),
+            Instance("n2", "http://n2", Role.PREFILL),
+            Instance("n5", "http://n5", Role.DECODE),
+        ]
+        # A prefill target hands KV to a decode peer, and a decode target takes it from one.
+        self.assertEqual(role_bound_pairs("n6", Role.PREFILL, live), [("n6", "n5")])
+        self.assertEqual(role_bound_pairs("n6", Role.DECODE, live), [("n1", "n6")])
+        self.assertEqual(role_bound_pairs("n6", Role.PREFILL, live[:2]), [])
+
+
+class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cfg = fleet(Path(folder.name), engines=("e0", "e3", "e5"))
+        self.cfg.engine_contract = None
+        self.router = create_app(self.cfg).state.router
+        bind_identity_profiles(self.router)
+        self.addAsyncCleanup(self.router.engines.aclose)
+        self.router.scheduler.availability.roles_bound = True
+        instances = self.router.monitor.instances
+        instances["e0"].role, instances["e3"].role, instances["e5"].role = (
+            Role.PREFILL,
+            Role.DECODE,
+            Role.DECODE,
+        )
+        self.verifier = self.router.verifier
+
+    def test_a_decode_suspect_never_gets_a_standalone_probe(self):
+        self.assertEqual(self.verifier.producers("e3", "e0"), ["e0"])
+        self.router.scheduler.eject("e0", "test")
+        self.assertEqual(self.verifier.producers("e3", "e0"), [""])
+
+    def test_a_decode_suspect_without_a_recorded_producer_takes_a_live_one(self):
+        self.assertEqual(self.verifier.producers("e3", ""), ["e0"])
+        self.router.scheduler.eject("e0", "test")
+        self.assertEqual(self.verifier.producers("e3", ""), [""])
+
+    async def test_a_decode_suspect_without_a_recorded_producer_is_probed(self):
+        probe = AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg()))
+        with patch.object(self.router.engines, "probe_inference", new=probe):
+            self.assertTrue(await self.verifier._verify_path("e3", "http://e3", ""))
+        self.assertEqual(
+            probe.await_args.kwargs["prefill_url"],
+            self.router.monitor.instances["e0"].url,
+        )
+        self.assertEqual(self.verifier.probes[("e3", "verify_inference", "passed")], 1)
+
+    async def test_a_decode_suspect_without_a_producer_defers(self):
+        self.router.scheduler.eject("e0", "test")
+        probe = AsyncMock()
+        with patch.object(self.router.engines, "probe_inference", new=probe):
+            self.assertFalse(await self.verifier._verify_path("e3", "http://e3", "e0"))
+        probe.assert_not_awaited()
+        self.assertEqual(self.verifier.probes[("e3", "verify_inference", "inconclusive")], 1)
+
+    async def test_a_prefill_suspect_is_probed_ahead_of_a_decode_peer(self):
+        probes = [
+            InferenceProbe(ProbeLeg(), ProbeLeg(failed="stream")),
+            InferenceProbe(ProbeLeg(failed="inference_status"), ProbeLeg(inconclusive=True)),
+        ]
+        probe = AsyncMock(side_effect=probes)
+        with (
+            patch.object(self.router.engines, "probe_inference", new=probe),
+            patch.object(self.router.journal, "write") as write,
+            self.assertLogs("narwhal", level="INFO") as logs,
+        ):
+            self.assertFalse(await self.verifier._verify_path("e0", "http://e0", ""))
+        self.assertEqual(
+            [call.kwargs["prefill_url"] for call in probe.await_args_list],
+            ["http://e0", "http://e0"],
+        )
+        outcomes = self.verifier.probes
+        self.assertEqual(outcomes[("e0", "verify_inference", "consumer_failed")], 1)
+        self.assertEqual(outcomes[("e0", "verify_inference", "failed")], 1)
+        rows = [call.args[0] for call in write.call_args_list]
+        row = next(row for row in rows if row.get("outcome") == "consumer_failed")
+        self.assertEqual(
+            list(row.items())[-3:],
+            [
+                ("outcome", "consumer_failed"),
+                ("consumer_class", "stream"),
+                ("consumer", "e3"),
+            ],
+        )
+        self.assertIn(
+            "suspect e0 inference probe: consumer e3 leg failed stream; trying the next consumer",
+            "\n".join(logs.output),
+        )
+
+
+class ContractFieldTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cfg = fleet(Path(folder.name))
+        self.cfg.backend, self.cfg.connector, self.cfg.dialect = (
+            "sglang",
+            "mooncake",
+            "sglang",
+        )
+
+    def problems(self):
+        try:
+            validate(self.cfg)
+        except ValueError as exc:
+            return str(exc)
+        return ""
+
+    def test_a_backend_attests_only_its_own_fields(self):
+        contract = self.cfg.engine_contract
+        self.assertTrue(contract.enforce_handshake_compat)
+        self.assertIn("enforce_handshake_compat is not attested", self.problems())
+        self.cfg.engine_contract = replace(
+            contract,
+            enforce_handshake_compat=None,
+            connector_version=0,
+            cross_layers_blocks=None,
+            hybrid_kv_cache_manager=None,
+            kv_role="",
+            transfer_mode="",
+        )
+        self.assertEqual(self.cfg.contract_missing(), [])
+        self.assertNotIn("engine_contract", self.problems())
+
+    def test_mooncake_is_the_only_connector(self):
+        self.cfg.connector = "nixl"
+        problems = self.problems()
+        self.assertIn("backend 'sglang' has no connector 'nixl'", problems)
+        self.assertNotIn("set pin on every engine", problems)
+
+
+class ProcessRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_sidecar_reports_the_host_process_start(self):
+        contract = EngineContract(
+            engine_version="1.0", connector="mooncake", enforce_handshake_compat=None
+        )
+        app = build_app(
+            AttestationDocument(contract, {}),
+            "http://engine",
+            EngineIdentity("1.0", 5.0),
+            reader=load("sglang").identity,
+            process=lambda: 5.0,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://sidecar"
+        ) as client:
+            response = await client.get(PROCESS_PATH)
+        self.assertEqual(response.json(), {"process_start_time_seconds": 5.0})
+
+
+if __name__ == "__main__":
+    unittest.main()

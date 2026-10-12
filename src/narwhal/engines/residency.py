@@ -1,16 +1,10 @@
-"""Bounded record of the prefix blocks one engine process holds on its GPU.
-
-Residency is known only while every batch since the engine's first batch or its
-last cache reset has applied.
-"""
-
 from __future__ import annotations
 
 import threading
 from collections import Counter, deque
 from collections.abc import Collection, Hashable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .kv_events import (
     GPU_MEDIUM,
@@ -23,9 +17,10 @@ from .kv_events import (
 )
 
 MAX_RESIDENT_BLOCKS = 1_000_000
+MAX_TRACKED_PAGES = 4_000_000
 MAX_RETAINED_CHANGES = 10_000
 MAX_RETAINED_CHANGE_BLOCKS = 1_000_000
-# vLLM KV cache group kinds by what a prefix hit needs from the group:
+# KV cache group kinds by what a prefix hit needs from the group:
 # every leading block, the trailing attention window, or boundary state only.
 FULL_KINDS = frozenset({None, "full_attention", "mla_attention", "sink_full_attention"})
 WINDOW_KINDS = frozenset({"sliding_window", "sliding_window_mla"})
@@ -63,10 +58,128 @@ class _Group:
                 del self.names[entry[0]]
 
 
+@dataclass(slots=True)
+class _Page:
+    parent: Hashable | None
+    tokens: tuple[int, ...]
+    # Pages from the start of this page's run through this page; a full run ends here.
+    offset: int
+    # The page that ends the previous run, or None in a prompt's first run.
+    run_parent: Hashable | None
+    extras: tuple[object, ...] | None
+    copies: int = 1
+
+
+class PageRuns:
+    """Republish engine pages shorter than `min_tokens` as blocks of consecutive pages.
+
+    A block stands for the shortest run of pages that holds `min_tokens` tokens, and takes
+    the hash of the run's last page. The engine stores and evicts pages along a prefix tree,
+    so a run's last page is resident while the run is.
+    """
+
+    def __init__(self, min_tokens: int) -> None:
+        self.min_tokens = min_tokens
+        self._pages: dict[Hashable, _Page] = {}
+
+    def __len__(self) -> int:
+        return len(self._pages)
+
+    def clear(self) -> None:
+        self._pages.clear()
+
+    def coarsen(self, events: Sequence[CacheEvent]) -> list[CacheEvent]:
+        out: list[CacheEvent] = []
+        for event in events:
+            if isinstance(event, CacheCleared):
+                self._pages.clear()
+                out.append(event)
+            elif isinstance(event, StoredBlocks):
+                out += self._store(event)
+            else:
+                out += self._remove(event)
+        return out
+
+    def _store(self, event: StoredBlocks) -> list[CacheEvent]:
+        size = event.block_size
+        if not event.complete or size >= self.min_tokens or event.medium not in (None, GPU_MEDIUM):
+            return [event]
+        pages = -(-self.min_tokens // size)
+        if event.parent_hash is None:
+            offset, run_parent = 0, None
+        elif (parent := self._pages.get(event.parent_hash)) is not None:
+            offset = parent.offset % pages
+            run_parent = event.parent_hash if parent.offset == pages else parent.run_parent
+        else:
+            # Pages under an unknown parent stay unpublished, as do their descendants.
+            return []
+        out: list[CacheEvent] = []
+        previous = event.parent_hash
+        for index, block_hash in enumerate(event.block_hashes):
+            offset += 1
+            page = self._pages.get(block_hash)
+            if page is None:
+                extras = None if event.extra_keys is None else event.extra_keys[index]
+                tokens = event.token_ids[index * size : (index + 1) * size]
+                self._pages[block_hash] = page = _Page(previous, tokens, offset, run_parent, extras)
+            else:
+                page.copies += 1
+            previous = block_hash
+            if offset < pages:
+                continue
+            run = self._run(block_hash, pages)
+            if run is not None:
+                tokens, extras = run
+                out.append(
+                    StoredBlocks(
+                        (block_hash,),
+                        run_parent,
+                        tokens,
+                        pages * size,
+                        event.adapter,
+                        None if extras is None else (extras,),
+                        event.group,
+                        event.kind,
+                        event.medium,
+                        event.sliding_window,
+                    )
+                )
+            offset, run_parent = 0, block_hash
+        return out
+
+    def _run(
+        self, last: Hashable, pages: int
+    ) -> tuple[tuple[int, ...], tuple[object, ...] | None] | None:
+        """Return the tokens of the run ending at `last` and its first page's extra keys."""
+        chunks: list[tuple[int, ...]] = []
+        current: Hashable | None = last
+        extras: tuple[object, ...] | None = None
+        for _ in range(pages):
+            page = self._pages.get(current) if current is not None else None
+            if page is None:
+                return None
+            chunks.append(page.tokens)
+            current, extras = page.parent, page.extras
+        return tuple(t for chunk in reversed(chunks) for t in chunk), extras
+
+    def _remove(self, event: RemovedBlocks) -> list[CacheEvent]:
+        if event.medium not in (None, GPU_MEDIUM):
+            return [event]
+        ends: list[Hashable] = []
+        for block_hash in event.block_hashes:
+            page = self._pages.get(block_hash)
+            if page is None:
+                continue
+            page.copies -= 1
+            if page.copies == 0:
+                del self._pages[block_hash]
+            if page.offset == -(-self.min_tokens // len(page.tokens)):
+                ends.append(block_hash)
+        return [RemovedBlocks(tuple(ends), event.group, event.medium)] if ends else []
+
+
 @dataclass(frozen=True)
 class ResidencyChanges:
-    """Batch changes after a sequence and the index state read with them."""
-
     sequence: int
     block_size: int | None
     reason: str
@@ -74,8 +187,6 @@ class ResidencyChanges:
 
 
 class ResidencyIndex:
-    """Apply one engine process's cache events and serve its named resident blocks."""
-
     def __init__(
         self,
         model: str,
@@ -84,10 +195,14 @@ class ResidencyIndex:
         max_blocks: int = MAX_RESIDENT_BLOCKS,
         max_changes: int = MAX_RETAINED_CHANGES,
         max_change_blocks: int = MAX_RETAINED_CHANGE_BLOCKS,
+        min_block_tokens: int | None = None,
+        max_pages: int = MAX_TRACKED_PAGES,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.max_blocks = max_blocks
+        self._runs = None if min_block_tokens is None else PageRuns(min_block_tokens)
+        self.max_pages = max_pages
         self._lock = threading.Lock()
         self._groups: dict[int | None, _Group] = {}
         self._named: dict[Hashable, bytes] = {}
@@ -105,12 +220,10 @@ class ResidencyIndex:
         self.current = True
 
     def set_current(self, current: bool) -> None:
-        """Record whether applied batches have reached the engine's live stream."""
         with self._lock:
             self.current = current
 
     def apply(self, sequence: int, events: Sequence[CacheEvent | None] | None) -> None:
-        """Apply the batch numbered `sequence`; None marks a batch that failed to decode."""
         with self._lock:
             if self.sequence is not None and sequence <= self.sequence:
                 return
@@ -127,10 +240,15 @@ class ResidencyIndex:
             if events is None or any(event is None for event in events):
                 self._lose(f"unreadable cache event in sequence {sequence}")
                 return
+            if self._runs is not None:
+                events = self._runs.coarsen(cast(Sequence[CacheEvent], events))
+                if len(self._runs) > self.max_pages:
+                    self._lose(f"index tracks more than {self.max_pages} cache pages")
+                    return
             cleared = False
             self._touched = {}
             # A partial group's blocks take names from complete groups stored in the same run,
-            # which vLLM can list after it.
+            # which the engine can list after it.
             deferred: list[StoredBlocks] = []
             for event in events:
                 if isinstance(event, StoredBlocks) and not event.complete:
@@ -156,7 +274,6 @@ class ResidencyIndex:
                 self._record(sequence, cleared)
 
     def _record(self, sequence: int, cleared: bool) -> None:
-        """Retain the batch's net change per group, which followers apply in any order."""
         groups: dict[str, dict[str, Any]] = {}
         size = 0
         for key, touched in self._touched.items():
@@ -182,19 +299,19 @@ class ResidencyIndex:
             self._change_blocks -= self._changes.popleft()["size"]
 
     def mark_empty(self) -> None:
-        """Record an engine that has published no batch as holding no cached block."""
         with self._lock:
             if self.sequence is None:
                 self._reset("no cache events published")
                 self.sequence = -1
 
     def lose(self, reason: str) -> None:
-        """Mark residency unknown after a feed failure outside the event stream."""
         with self._lock:
             self._lose(reason)
 
     def _lose(self, reason: str) -> None:
         self._clear()
+        if self._runs is not None:
+            self._runs.clear()
         self.known = False
         self.reason = f"{reason}; waiting for a cache reset"
 
@@ -265,7 +382,6 @@ class ResidencyIndex:
                 self._named.pop(block_hash, None)
 
     def snapshot(self) -> dict[str, Any]:
-        """Return the named resident blocks with the last applied sequence."""
         with self._lock:
             groups = []
             if self.known:
@@ -298,7 +414,6 @@ class ResidencyIndex:
             }
 
     def changes_after(self, sequence: int) -> ResidencyChanges | None:
-        """Return the batch changes after `sequence`, or None when a snapshot is required."""
         with self._lock:
             if not self.known or not self.current or self.sequence is None:
                 return None
@@ -328,7 +443,6 @@ class ResidencyIndex:
             return ResidencyChanges(self.sequence, self.block_size, self.reason, changes)
 
     def cached_prefix_blocks(self, identities: Sequence[bytes]) -> int:
-        """Return how many leading prompt blocks this engine can reuse."""
         with self._lock:
             if not self.known or not self.current:
                 return 0
@@ -342,10 +456,6 @@ def cached_prefix_blocks(
     identities: Sequence[bytes],
     block_size: int | None,
 ) -> int:
-    """Return how many leading prompt blocks the engine can reuse from every KV cache group.
-
-    `identities` exclude the prompt's final token; vLLM always computes it.
-    """
     groups = list(groups)
     if not groups or any(
         kind not in FULL_KINDS | WINDOW_KINDS | BOUNDARY_KINDS

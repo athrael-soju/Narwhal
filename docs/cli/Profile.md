@@ -4,60 +4,59 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 # `narwhal-profile`
 
-`narwhal-profile --fleet PATH` runs in one of three modes:
+`narwhal-profile --fleet PATH` measures the prefill and decode costs of vLLM and SGLang engines and writes them as router profiles. It runs in one of three modes:
 
 | Mode | Operation | Output |
 | --- | --- | --- |
-| Live sweep | Measures live engines. | The fleet's `profiles.path` |
-| Refit | Recomputes cold and warm time to first token (TTFT) fits from retained samples, with the decode fits kept. | `--out` |
-| Merge | Combines separately measured role mixes. | `--out` |
+| Live sweep | Measures the live engines. | The fleet's `profiles.path` |
+| Refit | Recomputes the cold and warm time to first token (TTFT) fits from a sample sidecar and keeps the decode fits. | `--out` |
+| Merge | Combines profile stores of separately measured role mixes. | `--out` |
 
-Every mode writes a profile store plus a sample sidecar at the store's path with its suffix replaced by `.samples.json`.
+Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink. The [measurement contract](../measure/01-Profile.md) describes the sweeps, the fits and the sidecar.
 
-When the fleet configuration sets `engine_contract`, a live sweep binds each fit to the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation) when the attestation carries launch evidence, otherwise to its `attestation_digest`. When the configuration omits `engine_contract`, a live sweep binds each fit to the live process identity.
+A live sweep binds each fit to the engine process it measured. With `engine_contract` set in the fleet configuration, the binding is the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation), or its `attestation_digest` when the attestation carries no launch evidence. Without `engine_contract`, the binding is the engine version and process start time. vLLM reports both on `/version` and `/metrics`. An SGLang engine reports its version on `/server_info`, and the sweep reads its process start from the attestation sidecar's `/v1/process`.
 
-A live sweep measures engines on separate devices at the same time. It measures engines in one `shared_device.group`, and all engines under `--colocated`, one after another.
+A live sweep measures engines on separate devices at the same time. Engines in one `shared_device.group`, and all engines under `--colocated`, take turns.
 
-Every mode rejects symlink destinations.
+## SGLang pairs
+
+An SGLang prefill runs only together with a decode leg on another engine. On an SGLang fleet, the sweep therefore measures both roles of each engine and has a peer engine serve the other leg of each request. It needs `engine.connector` `mooncake`, at least two engines in the fleet and each engine's attestation sidecar, and it rejects `--colocated`. Before each engine's prefill, decode and warm prefill sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`. When the decode engine may hold a transfer endpoint that the producer no longer listens on, the sweep also switches the decode engine to prefill and back to clear it. The sample sidecar names each engine's peer in `peer`.
+
+The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time, and each engine's peer is the next selected engine.
 
 ## Selection, refitting, and output
 
-These options select engines, choose the mode, and set the output files.
+These options select engines, choose the mode, and set the output files:
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--version` | | Print the installed distribution version. |
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). |
 | `--fleet PATH` | required | Fleet configuration file that defines engine membership for every mode. |
-| `--only IID` | every engine | Repeatable engine `iid` to include in a live sweep. |
-| `--refit-samples PATH` | optional | Sample sidecar for a refit of cold and warm prefill. |
-| `--merge PATH` | optional | Measured profile store to combine with its matching sample sidecar, repeated at least twice. |
-| `--out PATH` | optional | Fresh profile destination for `--refit-samples` and `--merge`, with a matching `.samples.json` sample sidecar. |
-| `--limits PATH` | requested concurrency points | Generated per-engine `max_num_seqs` limits applied to live decode cohorts. |
-| `--observation-timeout-s SECONDS` | each probe's built-in timeout | Positive diagnostic HTTP timeout for every live probe. |
-| `--overwrite` | `false` | Replace live profile and sample files when the first engine completes. |
+| `--only IID` | every engine | Engine `iid` to include in a live sweep, repeatable. |
+| `--refit-samples PATH` | optional | Sample sidecar to refit. |
+| `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeated at least twice. |
+| `--out PATH` | optional | New profile store for `--refit-samples` and `--merge`, written with a matching sample sidecar. |
+| `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's sequence limit, `--max-num-seqs` on vLLM and `--max-running-requests` on SGLang, applied to live decode cohorts. |
+| `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
+| `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
 
-Mode rules:
+The mode options depend on each other:
 
 | Option | Requires | Mutually exclusive with |
 | --- | --- | --- |
-| `--refit-samples` | `--out` and samples covering every fleet engine | `--only`, `--merge` |
-| `--merge` | `--out` and at least two profile stores | `--only`, `--overwrite`, `--refit-samples` |
-| `--out` | `--refit-samples` or `--merge` | |
+| `--refit-samples` | `--out`, and samples covering every fleet engine | `--only`, `--merge` |
+| `--merge` | `--out`, and at least two profile stores | `--only`, `--overwrite`, `--refit-samples` |
+| `--out` | `--refit-samples` or `--merge`, and a store path and sidecar path that do not exist yet | |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
 
-With `--only`, `--overwrite` writes a store holding the selected profiles.
+With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 
-Refit and merge outputs:
+A refit needs each engine's saved generation evidence, and writes the raw samples and that evidence to its new sample sidecar.
 
-- Refits retain the raw samples and process-generation evidence in the new sample sidecar.
-- A merge requires matching measurement evidence for every input profile.
-- A merge requires coverage of every configured engine.
-- Each engine, GPU group, role split, and target-role variant must occur once in a merge.
-- The merged sample sidecar records each source file's path and SHA-256 hash.
-- Keep the source files.
+A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine, with each combination of engine, GPU group, role split and target role occurring once. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
 
-Commands for each mode:
+Run each mode with:
 
 ```bash
 narwhal-profile --fleet fleet.json
@@ -67,28 +66,32 @@ narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --o
 
 ## Prefill and decode sweeps
 
-All modes validate these options:
+Every mode validates these options:
 
 | Option | Default | Description | Valid values |
 | --- | :---: | --- | --- |
-| `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths, filtered to each engine's live `max_model_len`. | At least three distinct usable values |
-| `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. | At least two distinct values |
-| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts, with candidates above an engine's `--limits` value replaced by that value. | At least two distinct usable values |
+| `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths. Each engine keeps the lengths that fit its live context limit with one output token. | At least three distinct positive values, and three that fit each engine |
+| `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. Each engine keeps the lengths that fit its live context limit with `--decode-tokens`. | At least two distinct positive values, and two that fit each engine |
+| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. With `--limits`, each engine drops the counts above its limit and adds the limit. | At least two distinct values of at least 1, and two that remain for each engine |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
-| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | At least two distinct values and five cases with `--cached-suffix-lens` |
-| `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | At least two distinct values |
+| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | Positive, with at least two distinct values and five prefix and suffix cases |
+| `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | Positive, with at least two distinct values |
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
-| `--decode-repeats N` | `1` | Repetitions per decode input-length and concurrency point. | At least 1 |
+| `--decode-repeats N` | `1` | Repetitions per decode input length and concurrency. | At least 1 |
 
-A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
+The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`.
+
+Each engine's [decode sweep](../measure/01-Profile.md#decode-sweep) warms each concurrency with one unmeasured cohort. A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
+
+The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When the engine exports no such counter, the warm cases that fit its context include fewer than five cases or fewer than two prefix or suffix lengths, a case reuses no cached prefix, or the warm fit fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 ## Shared-GPU neighbour traffic
 
-Each neighbour's tokenized input plus output must fit its live `max_model_len`.
+With `--colocated`, the sweep measures each target while the other engines in its `shared_device.group` serve paced traffic for their configured roles. Every target needs a `shared_device` group with at least one neighbour. Each neighbour's tokenized input plus output must fit its live context limit. SGLang fleets reject `--colocated`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
-| `--colocated` | `false` | Measure each target under traffic that peers in its `shared_device.group` send by their configured roles. | |
+| `--colocated` | `false` | Measure each target under traffic from the peers in its `shared_device.group`. | |
 | `--neighbour-prefill-rps RATE` | required with `--colocated` | Offered requests per second per prefill neighbour. | Finite, positive |
 | `--neighbour-decode-rps RATE` | required with `--colocated` | Offered requests per second per decode neighbour. | Finite, positive |
 | `--neighbour-prefill-tokens N` | required with `--colocated` | Input tokens per prefill neighbour request, each asking for one output token. | Positive integer |
@@ -102,26 +105,39 @@ narwhal-profile --fleet fleet.json --colocated \
   --neighbour-decode-output-tokens 32
 ```
 
-## Sweep validation and completion
+The neighbour traffic runs for one period of the slowest rate before measurement starts. The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`.
 
-With `--colocated`, a profile's measured role mix is rejected when a neighbour completes zero requests during the target's measurement interval.
+## Completion and exit codes
 
-The sample sidecar records each neighbour's role, completion count, achieved rate, and errors.
-
-A profiling run aborts when any of these conditions occurs:
-
-- the `--only` selection matches zero configured engines
-- `/health` fails its HTTP 200 check
-- the `/tokenize` response fails `max_model_len` validation
-- engine limits leave fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
-- the representative prefill fit exceeds 20% mean error or 50% worst-point error
-- the decode fit error exceeds `profiles.max_decode_fit_mape`, or its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`
-- an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control in the warm prefill sweep
-
-On success, each mode prints:
+On success, each mode prints one line and exits with code `0`:
 
 | Mode | Success output |
 | --- | --- |
 | Live sweep | `wrote N profile(s) to PATH` |
 | Refit | `refitted N profile(s) to PATH` |
 | Merge | `merged N measured profiles to PATH` |
+
+A live sweep writes the profile store and sample sidecar after each engine completes, so a failure keeps the profiles of engines that finished. The sidecar also records the failing engine's error. In text mode, the profiler stops with exit code `1` when:
+
+- an engine's `/health` returns a status other than 200
+- a probe, including the context-limit probe, fails or returns an incomplete response
+- an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
+- the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis
+- a neighbour fails a request or completes zero requests during the target's measurement
+- a neighbour's input plus output exceeds the neighbour's context limit
+- the prefill fit exceeds 20% mean error or 50% worst-point error
+- an engine's attestation fails verification, or its process changes during its measurement
+- on SGLang, `POST /pd_role_switch` fails or the engine refuses the switch, or `POST /flush_cache` fails or returns a status other than 200
+
+It stops with exit code `2` when:
+
+- the arguments or the fleet configuration fail validation
+- `--only` matches zero configured engines
+- an output exists without `--overwrite`, or a refit or merge output exists
+- a fleet with `engine_contract` has a profiled engine without an attestation URL
+- an SGLang fleet uses a connector other than `mooncake`, has one engine, lacks an attestation URL, or sets `--colocated`
+- a `--colocated` target has no neighbour in its group
+- an engine's context limit leaves fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
+- a refit or merge input fails its checks
+
+With `--format json`, the exit code follows the [command result](../Command-Results.md) status.

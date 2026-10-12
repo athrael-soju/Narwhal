@@ -12,3 +12,10 @@ https://arxiv.org/abs/2505.11916
 
 Cite Arrow for those algorithms and Narwhal for this software.
 The software citation and full paper reference are in CITATION.cff.
+
+Third-party images
+
+src/narwhal/backends/vllm/icon.png is scaled from the vLLM project logo,
+https://github.com/vllm-project/vllm (Apache License 2.0).
+src/narwhal/backends/sglang/icon.png is scaled from the SGLang project logo,
+https://github.com/sgl-project/sglang (Apache License 2.0).

@@ -1,0 +1,56 @@
+{
+  "common": [
+    "--network",
+    "host",
+    "--ipc",
+    "host",
+    "--ulimit",
+    "memlock=-1:-1",
+    "--env-file",
+    "<root>/launch/container.env",
+    "--mount",
+    "type=bind,src=<root>/model,dst=/model,readonly",
+    "--mount",
+    "type=bind,src=<root>/launch/cache,dst=/root/.cache",
+    "--mount",
+    "type=bind,src=<root>/launch/hook,dst=/narwhal-hooks,readonly",
+    "--mount",
+    "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+    "--device",
+    "/dev/nvidiactl",
+    "--device",
+    "/dev/nvidia0",
+    "--gpus",
+    "all",
+    "--pid",
+    "host"
+  ],
+  "connector": {
+    "kv_connector": "NixlConnector",
+    "kv_connector_extra_config": {
+      "backends": [
+        "UCX"
+      ],
+      "enforce_handshake_compat": true,
+      "engine_ttl": 60,
+      "kv_lease_duration": 30
+    },
+    "kv_load_failure_policy": "fail",
+    "kv_role": "kv_both"
+  },
+  "container_env": [
+    "CUDA_VISIBLE_DEVICES=0,1",
+    "NIXL_HOST_IP=192.0.2.11",
+    "PYTHONPATH=/narwhal-hooks",
+    "UCX_CUDA_IPC_CACHE=n",
+    "UCX_NET_DEVICES=fabric0",
+    "UCX_TCP_PORT_RANGE=39000-39999",
+    "UCX_TLS=tcp,sm,self,cuda",
+    "VLLM_API_KEY=engine-only-secret",
+    "VLLM_NIXL_SIDE_CHANNEL_HOST=192.0.2.11",
+    "VLLM_NIXL_SIDE_CHANNEL_PORT=5600",
+    "VLLM_ROCM_USE_AITER=1"
+  ],
+  "cuda_ipc_peers": true,
+  "ucx_tls": "tcp,sm,self,cuda"
+}

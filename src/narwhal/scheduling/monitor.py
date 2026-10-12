@@ -107,6 +107,7 @@ class InstanceMonitor:
         self.waiting: dict[str, Request] = {}
         self.on_capacity_change: Callable[[], None] = lambda: None
         self._windows: dict[str, _Window] = {}
+        self._handoffs: dict[str, _Window] = {}
         # Resident decode tokens per engine, read by `output_token`.
         self._decode_tokens: dict[str, int] = {}
         self._prices: dict[str, _PriceWindow] = {}
@@ -122,6 +123,7 @@ class InstanceMonitor:
         now = self._clock()
         self.instances[instance.iid] = instance
         self._windows[instance.iid] = _Window()
+        self._handoffs[instance.iid] = _Window()
         self._prices[instance.iid] = _PriceWindow(anchor=now, window_start=now)
         self._decode_tokens[instance.iid] = instance.decode_tokens()
 
@@ -183,6 +185,8 @@ class InstanceMonitor:
                 else None
             )
             window.add(now - prev, expected)
+        elif prev is not None:
+            self._handoffs[iid].add(now - prev)
         self._decode_started.add(rid)
         self._last_token[rid] = self._last_output[iid] = now
         req = self.instances[iid].decode.get(rid)
@@ -240,6 +244,10 @@ class InstanceMonitor:
         """Return the bounded live/profile decode ratio for one engine."""
         return self._windows[iid].correction
 
+    def handoff_delay(self, iid: str) -> float:
+        """Return the latest interval's mean wait from prefill completion to first decode token."""
+        return self._handoffs[iid].published
+
     def stalled_gap(self, iid: str) -> float:
         """Return the longest open inter-token gap on an engine.
 
@@ -267,5 +275,8 @@ class InstanceMonitor:
                 correction_alpha=self.decode_correction_alpha,
                 correction_min_samples=self.decode_correction_min_samples,
             )
+        for h in self._handoffs.values():
+            h.published = h.total_s / h.count if h.count else 0.0
+            h.total_s, h.count = 0.0, 0
         for p in self._prices.values():
             p.roll(now)

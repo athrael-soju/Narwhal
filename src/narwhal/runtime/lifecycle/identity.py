@@ -1,5 +1,3 @@
-"""Bind, capture and verify engine process identities."""
-
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +6,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_engine_identity, verify_attestation
+from ...engines.attestation import fetch_spec_identity, verify_attestation
 from ...profiling.generation import binding_digest, profile_generation_problems, read_generation
 from .manager import LifecycleManager
 
@@ -19,7 +17,6 @@ if TYPE_CHECKING:
 async def check_process_identities(
     router: NarwhalRouter, engines: list[str] | None = None
 ) -> list[str]:
-    """Bind initial identities and exclude changed or unverifiable processes."""
     from ..standby import controls_fleet
 
     cfg: FleetConfig = router.cfg
@@ -47,9 +44,9 @@ async def check_process_identities(
 
         async def inspect(spec: EngineSpec) -> tuple[float | None, str]:
             try:
-                identity = await fetch_engine_identity(
-                    spec.url,
-                    timeout_s=cfg.health_timeout_s,
+                identity = await fetch_spec_identity(
+                    cfg,
+                    spec,
                     transport=router.lifecycle_transport,
                     headers=router.engines._auth(None),
                 )
@@ -71,7 +68,14 @@ async def check_process_identities(
                 if problems:
                     return None, "; ".join(problems)
                 router.attested(spec.iid, payload)
-                return identity.process_start_time_seconds, ""
+                start = identity.process_start_time_seconds
+                if manager.process_starts.get(spec.iid) != start:
+                    # A new engine process starts in its launch role. A known process keeps
+                    # its role, and a switch would hold it out of placement.
+                    switched = await router.resume_role(spec.iid)
+                    if switched is not None:
+                        return None, f"role switch failed: {switched}"
+                return start, ""
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 return None, f"process identity unavailable: {type(exc).__name__}"
 
@@ -106,21 +110,15 @@ async def capture_process_identities(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
-    """Read the live process identity before an external supervisor stops it."""
     specs = {spec.iid: spec for spec in cfg.engines}
     starts: dict[str, float] = {}
     failures: dict[str, str] = {}
-    if cfg.engine_contract is None or cfg.engine_contract.missing():
+    if cfg.engine_contract is None or cfg.contract_missing():
         detail = "lifecycle drain requires a complete engine_contract"
         return {}, dict.fromkeys(engines, detail)
     for iid in engines:
         try:
-            identity = await fetch_engine_identity(
-                specs[iid].url,
-                timeout_s=cfg.health_timeout_s,
-                transport=transport,
-                headers=cfg.engine_headers(),
-            )
+            identity = await fetch_spec_identity(cfg, specs[iid], transport=transport)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             failures[iid] = f"process identity unreadable: {type(exc).__name__}"
         else:
@@ -129,7 +127,6 @@ async def capture_process_identities(
 
 
 async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
-    """Keep health and inference probes from restoring stale or operator-held engines."""
     from ..standby import controls_fleet
 
     manager = router.lifecycle
@@ -146,11 +143,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
         spec = next(spec for spec in router.cfg.engines if spec.iid == iid)
         try:
             generation = await read_generation(
-                spec,
-                router.cfg.engine_contract,
-                timeout_s=router.cfg.health_timeout_s,
-                headers=router.cfg.engine_headers(),
-                transport=router.lifecycle_transport,
+                router.cfg, spec, transport=router.lifecycle_transport
             )
             problems = profile_generation_problems(router.profiles, iid, generation.digest)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:

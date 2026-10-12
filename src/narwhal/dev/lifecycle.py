@@ -1,5 +1,3 @@
-"""Own local engine generations and qualify them through the fleet commands."""
-
 from __future__ import annotations
 
 import asyncio
@@ -19,23 +17,27 @@ from urllib.parse import urlsplit
 import httpx
 
 from narwhal.config import FleetConfig
-from narwhal.deployment import cache_capture_hook, native_engine, stages
+from narwhal.deployment import native_engine, stages
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
+from narwhal.deployment.launch_engine.backend import launcher
 from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
-from .template import _check_free_ports, _port_layout, _sha256, check_plugin
+from .template import _check_free_ports, _port_layout, _sha256, current_ports, model_files
 
 
 class LifecycleDocumentError(ValueError):
-    """A persisted lifecycle document has invalid fields consumed by its readers."""
+    pass
+
+
+class LifecycleOperationError(RuntimeError):
+    pass
 
 
 def read(path: Path) -> dict:
-    """Read an instance document as an object."""
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object: {path}")
@@ -97,7 +99,6 @@ def _read_state(root: Path) -> dict:
 
 
 def write(path: Path, value: dict) -> None:
-    """Replace a private state document atomically."""
     temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}")
     try:
         with os.fdopen(
@@ -111,8 +112,7 @@ def write(path: Path, value: dict) -> None:
 
 
 def instance(root: Path) -> dict:
-    """Require the supported local configuration and its original Python environment."""
-    value = read(root / "instance.json")
+    value = current_ports(read(root / "instance.json"))
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
     expected = Path(value["python_executable"])
@@ -124,7 +124,6 @@ def instance(root: Path) -> dict:
 
 @contextlib.contextmanager
 def locked(root: Path) -> Iterator[None]:
-    """Serialize lifecycle mutations while status reads the last atomic state."""
     with (root / "lifecycle.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -157,7 +156,7 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
         path = root / f"{log}.log"
         lines = path.read_text(errors="replace").strip().splitlines()
         detail = lines[-1] if lines else "empty subprocess output"
-        raise ValueError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
+        raise LifecycleOperationError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
@@ -223,7 +222,6 @@ def _wait(url: str, identity: dict, seconds: int = 30) -> None:
 
 @contextlib.contextmanager
 def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
-    """Retain whole-device VRAM during startup, profiling and routed checks."""
     stopped = threading.Event()
 
     def sample() -> None:
@@ -248,8 +246,12 @@ def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
 
 def _profiles(run: Path, fleet: dict, spec: dict) -> None:
     count = len(fleet["engines"])
+    # A backend that profiles engines in pairs takes no neighbour load and measures both roles
+    # of each engine, so one split covers every split.
+    colocated = "neighbour_prefill_rps" in spec["profile"]
+    opening = sum(engine["role"] == "prefill" for engine in fleet["engines"])
     sources = []
-    for prefill in range(1, count):
+    for prefill in range(1, count) if colocated else (opening,):
         measured = json.loads(json.dumps(fleet))
         for index, engine in enumerate(measured["engines"]):
             engine["role"] = "prefill" if index < prefill else "decode"
@@ -257,7 +259,9 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         measured["profiles"]["path"] = str(profile)
         fleet_path = run / f"profile-{prefill}p{count - prefill}d.fleet.json"
         write(fleet_path, measured)
-        args = ["--fleet", str(fleet_path), "--colocated"]
+        args = ["--fleet", str(fleet_path)]
+        if colocated:
+            args.append("--colocated")
         for key, value in spec["profile"].items():
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
             args.extend(["--" + key.replace("_", "-"), rendered])
@@ -323,7 +327,6 @@ def _stop(root: Path, state: dict) -> None:
 
 
 def up(root: Path) -> dict:
-    """Launch a fresh owned generation, profile it and start its router."""
     config = instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():
@@ -331,9 +334,10 @@ def up(root: Path) -> dict:
             if previous.get("phase") != "stopped":
                 raise ValueError("run dev down before starting another generation")
         spec = read(root / "template.json")
-        check_plugin(spec["runtime"])
-        if _sha256(Path(config["model_path"])) != spec["model"]["sha256"]:
-            raise ValueError("GGUF model changed after dev init")
+        launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
+        for path, expected in model_files(spec["model"], Path(config["model_path"])).items():
+            if _sha256(path) != expected:
+                raise ValueError(f"model file {path.name} changed after dev init")
         for name, expected in spec["model"].get("tokenizer_sha256", {}).items():
             if _sha256(Path(config["model_dir"]) / name) != expected:
                 raise ValueError(f"tokenizer file {name} changed after dev init")
@@ -374,7 +378,8 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
     write(run / "fleet.json", fleet)
     engine_key = FleetConfig.load(run / "fleet.json").resolve_engine_key()
     allocation = read(root / "engine-launch.json")
-    hook = Path(cache_capture_hook.__file__)
+    engine_launcher = launcher(spec["runtime"].get("backend"))
+    hook = engine_launcher.cache_hook
     runs = []
     for index, engine in enumerate(fleet["engines"]):
         number = index + 1
@@ -392,7 +397,9 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(hook),
             "NARWHAL_ENGINE_PORT": str(config["ports"]["engine_first"] + index),
             "NARWHAL_ATTEST_PORT": str(config["ports"]["attestation_first"] + index),
-            "NARWHAL_NIXL_SIDE_CHANNEL_PORT": str(config["ports"]["nixl_first"] + index),
+            engine_launcher.side_channel_port_env: str(
+                config["ports"]["side_channel_first"] + index
+            ),
             "NARWHAL_UCX_TCP_PORT_RANGE": config["ucx_range"],
             f"NARWHAL_NODE_{number}_IP": config["fabric_address"],
             f"NARWHAL_NODE_{number}_URL": engine["url"],
@@ -460,7 +467,6 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
 
 
 def verify(root: Path) -> dict:
-    """Run current-process preflight, all eligible KV paths and a routed completion."""
     config = instance(root)
     with locked(root):
         state = _read_state(root)
@@ -506,17 +512,17 @@ def verify(root: Path) -> dict:
                     try:
                         content = result["choices"][0]["message"]["content"]
                     except (KeyError, IndexError, TypeError) as exc:
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed completion requires choices[0].message.content as a string; "
                             f"inspect {completion}"
                         ) from exc
                     if not isinstance(content, str):
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed completion requires choices[0].message.content as a string; "
                             f"inspect {completion}"
                         )
                     if content.strip() != "5":
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed arithmetic canary expected 5; inspect completion.json"
                         )
                     for name, url in [
@@ -552,7 +558,6 @@ def verify(root: Path) -> dict:
 
 
 def status(root: Path) -> dict:
-    """Combine process and HTTP health with retained qualification outcomes and KV evidence."""
     config = instance(root)
     if not (root / "lifecycle.json").exists():
         return {"status": "stopped"}
@@ -639,7 +644,6 @@ def status(root: Path) -> dict:
 
 
 def down(root: Path) -> dict:
-    """Stop the selected instance's matching process groups and retain its measurements."""
     instance(root)
     with locked(root):
         if (root / "lifecycle.json").exists():

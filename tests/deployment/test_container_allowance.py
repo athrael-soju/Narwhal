@@ -12,7 +12,7 @@ from narwhal.deployment import stages
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import load, prepare
 from narwhal.deployment.launch_engine.start import start_shared
-from tests.deployment.fixtures import cache_settings_line, launcher_inputs, patched_docker
+from tests.deployment.fixtures import launcher_inputs, patched_docker, vllm_check_output
 
 
 class ContainerAllowanceTests(unittest.TestCase):
@@ -33,11 +33,7 @@ class ContainerAllowanceTests(unittest.TestCase):
                 if action == "image":
                     return json.dumps([{"Id": image}])
                 if action == "run":
-                    return (
-                        "NARWHAL_TOKENIZER_READY=1\n"
-                        + cache_settings_line(json.loads((run / "launch.json").read_text()))
-                        + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
-                    )
+                    return vllm_check_output(json.loads((run / "launch.json").read_text()))
                 if action == "create":
                     cid = ids[run]
                     containers[cid] = "created"

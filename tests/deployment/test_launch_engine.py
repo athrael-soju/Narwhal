@@ -1,5 +1,3 @@
-"""Exercise complete serving plans and launch guards with synthetic inputs and Docker mocks."""
-
 import contextlib
 import hashlib
 import importlib
@@ -14,12 +12,13 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
+from narwhal.backends.vllm.captures import handshake_policy
+from narwhal.backends.vllm.identity import VllmIdentity
+from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
-from narwhal.deployment.launch_engine.captures import handshake_policy
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import (
-    ENGINE_TTL_S,
     build,
     load,
     prepare,
@@ -33,27 +32,22 @@ from narwhal.deployment.launch_engine.start import (
     validate_shared_gpu,
     validate_shared_runs,
 )
-from narwhal.engines.attestation import attested_kv_lease
 from tests.deployment.fixtures import (
-    cache_settings_line,
     cuda_engine,
     engine_config_modules,
     launcher_inputs,
     patched_docker,
     runtime,
+    vllm_check_output,
 )
 
-IMAGE_CHECK_OUTPUT = (
-    "NARWHAL_TOKENIZER_READY=1\n"
-    + cache_settings_line(
-        {
-            "kv_events": {
-                "endpoint": "ipc:///narwhal-kv-events/events.sock",
-                "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock",
-            }
+IMAGE_CHECK_OUTPUT = vllm_check_output(
+    {
+        "kv_events": {
+            "endpoint": "ipc:///narwhal-kv-events/events.sock",
+            "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock",
         }
-    )
-    + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
+    }
 )
 
 
@@ -74,12 +68,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(model_arg, env["NARWHAL_MODEL_DIR"])
             self.assertEqual(plan["connector"]["kv_connector"], "NixlConnector")
             self.assertFalse(plan["common"])
-            output = (
-                '{"vllm": "0.29.0", "nixl": "1.0.0"}\n'
-                "NARWHAL_TOKENIZER_READY=1\n"
-                + cache_settings_line(plan)
-                + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}\n'
-            )
+            output = vllm_check_output(plan, packages=plan["expected_packages"])
             with (
                 patched_docker() as docker,
                 patch("narwhal.deployment.stages.run") as invoke,
@@ -88,7 +77,24 @@ class EngineLauncherTests(unittest.TestCase):
                 check(run, plan)
                 docker.assert_not_called()
                 self.assertEqual(invoke.call_args.args[0][0], sys.executable)
-            checked = json.loads((run / "checked.json").read_text())
+            text = (run / "checked.json").read_text()
+            checked = json.loads(text)
+            # write_once compares bytes, so a re-check needs this exact serialization.
+            self.assertEqual(text, json.dumps(checked))
+            self.assertEqual(
+                list(checked),
+                [
+                    "plan_sha256",
+                    "vllm_api_version",
+                    "prefix_caching",
+                    "kv_events",
+                    "ucx_version",
+                    "peer_release",
+                    "backend",
+                    "python_executable",
+                    "expected_packages",
+                ],
+            )
             self.assertEqual(checked["backend"], "native")
             self.assertNotIn("image_id", checked)
 
@@ -135,7 +141,7 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
 
     def test_qwen_linear_convolution_requires_ds_layout(self):
-        from narwhal.deployment.launch_engine.plan import requires_ds_conv_state_layout
+        from narwhal.backends.vllm.plan import requires_ds_conv_state_layout
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -168,6 +174,17 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(values["VLLM_API_KEY"], "engine-only-secret")
             self.assertNotIn("management-only-secret", json.dumps([plan, values]))
             self.assertNotIn("engine-only-secret", json.dumps(plan))
+
+    def test_runtime_backend_selects_the_engine_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            self.assertNotIn("engine", build(record, env, Path(folder) / "default")[0])
+            record["runtime"]["backend"] = "vllm"
+            plan, _ = build(record, env, Path(folder) / "named")
+            self.assertEqual(plan["engine"], "vllm")
+            record["runtime"]["backend"] = "missing"
+            with self.assertRaisesRegex(ValueError, "unknown engine backend 'missing'"):
+                build(record, env, Path(folder) / "missing")
 
     def test_colocated_cuda_engines_share_the_host_pid_namespace(self):
         for visible, shared, gpu_tls, cache in (
@@ -219,7 +236,9 @@ class EngineLauncherTests(unittest.TestCase):
                 extra = transfer_config["kv_connector_extra_config"]
                 self.assertEqual(extra["kv_lease_duration"], lease or 30)
                 # The attested launch arguments record the lease the router reads.
-                self.assertEqual(attested_kv_lease({"launch": {"args": plan["args"]}}), lease or 30)
+                self.assertEqual(
+                    VllmIdentity().kv_lease({"launch": {"args": plan["args"]}}), lease or 30
+                )
         for lease in (5, 0, 30.0, "30", True):
             spec = runtime()
             spec["kv_lease_s"] = lease
@@ -355,11 +374,7 @@ class EngineLauncherTests(unittest.TestCase):
                 resolved = plan
                 if case == "endpoint_differs":
                     resolved = {"kv_events": {**plan["kv_events"], "endpoint": "tcp://*:5557"}}
-                output = (
-                    "NARWHAL_TOKENIZER_READY=1\n"
-                    + cache_settings_line(resolved, prefix_caching=case != "caching_off")
-                    + '\nNARWHAL_IMAGE_RUNTIME={"vllm_api_version": "0.29.0"}'
-                )
+                output = vllm_check_output(resolved, prefix_caching=case != "caching_off")
                 image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
                 with (
                     patched_docker(side_effect=[image, output]),
@@ -371,7 +386,21 @@ class EngineLauncherTests(unittest.TestCase):
                         self.assertFalse((run / "checked.json").exists())
                         continue
                     check(run, plan)
-                checked = json.loads((run / "checked.json").read_text())
+                text = (run / "checked.json").read_text()
+                checked = json.loads(text)
+                self.assertEqual(text, json.dumps(checked))
+                self.assertEqual(
+                    list(checked),
+                    [
+                        "plan_sha256",
+                        "vllm_api_version",
+                        "prefix_caching",
+                        "kv_events",
+                        "ucx_version",
+                        "peer_release",
+                        "image_id",
+                    ],
+                )
                 self.assertEqual(checked["prefix_caching"], case == "published")
                 self.assertEqual(
                     checked["kv_events"],
@@ -412,12 +441,7 @@ class EngineLauncherTests(unittest.TestCase):
                     [line for line in values if line.startswith("UCX_CUDA_IPC_CACHE=")],
                     [f"UCX_CUDA_IPC_CACHE={cache}"] if cache else [],
                 )
-                output = (
-                    "NARWHAL_TOKENIZER_READY=1\n"
-                    + cache_settings_line(plan)
-                    + "\nNARWHAL_IMAGE_RUNTIME="
-                    + json.dumps({"vllm_api_version": "0.29.0", "ucx_version": ucx})
-                )
+                output = vllm_check_output(plan, ucx=ucx)
                 image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
                 with (
                     patched_docker(side_effect=[image, output]),
