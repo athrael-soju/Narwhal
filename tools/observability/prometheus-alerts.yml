@@ -10,7 +10,7 @@ groups:
           severity: page
         annotations:
           summary: "Engine {{ $labels.iid }} stopped answering its scrape"
-          description: "Check the engine process and its metrics endpoint. Targets remain monitored until removed from the generated engine targets file."
+          description: "Check the engine process and its metrics endpoint. Targets remain monitored while the router lists them in /narwhal/targets."
 
       - alert: NarwhalEngineEjected
         expr: narwhal_ejected_instances > 0

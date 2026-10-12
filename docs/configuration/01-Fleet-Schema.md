@@ -35,7 +35,7 @@ Set these variables in the process environment, or in the workstation `.env` tha
 
 | Variable                            | Use                                                                                                                             | Default                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `NARWHAL_FLEET`                     | Fleet file for `make observe`, `create_app()`, and CLI commands through `--fleet "$NARWHAL_FLEET"`                              |                                  |
+| `NARWHAL_FLEET`                     | Fleet file for `create_app()` and CLI commands through `--fleet "$NARWHAL_FLEET"`                                               |                                  |
 | `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                                                        |                                  |
 | `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                                                       |                                  |
 | `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                                             | `127.0.0.1`                      |

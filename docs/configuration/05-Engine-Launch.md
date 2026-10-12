@@ -49,9 +49,6 @@ For the profiling, preflight and serving commands:
 1. Load `.env` and `config/deployment.env`.
 2. Pass `--fleet "$NARWHAL_FLEET"`.
 
-The monitoring stack's scrape-target generator, `tools/observability/make_targets.py`, resolves endpoint URLs with the fleet's [whole-value substitution rules](01-Fleet-Schema.md#environment-loading).
-
-
 ## Engine launch records
 
 `NARWHAL_LAUNCH_CONFIG` selects the launch-record file on the management workstation, `config/engine-launch.local.json` by default. Discovery writes one launch record per `engine-<n>` role from the detected GPUs and their device paths, the image's package versions, the model configuration, and the [launch policy](../deploy/01-Discover.md#confirming-the-launch-policy) in `.env`. It writes `engine-launch.sources.json` beside the file, mapping each role to its inspection file and policy source.

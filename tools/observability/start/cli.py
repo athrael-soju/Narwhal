@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 
 from tools.observability.artifacts import (
     ControlTarget,
@@ -62,12 +61,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="seconds to wait for both versioned health contracts",
     )
     parser.add_argument(
-        "--fleet",
-        type=Path,
-        default=os.environ.get("NARWHAL_FLEET"),
-        help="deployed fleet document (default: NARWHAL_FLEET)",
-    )
-    parser.add_argument(
         "--router-url",
         default=os.environ.get("NARWHAL_ROUTER_URL"),
         help="router HTTP origin scraped by Prometheus (default: NARWHAL_ROUTER_URL)",
@@ -75,12 +68,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
-    if args.fleet is None:
-        parser.error("--fleet or NARWHAL_FLEET is required")
     if args.router_url is None:
         parser.error("--router-url or NARWHAL_ROUTER_URL is required")
     try:
-        contract = load_contract(args.fleet, args.router_url)
+        contract = load_contract(args.router_url)
         start(os.environ, ComposeStack(env=os.environ), contract, timeout_s=args.ready_timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()

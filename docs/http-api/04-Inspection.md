@@ -1,5 +1,5 @@
 ---
-description: Inspect a Narwhal router through GET /v1/models, /health, /ready and /metrics.
+description: Inspect a Narwhal router through GET /v1/models, /health, /ready, /metrics and /narwhal/targets.
 ---
 
 # Model, health, and metrics inspection
@@ -100,3 +100,23 @@ During a [whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wa
 ## `GET /metrics`
 
 Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#prometheus-metrics) in Prometheus exposition format `0.0.4`.
+
+## `GET /narwhal/targets`
+
+Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prometheus/latest/http_sd/) target group per configured engine. The target is the host and port of the engine's `url`. The labels carry the engine's `iid`, the fleet's `engine.backend`, the scheme of the `url`, and its path followed by `/metrics`:
+
+```json
+[
+  {
+    "targets": ["node0:8000"],
+    "labels": {
+      "iid": "n0",
+      "backend": "vllm",
+      "__scheme__": "http",
+      "__metrics_path__": "/metrics"
+    }
+  }
+]
+```
+
+The `engines` job of the [monitoring stack](../observability/01-Start-and-Verify.md) reads this route every 15 seconds.

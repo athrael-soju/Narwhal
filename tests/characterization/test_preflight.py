@@ -203,7 +203,7 @@ class FabricCharacterizationTests(unittest.IsolatedAsyncioTestCase):
             if line.startswith(("narwhal_kv_lease_seconds", "narwhal_handoff_bound_seconds"))
         ]
         shipped = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
-        dashboard = json.dumps(render_dashboard(shipped, "vllm"))
+        dashboard = json.dumps(render_dashboard(shipped))
         series = sorted(set(re.findall(r"vllm:[A-Za-z0-9_:]+", dashboard)))
         assert_golden(
             self, "preflight_observability", {"lease_metrics": lines, "dashboard_series": series}

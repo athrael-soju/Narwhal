@@ -44,7 +44,6 @@ Replace `<served-model>` with the fleet model.
 In the router shell, run:
 
 ```bash
-export NARWHAL_FLEET=runs/deployment/fleet.json
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 make observe
 ```

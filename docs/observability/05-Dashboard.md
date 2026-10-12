@@ -111,7 +111,7 @@ Status colours:
 
 The engine table shows each engine's backend, current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
 
-**Role** and **State** tell you what the engine does and whether it takes placements. The engine columns read the series of the fleet's `engine.backend`, which also names the running column **vLLM running** or **SGLang running**. The **Resident** and running bars scale to the busiest engine.
+**Role** and **State** tell you what the engine does and whether it takes placements. The engine columns read the vLLM or SGLang series the engine exports. The **Resident** and **Engine running** bars scale to the busiest engine.
 
 | Column                       | Shows                                                                                                                                                                                                  |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -120,7 +120,7 @@ The engine table shows each engine's backend, current role, state and load. **En
 | Role                         | Current pool assignment: Prefill, Decode or Colocated                                                                                                                                                  |
 | State                        | The most serious [engine state](#engine-states)                                                                                                                                                        |
 | Resident                     | Narwhal requests currently on the engine                                                                                                                                                               |
-| vLLM running, SGLang running | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
+| Engine running               | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
 | KV cache                     | KV cache use from `vllm:kv_cache_usage_perc` or `sglang:token_usage`, amber from 80% and red from 95%                                                                                                  |
 | Prefix hits                  | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, or `sglang:cached_tokens_total` over `sglang:prompt_tokens_total` |
 | Tokens/s                     | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |

@@ -10,12 +10,12 @@ Follow [Setting up observability](../../docs/Observability.md) to select listene
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
-The shipped scrape configuration binds one router and one fleet to each Prometheus data source.
+The shipped scrape configuration binds one router to each Prometheus data source and discovers the engines from that router's `/narwhal/targets`.
 
 The dashboard expects these label contracts:
 
 - Router series carry `job="narwhal-router"` and the Prometheus target's `instance`.
-- Engine series carry `job="engines"` and the fleet generator's stable `iid`.
+- Engine series carry `job="engines"` and the router's stable `iid`.
 - vLLM exposes `vllm:num_requests_running`, `vllm:num_requests_waiting`,
   `vllm:kv_cache_usage_perc`, `vllm:prefix_cache_hits_total`,
   `vllm:prefix_cache_queries_total`, `vllm:generation_tokens_total` and
@@ -71,14 +71,9 @@ Each `iid` identifies one logical engine replica. Role changes affect new placem
 
 Grafana replaces UI edits with the staged file.
 
-`make observe` stages the source dashboard through `narwhal_dashboard` in `tools/observability/artifacts.py`, which fills its placeholders from the fleet's `engine.backend`:
+`make observe` builds the staged copy with `narwhal_dashboard` in `tools/observability/artifacts.py`. A `<<name{selector}>>` placeholder becomes the `name` query from each backend's `dashboard_series`, with the selector applied, joined with `or`. `<<backend_badges>>` becomes the icon of each backend. To chart a new engine series, add it to a backend's `dashboard_series`; a panel that queries a name no backend defines is left out.
 
-- `<<engine>>`: the backend's `label`
-- `<<backend_badges>>`: the icon of each registered backend
-- `<<name>>`: the backend's `dashboard_text` entry
-- `<<name{selector}>>`: the backend's `dashboard_series` query for that selector
-
-It drops each panel whose placeholder the backend leaves unmapped. It adds the `CONTROL_ANNOTATIONS` layers, **Fleet control actions** and **Load jobs**, and a **Fleet control** dashboard link to `NARWHAL_CONTROL_CONSOLE_URL`.
+The staged copy also has the **Fleet control actions** and **Load jobs** annotations from `CONTROL_ANNOTATIONS`, and a **Fleet control** link to `NARWHAL_CONTROL_CONSOLE_URL`.
 
 Refresh the staged copy and verify provisioning after changing the source dashboard:
 
@@ -101,4 +96,4 @@ Alert rules in `tools/observability/prometheus-alerts.yml`:
 
 - Prometheus publishes firing rules through `ALERTS` to the dashboard's **Fleet events** timeline.
 - Production monitoring loads the same rule file and routes page and warning severities through the deployment's alert manager.
-- Engine targets carry `job="engines"`, their `iid` and the fleet's `backend` label for engine reachability, scoped alert rows and the engine table's **Backend** column.
+- Engine targets carry `job="engines"`, their `iid` and the `backend` label from the router's `/narwhal/targets` for engine reachability, scoped alert rows and the engine table's **Backend** column.

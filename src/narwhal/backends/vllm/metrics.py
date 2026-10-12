@@ -36,7 +36,6 @@ class VllmMetrics(EngineMetrics):
         ),
         "output_tokens": "sum by(iid) (rate(vllm:generation_tokens_total{@sel}[$__rate_interval]))",
     }
-    dashboard_text: ClassVar[Mapping[str, str]] = {}
 
     def kv_capacity(self, metrics: str) -> int | None:
         values = [int(float(match)) for match in _KV_CAPACITY.findall(metrics)]

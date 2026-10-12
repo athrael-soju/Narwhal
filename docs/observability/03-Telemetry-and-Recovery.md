@@ -35,7 +35,7 @@ Find the symptom and apply the check or action beside it:
 | Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps |
 | Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets` |
-| An engine replica disappears from charts | Check the generated target entry and the engine's `iid` label |
+| An engine replica disappears from charts | Check its entry in the router's `/narwhal/targets` and its `iid` label |
 | Grafana shows an older dashboard | Rerun `make observe` |
 | `make observe` fails the [dashboard readiness check](01-Start-and-Verify.md#readiness-contract) | Read the Grafana provisioning log |
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid` |

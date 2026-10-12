@@ -19,6 +19,7 @@ from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
 from ..observability.metrics.render import render
+from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
 from ..profiling.generation import generation_problem, read_generation
 from ..runtime import state as handoff_state
@@ -318,6 +319,10 @@ def create_app(
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")
+    async def targets() -> list[dict[str, Any]]:
+        return scrape_targets(cfg)
 
     @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
     async def state() -> dict[str, Any]:

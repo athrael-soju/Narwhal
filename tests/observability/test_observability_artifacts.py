@@ -18,7 +18,7 @@ class MonitoringArtifactTests(unittest.TestCase):
             checkout = Path(temporary)
             source = checkout / "tools" / "observability"
             root = checkout / "runs" / "observability" / "mounts"
-            contract = TargetContract("127.0.0.1:8000", (("e1", "192.0.2.1:8002"),))
+            contract = TargetContract("127.0.0.1:8000")
             previous_umask = os.umask(0o077)
             try:
                 for relative in (*artifacts.FILES, "grafana-narwhal.json"):
@@ -35,7 +35,6 @@ class MonitoringArtifactTests(unittest.TestCase):
                     artifacts.CONTROL_TARGETS,
                     artifacts.CONTROL_TOKEN_FILE,
                     "prometheus/targets/router.json",
-                    "prometheus/targets/engines.json",
                 }
                 self.assertEqual(
                     {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}, expected
@@ -48,12 +47,15 @@ class MonitoringArtifactTests(unittest.TestCase):
                         required = 0o005 if path.is_dir() else 0o004
                         self.assertEqual(mode & required, required, str(path))
                 self.assertEqual(root.stat().st_mode & 0o777, 0o700)
-                self.assertEqual(
-                    json.loads((root / "prometheus/targets/engines.json").read_text()),
-                    [{"targets": ["192.0.2.1:8002"], "labels": {"iid": "e1", "backend": "vllm"}}],
+                self.assertIn(
+                    "url: http://127.0.0.1:8000/narwhal/targets",
+                    (root / "prometheus/prometheus.yml").read_text(),
                 )
                 for relative, target in artifacts.FILES.items():
-                    self.assertEqual((root / target).read_bytes(), (source / relative).read_bytes())
+                    expected_bytes = (source / relative).read_bytes()
+                    if relative == "prometheus.yml":
+                        expected_bytes = expected_bytes.replace(b"<<router>>", b"127.0.0.1:8000")
+                    self.assertEqual((root / target).read_bytes(), expected_bytes)
                 for path, mode in original_modes.items():
                     self.assertEqual(path.stat().st_mode, mode, str(path))
                 # Staging restores readable modes on a prior private staging directory.
@@ -73,7 +75,7 @@ class MonitoringArtifactTests(unittest.TestCase):
             external.mkdir(mode=0o700)
             (root / "prometheus").symlink_to(external, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "real directory"):
-                artifacts.stage_artifacts(TargetContract("127.0.0.1:8000", ()), root=root)
+                artifacts.stage_artifacts(TargetContract("127.0.0.1:8000"), root=root)
             self.assertEqual(external.stat().st_mode & 0o777, 0o700)
             self.assertEqual(list(external.iterdir()), [])
 
@@ -118,7 +120,7 @@ class OrchestratorDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "mounts"
             console = artifacts.console_url({artifacts.CONSOLE_URL_ENV: "/fleet-control/console"})
-            artifacts.stage_artifacts(TargetContract("127.0.0.1:8000", ()), console, root=root)
+            artifacts.stage_artifacts(TargetContract("127.0.0.1:8000"), console, root=root)
             staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
             urls = [link["url"] for link in staged["spec"]["links"] if link["type"] == "link"]
             self.assertEqual(urls, ["/fleet-control/console"])
@@ -149,7 +151,7 @@ class OrchestratorDashboardTests(unittest.TestCase):
     def test_staging_writes_the_control_target_and_token(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "mounts"
-            contract = TargetContract("127.0.0.1:8000", ())
+            contract = TargetContract("127.0.0.1:8000")
             artifacts.stage_artifacts(contract, root=root)
             self.assertEqual(json.loads((root / artifacts.CONTROL_TARGETS).read_text()), [])
             self.assertEqual((root / artifacts.CONTROL_TOKEN_FILE).read_text(), "")

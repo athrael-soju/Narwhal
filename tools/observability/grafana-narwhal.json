@@ -389,7 +389,7 @@
         "spec": {
           "id": 7,
           "title": "",
-          "description": "One row per engine, in engine ID order. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (<<engine>> has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and <<engine>> running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
+          "description": "One row per engine, in engine ID order. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (the engine has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and Engine running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -591,7 +591,7 @@
                         "Value #A": "Role",
                         "Value #S": "State",
                         "Value #R": "Resident",
-                        "Value #F": "<<engine>> running",
+                        "Value #F": "Engine running",
                         "Value #H": "KV cache",
                         "Value #P": "Prefix hits",
                         "Value #T": "Tokens/s"
@@ -851,7 +851,7 @@
                   {
                     "matcher": {
                       "id": "byName",
-                      "options": "<<engine>> running"
+                      "options": "Engine running"
                     },
                     "properties": [
                       {

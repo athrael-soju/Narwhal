@@ -1,5 +1,5 @@
-# Startup writes the deployed router and engine addresses to the gitignored
-# discovery files under runs/observability/mounts/prometheus/targets.
+# Startup writes the deployed router address to the gitignored discovery file
+# under runs/observability/mounts/prometheus/targets and in place of <<router>>.
 global:
   scrape_interval: 5s
   evaluation_interval: 15s
@@ -12,8 +12,9 @@ scrape_configs:
     file_sd_configs:
       - files: ["/etc/prometheus/targets/router.json"]
   - job_name: engines
-    file_sd_configs:
-      - files: ["/etc/prometheus/targets/engines.json"]
+    http_sd_configs:
+      - url: http://<<router>>/narwhal/targets
+        refresh_interval: 15s
   # Empty unless NARWHAL_CONTROL_METRICS_URL is set.
   - job_name: fleet-control
     authorization:

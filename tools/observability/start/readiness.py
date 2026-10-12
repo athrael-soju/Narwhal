@@ -146,7 +146,10 @@ def _verify_targets(
             f"{router.get('health')}: {router.get('lastError', '')}"
         )
 
-    expected_engines = dict(contract.engines)
+    status, body = get(contract.engine_targets_url, 2.0)
+    if status != 200:
+        raise StartupError(f"Router engine targets returned HTTP {status}")
+    expected_engines = {group["labels"]["iid"]: group["targets"][0] for group in json.loads(body)}
     engine_rows = [row for row in active if row.get("scrapePool") == "engines"]
     actual_engines: dict[str, str] = {}
     for row in engine_rows:

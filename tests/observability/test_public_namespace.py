@@ -138,6 +138,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         paths = response.json()["paths"]
         for path, method in (
             ("/narwhal/state", "get"),
+            ("/narwhal/targets", "get"),
             ("/narwhal/handoff", "get"),
             ("/narwhal/lifecycle", "get"),
             ("/narwhal/lifecycle/drain", "post"),
@@ -150,6 +151,16 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(method, paths[path])
+
+    async def test_targets_list_every_configured_engine_for_prometheus(self):
+        response = await self.client.get("/narwhal/targets")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/json")
+        self.assertEqual(
+            [(group["targets"], group["labels"]["iid"]) for group in response.json()],
+            [(["prefill"], "p"), (["decode"], "d")],
+        )
+        self.assertEqual({group["labels"]["backend"] for group in response.json()}, {"vllm"})
 
     async def test_metrics_use_narwhal_prefix_and_contract_version_two(self):
         self.router.served = 7
@@ -540,7 +551,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             override["matcher"]["options"]: override["properties"]
             for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
         }
-        for column in ("Resident", "vLLM running"):
+        for column in ("Resident", "Engine running"):
             self.assertIn({"id": "fieldMinMax", "value": True}, overrides[column])
         mappings = next(
             override["properties"][0]["value"][0]["options"]

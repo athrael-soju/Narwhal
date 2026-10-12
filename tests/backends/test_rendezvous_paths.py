@@ -48,7 +48,11 @@ class PairedEngines(unittest.IsolatedAsyncioTestCase):
         self.engines = []
         for iid in ("e0", "e3"):
             engine = sim.SimulatedEngine(
-                iid, prefill_s=0.001, token_interval_s=0.001, backend=self.name, rooms=rooms
+                iid,
+                prefill_s=0.001,
+                token_interval_s=0.001,
+                backend=self.name,
+                rooms=rooms,
             )
             await engine.start()
             self.addAsyncCleanup(engine.close)
@@ -71,7 +75,9 @@ class PairedEngines(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(self.client.aclose)
         launches = patch.object(
-            transfer, "attested_launches", new=AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH})
+            transfer,
+            "attested_launches",
+            new=AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH}),
         )
         launches.start()
         self.addCleanup(launches.stop)
@@ -132,8 +138,8 @@ class SglangPreflightTests(PairedEngines):
 
     async def test_profile_measures_both_roles_through_a_peer(self):
         target, peer = self.engines
-        # A prefill time well above scheduling jitter keeps the fit within its error bound.
         target.prefill_s = peer.prefill_s = 0.05
+        target.token_interval_s = peer.token_interval_s = 0.02
         pairing = PairedTransport(httpx.AsyncHTTPTransport(), self.client.kv, self.backend.dialect)
         switcher = self.backend.role_switcher(self.connector)
         roles = fleet_probe._pair_roles(
@@ -166,8 +172,6 @@ class SglangPreflightTests(PairedEngines):
             )
         self.assertGreater(profile.tpot_intercept, 0)
         self.assertEqual(profile.kv_capacity_tokens, sim.MAX_MODEL_LEN)
-        # The peer decoded each prefill sample; the target decoded a warmup cohort at each
-        # concurrency and each decode stream.
         self.assertEqual(peer.transfers, 3)
         self.assertEqual(target.transfers, 9)
 
@@ -181,7 +185,6 @@ class SglangPreflightTests(PairedEngines):
             slow = await engine_gates.gate_pace(self.cfg, {"e0", "e3"}, report)
         self.assertEqual((slow, report.failed), (set(), []))
         launches.assert_awaited_once_with(self.cfg.engines, timeout_s=self.cfg.health_timeout_s)
-        # Each engine decoded both pace probes of the other.
         self.assertEqual([engine.transfers for engine in self.engines], [2, 2])
 
     async def test_profile_run_measures_each_engine_beside_its_lane_peer(self):
@@ -297,7 +300,8 @@ class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.router.engines, "probe_inference", new=probe):
             self.assertTrue(await self.verifier._verify_path("e3", "http://e3", ""))
         self.assertEqual(
-            probe.await_args.kwargs["prefill_url"], self.router.monitor.instances["e0"].url
+            probe.await_args.kwargs["prefill_url"],
+            self.router.monitor.instances["e0"].url,
         )
         self.assertEqual(self.verifier.probes[("e3", "verify_inference", "passed")], 1)
 
@@ -332,7 +336,11 @@ class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):
         row = next(row for row in rows if row.get("outcome") == "consumer_failed")
         self.assertEqual(
             list(row.items())[-3:],
-            [("outcome", "consumer_failed"), ("consumer_class", "stream"), ("consumer", "e3")],
+            [
+                ("outcome", "consumer_failed"),
+                ("consumer_class", "stream"),
+                ("consumer", "e3"),
+            ],
         )
         self.assertIn(
             "suspect e0 inference probe: consumer e3 leg failed stream; trying the next consumer",
@@ -345,7 +353,11 @@ class ContractFieldTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.cfg = fleet(Path(folder.name))
-        self.cfg.backend, self.cfg.connector, self.cfg.dialect = "sglang", "mooncake", "sglang"
+        self.cfg.backend, self.cfg.connector, self.cfg.dialect = (
+            "sglang",
+            "mooncake",
+            "sglang",
+        )
 
     def problems(self):
         try:
