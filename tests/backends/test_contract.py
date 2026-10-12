@@ -1,23 +1,45 @@
+import contextlib
+import io
 import itertools
 import json
 import math
+import os
 import re
 import socket
+import tempfile
 import unittest
 from collections.abc import Mapping
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
 from narwhal.backends import EngineBackend, load, names
 from narwhal.deployment.launch_engine.backend import EngineLauncher
+from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.plan import load as load_plan
+from narwhal.deployment.launch_engine.start import start
+from narwhal.deployment.native_engine import start_shared
 from narwhal.engines.attestation import EngineIdentity, fetch_engine_identity
-from narwhal.engines.client import EngineClient, ProbeLeg
+from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
 from narwhal.engines.connector import KvConnector, PrefillResult, RendezvousConnector
 from narwhal.engines.stream import sse_token_bearing
-from narwhal.runtime.role_switch import RoleSwitcher
+from narwhal.runtime.role_switch import RoleSwitcher, restore_roles
 from narwhal.serving.completion import completion_body_error
 from narwhal.types import Role
-from tests.backends.contract import fixtures
+from tests.backends.contract import (
+    CONTAINER_ID,
+    Engines,
+    Stages,
+    fixtures,
+    prepared,
+    random_ids,
+    running_container,
+)
+from tests.characterization.golden import assert_golden
+from tests.characterization.test_launch import env_lines, placeholders, redacted
+from tests.wire import engine_transports, serving_app
 from tools.measurement import simulated_engine as sim
 
 PROMPT = "contract probe"
@@ -295,8 +317,217 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 await switcher.switch(client, "http://engine", role, {})
 
 
+class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
+    """Golden records of each step a backend takes part in, recorded at the engine boundary."""
+
+    name: str
+    backend: EngineBackend
+
+    def setUp(self):
+        self.backend = load(self.name)
+        self.fixtures = fixtures(self.name)
+        self.launcher = self.backend.launcher()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.replacements: dict[str, str] = {}
+
+    def golden(self, aspect: str, record: object) -> None:
+        assert_golden(self, f"contract_{self.name}_{aspect}", random_ids(record), self.replacements)
+
+    def inherited(self) -> contextlib.AbstractContextManager:
+        # A native engine inherits the caller's environment; this one holds only an engine key.
+        return patch.dict(os.environ, {self.launcher.api_key_env: "inherited-key"}, clear=True)
+
+    def launched(self, native: bool) -> dict:
+        """Prepare, check and start one launch, recording each step."""
+        root = self.root / ("native" if native else "container")
+        root.mkdir()
+        run, plan, printed = prepared(root, self.launcher, self.fixtures, native=native)
+        self.replacements = {**placeholders(self.root, plan), **self.replacements}
+        stages = Stages(plan, self.fixtures.check_output(plan))
+        record: dict = {
+            "prepare": {
+                "plan": redacted(plan),
+                "env": env_lines(run / ("engine.env" if native else "container.env")),
+                "hook_files": sorted(path.name for path in (run / "hook").iterdir()),
+                "printed": printed,
+            }
+        }
+        with (
+            self.inherited() if native else contextlib.nullcontext(),
+            patch("narwhal.deployment.stages.run", side_effect=stages),
+            contextlib.redirect_stdout(io.StringIO()) as checked,
+        ):
+            check(run, plan)
+        record["check"] = {
+            "calls": stages.calls,
+            "printed": checked.getvalue(),
+            "checked": redacted(json.loads((run / "checked.json").read_text())),
+        }
+        stages.calls = []
+        if native:
+            record["start"] = self.started_native(run)
+            return record
+        with (
+            patch("narwhal.deployment.stages.run", side_effect=stages),
+            contextlib.redirect_stdout(io.StringIO()) as started,
+        ):
+            start(run, load_plan(run))
+        record["start"] = {"calls": stages.calls, "printed": started.getvalue()}
+        record["attestation"] = self.attested(run, load_plan(run))
+        return record
+
+    def started_native(self, run: Path) -> dict:
+        checked = json.loads((run / "checked.json").read_text())
+        live = SimpleNamespace(
+            version=checked[self.launcher.checked_version_field],
+            process_start_time_seconds=1234.5,
+        )
+        readings = iter((1000, 6100))
+        prefix = "narwhal.deployment.native_engine."
+        with (
+            self.inherited(),
+            patch(prefix + "validate_shared_runs", return_value=[(run, load_plan(run))]),
+            patch(prefix + "_ports_free"),
+            patch(prefix + "gpu_memory") as memory,
+            patch(prefix + "subprocess.Popen", return_value=Mock(pid=101)) as popen,
+            patch(
+                prefix + "process_identity",
+                return_value={"pid": 101, "boot_id": "boot", "start_ticks": 10},
+            ),
+            patch(prefix + "_wait_ready"),
+            patch(
+                prefix + "fetch_engine_identity", new_callable=AsyncMock, return_value=live
+            ) as fetch,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            memory.side_effect = lambda _: {"used_mib": next(readings), "total_mib": 30000}
+            start_shared([run], ready_seconds=30)
+        return {
+            "argv": popen.call_args.args[0],
+            "env": dict(sorted(popen.call_args.kwargs["env"].items())),
+            "identity_request": {
+                "endpoint": fetch.await_args.args[0],
+                "headers": fetch.await_args.kwargs["headers"],
+            },
+            "record": redacted(json.loads((run / "shared-start.json").read_text())),
+        }
+
+    def attested(self, run: Path, plan: dict) -> dict:
+        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
+        log = run / "startup.log"
+        log.write_text(self.fixtures.startup_log)
+        checked = json.loads((run / "checked.json").read_text())
+        with running_container(checked["image_id"]):
+            document = self.launcher.engine_document(run, log)
+        document["sources"] = {
+            field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)
+            for field, source in document["sources"].items()
+        }
+        return redacted(document)
+
+    def launches(self) -> dict:
+        return {"container": self.launched(False), "native": self.launched(True)}
+
+    def test_launch_command_and_environment(self):
+        launches = self.launches()
+        self.golden(
+            "launch",
+            {
+                mode: {"prepare": record["prepare"], "start": record["start"]}
+                for mode, record in launches.items()
+            },
+        )
+
+    def test_runtime_check_result(self):
+        launches = self.launches()
+        self.golden("runtime_check", {mode: record["check"] for mode, record in launches.items()})
+
+    def test_attestation_document(self):
+        self.golden("attestation", self.launched(False)["attestation"])
+
+    async def test_handoff_request_bodies_and_order(self):
+        engines = Engines(self.name, self.fixtures.handoff_random_fields)
+        launch = self.fixtures.attestation["launch"]
+        producer, consumer = "http://stub-0", "http://stub-1"
+        switcher = self.backend.role_switcher(self.backend.default_connector)
+        assert switcher is not None
+        async with httpx.AsyncClient(transport=httpx.MockTransport(engines)) as control:
+            await switcher.place(control, (producer, launch), (consumer, launch))
+        record: dict = {"placement": engines.take()}
+        router, client = serving_app(self, engines, urls=(producer, consumer), backend=self.name)
+        router.attested("p", self.fixtures.attestation)
+        for case, endpoint, body in (
+            ("serving_completions", "/v1/completions", {"prompt": PROMPT, "max_tokens": 4}),
+            (
+                "serving_chat_stream",
+                "/v1/chat/completions",
+                {
+                    "messages": [{"role": "user", "content": PROMPT}],
+                    "max_completion_tokens": 4,
+                    "stream": True,
+                },
+            ),
+        ):
+            response = await client.post(endpoint, json={"model": "stub", **body})
+            self.assertEqual(response.status_code, 200, response.text)
+            record[case] = engines.handoff()
+        kv = self.backend.connector(self.backend.default_connector)
+        engine = EngineClient(
+            kv=kv, dialect=self.backend.dialect, model="m", **engine_transports(engines)
+        )
+        self.addAsyncCleanup(engine.aclose)
+        body = {"model": "m", "prompt": PROMPT, "max_tokens": 4}
+        handoff = await engine.start_handoff(producer, "/v1/completions", body, {}, producer=launch)
+        async for _ in engine.decode_handoff(handoff, consumer, "/v1/completions", body, {}):
+            pass
+        record["paired_handoff"] = engines.handoff()
+        probe = await engine.probe_inference(
+            consumer, prefill_url=producer, deadline_s=5, producer=launch
+        )
+        self.assertEqual(probe, InferenceProbe(ProbeLeg(), ProbeLeg()))
+        record["inference_probe"] = engines.handoff()
+        self.golden("handoff", record)
+
+    async def test_role_switch_calls(self):
+        engines = Engines(self.name, ())
+        launch = self.fixtures.attestation["launch"]
+        switcher = self.backend.role_switcher(self.backend.default_connector)
+        assert switcher is not None
+        a, b, c = "http://a", "http://b", "http://c"
+        record: dict = {
+            "requires_idle": switcher.requires_idle,
+            "connectors": None if switcher.connectors is None else sorted(switcher.connectors),
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(engines)) as client:
+            await switcher.place(client, (a, launch), (b, launch))
+            record["place"] = engines.take()
+            await switcher.place(client, (a, launch), (b, launch))
+            record["place_again"] = engines.take()
+            await switcher.switch(client, a, Role.DECODE, launch)
+            record["switch_producer_to_decode"] = engines.take()
+            await switcher.place(client, (a, launch), (b, launch))
+            record["place_after_producer_switch"] = engines.take()
+            roles = {base: await switcher.role(client, base) for base in (a, b, c)}
+            record["roles"] = {
+                base: None if role is None else role.value for base, role in roles.items()
+            }
+            record["role_reads"] = engines.take()
+            await restore_roles(
+                switcher,
+                client,
+                {a: (Role.DECODE, launch), b: (Role.PREFILL, launch), c: (Role.DECODE, launch)},
+            )
+            record["restore"] = engines.take()
+        self.golden("role_switch", record)
+
+
 for _name in names():
     globals()[f"{_name.title()}ContractTests"] = type(
         f"{_name.title()}ContractTests", (BackendContract,), {"name": _name}
     )
-del BackendContract, _name
+    globals()[f"{_name.title()}CharacterizationTests"] = type(
+        f"{_name.title()}CharacterizationTests", (BackendCharacterization,), {"name": _name}
+    )
+del BackendContract, BackendCharacterization, _name

@@ -1,0 +1,181 @@
+{
+  "inference_probe": {
+    "control": [],
+    "decode": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 4>",
+        "ignore_eos": true,
+        "max_tokens": 1,
+        "min_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "legs overlap",
+    "prefill": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 4>",
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "paired_handoff": {
+    "control": [],
+    "decode": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 3>",
+        "max_tokens": 4,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "legs overlap",
+    "prefill": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 3>",
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "placement": [
+    {
+      "body": null,
+      "engine": "stub-0",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "stub-1",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    }
+  ],
+  "serving_chat_stream": {
+    "control": [],
+    "decode": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 2>",
+        "max_tokens": 4,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "rid": "<uuid>-a1-decode",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "order": "legs overlap",
+    "prefill": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 2>",
+        "max_tokens": 1,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "rid": "<uuid>-a1-prefill",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    }
+  },
+  "serving_completions": {
+    "control": [],
+    "decode": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 1>",
+        "max_tokens": 4,
+        "model": "stub",
+        "prompt": "contract probe",
+        "return_token_ids": true,
+        "rid": "<uuid>-a1-decode",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "legs overlap",
+    "prefill": {
+      "body": {
+        "bootstrap_host": "192.0.2.11",
+        "bootstrap_port": 5600,
+        "bootstrap_room": "<bootstrap_room 1>",
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "contract probe",
+        "rid": "<uuid>-a1-prefill",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  }
+}

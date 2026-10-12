@@ -1,0 +1,205 @@
+{
+  "connectors": [
+    "mooncake"
+  ],
+  "place": [
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "b",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    }
+  ],
+  "place_after_producer_switch": [
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "new_role": "prefill"
+      },
+      "engine": "a",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "new_role": "prefill"
+      },
+      "engine": "b",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "b",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    }
+  ],
+  "place_again": [
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    }
+  ],
+  "requires_idle": true,
+  "restore": [
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "new_role": "prefill"
+      },
+      "engine": "b",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    },
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "a",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    },
+    {
+      "body": null,
+      "engine": "c",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "c",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    }
+  ],
+  "role_reads": [
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "b",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": null,
+      "engine": "c",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    }
+  ],
+  "roles": {
+    "http://a": "prefill",
+    "http://b": "decode",
+    "http://c": "prefill"
+  },
+  "switch_producer_to_decode": [
+    {
+      "body": null,
+      "engine": "a",
+      "headers": {},
+      "method": "GET",
+      "path": "/server_info"
+    },
+    {
+      "body": {
+        "decode_cuda_graph_memory_gb": 4.0,
+        "new_role": "decode"
+      },
+      "engine": "a",
+      "headers": {},
+      "method": "POST",
+      "path": "/pd_role_switch"
+    }
+  ]
+}

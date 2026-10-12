@@ -1,0 +1,427 @@
+{
+  "container": {
+    "prepare": {
+      "env": [
+        "CUDA_VISIBLE_DEVICES=0,1",
+        "NIXL_HOST_IP=192.0.2.11",
+        "PYTHONPATH=/narwhal-hooks",
+        "UCX_NET_DEVICES=fabric0",
+        "UCX_TCP_PORT_RANGE=39000-39999",
+        "UCX_TLS=tcp,sm,self,cuda",
+        "VLLM_API_KEY=engine-only-secret",
+        "VLLM_NIXL_SIDE_CHANNEL_HOST=192.0.2.11",
+        "VLLM_NIXL_SIDE_CHANNEL_PORT=5600",
+        "VLLM_ROCM_USE_AITER=1"
+      ],
+      "hook_files": [
+        "launch.json",
+        "launch_engine.py",
+        "sitecustomize.py"
+      ],
+      "plan": {
+        "args": [
+          "-m",
+          "vllm.entrypoints.openai.api_server",
+          "--model",
+          "/model",
+          "--served-model-name",
+          "synthetic",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8000",
+          "--tensor-parallel-size",
+          "2",
+          "--dtype",
+          "bfloat16",
+          "--kv-cache-dtype",
+          "auto",
+          "--block-size",
+          "128",
+          "--kv-events-config",
+          "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}",
+          "--kv-transfer-config",
+          "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+          "--max-model-len",
+          "4096",
+          "--enforce-eager"
+        ],
+        "attestation_port": 8010,
+        "cache_capture_code_sha256": "<sha256>",
+        "cache_capture_sha256": "<sha256>",
+        "common": [
+          "--network",
+          "host",
+          "--ipc",
+          "host",
+          "--ulimit",
+          "memlock=-1:-1",
+          "--env-file",
+          "<root>/container/launch/container.env",
+          "--mount",
+          "type=bind,src=<root>/container/model,dst=/model,readonly",
+          "--mount",
+          "type=bind,src=<root>/container/launch/cache,dst=/root/.cache",
+          "--mount",
+          "type=bind,src=<root>/container/launch/hook,dst=/narwhal-hooks,readonly",
+          "--mount",
+          "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+          "--device",
+          "/dev/nvidiactl",
+          "--device",
+          "/dev/nvidia0",
+          "--device",
+          "/dev/nvidia1",
+          "--gpus",
+          "all"
+        ],
+        "connector": {
+          "kv_connector": "NixlConnector",
+          "kv_connector_extra_config": {
+            "backends": [
+              "UCX"
+            ],
+            "enforce_handshake_compat": true,
+            "kv_lease_duration": 30
+          },
+          "kv_load_failure_policy": "fail",
+          "kv_role": "kv_both"
+        },
+        "cuda_ipc_peers": false,
+        "endpoint": "http://192.0.2.11:8000",
+        "env_sha256": "<sha256>",
+        "expected_packages": {
+          "nixl": "1.0.0",
+          "vllm": "0.29.0"
+        },
+        "image": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kv_events": {
+          "endpoint": "ipc:///narwhal-kv-events/events.sock",
+          "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock",
+          "socket_dir": "<kv-events-root>/<name>"
+        },
+        "launch_sha256": "<sha256>",
+        "launcher_code_sha256": "<sha256>",
+        "launcher_sha256": "<sha256>",
+        "model_config_sha256": "51f95475923702b855b9c8bc342c5692adec323205052b4725a937b7bc0ee5f4",
+        "model_dir": "<root>/container/model",
+        "name": "<name>",
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "role": "engine-1",
+        "side_channel_port": 5600,
+        "ucx_tls": "tcp,sm,self,cuda"
+      },
+      "printed": "Prepared engine-1; review launch.json and run the image check.\n"
+    },
+    "start": {
+      "calls": [
+        {
+          "command": [
+            "docker",
+            "create",
+            "--label",
+            "io.narwhal.launch=<hex>",
+            "--label",
+            "io.narwhal.operation=<hex>",
+            "--name",
+            "<name>",
+            "--network",
+            "host",
+            "--ipc",
+            "host",
+            "--ulimit",
+            "memlock=-1:-1",
+            "--env-file",
+            "<root>/container/launch/container.env",
+            "--mount",
+            "type=bind,src=<root>/container/model,dst=/model,readonly",
+            "--mount",
+            "type=bind,src=<root>/container/launch/cache,dst=/root/.cache",
+            "--mount",
+            "type=bind,src=<root>/container/launch/hook,dst=/narwhal-hooks,readonly",
+            "--mount",
+            "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+            "--device",
+            "/dev/nvidiactl",
+            "--device",
+            "/dev/nvidia0",
+            "--device",
+            "/dev/nvidia1",
+            "--gpus",
+            "all",
+            "--env",
+            "NARWHAL_CAPTURE_CACHE=1",
+            "--env",
+            "NARWHAL_CACHE_PLAN=/narwhal-hooks/launch.json",
+            "--env",
+            "NARWHAL_CACHE_OUTPUT=/tmp/narwhal-cache-layout.json",
+            "--entrypoint",
+            "python3",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "-m",
+            "vllm.entrypoints.openai.api_server",
+            "--model",
+            "/model",
+            "--served-model-name",
+            "synthetic",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--tensor-parallel-size",
+            "2",
+            "--dtype",
+            "bfloat16",
+            "--kv-cache-dtype",
+            "auto",
+            "--block-size",
+            "128",
+            "--kv-events-config",
+            "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}",
+            "--kv-transfer-config",
+            "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+            "--max-model-len",
+            "4096",
+            "--enforce-eager"
+          ],
+          "log": "<root>/container/launch/launch.log",
+          "stage": "docker-create"
+        },
+        {
+          "command": [
+            "docker",
+            "start",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          ],
+          "log": "<root>/container/launch/launch.log",
+          "stage": "docker-start"
+        }
+      ],
+      "printed": "Container started; follow its logs and verify the HTTP endpoints.\n"
+    }
+  },
+  "native": {
+    "prepare": {
+      "env": [
+        "CUDA_VISIBLE_DEVICES=0",
+        "NIXL_HOST_IP=192.0.2.11",
+        "PYTHONPATH=<root>/native/launch/hook",
+        "UCX_NET_DEVICES=fabric0",
+        "UCX_TCP_PORT_RANGE=39000-39999",
+        "UCX_TLS=tcp,sm,self,cuda",
+        "VLLM_API_KEY=engine-only-secret",
+        "VLLM_NIXL_SIDE_CHANNEL_HOST=192.0.2.11",
+        "VLLM_NIXL_SIDE_CHANNEL_PORT=5600",
+        "VLLM_ROCM_USE_AITER=1"
+      ],
+      "hook_files": [
+        "launch.json",
+        "launch_engine.py",
+        "sitecustomize.py"
+      ],
+      "plan": {
+        "args": [
+          "-m",
+          "vllm.entrypoints.openai.api_server",
+          "--model",
+          "<root>/native/model",
+          "--served-model-name",
+          "synthetic",
+          "--host",
+          "192.0.2.11",
+          "--port",
+          "8000",
+          "--tensor-parallel-size",
+          "1",
+          "--dtype",
+          "bfloat16",
+          "--kv-cache-dtype",
+          "auto",
+          "--block-size",
+          "128",
+          "--kv-events-config",
+          "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
+          "--kv-transfer-config",
+          "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+          "--max-model-len",
+          "4096",
+          "--enforce-eager",
+          "--gpu-memory-utilization",
+          "0.4"
+        ],
+        "attestation_port": 8010,
+        "attestation_url": "http://192.0.2.11:8010/v1/attestation",
+        "backend": "native",
+        "cache_capture_code_sha256": "<sha256>",
+        "cache_capture_sha256": "<sha256>",
+        "common": [],
+        "connector": {
+          "kv_connector": "NixlConnector",
+          "kv_connector_extra_config": {
+            "backends": [
+              "UCX"
+            ],
+            "enforce_handshake_compat": true,
+            "kv_lease_duration": 30
+          },
+          "kv_load_failure_policy": "fail",
+          "kv_role": "kv_both"
+        },
+        "cuda_ipc_peers": true,
+        "endpoint": "http://192.0.2.11:8000",
+        "env_sha256": "<sha256>",
+        "expected_packages": {
+          "nixl": "1.0.0",
+          "vllm": "0.29.0"
+        },
+        "image": "",
+        "kv_events": {
+          "endpoint": "ipc://<kv-events-root>/<name>/events.sock",
+          "replay_endpoint": "ipc://<kv-events-root>/<name>/replay.sock",
+          "socket_dir": "<kv-events-root>/<name>"
+        },
+        "launch_sha256": "<sha256>",
+        "launcher_code_sha256": "<sha256>",
+        "launcher_sha256": "<sha256>",
+        "model_config_path": "<root>/native/model/config.json",
+        "model_config_sha256": "51f95475923702b855b9c8bc342c5692adec323205052b4725a937b7bc0ee5f4",
+        "model_dir": "<root>/native/model",
+        "model_path": "<root>/native/model",
+        "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "<name>",
+        "python_executable": "<python>",
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "role": "engine-1",
+        "shared_device": {
+          "device_allowance": 0.9,
+          "gpu_memory_utilization": 0.4,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "side_channel_port": 5600,
+        "ucx_tls": "tcp,sm,self,cuda"
+      },
+      "printed": "Prepared engine-1; review launch.json and run the native runtime check.\n"
+    },
+    "start": {
+      "argv": [
+        "<python>",
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        "<root>/native/model",
+        "--served-model-name",
+        "synthetic",
+        "--host",
+        "192.0.2.11",
+        "--port",
+        "8000",
+        "--tensor-parallel-size",
+        "1",
+        "--dtype",
+        "bfloat16",
+        "--kv-cache-dtype",
+        "auto",
+        "--block-size",
+        "128",
+        "--kv-events-config",
+        "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
+        "--kv-transfer-config",
+        "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+        "--max-model-len",
+        "4096",
+        "--enforce-eager",
+        "--gpu-memory-utilization",
+        "0.4"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "NARWHAL_CACHE_OUTPUT": "<root>/native/launch/cache-layout.json",
+        "NARWHAL_CACHE_PLAN": "<root>/native/launch/hook/launch.json",
+        "NARWHAL_CAPTURE_CACHE": "1",
+        "NIXL_HOST_IP": "192.0.2.11",
+        "PYTHONPATH": "<root>/native/launch/hook",
+        "UCX_NET_DEVICES": "fabric0",
+        "UCX_TCP_PORT_RANGE": "39000-39999",
+        "UCX_TLS": "tcp,sm,self,cuda",
+        "VLLM_API_KEY": "engine-only-secret",
+        "VLLM_NIXL_SIDE_CHANNEL_HOST": "192.0.2.11",
+        "VLLM_NIXL_SIDE_CHANNEL_PORT": "5600",
+        "VLLM_ROCM_USE_AITER": "1"
+      },
+      "identity_request": {
+        "endpoint": "http://192.0.2.11:8000",
+        "headers": {
+          "Authorization": "Bearer engine-only-secret"
+        }
+      },
+      "record": {
+        "aggregate_delta_mib": 5100,
+        "backend": "native",
+        "budget_mib": 12000.0,
+        "device_allowance_mib": 27000.0,
+        "expected_packages": {
+          "nixl": "1.0.0",
+          "vllm": "0.29.0"
+        },
+        "gpu_after": {
+          "total_mib": 30000,
+          "used_mib": 6100
+        },
+        "gpu_baseline_used_mib": 1000,
+        "gpu_before": {
+          "total_mib": 30000,
+          "used_mib": 1000
+        },
+        "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "model_sha256": "<sha256>",
+        "observed_delta_mib": 5100,
+        "plan_sha256": "<sha256>",
+        "process": {
+          "boot_id": "boot",
+          "pid": 101,
+          "start_ticks": 10
+        },
+        "process_start_time_seconds": 1234.5,
+        "role": "engine-1",
+        "shared_device": {
+          "device_allowance": 0.9,
+          "gpu_memory_utilization": 0.4,
+          "gpu_uuid": "GPU-fixture",
+          "group": "example-host:GPU-fixture"
+        },
+        "status": "running",
+        "vllm_args": [
+          "-m",
+          "vllm.entrypoints.openai.api_server",
+          "--model",
+          "<root>/native/model",
+          "--served-model-name",
+          "synthetic",
+          "--host",
+          "192.0.2.11",
+          "--port",
+          "8000",
+          "--tensor-parallel-size",
+          "1",
+          "--dtype",
+          "bfloat16",
+          "--kv-cache-dtype",
+          "auto",
+          "--block-size",
+          "128",
+          "--kv-events-config",
+          "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
+          "--kv-transfer-config",
+          "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
+          "--max-model-len",
+          "4096",
+          "--enforce-eager",
+          "--gpu-memory-utilization",
+          "0.4"
+        ],
+        "vllm_version": "0.29.0"
+      }
+    }
+  }
+}

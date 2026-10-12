@@ -1,10 +1,14 @@
 import json
 from collections.abc import Iterable
+from pathlib import Path
 
 import msgpack
 
+from narwhal.deployment.launch_engine.plan import option
+from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from tests.backends.contract import ContractFixtures
+from tests.deployment.fixtures import runtime, vllm_check_output
 
 
 def stored(
@@ -51,6 +55,63 @@ def launch(*args: object) -> dict[str, object]:
     return {"launch": {"args": list(args)}}
 
 
+def check_output(plan: dict) -> str:
+    return vllm_check_output(plan, packages=plan["expected_packages"], ucx="1.22.0")
+
+
+def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
+    plan_hash = digest(run / "launch.json")
+    image = plan["image"]
+    ranks = range(int(option(plan["args"], "--tensor-parallel-size") or 1))
+    captures = {
+        "model-dimensions.json": {
+            "plan_sha256": plan_hash,
+            "image": image,
+            "model_config_sha256": plan["model_config_sha256"],
+            "revision": plan["revision"],
+            "contract": {"kv_heads": 8, "head_size": 64, "hidden_layers": 4},
+            "model_architecture": "FixtureForCausalLM",
+        },
+        "cache-registration.json": {
+            "plan_sha256": plan_hash,
+            "image": image,
+            "kv_cache_layout": "NHD",
+            "cross_layers_blocks": False,
+        },
+        "cache-layout.json": {
+            "plan_sha256": plan_hash,
+            "image": image,
+            "model_config_sha256": plan["model_config_sha256"],
+            "launch_config_sha256": plan["launch_sha256"],
+            "ranks": [
+                {"rank": rank, "kv_cache_layout": "NHD", "layers": [{"kind": "FullAttentionSpec"}]}
+                for rank in ranks
+            ],
+        },
+        "nixl-connector-version.json": {
+            "plan_sha256": plan_hash,
+            "image_id": image,
+            "container_id": container_id,
+            "nixl_connector_version": 9,
+        },
+        "transfer-mode.json": {
+            "plan_sha256": plan_hash,
+            "image_id": image,
+            "transfer_mode": "pull",
+        },
+        "handshake-policy.json": {
+            "plan_sha256": plan_hash,
+            "image": image,
+            "connector_config": plan["connector"],
+            "enforce_handshake_compat": True,
+        },
+        "version.json": {"version": "0.29.0"},
+    }
+    for name, value in captures.items():
+        (run / name).write_text(json.dumps(value) + "\n")
+    (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
+
+
 _STORED = stored([11, 12], range(1, 9))
 
 FIXTURES = ContractFixtures(
@@ -81,4 +142,8 @@ FIXTURES = ContractFixtures(
     memory_fraction="0.4",
     no_kv_event_args=["--no-enable-prefix-caching"],
     image_packages={"vllm": "0.29.0", "nixl": "1.0.0", "torch": "2.12.0"},
+    launch_runtime=runtime(),
+    check_output=check_output,
+    attestation_evidence=attestation_evidence,
+    startup_log="Using FLASH_ATTN attention backend.\n",
 )
