@@ -46,7 +46,9 @@ SOURCE_DIGESTS = {
     "env_sha256",
     "launch_sha256",
     "launcher_sha256",
+    "launcher_code_sha256",
     "cache_capture_sha256",
+    "cache_capture_code_sha256",
     "plan_sha256",
     "model_sha256",
 }

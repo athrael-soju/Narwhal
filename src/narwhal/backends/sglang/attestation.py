@@ -235,7 +235,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "model_config_sha256": plan["model_config_sha256"],
         "model_revision": plan.get("model_revision", ""),
         "launch_sha256": plan.get("launch_sha256", ""),
-        "launcher_sha256": plan.get("launcher_sha256", ""),
+        "launcher_code_sha256": plan["launcher_code_sha256"],
         "bootstrap": {
             "bootstrap_host": env["NARWHAL_SGLANG_BOOTSTRAP_HOST"],
             "bootstrap_port": int(env["NARWHAL_SGLANG_BOOTSTRAP_PORT"]),

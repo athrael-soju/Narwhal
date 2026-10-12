@@ -145,7 +145,6 @@ def transfer_series(metrics: str) -> dict[str, dict[str, float]]:
 
 
 def transfer_payload(before: str, after: str) -> tuple[int, int]:
-    """Sum each TP rank's mean transfer between two SGLang prefill /metrics snapshots."""
     start, end = transfer_series(before), transfer_series(after)
     if not end:
         raise ValueError("the metrics hold no sglang:kv_transfer_total_mb series")
@@ -165,8 +164,6 @@ def transfer_payload(before: str, after: str) -> tuple[int, int]:
 
 
 def measure_transfer(args: argparse.Namespace) -> tuple[int, int]:
-    """Send cold SGLang handoffs of one prompt length and save the prefill /metrics around them.
-    The decode engine serves the decode role for the handoffs and returns to its role after."""
     integer({"prompt_tokens": args.prompt_tokens}, "prompt_tokens")
     integer({"handoffs": args.handoffs}, "handoffs")
     headers = {"Content-Type": "application/json"}
@@ -198,7 +195,6 @@ def measure_transfer(args: argparse.Namespace) -> tuple[int, int]:
         "runtime"
     ].get("decode_cuda_graph_memory_gb")
     if found == "decode":
-        # A decode engine keeps each producer's transfer endpoint until it switches itself.
         switch(args.decode, "prefill")
     switch(args.decode, "decode", float(memory) if memory else None)
     try:
@@ -214,7 +210,6 @@ def send_handoffs(args: argparse.Namespace, call) -> tuple[int, int]:
     before = call(metrics_url)
     draw = random.SystemRandom()
     for _ in range(args.handoffs):
-        # A fresh first token keeps every prompt out of the radix cache.
         body = {
             "model": args.model,
             "prompt": [draw.randrange(100, 10000) for _ in range(args.prompt_tokens)],

@@ -430,8 +430,8 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "model_config_sha256": plan["model_config_sha256"],
         "model_revision": plan.get("model_revision", ""),
         "launch_sha256": plan.get("launch_sha256", ""),
-        "launcher_sha256": plan.get("launcher_sha256", ""),
-        "cache_capture_sha256": plan.get("cache_capture_sha256", ""),
+        "launcher_code_sha256": plan["launcher_code_sha256"],
+        "cache_capture_code_sha256": plan["cache_capture_code_sha256"],
         "ucx_version": checked.get("ucx_version") or "",
         "peer_release": checked.get("peer_release") is True,
     }

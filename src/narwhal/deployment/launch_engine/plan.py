@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .backend import EngineLauncher, launcher, plan_launcher
-from .runtime import digest, write_private
+from .runtime import code_digest, digest, write_private
 
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
@@ -401,7 +401,9 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         env_sha256=digest(output / env_file),
         launch_sha256=digest(source),
         launcher_sha256=digest(script),
+        launcher_code_sha256=code_digest(script),
         cache_capture_sha256=hook_sha,
+        cache_capture_code_sha256=code_digest(hook_source),
         model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
     if backend == "native" and Path(plan["model_path"]).is_file():

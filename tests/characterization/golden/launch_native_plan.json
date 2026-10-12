@@ -42,6 +42,7 @@
     "attestation_port": 8010,
     "attestation_url": "http://192.0.2.11:8010/v1/attestation",
     "backend": "native",
+    "cache_capture_code_sha256": "<sha256>",
     "cache_capture_sha256": "<sha256>",
     "common": [],
     "connector": {
@@ -70,6 +71,7 @@
       "socket_dir": "<kv-events-root>/<name>"
     },
     "launch_sha256": "<sha256>",
+    "launcher_code_sha256": "<sha256>",
     "launcher_sha256": "<sha256>",
     "model_config_path": "<root>/model/config.json",
     "model_config_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",

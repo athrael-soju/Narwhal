@@ -43,14 +43,14 @@
       "4096",
       "--enforce-eager"
     ],
-    "cache_capture_sha256": "<sha256>",
+    "cache_capture_code_sha256": "<sha256>",
     "expected_packages": {
       "nixl": "1.0.0",
       "vllm": "0.29.0"
     },
     "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "launch_sha256": "<sha256>",
-    "launcher_sha256": "<sha256>",
+    "launcher_code_sha256": "<sha256>",
     "model_config_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
     "model_revision": "",
     "peer_release": true,

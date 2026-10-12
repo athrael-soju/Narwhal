@@ -253,6 +253,8 @@ class AttestationContractTests(unittest.TestCase):
             ],
             "env_sha256": "e" * 64,
             "launcher_sha256": "f" * 64,
+            "launcher_code_sha256": "f" * 64,
+            "cache_capture_code_sha256": "f" * 64,
             "connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
             "expected_packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0"},
         }

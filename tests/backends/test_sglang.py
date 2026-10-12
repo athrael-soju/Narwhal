@@ -749,6 +749,7 @@ class EngineDocumentTests(unittest.TestCase):
             "model_revision": "2" * 40,
             "launch_sha256": "3" * 64,
             "launcher_sha256": "4" * 64,
+            "launcher_code_sha256": "5" * 64,
         }
         checked = {"sglang_version": "0.5.21", "image_id": IMAGE_ID}
         identity: dict = {"image_id": IMAGE_ID, "container_id": CONTAINER_ID}
@@ -847,7 +848,7 @@ class EngineDocumentTests(unittest.TestCase):
                         "model_config_sha256": "1" * 64,
                         "model_revision": "2" * 40,
                         "launch_sha256": "3" * 64,
-                        "launcher_sha256": "4" * 64,
+                        "launcher_code_sha256": "5" * 64,
                         "bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600},
                         "role_switch": connector["role_switch"],
                         **({} if native else {"decode_cuda_graph_memory_gb": 4.0}),
