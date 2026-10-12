@@ -10,8 +10,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.backends.vllm.plan import ds_conv_state_layout_required
-from narwhal.deployment.launch_engine.plan import build
+from narwhal.deployment.engine_launch import load_launches
+from narwhal.deployment.launch_engine.plan import build, conv_state_layers
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -21,7 +21,6 @@ from tools.deployment.discover_deployment import (
     fabric_address,
     service_url,
 )
-from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, load_hosts
 from tools.deployment.prepare_host_env import select_values
 
@@ -256,7 +255,7 @@ class DiscoveryTests(unittest.TestCase):
         hosts = derive_hosts(env)
         observations = {f"engine-{i}": sglang_observation(f"10.0.0.{i}") for i in (1, 2)}
         for observed in observations.values():
-            observed["requires_ds_conv_state_layout"] = True
+            observed["conv_state_layers"] = True
 
         def extra_args() -> list[str]:
             _, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
@@ -373,7 +372,7 @@ class DiscoveryTests(unittest.TestCase):
             env = environment(root)
             hosts = derive_hosts(env)
             observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
-            observations["engine-1"]["requires_ds_conv_state_layout"] = True
+            observations["engine-1"]["conv_state_layers"] = True
             _, launches, _, _ = build_records(hosts, env, observations, root)
             self.assertEqual(
                 launches["engines"]["engine-1"]["runtime"]["environment"][
@@ -429,7 +428,7 @@ class DiscoveryTests(unittest.TestCase):
         compile(PROBE, "remote discovery probe", "exec")
 
     def test_probe_applies_the_launcher_convolutional_state_rule(self):
-        rule = inspect.getsource(ds_conv_state_layout_required)
+        rule = inspect.getsource(conv_state_layers)
         self.assertTrue(PROBE.startswith(rule))
         namespace = {}
         exec(compile(rule, "remote discovery rule", "exec"), namespace)
@@ -439,8 +438,8 @@ class DiscoveryTests(unittest.TestCase):
                 "layer_types": ["linear_attention", "linear_attention", "full_attention"],
             }
         }
-        self.assertTrue(namespace["ds_conv_state_layout_required"](model))
-        self.assertFalse(namespace["ds_conv_state_layout_required"]({"layer_types": ["full"]}))
+        self.assertTrue(namespace["conv_state_layers"](model))
+        self.assertFalse(namespace["conv_state_layers"]({"layer_types": ["full"]}))
 
     def test_probe_maps_rocm_pci_ids_and_filters_image_environment(self):
         inputs = {
@@ -513,7 +512,7 @@ class DiscoveryTests(unittest.TestCase):
             exec(compile(PROBE, "remote discovery probe", "exec"), {})
         result = json.loads(output.getvalue())
         self.assertTrue(result["requires_trust_remote_code"])
-        self.assertTrue(result["requires_ds_conv_state_layout"])
+        self.assertTrue(result["conv_state_layers"])
         self.assertEqual(result["image_environment"], {"VLLM_ROCM_USE_AITER": "1"})
         self.assertEqual(
             [g["device"] for g in result["gpus"]],

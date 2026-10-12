@@ -18,9 +18,8 @@ import json
 import os
 from pathlib import Path
 record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
-args = "sglang_args" if "sglang_args" in record else "vllm_args"
 for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
-              "accelerator_devices", "network_mode", "transfer", "environment", args):
+              "accelerator_devices", "network_mode", "transfer", "environment"):
     print(f"{field}: {json.dumps(record[field])}")
 PY_LAUNCH
 ```

@@ -255,7 +255,6 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(launcher.side_channel_address(env), ("192.0.2.11", 5600))
         self.assertEqual(env[launcher.api_key_env], "key")
         self.assertNotIn(launcher.api_key_env, launcher.engine_env("192.0.2.11", 5600, ""))
-        self.assertIn("2", launcher.tensor_parallel_args(2))
         self.assertEqual(launcher.memory_fraction(fixture.memory_args), fixture.memory_fraction)
         self.assertIsNone(launcher.memory_fraction([]))
         self.assertTrue(launcher.publishes_kv_events(fixture.kv_event_args))
@@ -283,7 +282,6 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                     observed,
                     lambda name, default: fixture.discovery_settings.get(name, default),
                     connector,
-                    "prefill",
                 )
                 launcher.validate_runtime(runtime)
                 self.assertGreater(launcher.sequence_limit(runtime), 0)
@@ -300,7 +298,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
             for connector in self.backend.connectors:
                 with self.subTest(name=name, connector=connector):
                     with self.assertRaises(ValueError) as raised:
-                        launcher.discovered_runtime(observed, settings.get, connector, "prefill")
+                        launcher.discovered_runtime(observed, settings.get, connector)
                     self.assertEqual(str(raised.exception), message)
 
     async def test_role_switch_capability(self):

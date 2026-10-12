@@ -33,9 +33,9 @@ class SglangLauncher(EngineLauncher):
         policy.validate_runtime(runtime)
 
     def discovered_runtime(
-        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+        self, observed: dict, setting: Callable[[str, str], str], connector: str
     ) -> dict:
-        return discovery.runtime(observed, setting, connector, role)
+        return discovery.runtime(observed, setting, connector)
 
     def sequence_limit(self, runtime: dict) -> int:
         return discovery.sequence_limit(runtime.get("extra_args", []))
@@ -78,9 +78,6 @@ class SglangLauncher(EngineLauncher):
         return policy.serve_args(
             record, model=model, served_name=served_name, host=host, port=port, kv_events=kv_events
         )
-
-    def tensor_parallel_args(self, size: int) -> list[str]:
-        return ["--tp-size", str(size)]
 
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)

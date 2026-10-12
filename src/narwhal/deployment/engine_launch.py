@@ -110,7 +110,6 @@ def selected_launch(document: dict, role: str, env: dict[str, str]) -> dict:
         )
     entry["transfer"] = transfer
     entry["environment"] = {visibility: ",".join(devices), "UCX_NET_DEVICES": net}
-    entry[engine.args_field] = engine.tensor_parallel_args(tp)
     return {"schema": "narwhal.engine-launch", "schema_version": 1, "role": role, **entry}
 
 

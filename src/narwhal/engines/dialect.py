@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -16,12 +17,18 @@ class EngineDialect(ABC):
     # None means the engine exposes no HTTP cache-reset capability.
     cache_reset_path: ClassVar[str | None] = None
     # These client fields conflict with the forced one-token prefill request.
-    prefill_incompatible: ClassVar[tuple[str, ...]] = ()
-    # True when streamed decode honors return_token_ids and stream_interval.
-    token_ids: ClassVar[bool] = False
+    prefill_incompatible: ClassVar[tuple[str, ...]] = (
+        "stream_options",
+        "min_tokens",
+        "n",
+        "best_of",
+        "max_completion_tokens",
+    )
+    # True when each streamed decode chunk carries its token IDs.
+    token_ids: ClassVar[bool] = True
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
-    engine_output_fields: ClassVar[tuple[str, ...]] = ()
+    engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")
     # Engine choice fields that a reassembled non-streaming choice carries from the stream.
     choice_fields: ClassVar[tuple[str, ...]] = ()
     # Dotted client fields that would override Narwhal's engine controls.
@@ -79,5 +86,6 @@ class EngineDialect(ABC):
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"min_tokens": tokens, "ignore_eos": True}
 
-    @abstractmethod
-    def cold_probe_extras(self) -> dict[str, Any]: ...
+    def cold_probe_extras(self) -> dict[str, Any]:
+        # The engine keys its prefix cache by cache_salt, so a fresh salt shares no prefix.
+        return {"cache_salt": secrets.token_urlsafe(32)}

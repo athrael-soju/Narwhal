@@ -172,6 +172,33 @@ def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> 
     return False
 
 
+def conv_state_layers(model: dict) -> bool:
+    # State-space and short-convolution layers keep a convolutional state beside the KV cache.
+    # Discovery runs this function's source in the remote probe, so it stays self-contained.
+    text_model = model.get("text_config", model)
+    linear = text_model.get("linear_attn_config", {})
+    if (
+        isinstance(linear, dict)
+        and linear.get("kda_layers")
+        and linear.get("short_conv_kernel_size")
+    ):
+        return True
+    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
+        return True
+    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
+        "layer_types", []
+    ):
+        return True
+    return any(
+        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
+        for layer in text_model.get("layer_types", [])
+    )
+
+
+def model_conv_state_layers(model_dir: Path) -> bool:
+    return conv_state_layers(json.loads((model_dir / "config.json").read_text()))
+
+
 def check_shared_memory(engine: EngineLauncher, role: str, args: list[str], budget: float) -> None:
     value = engine.memory_fraction(args)
     if value is None:

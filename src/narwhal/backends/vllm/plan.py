@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from ...deployment.launch_engine.plan import (
     SECRET_WORDS,
@@ -169,28 +168,3 @@ def serve_args(
 
 def memory_fraction(args: list[str]) -> str | None:
     return option(args, "--gpu-memory-utilization")
-
-
-def requires_ds_conv_state_layout(model_dir: Path) -> bool:
-    return ds_conv_state_layout_required(json.loads((model_dir / "config.json").read_text()))
-
-
-def ds_conv_state_layout_required(model: dict) -> bool:
-    text_model = model.get("text_config", model)
-    linear = text_model.get("linear_attn_config", {})
-    if (
-        isinstance(linear, dict)
-        and linear.get("kda_layers")
-        and linear.get("short_conv_kernel_size")
-    ):
-        return True
-    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
-        return True
-    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
-        "layer_types", []
-    ):
-        return True
-    return any(
-        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
-        for layer in text_model.get("layer_types", [])
-    )

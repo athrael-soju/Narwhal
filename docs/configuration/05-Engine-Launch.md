@@ -79,7 +79,7 @@ Each launch record holds these allocation and transport fields:
 | `shared_device`        | Optional allocation that shares one GPU with other engines, with the fields of the fleet's [`shared_device`](01-Fleet-Schema.md#shared-device-allocation). It requires one CUDA GPU and TP size 1. |
 | `sources`              | Allocation, device, transfer and runtime definitions that produced the record.                                                                                                                     |
 
-`deploy_hosts.py prepare` adds the record's `environment`, with GPU visibility and `UCX_NET_DEVICES`, and the TP argument: `--tensor-parallel-size` in `vllm_args` on vLLM, `--tp-size` in `sglang_args` on SGLang. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
+`deploy_hosts.py prepare` adds the record's `environment`, with GPU visibility and `UCX_NET_DEVICES`. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
 
 A CUDA engine with dedicated GPUs exports its own `gpu_ids` first, followed by the GPUs of the other such engines on its host. It runs on its own GPUs. A shared-device engine exports only its own GPU. Under the container backend, an engine that exports another engine's GPUs runs in the host PID namespace.
 

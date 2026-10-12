@@ -17,8 +17,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from narwhal.deployment.engine_launch import expose_colocated_gpus, load_launches
 from narwhal.deployment.launch_engine.backend import launcher
-from tools.deployment.engine_launch import expose_colocated_gpus, load_launches
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 

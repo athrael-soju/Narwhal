@@ -14,12 +14,12 @@ from ...deployment.launch_engine.docker import docker
 from ...deployment.launch_engine.plan import (
     container_options,
     env_file_name,
+    model_conv_state_layers,
     read_env,
     releases_peers,
     requires_remote_code,
 )
 from ...deployment.launch_engine.runtime import digest
-from .plan import requires_ds_conv_state_layout
 from .runtime import engine_arguments
 
 
@@ -40,7 +40,7 @@ def check(run: Path, plan: dict) -> None:
     ):
         raise ValueError("Model metadata requires --trust-remote-code in the launch record")
     environment = read_env(run / env_file_name(plan))
-    ds_required = requires_ds_conv_state_layout(Path(plan["model_dir"]))
+    ds_required = model_conv_state_layers(Path(plan["model_dir"]))
     if ds_required and environment.get("VLLM_SSM_CONV_STATE_LAYOUT") != "DS":
         raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
     if native:

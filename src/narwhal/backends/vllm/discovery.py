@@ -23,7 +23,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
     )
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
-    if observed.get("requires_ds_conv_state_layout"):
+    if observed.get("conv_state_layers"):
         if (
             "VLLM_SSM_CONV_STATE_LAYOUT" in overrides
             and overrides["VLLM_SSM_CONV_STATE_LAYOUT"] != "DS"
