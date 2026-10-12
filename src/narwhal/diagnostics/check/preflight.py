@@ -12,7 +12,7 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, client_options
-from ...runtime.role_switch import RoleSwitcher, engine_side, restore_roles
+from ...runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
 from ...types import Role
 from .engines import (
     colocated_restart_risk,
@@ -34,18 +34,12 @@ async def _live_roles(
 ) -> dict[str, tuple[Role, Mapping[str, Any] | None]]:
     specs = [spec for spec in cfg.engines if spec.iid in live]
     launches = await attested_launches(specs, timeout_s=cfg.health_timeout_s)
-    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
     async with httpx.AsyncClient(
         timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
     ) as control:
-        for spec in specs:
-            try:
-                role = await switcher.role(control, spec.url)
-            except (httpx.HTTPError, ValueError):
-                continue
-            if role is not None:
-                roles[spec.url] = (role, launches.get(spec.iid))
-    return roles
+        return await current_roles(
+            switcher, control, {spec.url: launches.get(spec.iid) for spec in specs}
+        )
 
 
 async def run(

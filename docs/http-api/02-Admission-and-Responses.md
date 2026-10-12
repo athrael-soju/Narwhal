@@ -14,6 +14,8 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | --- | :---: | --- | --- | --- |
 | The body is not valid JSON or not a JSON object, with `param` null, or a field the router reads has the wrong type, with `param` naming the field | `400` | `invalid_request_error` | `null` | |
 | On vLLM, `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`; `param` is `vllm_xargs` | `400` | `invalid_request_error` | `null` | |
+| On SGLang, the body sets `rid`, `bootstrap_host`, `bootstrap_port`, or `bootstrap_room`; `param` names the field | `400` | `invalid_request_error` | `null` | |
+| On SGLang, a `/v1/chat/completions` body sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | Unsupported non-streaming audio, modality, or tool request; `param` names the option | `400` | `invalid_request_error` | `null` | |
 | `n > 1` or `best_of > 1` | `400` | `invalid_request_error` | | |
 | Requested model differs from the configured model | `404` | `invalid_request_error` | `model_not_found` | |
@@ -126,4 +128,4 @@ When the decode request asks for token IDs, every event with text, reasoning, to
 
 The router reports `token_accounting: token_ids` on vLLM and SGLang.
 
-Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, a `/v1/chat/completions` request that sets `return_token_ids` fails with HTTP `502`, because the router streams the decode leg and SGLang refuses the field there.
+Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`, because it streams every decode leg and SGLang refuses the field on a streamed chat request.

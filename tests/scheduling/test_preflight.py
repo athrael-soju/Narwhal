@@ -100,6 +100,13 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("engines e0, e3, e9 share a host with a KV consumer without attested", risk)
         self.cfg.engine_restart_policy = "whole_wave"
         self.assertEqual(await engine_gates.colocated_restart_risk(self.cfg, attested), "")
+        self.cfg.engine_restart_policy = "individual"
+        released[8300] = False
+        self.assertIn(
+            "whole-wave restart", await engine_gates.colocated_restart_risk(self.cfg, attested)
+        )
+        self.cfg.backend, self.cfg.connector = "sglang", "mooncake"
+        self.assertEqual(await engine_gates.colocated_restart_risk(self.cfg, attested), "")
 
     async def test_reach_and_tokenize_account_for_unreachable_engines(self):
         client = SimpleNamespace(

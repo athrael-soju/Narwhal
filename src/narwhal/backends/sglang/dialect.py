@@ -37,6 +37,11 @@ class SglangDialect(EngineDialect):
     def token_id_fields(self) -> dict[str, Any]:
         return {"return_token_ids": True}
 
+    def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
+        if endpoint == "/v1/chat/completions":
+            return ("return_token_ids", "return_prompt_token_ids", "return_meta_info")
+        return ()
+
     def streams_token_ids(self, endpoint: str) -> bool:
         # SGLang rejects return_token_ids on streamed chat, where each chunk still carries one
         # token under the pinned --stream-interval 1.

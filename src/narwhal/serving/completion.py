@@ -60,7 +60,7 @@ def completion_body_error(
     for dotted in reserved:
         parent, _, key = dotted.partition(".")
         group = body.get(parent)
-        if isinstance(group, dict) and key in group:
+        if (not key and parent in body) or (isinstance(group, dict) and key in group):
             return f"{dotted} is reserved for Narwhal", parent
     if not stream:
         if body.get("audio") is not None:

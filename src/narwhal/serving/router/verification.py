@@ -166,9 +166,9 @@ class SuspectVerifier:
 
     def producers(self, iid: str, recorded: str) -> list[str]:
         """An empty ID stands for the standalone probe."""
-        if not recorded:
-            return [""]
         scheduler = self.router.scheduler
+        if not recorded and not scheduler.availability.roles_bound:
+            return [""]
         live = scheduler.role_pool(Role.PREFILL, scheduler.live_instances(exclude={iid}))
         order = [recorded] if any(inst.iid == recorded for inst in live) else []
         others = sorted(

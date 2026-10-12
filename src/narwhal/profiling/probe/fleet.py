@@ -274,6 +274,10 @@ async def run(
         )
         print("no matching instances", file=sys.stderr)
         return 2
+    if cfg.engine_contract is not None and (
+        missing := [spec.iid for spec in targets if not spec.attestation_url]
+    ):
+        raise ValueError(f"profile generation needs an attestation_url: {', '.join(missing)}")
     limits = (
         load_sequence_limits(limits_path, {engine.iid for engine in cfg.engines})
         if limits_path is not None
@@ -474,6 +478,13 @@ async def run(
                     "x" if len(evidence_rows) == 1 and not overwrite else "w", encoding="utf-8"
                 ) as output:
                     output.write(json.dumps(measurement_record, indent=2) + "\n")
+                if isinstance(exc, ValueError):
+                    # The inputs passed validation, so a measurement that fails here is not invalid
+                    # input.
+                    detail = str(exc)
+                    if not detail.startswith(f"{spec.iid}:"):
+                        detail = f"{spec.iid}: {detail}"
+                    raise RuntimeError(detail) from exc
                 raise
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence

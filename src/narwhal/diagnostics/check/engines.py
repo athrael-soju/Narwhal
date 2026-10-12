@@ -29,6 +29,9 @@ async def colocated_restart_risk(
     contract = cfg.engine_contract
     if cfg.engine_restart_policy != "individual" or contract is None or not contract.connector:
         return ""
+    if not load_backend(cfg.backend).fabric.release_after_s:
+        # No consumer keeps this backend's KV mapped past a handoff.
+        return ""
     hosts: dict[str, list[EngineSpec]] = {}
     for spec in cfg.engines:
         hosts.setdefault(urlsplit(spec.url).hostname or "", []).append(spec)

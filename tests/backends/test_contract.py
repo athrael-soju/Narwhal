@@ -15,6 +15,7 @@ from narwhal.engines.client import EngineClient, ProbeLeg
 from narwhal.engines.connector import KvConnector, PrefillResult, RendezvousConnector
 from narwhal.engines.stream import sse_token_bearing
 from narwhal.runtime.role_switch import RoleSwitcher
+from narwhal.serving.completion import completion_body_error
 from narwhal.types import Role
 from tests.backends.contract import fixtures
 from tools.measurement import simulated_engine as sim
@@ -79,6 +80,16 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(dialect.decode_probe_extras(3), dict)
         cold = dialect.cold_probe_extras(), dialect.cold_probe_extras()
         self.assertTrue(cold[0] != cold[1] or not cold[0])
+
+    def test_the_router_rejects_each_reserved_field(self):
+        for dotted in self.backend.dialect.reserved_fields:
+            parent, _, key = dotted.partition(".")
+            body = {"model": "m", "prompt": PROMPT, parent: {key: 1} if key else 1}
+            with self.subTest(field=dotted):
+                self.assertEqual(
+                    completion_body_error(body, self.backend.dialect.reserved_fields),
+                    (f"{dotted} is reserved for Narwhal", parent),
+                )
 
     async def test_health_and_tokenize_round_trip(self):
         engine = await self.engine()

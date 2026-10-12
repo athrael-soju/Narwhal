@@ -8,7 +8,7 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
-| `small-cuda-v1.json`, the default, for a GPU with 8 GB of VRAM or less | vLLM | 1 prefill, 1 decode | GGUF file |
+| `small-cuda-v1.json`, the default | vLLM | 1 prefill, 1 decode | GGUF file |
 | [`small-cuda-sglang-v1.json`](../Dev-Runtime.md#running-sglang-engines) | SGLang with Mooncake | 1 prefill, 1 decode | Checkpoint directory |
 | [`reference-v1.json`](../dev/RTX-5090-Reference.md), for an RTX 5090 | vLLM | 2 prefill, 2 decode | GGUF file |
 
@@ -60,7 +60,7 @@ In text mode, stdout carries the result as one JSON document, and stderr carries
 | `degraded`, or a failed `up`, `verify` or `down` | `1` |
 | A failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `init` | `2` |
 
-With `--format json`, the command prints a [versioned command result](../Command-Results.md), and the exit code follows its status. A `degraded` instance exits with code `3`.
+With `--format json`, the command prints a [versioned command result](../Command-Results.md), and the exit code follows its status. A `degraded` instance exits with code `3`, and a failed step or routed check during `up` or `verify` exits with code `4`.
 
 ## Options
 

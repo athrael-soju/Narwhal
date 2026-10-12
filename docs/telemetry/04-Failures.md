@@ -99,8 +99,7 @@ A vLLM engine held without a recorded producer, such as one held for `inference_
 On SGLang, every engine serves only its current role, so the probe pairs the held engine with a live peer in the other role:
 
 - A held prefill engine runs the prefill leg for the live decode engines in turn, starting with the one that has the fewest resident decode requests and then by engine ID order. When no decode engine is live, or every one has failed its leg, the probe is `inconclusive` with the reason `no_consumer`.
-- A held decode engine with a recorded producer tries that producer and then one other live prefill-role engine, chosen as on vLLM. With neither live, the probe is `inconclusive` with the reason `no_producer`. When every producer it tried has failed its leg, the engine stays held until the next probe.
-- A held decode engine without a recorded producer, such as one held for `inference_status` evidence alone, gets an `inconclusive` probe with the reason `no_producer` every time. Its hold lasts until the engine is ejected, drained or left uncovered.
+- A held decode engine tries its recorded producer while it is live, and then one other live prefill-role engine, chosen as on vLLM. A held decode engine without a recorded producer, such as one held for `inference_status` evidence alone, tries only that other engine. With no prefill-role engine live, the probe is `inconclusive` with the reason `no_producer`. When every producer it tried has failed its leg, the engine stays held until the next probe.
 
 A failed peer leg leaves the held engine untested, so the verifier records `producer_failed` or `consumer_failed` and moves to the next peer. A peer leg that waits out the router's control pool makes the probe `inconclusive`, and the verifier keeps the hold and tries again at the next probe.
 

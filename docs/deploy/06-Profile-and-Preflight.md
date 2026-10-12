@@ -163,7 +163,7 @@ calibration
   ok    first-token calibration reused for e1, e3: launch unchanged since capture; candidate 1.840s, deadline 2.5s
 ```
 
-Under `recovery.engine_restart_policy: individual`, preflight warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).
+Under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).
 
 ### Pace gate
 

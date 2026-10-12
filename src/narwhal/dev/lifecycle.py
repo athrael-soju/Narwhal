@@ -33,6 +33,10 @@ class LifecycleDocumentError(ValueError):
     pass
 
 
+class LifecycleOperationError(RuntimeError):
+    pass
+
+
 def read(path: Path) -> dict:
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
@@ -152,7 +156,7 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
         path = root / f"{log}.log"
         lines = path.read_text(errors="replace").strip().splitlines()
         detail = lines[-1] if lines else "empty subprocess output"
-        raise ValueError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
+        raise LifecycleOperationError(f"{log} exited {result.returncode}: {detail}; inspect {path}")
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
@@ -508,17 +512,17 @@ def verify(root: Path) -> dict:
                     try:
                         content = result["choices"][0]["message"]["content"]
                     except (KeyError, IndexError, TypeError) as exc:
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed completion requires choices[0].message.content as a string; "
                             f"inspect {completion}"
                         ) from exc
                     if not isinstance(content, str):
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed completion requires choices[0].message.content as a string; "
                             f"inspect {completion}"
                         )
                     if content.strip() != "5":
-                        raise ValueError(
+                        raise LifecycleOperationError(
                             "routed arithmetic canary expected 5; inspect completion.json"
                         )
                     for name, url in [

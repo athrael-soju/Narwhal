@@ -37,7 +37,7 @@ An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang 
 | `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and the cache-capture hook |
 | `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
-| `model-dimensions` | container | Checked plan on vLLM, prepared plan on SGLang | `model-dimensions.json`, read in the image on vLLM and from the model's `config.json` on SGLang |
+| `model-dimensions` | container | Checked plan | `model-dimensions.json`, read in the image on vLLM and from the model's `config.json` on SGLang |
 | `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
 | `start` | container | Checked plan | One serving container and `container.id` |
 | `capture-cache` | container, vLLM | Running container of a checked plan | `cache-layout.json` with the live cache pages |

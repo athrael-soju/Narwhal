@@ -287,6 +287,20 @@ class RoleBoundVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.router.scheduler.eject("e0", "test")
         self.assertEqual(self.verifier.producers("e3", "e0"), [""])
 
+    def test_a_decode_suspect_without_a_recorded_producer_takes_a_live_one(self):
+        self.assertEqual(self.verifier.producers("e3", ""), ["e0"])
+        self.router.scheduler.eject("e0", "test")
+        self.assertEqual(self.verifier.producers("e3", ""), [""])
+
+    async def test_a_decode_suspect_without_a_recorded_producer_is_probed(self):
+        probe = AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg()))
+        with patch.object(self.router.engines, "probe_inference", new=probe):
+            self.assertTrue(await self.verifier._verify_path("e3", "http://e3", ""))
+        self.assertEqual(
+            probe.await_args.kwargs["prefill_url"], self.router.monitor.instances["e0"].url
+        )
+        self.assertEqual(self.verifier.probes[("e3", "verify_inference", "passed")], 1)
+
     async def test_a_decode_suspect_without_a_producer_defers(self):
         self.router.scheduler.eject("e0", "test")
         probe = AsyncMock()

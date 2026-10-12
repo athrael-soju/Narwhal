@@ -124,19 +124,20 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis
 - a neighbour fails a request or completes zero requests during the target's measurement
-- on SGLang, `POST /pd_role_switch` fails, or `POST /flush_cache` fails or returns a status other than 200
+- a neighbour's input plus output exceeds the neighbour's context limit
+- the prefill fit exceeds 20% mean error or 50% worst-point error
+- an engine's attestation fails verification, or its process changes during its measurement
+- on SGLang, `POST /pd_role_switch` fails or the engine refuses the switch, or `POST /flush_cache` fails or returns a status other than 200
 
 It stops with exit code `2` when:
 
 - the arguments or the fleet configuration fail validation
 - `--only` matches zero configured engines
 - an output exists without `--overwrite`, or a refit or merge output exists
+- a fleet with `engine_contract` has a profiled engine without an attestation URL
 - an SGLang fleet uses a connector other than `mooncake`, has one engine, lacks an attestation URL, or sets `--colocated`
-- a `--colocated` target has no neighbour in its group, or a neighbour's input plus output exceeds the neighbour's context limit
+- a `--colocated` target has no neighbour in its group
 - an engine's context limit leaves fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
-- the prefill fit exceeds 20% mean error or 50% worst-point error
-- an engine's attestation fails verification, or its process changes during its measurement
-- an SGLang engine refuses a role switch
 - a refit or merge input fails its checks
 
 With `--format json`, the exit code follows the [command result](../Command-Results.md) status.

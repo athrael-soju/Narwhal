@@ -95,7 +95,7 @@ class SglangLauncher(EngineLauncher):
         raise _no_step("cache capture")
 
     def model_dimensions(self, run: Path, plan: dict) -> None:
-        attestation.model_dimensions(run, plan)
+        attestation.capture_model_dimensions(run)
 
     def handshake_policy(self, run: Path, plan: dict) -> None:
         raise ValueError("SGLang has no handshake compatibility policy to inspect")

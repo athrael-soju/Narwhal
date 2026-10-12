@@ -60,11 +60,11 @@ Options for first-token calibration:
 | `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines. |
 | `slo` | Each engine's profile meets the [SLO targets](#the-slo-gate). |
 
-Between `reach` and `calibration`, preflight warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
+Between `reach` and `calibration`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
 
 When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`, because a stalled transfer can stop a healthy peer's engine core.
 
-On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. With Mooncake, the peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and leaves them in the roles of its last step. With NIXL, roles stay fixed: `pace` times only engines that can produce, each beside the first live engine pinned to decode, and skips an engine without one.
+On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. With Mooncake, the peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and returns every engine to its starting role at the end, and a failed return prints `role restore failed` and exits with status 1. With NIXL, roles stay fixed: `pace` times only engines that can produce, each beside the first live engine pinned to decode, and skips an engine without one.
 
 ### KV transfer probes
 
@@ -95,7 +95,7 @@ Calibration measures how long fresh KV handoffs take to produce their first toke
 
 `--calibrate-first-token` needs `--input-tokens`, `--observation-timeout-s` and `--calibration-out`. Those options, and a `--samples` value other than 100, apply only to calibration. Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
 
-Calibration needs at least one directed pair that role pins permit and an engine tokenizer route that returns exact counts. It exits with status 0 when the artifact is `complete` and 1 otherwise.
+Calibration needs at least one directed pair that role pins permit and an engine tokenizer route that returns exact counts. It exits with status 0 when the artifact is `complete` and every switched engine returns to its starting role, and 1 otherwise.
 
 ### Sampling schedule
 
@@ -177,7 +177,7 @@ Text mode uses the [text-mode exit codes](../CLI-Reference.md#text-mode-exit-cod
 
 | Outcome | Exit code |
 | --- | :--: |
-| A failed gate, a failed evidence verification, or an incomplete calibration | `1` |
+| A failed gate, a failed evidence verification, an incomplete calibration, or a failed role restore | `1` |
 | A skipped gate with `--evidence-out` | `1` |
 | Invalid arguments | `2` |
 | A fleet config that fails to load or validate | `2` |

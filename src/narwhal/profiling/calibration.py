@@ -28,7 +28,8 @@ from ..engines.connector import RendezvousConnector
 from ..engines.dialect import EngineDialect
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
-from ..runtime.role_switch import RoleSwitcher, engine_side
+from ..runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
+from ..types import Role
 from .generation import read_generation
 from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
@@ -592,6 +593,8 @@ async def calibrate(
         iid: generation.process_start_time_seconds for iid, generation in started.items()
     }
     client = EngineClient(**client_options(cfg))
+    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
+    restore_error: str | None = None
     try:
         async with httpx.AsyncClient(
             timeout=observation_timeout_s, headers=cfg.engine_headers()
@@ -615,6 +618,10 @@ async def calibrate(
                 if switcher is not None or isinstance(client.kv, RendezvousConnector)
                 else {}
             )
+            if switcher is not None:
+                roles = await current_roles(
+                    switcher, sizing, {spec.url: launches.get(spec.iid) for spec in cfg.engines}
+                )
             lockstep = _Lockstep(
                 cfg,
                 client,
@@ -641,7 +648,17 @@ async def calibrate(
                             await lockstep.step(members, target, index, number)
                 first += len(rounds)
     finally:
-        await client.aclose()
+        try:
+            if switcher is not None and roles:
+                async with httpx.AsyncClient(
+                    timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                ) as control:
+                    await restore_roles(switcher, control, roles)
+        except (httpx.HTTPError, ValueError) as exc:
+            restore_error = f"{type(exc).__name__}: {exc}"
+            print(f"role restore failed: {restore_error}")
+        finally:
+            await client.aclose()
     rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     for src, dst, target in groups:
@@ -728,4 +745,4 @@ async def calibrate(
     for error in generation_errors:
         print(f"process generation check failed: {error}")
     print(f"duration {duration_s:.0f}s")
-    return 0 if complete else 1
+    return 0 if complete and restore_error is None else 1

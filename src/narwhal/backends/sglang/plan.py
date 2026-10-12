@@ -41,6 +41,7 @@ VALUE_OPTIONS = {
     "--max-mamba-cache-size",
     "--max-running-requests",
     "--mamba-radix-cache-strategy",
+    "--kv-events-config",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -117,9 +118,27 @@ def transfer_package(connector_name: str, packages: dict) -> str | None:
     return pinned[0] if len(pinned) == 1 and packages[pinned[0]] else None
 
 
-def publishes_kv_events(args: list[str]) -> bool:
-    # The radix cache is on unless disabled, and its events follow it.
+def radix_cache(args: list[str]) -> bool:
     return "--disable-radix-cache" not in args
+
+
+def publishes_kv_events(args: list[str]) -> bool:
+    # The radix cache publishes events unless --kv-events-config selects the null publisher.
+    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
+    if len(supplied) > 1:
+        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
+    if supplied:
+        try:
+            value = json.loads(supplied[0])
+        except ValueError:
+            value = None
+        if value != {"publisher": "null"}:
+            raise ValueError(
+                "runtime.extra_args --kv-events-config may only set "
+                '{"publisher": "null"}; the launcher selects event endpoints'
+            )
+        return False
+    return radix_cache(args)
 
 
 def serve_args(
@@ -189,7 +208,7 @@ def serve_args(
         # decode admission neither counts nor evicts its finished requests and stops admitting.
         *(
             ["--disaggregation-decode-enable-radix-cache"]
-            if switches and publishes_kv_events(extra)
+            if switches and radix_cache(extra)
             else []
         ),
         *(

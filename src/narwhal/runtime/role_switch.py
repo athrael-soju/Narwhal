@@ -71,6 +71,23 @@ def engine_side(switcher: RoleSwitcher | None) -> RoleSwitcher | None:
     return switcher if switcher is not None and switcher.requires_idle else None
 
 
+async def current_roles(
+    switcher: RoleSwitcher,
+    client: httpx.AsyncClient,
+    launches: Mapping[str, Mapping[str, Any] | None],
+) -> dict[str, tuple[Role, Mapping[str, Any] | None]]:
+    """The role each engine base in `launches` serves now; an unreadable role is left out."""
+    roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
+    for base, launch in launches.items():
+        try:
+            role = await switcher.role(client, base)
+        except (httpx.HTTPError, ValueError):
+            continue
+        if role is not None:
+            roles[base] = (role, launch)
+    return roles
+
+
 async def restore_roles(
     switcher: RoleSwitcher,
     client: httpx.AsyncClient,

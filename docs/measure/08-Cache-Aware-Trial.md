@@ -6,7 +6,7 @@ description: Compare SLO-qualified throughput between cold and cache-aware prefi
 
 The trial compares the throughput of requests that meet the service-level objectives (SLOs) between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices each engine that holds the request's prefix at its warm fit.
 
-The trial needs a vLLM fleet, and both arms run with prefix caching on. The baseline arm turns off cache events with `--kv-events-config`, which the SGLang launcher rejects in `runtime.extra_args`. SGLang publishes cache events whenever its radix cache is on.
+Both arms run with prefix caching on, and the baseline arm turns off cache events with `--kv-events-config`.
 
 ## Freezing the comparison
 
@@ -47,7 +47,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 
 ## Preparing each arm
 
-The baseline arm adds `["--kv-events-config", "{\"enable_kv_cache_events\": false}"]` to `runtime.extra_args`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
+The baseline arm adds the backend's [event setting](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `runtime.extra_args`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
 
 For each arm:
 

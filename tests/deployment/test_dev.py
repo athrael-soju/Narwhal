@@ -889,6 +889,11 @@ class DevTests(unittest.TestCase):
             patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(
+                    main(["dev", "verify", "--instance", str(self.root), "--format", "json"]), 4
+                )
+            self.assertEqual(json.loads(output.getvalue())["status"], "error")
             self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 1)
             state = lifecycle.read(self.root / "lifecycle.json")
             self.assertEqual(state["phase"], "degraded")

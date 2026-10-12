@@ -48,7 +48,7 @@ The router and `narwhal-check` read an SGLang engine's process start from `/v1/p
 
 ## Residency
 
-The residency routes give the router a bounded index of the prefix blocks held on the engine's GPU, built from the engine's cache events. A vLLM engine publishes events for its KV blocks while prefix caching is on, and the sidecar indexes those blocks. An SGLang engine publishes events for its radix cache unless `--disable-radix-cache` is set. Its launcher sets one-token pages, so the sidecar groups pages into blocks, each the shortest run of pages that holds 64 tokens, and reports a block resident while the block's last page is resident.
+The residency routes give the router a bounded index of the prefix blocks held on the engine's GPU, built from the engine's cache events. A vLLM engine publishes events for its KV blocks while prefix caching is on, and the sidecar indexes those blocks. An SGLang engine publishes events for its radix cache unless `--disable-radix-cache` is set. On either backend, the [event setting](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) in `runtime.extra_args` turns events off with prefix caching on. Its launcher sets one-token pages, so the sidecar groups pages into blocks, each the shortest run of pages that holds 64 tokens, and reports a block resident while the block's last page is resident.
 
 ### Snapshots and changes
 

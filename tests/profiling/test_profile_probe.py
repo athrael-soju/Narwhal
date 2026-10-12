@@ -1030,7 +1030,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(instance_probe, "probe_prefill", AsyncMock(return_value=bad)),
                 patch.object(instance_probe, "probe_decode", AsyncMock()) as decode,
                 redirect_stdout(io.StringIO()),
-                self.assertRaisesRegex(ValueError, "prefill median fit error"),
+                self.assertRaisesRegex(RuntimeError, "e0: .*prefill median fit error"),
             ):
                 await fleet_probe.run(cfg, {"e0"})
             decode.assert_not_awaited()
@@ -1059,7 +1059,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(fleet_probe, "read_generation", AsyncMock(side_effect=generations)),
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(
-                    ValueError, "e0: engine generation changed during profiling"
+                    RuntimeError, "^e0: engine generation changed during profiling"
                 ),
             ):
                 await fleet_probe.run(cfg, {"e0"})

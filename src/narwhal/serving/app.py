@@ -456,9 +456,16 @@ async def _completion_body(
         return error_response(413, "request_too_large", "request body exceeds max_request_bytes")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return _invalid_refusal(state, "the request body is not valid JSON", None)
-    problem = completion_body_error(raw, router.engines.dialect.reserved_fields)
+    dialect = router.engines.dialect
+    problem = completion_body_error(raw, dialect.reserved_fields)
     if problem is not None:
         return _invalid_refusal(state, *problem)
+    # Every decode leg streams, so a field the engine refuses on a stream fails the request.
+    for name in dialect.stream_refused_fields(request.url.path):
+        if raw.get(name):
+            return _invalid_refusal(
+                state, f"{name} is not supported on {request.url.path} by {dialect.name}", name
+            )
     return raw
 
 

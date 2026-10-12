@@ -8,10 +8,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
 import msgpack
+from starlette.requests import Request as HTTPRequest
 
 from narwhal.backends import load
 from narwhal.backends.sglang import attestation, check, discovery, plan, runtime
@@ -26,6 +28,7 @@ from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
 from narwhal.runtime.role_switch import restore_roles
+from narwhal.serving import app as app_module
 from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Phase, Request, Role
@@ -459,6 +462,19 @@ class LaunchTests(unittest.TestCase):
         self.assertIn("--enable-pd-role-switch", args)
         self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
 
+    def test_the_null_publisher_keeps_the_radix_cache_without_events(self):
+        null = ["--kv-events-config", '{"publisher": "null"}']
+        plan.validate_runtime(runtime_record(extra_args=null))
+        self.assertFalse(plan.publishes_kv_events(null))
+        self.assertTrue(plan.publishes_kv_events([]))
+        args, _ = serve(runtime_record(extra_args=null))
+        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
+        self.assertEqual(args.count("--kv-events-config"), 1)
+        self.assertEqual(json.loads(option(args, "--kv-events-config")), {"publisher": "null"})
+        for value in ('{"publisher": "zmq"}', "{}"):
+            with self.assertRaisesRegex(ValueError, "may only set"):
+                plan.publishes_kv_events(["--kv-events-config", value])
+
     def test_every_engine_launches_as_prefill_with_the_pins(self):
         events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
         args, transfer = serve(runtime_record(), tp=2, kv_events=events)
@@ -530,6 +546,16 @@ class LaunchTests(unittest.TestCase):
                 "model_architecture": "M",
             },
         )
+
+    def test_model_dimensions_need_a_checked_plan(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        run = Path(folder.name)
+        (run / "launch.json").write_text(json.dumps({"engine": "sglang"}))
+        (run / "checked.json").write_text(json.dumps({"plan_sha256": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "another serving plan"):
+            load("sglang").launcher().model_dimensions(run, {"engine": "sglang"})
+        self.assertFalse((run / "model-dimensions.json").exists())
 
 
 IMAGE = "registry.example/sglang@sha256:" + "a" * 64
@@ -970,3 +996,30 @@ class RouterRoleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(router.scheduler.held_for_switch(), set())
         router.scheduler.roles.planned_donor(Role.PREFILL, bypass_dwell=True, hold=True)
         self.assertEqual(len(router.scheduler.held_for_switch()), 1)
+
+
+class StreamRefusedFieldTests(unittest.IsolatedAsyncioTestCase):
+    async def body(self, path: str, payload: dict) -> object:
+        raw = json.dumps(payload).encode()
+
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+
+        scope = {"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""}
+        router = SimpleNamespace(
+            cfg=SimpleNamespace(serving=SimpleNamespace(max_request_bytes=1 << 20)),
+            engines=SimpleNamespace(dialect=load("sglang").dialect),
+        )
+        return await app_module._completion_body(router, HTTPRequest(scope, receive))
+
+    async def test_chat_refuses_fields_sglang_rejects_on_a_stream(self):
+        for name in ("return_token_ids", "return_prompt_token_ids", "return_meta_info"):
+            with self.subTest(field=name):
+                response = await self.body("/v1/chat/completions", {"messages": [], name: True})
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    json.loads(response.body)["error"]["message"],
+                    f"{name} is not supported on /v1/chat/completions by sglang",
+                )
+        payload = {"prompt": "x", "return_token_ids": True}
+        self.assertEqual(await self.body("/v1/completions", payload), payload)

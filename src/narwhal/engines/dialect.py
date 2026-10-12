@@ -35,6 +35,10 @@ class EngineDialect(ABC):
     @abstractmethod
     def token_id_fields(self) -> dict[str, Any]: ...
 
+    def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
+        """Client fields the engine refuses on a streamed request to `endpoint`."""
+        return ()
+
     def streams_token_ids(self, endpoint: str) -> bool:
         return self.token_ids
 

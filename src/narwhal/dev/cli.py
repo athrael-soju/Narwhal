@@ -195,7 +195,13 @@ def _main(argv: list[str]) -> int:
             else "read instance input"
         )
         return failure("narwhal", f"{context}: {input_operation}", exc, 2)
-    except (OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        lifecycle.LifecycleOperationError,
+        httpx.HTTPError,
+        subprocess.SubprocessError,
+    ) as exc:
         if results.json_mode():
             raise
         return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
