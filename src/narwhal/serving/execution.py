@@ -170,7 +170,7 @@ async def _place(
         finally:
             state.waited("prefill" if prefill else "decode", router._clock() - began)
     exclude = set(failed)
-    if not prefill and isinstance(router.engines.kv, RendezvousConnector):
+    if not prefill:
         exclude |= _seated_decode_engines(router, req, exclude)
     try:
         inst = router.scheduler.schedule(req, exclude=exclude)
@@ -183,11 +183,13 @@ async def _place(
 
 
 def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set[str]) -> set[str]:
-    """A rendezvous producer holds its prefill until the consumer admits the decode leg, so a leg
-    placed on a full engine waits on both engines. The leg skips full engines while one has a
-    free seat, and otherwise goes to the engine whose seat is projected to free first.
+    """A leg placed on a full engine waits there for a seat, and a rendezvous producer holds its
+    prefill until then. The leg skips full engines while one has a free seat, and otherwise goes
+    to the engine whose seat is projected to free first.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
+    if not pool:
+        return set()
     seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}
     full = {inst.iid for inst in pool if seats[inst.iid] and len(inst.decode) >= seats[inst.iid]}
     if len(full) < len(pool):

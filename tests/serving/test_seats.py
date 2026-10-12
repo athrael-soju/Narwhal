@@ -113,6 +113,29 @@ class SeatHttpTests(HttpHarness):
         self.assertIn('narwhal_engine_seats{iid="e3",phase="decode"} 5', text)
         self.assertIn(f'narwhal_engine_seats{{iid="e0",phase="prefill"}} {prefill}', text)
 
+    async def test_a_decode_leg_skips_an_engine_without_a_free_seat(self):
+        self.cfg = fleet(self.root, engines=("e0", "e3", "e4"))
+        self.cfg.tokenize = False
+        self.cfg.admission = "open"
+        hosts = []
+        serve = self.engine
+
+        async def engine(request):
+            hosts.append(request.url.host)
+            return await serve(request)
+
+        self.engine = engine
+        client = self.client()
+        self.router.attested("e3", launch("--max-num-seqs", "1"))
+        self.router.attested("e4", launch("--max-num-seqs", "8"))
+        # e3 holds fewer requests, but its one seat is taken.
+        for iid, rid in (("e3", "d0"), ("e4", "d1"), ("e4", "d2")):
+            self.router.monitor.dispatched(
+                iid, Request(rid, 10, phase=Phase.DECODE, wanted_len=2_000)
+            )
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assertEqual(hosts, ["engine-0.invalid", "engine-4.invalid"])
+
     async def test_a_queued_request_waits_for_a_free_prefill_seat(self):
         self.cfg.serving = ServingPolicy(queue_capacity=2, queue_timeout_s=0.05)
         # The original deadline bounds a prefill-seat wait.

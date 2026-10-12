@@ -66,7 +66,7 @@ For rising client errors:
 - If HTTP 504 responses increase, separate queue and request expiry from engine timeouts with the response error and terminal journal row.
 - If a stream ends with an error frame after the HTTP 200 response starts, inspect the failed attempts, final outcome, and participating engines.
 
-If the lifecycle state is `blocked`, repair the failed drain identity capture or readmission check, and retry that operation.
+If the lifecycle state is `blocked`, repair the failed drain identity capture or readmission check. Retry that operation.
 
 Procedures by path:
 
@@ -94,7 +94,7 @@ Procedures by path:
 
 ## Fleet overload with healthy engines
 
-Use this procedure when HTTP 429, 503, or 504 responses rise while engines pass health checks. If the router has ejected or held engines, follow [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md) first.
+Use this procedure when HTTP 429, 503, or 504 responses rise while engines pass health checks. If the router ejects or holds engines, follow [Engine and whole-wave recovery](troubleshoot/01-Engine-Recovery.md) first.
 
 ### Classify outcomes by reason
 
@@ -157,7 +157,7 @@ Check: read `admission_price` on the refused journal rows. Its parts are `backlo
 
 | `cause`              | Cause                                                                                                                                                                                                                         | Action                                                                                                                                                                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `queue`              | Prefill work resident on the cheapest prefill engine, `backlog_s`, the time the request already waited, `elapsed_s`, and the wait for the first decode token after prefill, `handoff_s`, push `price_s` past the TTFT budget. | Reduce the offered rate. Add prefill capacity when `backlog_s` dominates, or decode capacity when `handoff_s` dominates. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
+| `queue`              | The sum of `backlog_s`, `elapsed_s`, and `handoff_s` pushes `price_s` past the TTFT budget. `backlog_s` is the prefill work resident on the cheapest prefill engine. `elapsed_s` is the time the request already waited. `handoff_s` is the wait for the first decode token after prefill. | Reduce the offered rate. Add prefill capacity when `backlog_s` dominates, or decode capacity when `handoff_s` dominates. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
 | `prompt`             | The prompt's own prefill, `own_prefill_s`, exceeds the TTFT budget.                                                                                                                                                           | Shorten the prompt, or raise `slo.ttft_s`. Draining the prefill backlog does not clear this cause.                                                                                                                  |
 | `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work.                                                                                                                                                | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#role-floors).      |
 
@@ -185,7 +185,7 @@ Raising `serving.queue_timeout_s` lengthens waits without adding seats.
 
 Check: `narwhal_waiting_decode` stays above `0`, and the expired rows' `queue_waits.decode` approaches the producer's `narwhal_handoff_bound_seconds`.
 
-Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks, so the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so requests reach no handoff expiry.
+Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks. When the lease expires, the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so requests reach no handoff expiry.
 
 Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, as in the default of `2`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
 
@@ -199,7 +199,7 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 | `engine_timeout`    | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
 | `local_pool`        | A wait for a router data connection to the engine reached `engine.pool_timeout_s`.         |
 
-Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats. On SGLang, a decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat.
+Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places prefill legs without checking seats, and an engine queues requests above its seats. A decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat.
 
 Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 
@@ -212,7 +212,10 @@ Action: reduce the offered rate, or add capacity. In `open` mode, compare a run 
 
 Before you change an admission, queue, retry or in-flight setting, read [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value.
 
-The class is resolved when the counter series that identified it stops increasing at the offered rate, and the journal shows no new terminal rows with that reason.
+Treat the class as resolved when both of these hold:
+
+- The counter series that identified it stops increasing at the offered rate.
+- The journal shows no new terminal rows with that reason.
 
 The load-test router outcome ratio divides router completions by admitted requests. [Deployment attainment](measure/04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal) divides the client completions that meet the service-level objective by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
 

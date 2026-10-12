@@ -74,7 +74,7 @@ class SeatedDecodeTests(unittest.TestCase):
     def skipped(self, exclude=frozenset()):
         return execution._seated_decode_engines(self.router, self.request, set(exclude))
 
-    def test_a_rendezvous_decode_leg_skips_engines_without_a_free_seat(self):
+    def test_a_decode_leg_skips_engines_without_a_free_seat(self):
         self.resident("d1", "r1", 100)
         self.resident("d1", "r2", 100)
         self.assertEqual(self.skipped(), {"d1"})
