@@ -423,7 +423,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | Larger of the engine's mean token interval and its longest open inter-token gap                                                                               |
+| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
@@ -500,6 +500,8 @@ max over waiting decode requests and requests in prefill:
 The split's slot count is its decode engine count times the live mean slot count per decode engine.
 
 A request at or past its TTFT deadline when it reaches decode contributes zero.
+
+The ratio is at least the measured [handoff delay](../telemetry/01-Journal.md#admission-price) times the current decode engine count, divided by the split's decode engine count and by `slo.ttft_s`.
 
 Adjacent-split decisions use these spans:
 

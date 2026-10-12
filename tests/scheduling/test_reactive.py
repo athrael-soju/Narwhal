@@ -709,6 +709,24 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(shrink_decode.decode_queue_ratio, expand_decode.decode_queue_ratio)
         self.assertEqual(shrink_decode.pending_decode_requests, 100)
 
+    def test_a_measured_handoff_delay_is_decode_pressure_scaled_by_decode_count(self) -> None:
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.monitor.instances["e2"].role = Role.PREFILL
+        engines = len(fleet.monitor.instances)
+        decode = len(fleet.monitor.pool(Role.DECODE))
+        with patch.object(fleet.scheduler, "handoff_s", return_value=fleet.scheduler.slo.ttft_s):
+            snapshot = fleet.controller.scorer.capture(
+                fleet.now,
+                Demand(0.1, 0.1, 30, 0),
+                utilization=0.8,
+                observed_load=(0.1, 0.1),
+            )
+        for prefill in (1, 2, 3):
+            self.assertAlmostEqual(
+                snapshot.score(prefill).decode_queue_ratio, decode / (engines - prefill)
+            )
+
     def test_idle_candidate_decoder_does_not_create_fractional_batch(self) -> None:
         fleet = self.fleet
         fleet.monitor.instances["e1"].role = Role.PREFILL

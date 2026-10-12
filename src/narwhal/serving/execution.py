@@ -216,6 +216,7 @@ def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:
     elapsed = max(0.0, router._clock() - state.arrived)
     profile = router.profiles.get(prefill.iid)
     own = prefill_seconds(profile, req) if profile is not None else None
+    handoff = router.scheduler.handoff_s()
     finite = math.isfinite(placement)
     state.admission_price = {
         "attempt": state.attempts + 1,
@@ -223,9 +224,10 @@ def _price_admission(state: RequestLifecycle, prefill: Instance) -> float:
         "backlog_s": placement - own if finite and own is not None else None,
         "own_prefill_s": own,
         "elapsed_s": elapsed,
-        "price_s": placement + elapsed if finite else None,
+        "handoff_s": handoff,
+        "price_s": placement + elapsed + handoff if finite else None,
     }
-    return placement + elapsed
+    return placement + elapsed + handoff
 
 
 def _check_ttft(state: RequestLifecycle, priced: float) -> None:

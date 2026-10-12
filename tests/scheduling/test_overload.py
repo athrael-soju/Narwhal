@@ -52,6 +52,23 @@ class PinnedPlacementTests(unittest.TestCase):
                 residuals = {call.args[0]: call.args[1] for call in note.call_args_list}
                 self.assertAlmostEqual(residuals["e3"], residual)
 
+    def test_decode_load_counts_an_open_gap_only_without_output(self):
+        scheduler = self.router(pinned=False).scheduler
+        monitor = scheduler.monitor
+        monitor.dispatched("e3", Request("r", 10, phase=Phase.DECODE))
+        inst = monitor.instances["e3"]
+        gap = scheduler.slo.tpot_s * 20
+        loads = {}
+        for current in (scheduler.slo.tpot_s / 2, 0.0):
+            with (
+                patch.object(monitor, "mean_token_interval", return_value=scheduler.slo.tpot_s / 2),
+                patch.object(monitor, "current_token_interval", return_value=current),
+                patch.object(monitor, "stalled_gap", return_value=gap),
+            ):
+                loads[current] = scheduler.decode_load(inst)
+        self.assertLess(loads[scheduler.slo.tpot_s / 2], 1.0)
+        self.assertGreater(loads[0.0], 10.0)
+
     def test_unpinned_fleets_fall_back_to_the_other_role(self):
         router = self.router(pinned=False)
         router.scheduler.eject("e3", "liveness")

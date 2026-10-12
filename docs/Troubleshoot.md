@@ -119,17 +119,17 @@ Each output line counts one combination of terminal state, reason, HTTP status, 
 
 Match the largest counts to a class:
 
-| Counter and label | Journal `terminal` | Client response | Class |
-| --- | --- | --- | --- |
-| `narwhal_rejected_total{reason="inflight_limit"}` | `rejected` | HTTP 429, message `router in-flight limit reached` | [In-flight limit](#in-flight-limit-rejections) |
-| `narwhal_rejected_total{reason="saturated"}` | `rejected` | HTTP 429, message starting `router saturated` | [Router saturation](#router-saturation-rejections) |
-| `narwhal_rejected_total{reason="not_ready"}` | `rejected` | HTTP 503 `standby` or `backend_unavailable` | Router readiness, not overload. Read `readiness_reason` and follow [Router, admission, and lifecycle signals](#router-admission-and-lifecycle-signals). |
-| `narwhal_refused_total{cause="queue"}` or `{cause="prompt"}` | `refused` | HTTP 429 | [TTFT refusals](#ttft-refusals) |
-| `narwhal_refused_total{cause="aggregate_unpriced"}` | `refused` | HTTP 429 | [TTFT refusals](#ttft-refusals) |
-| `narwhal_refused_total{cause="slot_wait"}`, `{cause="kv_capacity"}`, or `{cause="tpot"}` | `refused` | HTTP 429 | [Decode capacity refusals](#decode-capacity-refusals) |
-| `narwhal_expired_total{reason="queue_timeout"}` or `{reason="deadline"}` | `expired` | HTTP 504 | [Wait and deadline expiries](#wait-and-deadline-expiries) |
-| `narwhal_expired_total{reason="handoff"}` | `expired` | HTTP 504 `handoff_expired` | [KV handoff expiries](#kv-handoff-expiries) |
-| `narwhal_failed_total{reason="engine_overloaded"}`, `{reason="engine_timeout"}`, or `{reason="local_pool"}` | `failed` | HTTP 502 or 504 | [Engine-side overload](#engine-side-overload) |
+| Counter and label                                                                                           | Journal `terminal` | Client response                                    | Class                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `narwhal_rejected_total{reason="inflight_limit"}`                                                           | `rejected`         | HTTP 429, message `router in-flight limit reached` | [In-flight limit](#in-flight-limit-rejections)                                                                                                          |
+| `narwhal_rejected_total{reason="saturated"}`                                                                | `rejected`         | HTTP 429, message starting `router saturated`      | [Router saturation](#router-saturation-rejections)                                                                                                      |
+| `narwhal_rejected_total{reason="not_ready"}`                                                                | `rejected`         | HTTP 503 `standby` or `backend_unavailable`        | Router readiness, not overload. Read `readiness_reason` and follow [Router, admission, and lifecycle signals](#router-admission-and-lifecycle-signals). |
+| `narwhal_refused_total{cause="queue"}` or `{cause="prompt"}`                                                | `refused`          | HTTP 429                                           | [TTFT refusals](#ttft-refusals)                                                                                                                         |
+| `narwhal_refused_total{cause="aggregate_unpriced"}`                                                         | `refused`          | HTTP 429                                           | [TTFT refusals](#ttft-refusals)                                                                                                                         |
+| `narwhal_refused_total{cause="slot_wait"}`, `{cause="kv_capacity"}`, or `{cause="tpot"}`                    | `refused`          | HTTP 429                                           | [Decode capacity refusals](#decode-capacity-refusals)                                                                                                   |
+| `narwhal_expired_total{reason="queue_timeout"}` or `{reason="deadline"}`                                    | `expired`          | HTTP 504                                           | [Wait and deadline expiries](#wait-and-deadline-expiries)                                                                                               |
+| `narwhal_expired_total{reason="handoff"}`                                                                   | `expired`          | HTTP 504 `handoff_expired`                         | [KV handoff expiries](#kv-handoff-expiries)                                                                                                             |
+| `narwhal_failed_total{reason="engine_overloaded"}`, `{reason="engine_timeout"}`, or `{reason="local_pool"}` | `failed`           | HTTP 502 or 504                                    | [Engine-side overload](#engine-side-overload)                                                                                                           |
 
 [Admission and refusal semantics](http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [Engine failure handling](http-api/03-Backend-and-Failures.md#engine-failure-handling) list the status, error type, and code of each response.
 
@@ -153,13 +153,13 @@ Action: for loop lag, inspect CPU load on the router host and `rate(narwhal_even
 
 #### TTFT refusals
 
-Check: read `admission_price` on the refused journal rows. Its parts are `backlog_s`, `own_prefill_s`, and `elapsed_s`, and `price_s` is their sum. The [admission price](telemetry/01-Journal.md#admission-price) section defines each part.
+Check: read `admission_price` on the refused journal rows. Its parts are `backlog_s`, `own_prefill_s`, `elapsed_s`, and `handoff_s`, and `price_s` is their sum. The [admission price](telemetry/01-Journal.md#admission-price) section defines each part.
 
-| `cause` | Cause | Action |
-| --- | --- | --- |
-| `queue` | Prefill work resident on the cheapest prefill engine, `backlog_s`, plus the time the request already waited, `elapsed_s`, pushes `price_s` past the TTFT budget. | Reduce the offered rate, or add prefill capacity. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
-| `prompt` | The prompt's own prefill, `own_prefill_s`, exceeds the TTFT budget. | Shorten the prompt, or raise `slo.ttft_s`. Draining the prefill backlog does not clear this cause. |
-| `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work. | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#role-floors). |
+| `cause`              | Cause                                                                                                                                                                                                                         | Action                                                                                                                                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue`              | Prefill work resident on the cheapest prefill engine, `backlog_s`, the time the request already waited, `elapsed_s`, and the wait for the first decode token after prefill, `handoff_s`, push `price_s` past the TTFT budget. | Reduce the offered rate. Add prefill capacity when `backlog_s` dominates, or decode capacity when `handoff_s` dominates. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
+| `prompt`             | The prompt's own prefill, `own_prefill_s`, exceeds the TTFT budget.                                                                                                                                                           | Shorten the prompt, or raise `slo.ttft_s`. Draining the prefill backlog does not clear this cause.                                                                                                                  |
+| `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work.                                                                                                                                                | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#role-floors).      |
 
 #### Decode capacity refusals
 
@@ -173,11 +173,11 @@ Action: reduce the offered rate, or add decode capacity.
 
 Check: read `queue_waits` on the expired journal rows, and `narwhal_queue_wait_seconds` by `stage`.
 
-| `reason` | Stage with the longest wait | Cause | Action |
-| --- | --- | --- | --- |
-| `queue_timeout` | `admission` | Every admission seat stayed held for `serving.queue_timeout_s`. | Treat as [in-flight limit](#in-flight-limit-rejections) pressure. |
-| `queue_timeout` | `prefill` | Every prefill engine's [seats](configuration/02-Serving-and-Role-Control.md#engine-seats) stayed full for the rest of `serving.queue_timeout_s`. | Reduce the offered rate, or add prefill capacity. |
-| `deadline` | any | The request reached `serving.request_timeout_s`. | Compare `queue_waits`, `ttft_s`, and `upstream_seconds` to find the stage that used the time. |
+| `reason`        | Stage with the longest wait | Cause                                                                                                                                            | Action                                                                                        |
+| --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `queue_timeout` | `admission`                 | Every admission seat stayed held for `serving.queue_timeout_s`.                                                                                  | Treat as [in-flight limit](#in-flight-limit-rejections) pressure.                             |
+| `queue_timeout` | `prefill`                   | Every prefill engine's [seats](configuration/02-Serving-and-Role-Control.md#engine-seats) stayed full for the rest of `serving.queue_timeout_s`. | Reduce the offered rate, or add prefill capacity.                                             |
+| `deadline`      | any                         | The request reached `serving.request_timeout_s`.                                                                                                 | Compare `queue_waits`, `ttft_s`, and `upstream_seconds` to find the stage that used the time. |
 
 Raising `serving.queue_timeout_s` lengthens waits without adding seats.
 
@@ -193,11 +193,11 @@ Action: reduce the offered rate, or add decode capacity. With `serving.max_attem
 
 Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each journal row's `attempt_failures`. Each entry's `retry_reason` records why the router retried the attempt or ended the request. `shared_budget` with a rising `narwhal_retry_denied_total` means the retry credits ran out.
 
-| `reason` | Meaning |
-| --- | --- |
-| `engine_overloaded` | The engine returned HTTP 408 or 429. |
-| `engine_timeout` | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
-| `local_pool` | A wait for a router data connection to the engine reached `engine.pool_timeout_s`. |
+| `reason`            | Meaning                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `engine_overloaded` | The engine returned HTTP 408 or 429.                                                       |
+| `engine_timeout`    | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
+| `local_pool`        | A wait for a router data connection to the engine reached `engine.pool_timeout_s`.         |
 
 Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places requests without checking seats, and an engine queues requests above its seats. On SGLang, a decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat.
 

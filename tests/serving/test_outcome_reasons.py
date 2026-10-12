@@ -354,10 +354,20 @@ class OutcomeReasonTests(HttpHarness):
                 self.assertEqual(price["attempt"], 1)
                 self.assertGreater(price["own_prefill_s"], 0.0)
                 self.assertGreaterEqual(price["backlog_s"], 0.0)
+                self.assertEqual(price["handoff_s"], 0.0)
                 self.assertAlmostEqual(
                     price["price_s"],
-                    price["backlog_s"] + price["own_prefill_s"] + price["elapsed_s"],
+                    price["backlog_s"]
+                    + price["own_prefill_s"]
+                    + price["elapsed_s"]
+                    + price["handoff_s"],
                 )
+        handoff = self.cfg.slo.ttft_s * 2
+        with patch.object(self.router.scheduler, "handoff_s", return_value=handoff):
+            self.assertEqual((await self.post(client)).status_code, 429)
+        price = self.terminal_rows()[-1]["admission_price"]
+        self.assertEqual(price["handoff_s"], handoff)
+        self.assertGreater(price["price_s"], handoff)
         with patch.object(
             self.router.scheduler, "prefill_admission_price", return_value=float("inf")
         ):

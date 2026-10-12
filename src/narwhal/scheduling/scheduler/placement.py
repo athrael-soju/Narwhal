@@ -217,6 +217,10 @@ class GlobalScheduler:
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
         return costs.meets_slo(request, cost, slo=self.slo, ttft_margin=ttft_margin)
 
+    def handoff_s(self) -> float:
+        delays = [self.monitor.handoff_delay(inst.iid) for inst in self.monitor.pool(Role.DECODE)]
+        return sum(delays) / len(delays) if delays else 0.0
+
     def prefill_load(self, inst: Instance) -> float:
         return costs.prefill_load(inst, monitor=self.monitor, profiles=self.profiles, slo=self.slo)
 

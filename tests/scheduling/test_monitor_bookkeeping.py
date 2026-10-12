@@ -114,6 +114,31 @@ class MonitorMathTests(unittest.TestCase):
         self.monitor.finished("d0", "a")
         self.assertEqual(self.monitor.stalled_gap("d0"), 0.0)
 
+    def test_handoff_delay_is_the_first_decode_gap_of_the_latest_interval(self):
+        self.decode("a", 1000)
+        self.decode("b", 1000)
+        self.clock.now = 0.4
+        self.monitor.output_token("d0", "a")
+        self.clock.now = 0.8
+        self.monitor.output_token("d0", "b")
+        self.monitor.output_token("d0", "a")
+        self.assertEqual(self.monitor.handoff_delay("d0"), 0.0)
+        self.monitor.roll_interval()
+        self.assertAlmostEqual(self.monitor.handoff_delay("d0"), 0.6)
+        self.monitor.roll_interval()
+        self.assertEqual(self.monitor.handoff_delay("d0"), 0.0)
+
+    def test_a_first_token_before_prefill_completion_adds_no_handoff(self):
+        request = Request("a", 1000)
+        self.monitor.dispatched("p0", request)
+        request.phase = Phase.DECODE
+        self.monitor.dispatched("d0", request)
+        self.clock.now = 0.3
+        self.monitor.output_token("d0", "a")
+        self.monitor.first_token("p0", "a")
+        self.monitor.roll_interval()
+        self.assertEqual(self.monitor.handoff_delay("d0"), 0.0)
+
     def tokens(self, rid: str, count: int, *, start: float, gap: float) -> None:
         """Emit `count` d0 tokens for `rid`, `gap` seconds apart from `start`."""
         for step in range(count):
