@@ -7,12 +7,13 @@ import re
 import stat
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .backend import EngineLauncher, launcher, plan_launcher
 from .runtime import code_digest, digest, write_private
+from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
@@ -112,10 +113,23 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
     return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
 
 
+def publishes_kv_events(engine: EngineLauncher, runtime: dict) -> bool:
+    # Publication needs prefix caching, and a launch can turn it off with prefix caching on.
+    return (
+        engine.publishes_kv_events(runtime.get("extra_args", []))
+        and switch(runtime, engine.launch_settings, "prefix_caching")
+        and runtime.get("kv_events") is not False
+    )
+
+
+def side_channel_port(engine: EngineLauncher, env: Mapping[str, str]) -> int:
+    return int(env.get(KV_SIDE_CHANNEL_PORT_ENV) or env[engine.side_channel_port_env])
+
+
 def kv_events_policy(
-    engine: EngineLauncher, args: list[str], socket_dir: Path, engine_dir: str
+    engine: EngineLauncher, runtime: dict, socket_dir: Path, engine_dir: str
 ) -> dict | None:
-    if not engine.publishes_kv_events(args):
+    if not publishes_kv_events(engine, runtime):
         return None
     for name in KV_EVENTS_SOCKETS.values():
         if len(str(socket_dir / name).encode()) > MAX_SOCKET_PATH_BYTES:
@@ -248,7 +262,7 @@ def build(
     ):
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
-    side_port = int(env[engine.side_channel_port_env])
+    side_port = side_channel_port(engine, env)
     attest_port = int(env["NARWHAL_ATTEST_PORT"])
     if (
         any(not 1 <= p <= 65535 for p in (port, side_port, attest_port))
@@ -308,7 +322,7 @@ def build(
     socket_dir = KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
     kv_events = kv_events_policy(
         engine,
-        runtime.get("extra_args", []),
+        runtime,
         socket_dir,
         KV_EVENTS_MOUNT if backend == "container" else str(socket_dir),
     )

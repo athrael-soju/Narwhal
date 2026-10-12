@@ -35,12 +35,10 @@
         "model_dtype": "bfloat16",
         "kv_cache_dtype": "auto",
         "block_size": 128,
+        "context_length": 16384,
+        "max_sequences": 8,
         "environment": {},
         "extra_args": [
-          "--max-model-len",
-          "16384",
-          "--max-num-seqs",
-          "8",
           "--gpu-memory-utilization",
           "0.9",
           "--enforce-eager"

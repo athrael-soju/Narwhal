@@ -72,7 +72,7 @@ Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--
 | `--prefill URL`         | required                 | Base URL of an idle engine serving the prefill role.                                                            |
 | `--decode URL`          | required                 | Base URL of another idle engine of the same cache group.                                                        |
 | `--bootstrap-host HOST` | required                 | Address of the prefill engine's bootstrap server.                                                               |
-| `--bootstrap-port PORT` | required                 | The prefill engine's `NARWHAL_SGLANG_BOOTSTRAP_PORT`.                                                           |
+| `--bootstrap-port PORT` | required                 | The prefill engine's KV side-channel port.                                                                      |
 | `--model NAME`          | required                 | Served model name.                                                                                              |
 | `--launch-config PATH`  | required                 | Launch record whose `runtime.decode_cuda_graph_memory_gb` sizes the decode switch when the engine reports none. |
 | `--prompt-tokens N`     | required                 | Prompt length of each handoff, the same as the budget's `--prompt-tokens`.                                      |

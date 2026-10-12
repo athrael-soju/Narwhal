@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import re
 
@@ -10,6 +9,8 @@ from ...deployment.launch_engine.plan import (
     check_versions_and_dtype,
     option,
 )
+from ...deployment.launch_engine.settings import LaunchSettings, Setting, check_settings, switch
+from ...deployment.launch_engine.settings import serve_args as render
 
 CONNECTORS = ("mooncake",)
 # Engines on these transfer backends switch roles at runtime.
@@ -61,6 +62,26 @@ MANAGED_ENV = {
     "NARWHAL_SGLANG_API_KEY",
 }
 ENV_PREFIXES = ("SGLANG_", "MOONCAKE_", "MC_", "UCX_", "NIXL_", "NCCL_", "PYTORCH_", "SAFETENSORS_")
+SETTINGS = LaunchSettings(
+    entrypoint=("-m", "launch_engine", "serve"),
+    model_flag="--model-path",
+    tensor_parallel_flag="--tp-size",
+    kv_events_flag="--kv-events-config",
+    kv_events_fields={},
+    settings={
+        "block_size": Setting(flag="--page-size", fixed=PAGE_SIZE),
+        "max_sequences": Setting(
+            flag="--max-running-requests",
+            default=MAX_RUNNING_REQUESTS,
+            maximum=MAX_RUNNING_REQUESTS,
+        ),
+        "context_length": Setting(flag="--context-length"),
+        "tokenizer": Setting(flag="--tokenizer-path"),
+        "prefix_caching": Setting(off=("--disable-radix-cache",), default=True),
+        # Without --kv-events-config the engine publishes no cache events.
+        "kv_events": Setting(default=True),
+    },
+)
 
 
 def connector(runtime: dict) -> str:
@@ -99,6 +120,7 @@ def validate_runtime(runtime: dict) -> None:
             raise ValueError(
                 f"--max-running-requests must be set once, from 1 to {MAX_RUNNING_REQUESTS}"
             )
+    check_settings(runtime, SETTINGS)
     check_environment(runtime.get("environment", {}), MANAGED_ENV, ENV_PREFIXES)
 
 
@@ -130,11 +152,6 @@ def serve_args(
     kv_events: dict | None,
 ) -> tuple[list[str], dict]:
     runtime = record["runtime"]
-    extra = list(runtime.get("extra_args", []))
-    cap = option(extra, "--max-running-requests") or str(MAX_RUNNING_REQUESTS)
-    if "--max-running-requests" in extra:
-        index = extra.index("--max-running-requests")
-        del extra[index : index + 2]
     name = connector(runtime)
     # Every engine starts as prefill and the router switches decode engines at admission:
     # an engine launched as decode fails after a decode-prefill-decode round trip.
@@ -145,58 +162,43 @@ def serve_args(
         "role_switch": True,
         "decode_cuda_graph_memory_gb": float(runtime["decode_cuda_graph_memory_gb"]),
     }
-    args = [
-        "-m",
-        "launch_engine",
-        "serve",
-        "--model-path",
-        model,
-        "--served-model-name",
-        served_name,
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--tp-size",
-        str(record["tensor_parallel_size"]),
-        "--dtype",
-        runtime["model_dtype"],
-        "--kv-cache-dtype",
-        runtime["kv_cache_dtype"],
-        "--page-size",
-        str(PAGE_SIZE),
-        "--attention-backend",
-        ATTENTION_BACKEND,
-        "--max-running-requests",
-        cap,
-        "--stream-interval",
-        "1",
-        "--enable-metrics",
-        "--enable-cache-report",
-        "--disaggregation-mode",
-        role,
-        "--disaggregation-transfer-backend",
-        name,
-        "--enable-pd-role-switch",
-        # A switched decode engine keeps the prefill launch's radix cache. Without this flag,
-        # decode admission neither counts nor evicts its finished requests and stops admitting.
-        *(["--disaggregation-decode-enable-radix-cache"] if radix_cache(extra) else []),
-        *(
-            []
-            if kv_events is None
-            else [
-                "--kv-events-config",
-                json.dumps(
-                    {
-                        "publisher": "zmq",
-                        "endpoint": kv_events["endpoint"],
-                        "replay_endpoint": kv_events["replay_endpoint"],
-                    }
-                ),
-            ]
+    args = render(
+        record,
+        SETTINGS,
+        (
+            "common",
+            "block_size",
+            ("--attention-backend", ATTENTION_BACKEND),
+            "max_sequences",
+            (
+                "--stream-interval",
+                "1",
+                "--enable-metrics",
+                "--enable-cache-report",
+                "--disaggregation-mode",
+                role,
+                "--disaggregation-transfer-backend",
+                name,
+                "--enable-pd-role-switch",
+            ),
+            # A switched decode engine keeps the prefill launch's radix cache. Without this
+            # flag, decode admission neither counts nor evicts its finished requests and stops
+            # admitting.
+            ("--disaggregation-decode-enable-radix-cache",)
+            if switch(runtime, SETTINGS, "prefix_caching")
+            else (),
+            "context_length",
+            "tokenizer",
+            "prefix_caching",
+            "kv_events",
+            "extra",
         ),
-        *extra,
-    ]
+        model=model,
+        served_name=served_name,
+        host=host,
+        port=port,
+        kv_events=kv_events,
+    )
     return args, transfer
 
 

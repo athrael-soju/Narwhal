@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ...deployment.launch_engine.plan import discovered_settings
+from ...deployment.launch_engine.settings import neutral_runtime
+from .plan import SETTINGS
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
 
@@ -30,7 +32,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         ):
             raise ValueError("convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
         environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
-    return {
+    record = {
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
         "kv_cache_dtype": "auto",
@@ -38,9 +40,13 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         "environment": environment,
         "extra_args": args,
     }
+    return neutral_runtime(record, SETTINGS)
 
 
-def sequence_limit(args: list[str]) -> int:
+def sequence_limit(runtime: dict) -> int:
+    if "max_sequences" in runtime:
+        return int(runtime["max_sequences"])
+    args = runtime.get("extra_args", [])
     values = []
     for index, arg in enumerate(args):
         if arg == "--max-num-seqs" and index + 1 < len(args):
@@ -48,5 +54,5 @@ def sequence_limit(args: list[str]) -> int:
         elif isinstance(arg, str) and arg.startswith("--max-num-seqs="):
             values.append(arg.partition("=")[2])
     if len(values) != 1 or not str(values[0]).isdigit() or int(values[0]) < 1:
-        raise ValueError("runtime.extra_args needs one positive --max-num-seqs")
+        raise ValueError("runtime needs a positive max_sequences or one --max-num-seqs")
     return int(values[0])

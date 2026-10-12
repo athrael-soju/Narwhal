@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from .settings import LaunchSettings
 
 
 class EngineLauncher(ABC):
@@ -17,6 +18,7 @@ class EngineLauncher(ABC):
     # Delivered as the hook's sitecustomize.py.
     cache_hook: ClassVar[Path]
     side_channel: ClassVar[str]
+    # The backend's earlier name for the KV side-channel port variable.
     side_channel_port_env: ClassVar[str]
     api_key_env: ClassVar[str]
     args_field: ClassVar[str]
@@ -27,6 +29,8 @@ class EngineLauncher(ABC):
     image_packages: ClassVar[str]
     environment_prefixes: ClassVar[tuple[str, ...]]
     managed_environment: ClassVar[frozenset[str]]
+    # How the backend applies each engine-neutral launch setting.
+    launch_settings: ClassVar[LaunchSettings]
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...

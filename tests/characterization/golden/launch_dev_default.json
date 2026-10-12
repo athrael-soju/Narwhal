@@ -11,6 +11,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 1024,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -25,23 +26,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "1024",
             "--gpu-memory-utilization",
             "0.35",
-            "--max-num-seqs",
-            "2",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "float16"
+          "max_sequences": 2,
+          "model_dtype": "float16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.8,
@@ -72,6 +69,7 @@
         "network_mode": "host",
         "runtime": {
           "block_size": 128,
+          "context_length": 1024,
           "environment": {
             "VLLM_SSM_CONV_STATE_LAYOUT": "DS",
             "VLLM_USE_FLASHINFER_SAMPLER": "0",
@@ -86,23 +84,19 @@
             "vllm-gguf-plugin": "0.0.5"
           },
           "extra_args": [
-            "--tokenizer",
-            "<root>/model",
             "--hf-config-path",
             "<root>/model",
             "--load-format",
             "gguf",
             "--language-model-only",
-            "--max-model-len",
-            "1024",
             "--gpu-memory-utilization",
             "0.35",
-            "--max-num-seqs",
-            "2",
             "--enforce-eager"
           ],
           "kv_cache_dtype": "auto",
-          "model_dtype": "float16"
+          "max_sequences": 2,
+          "model_dtype": "float16",
+          "tokenizer": "<root>/model"
         },
         "shared_device": {
           "device_allowance": 0.8,

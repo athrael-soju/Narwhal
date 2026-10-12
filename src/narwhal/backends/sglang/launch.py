@@ -28,6 +28,7 @@ class SglangLauncher(EngineLauncher):
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
+    launch_settings = policy.SETTINGS
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -38,7 +39,7 @@ class SglangLauncher(EngineLauncher):
         return discovery.runtime(observed, setting, connector)
 
     def sequence_limit(self, runtime: dict) -> int:
-        return discovery.sequence_limit(runtime.get("extra_args", []))
+        return discovery.sequence_limit(runtime)
 
     def engine_env(
         self, host: str, side_channel_port: int, api_key: str, bind_host: str | None = None

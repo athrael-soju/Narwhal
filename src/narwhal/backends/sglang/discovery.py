@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from ...deployment.launch_engine.plan import discovered_settings, option
-from .plan import CUDA_BUILD_SUFFIX, MAX_RUNNING_REQUESTS, TRANSFER_PACKAGES
+from ...deployment.launch_engine.plan import discovered_settings
+from ...deployment.launch_engine.settings import count, neutral_runtime
+from .plan import CUDA_BUILD_SUFFIX, MAX_RUNNING_REQUESTS, SETTINGS, TRANSFER_PACKAGES
 
 IMAGE_PACKAGES = "sglang|torch|" + "|".join(
     f"{re.escape(name)}(?:{CUDA_BUILD_SUFFIX})?" for name in TRANSFER_PACKAGES.values()
@@ -39,9 +40,8 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) 
     if not memory:
         raise ValueError(f"set DECODE_CUDA_GRAPH_MEMORY_GB in .env for {connector} engines")
     record["decode_cuda_graph_memory_gb"] = float(memory)
-    return {**record, "environment": environment, "extra_args": args}
+    return neutral_runtime({**record, "environment": environment, "extra_args": args}, SETTINGS)
 
 
-def sequence_limit(args: list[str]) -> int:
-    cap = option(args, "--max-running-requests")
-    return int(cap) if cap is not None and cap.isdigit() else MAX_RUNNING_REQUESTS
+def sequence_limit(runtime: dict) -> int:
+    return count(runtime, SETTINGS, "max_sequences") or MAX_RUNNING_REQUESTS

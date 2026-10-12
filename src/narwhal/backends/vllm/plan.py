@@ -9,6 +9,8 @@ from ...deployment.launch_engine.plan import (
     check_versions_and_dtype,
     option,
 )
+from ...deployment.launch_engine.settings import LaunchSettings, Setting, check_settings
+from ...deployment.launch_engine.settings import serve_args as render
 
 VALUE_OPTIONS = {
     "--max-model-len",
@@ -61,6 +63,24 @@ ENV_PREFIXES = (
     "PYTORCH_",
     "SAFETENSORS_",
 )
+KV_EVENTS_OFF = ("--kv-events-config", json.dumps({"enable_kv_cache_events": False}))
+SETTINGS = LaunchSettings(
+    entrypoint=("-m", "vllm.entrypoints.openai.api_server"),
+    model_flag="--model",
+    tensor_parallel_flag="--tensor-parallel-size",
+    kv_events_flag="--kv-events-config",
+    kv_events_fields={"enable_kv_cache_events": True},
+    settings={
+        "block_size": Setting(flag="--block-size", required=True),
+        "context_length": Setting(flag="--max-model-len"),
+        "max_sequences": Setting(flag="--max-num-seqs"),
+        "tokenizer": Setting(flag="--tokenizer"),
+        "prefix_caching": Setting(
+            on=("--enable-prefix-caching",), off=("--no-enable-prefix-caching",), default=True
+        ),
+        "kv_events": Setting(off=KV_EVENTS_OFF, default=True),
+    },
+)
 
 
 def validate_runtime(runtime: dict) -> None:
@@ -74,6 +94,7 @@ def validate_runtime(runtime: dict) -> None:
     if type(lease) is not int or lease < MIN_KV_LEASE_S:
         raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
     check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
+    check_settings(runtime, SETTINGS)
     check_environment(
         runtime.get("environment", {}),
         MANAGED_ENV,
@@ -125,44 +146,26 @@ def serve_args(
             **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
         },
     }
-    args = [
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        model,
-        "--served-model-name",
-        served_name,
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--tensor-parallel-size",
-        str(record["tensor_parallel_size"]),
-        "--dtype",
-        runtime["model_dtype"],
-        "--kv-cache-dtype",
-        runtime["kv_cache_dtype"],
-        "--block-size",
-        str(runtime["block_size"]),
-        *(
-            []
-            if kv_events is None
-            else [
-                "--kv-events-config",
-                json.dumps(
-                    {
-                        "enable_kv_cache_events": True,
-                        "publisher": "zmq",
-                        "endpoint": kv_events["endpoint"],
-                        "replay_endpoint": kv_events["replay_endpoint"],
-                    }
-                ),
-            ]
+    args = render(
+        record,
+        SETTINGS,
+        (
+            "common",
+            "block_size",
+            "context_length",
+            "max_sequences",
+            "tokenizer",
+            "prefix_caching",
+            "kv_events",
+            ("--kv-transfer-config", json.dumps(connector)),
+            "extra",
         ),
-        "--kv-transfer-config",
-        json.dumps(connector),
-        *runtime.get("extra_args", []),
-    ]
+        model=model,
+        served_name=served_name,
+        host=host,
+        port=port,
+        kv_events=kv_events,
+    )
     return args, connector
 
 

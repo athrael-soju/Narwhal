@@ -155,11 +155,11 @@ The launcher builds one launch plan per engine with these properties:
 | KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` transfer backend; every engine launches as prefill with `--enable-pd-role-switch` |
 | Side-channel address and port | The role environment, for the vLLM NIXL side channel or the SGLang bootstrap server                                                                                                                                                         |
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                                                                                                                                         |
-| Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                                                                                                                                      |
+| Prefix caching                | On by default, turned off through `runtime.prefix_caching`                                                                                                                                                                                  |
 | Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                                                                                                                                     |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching`, or SGLang's `--disable-radix-cache`, to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
+For the [capacity trial](../measure/03-Load-Trial.md), set `runtime.prefix_caching` to `false` before preparing the launch plans. The [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings) list each backend's flag for it.
 
 To add the flag after launch:
 
@@ -168,7 +168,7 @@ To add the flag after launch:
 3. Restart each engine.
 4. Repeat the work for an engine restart with a changed attested `launch_digest` from the [deployment sequence](../Deploy.md#deployment-sequence).
 
-For a separate tokenizer at `PATH`, add vLLM's `--tokenizer PATH` or SGLang's `--tokenizer-path PATH` to `runtime.extra_args` before preparing the launch plan.
+For a separate tokenizer at `PATH`, set `runtime.tokenizer` to `PATH` before preparing the launch plan.
 
 When the image, model, dtype, cache policy, TP allocation, or model arguments change:
 

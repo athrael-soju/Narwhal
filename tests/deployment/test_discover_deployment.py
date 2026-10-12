@@ -215,7 +215,8 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(serving["connector"], "mooncake")
             self.assertEqual(serving["decode_cuda_graph_memory_gb"], 4.0)
             self.assertNotIn("role", serving)
-            self.assertEqual(serving["extra_args"], ["--context-length", "16384"])
+            self.assertEqual(serving["extra_args"], [])
+            self.assertEqual(serving["context_length"], 16384)
             hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
             run = root / "prepared"
             prepare(hosts, env, run, ROOT)
@@ -263,16 +264,10 @@ class DiscoveryTests(unittest.TestCase):
 
         self.assertEqual(
             extra_args(),
-            [
-                "--context-length",
-                "16384",
-                "--mamba-radix-cache-strategy",
-                "no_buffer",
-                "--disable-overlap-schedule",
-            ],
+            ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
         )
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
-        self.assertEqual(extra_args(), ["--disable-radix-cache"])
+        self.assertEqual(extra_args(), [])
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
@@ -354,14 +349,12 @@ class DiscoveryTests(unittest.TestCase):
                 ["/dev/kfd", "/dev/dri/renderD130", "/dev/dri/renderD131"],
             )
             self.assertEqual(one["runtime"]["environment"]["VLLM_ROCM_USE_AITER"], "0")
-            self.assertEqual(
-                one["runtime"]["extra_args"],
-                ["--max-model-len", "8192", "--trust-remote-code"],
-            )
-            self.assertEqual(
-                launches["engines"]["engine-2"]["runtime"]["extra_args"],
-                ["--max-model-len", "8192"],
-            )
+            # Discovery writes the engine-neutral fields that ENGINE_ARGS flags set.
+            self.assertEqual(one["runtime"]["extra_args"], ["--trust-remote-code"])
+            self.assertEqual(one["runtime"]["context_length"], 8192)
+            self.assertNotIn("max_sequences", one["runtime"])
+            two = launches["engines"]["engine-2"]["runtime"]
+            self.assertEqual((two["extra_args"], two["context_length"]), ([], 8192))
             env["NARWHAL_MODEL_CONFIG_SHA256"] = "c" * 64
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 build_records(hosts, env, observations, root)

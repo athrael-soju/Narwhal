@@ -20,11 +20,9 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
             if "decode_cuda_graph_memory_gb" in template
             else {}
         ),
+        "context_length": template["max_model_len"],
+        "tokenizer": str(model_dir),
         "extra_args": [
-            "--tokenizer-path",
-            str(model_dir),
-            "--context-length",
-            str(template["max_model_len"]),
             "--mem-fraction-static",
             str(memory_fraction),
             *template.get("extra_args", []),

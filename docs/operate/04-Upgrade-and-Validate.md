@@ -88,3 +88,19 @@ Fleet files, attestation documents and dev templates with the earlier names stil
 2. Restart every `narwhal-attest` sidecar on the upgraded build.
 3. Regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 4. Run preflight.
+
+### Upgrading to engine-neutral launch settings
+
+Discovery and `narwhal dev` write [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings) in `runtime` in place of these `extra_args` flags:
+
+| Earlier `extra_args` flag                                                                       | Current `runtime` field |
+| ----------------------------------------------------------------------------------------------- | ----------------------- |
+| vLLM `--max-model-len`, SGLang `--context-length`                                               | `context_length`        |
+| vLLM `--max-num-seqs`, SGLang `--max-running-requests`                                          | `max_sequences`         |
+| vLLM `--tokenizer`, SGLang `--tokenizer-path`                                                   | `tokenizer`             |
+| vLLM `--enable-prefix-caching` or `--no-enable-prefix-caching`, SGLang `--disable-radix-cache`  | `prefix_caching`        |
+| vLLM `--kv-events-config` with `{"enable_kv_cache_events": false}`                              | `kv_events: false`      |
+
+The side-channel port variable `NARWHAL_KV_SIDE_CHANNEL_PORT` replaces `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_SGLANG_BOOTSTRAP_PORT`, which still apply while it is unset.
+
+Launch records with the earlier flags still load, and the launcher passes the same arguments for them. A record written with the new fields passes those flags in another position, which gives the engine a new [`launch_digest`](../configuration/01-Fleet-Schema.md#attestation). After you regenerate launch records, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline), then run preflight.
