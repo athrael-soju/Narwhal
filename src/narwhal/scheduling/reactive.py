@@ -312,12 +312,21 @@ class ReactivePolicy:
                     or candidate.prefill < current_p
                 ),
                 candidate.decode_profile_covered,
-                (
-                    base is current
-                    and candidate.prefill > current_p
-                    and max(candidate.tpot_ratio, candidate.decode_queue_ratio)
-                    > controller.scheduler.th.shrink
-                    and (recovery_prefill >= controller.scheduler.th.expand or urgent_ready)
+                base is current
+                and (
+                    (
+                        candidate.prefill > current_p
+                        and max(candidate.tpot_ratio, candidate.decode_queue_ratio)
+                        > controller.scheduler.th.shrink
+                        and (recovery_prefill >= controller.scheduler.th.expand or urgent_ready)
+                    )
+                    or (
+                        departure is None
+                        and candidate.prefill < current_p
+                        and candidate.ttft_ratio > controller.scheduler.th.shrink
+                        and max(current.tpot_ratio, current.decode_queue_ratio)
+                        >= controller.scheduler.th.expand
+                    )
                 ),
                 controller.within_floors(candidate.prefill),
             )

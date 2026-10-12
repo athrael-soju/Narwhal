@@ -301,8 +301,29 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, [{"new_role": "decode", "decode_cuda_graph_memory_gb": 4.0}])
 
     async def test_a_refused_switch_raises(self):
-        with self.assertRaisesRegex(ValueError, "not idle"):
+        with (
+            patch("narwhal.backends.sglang.role_switch.IDLE_WAIT_S", 0.0),
+            self.assertRaisesRegex(ValueError, "not idle"),
+        ):
             await self.switch("decode", Role.PREFILL, {"success": False, "message": "not idle"})
+
+    async def test_a_switch_waits_while_the_engine_finishes_its_transfers(self):
+        posted = []
+        refusal = "PD role switch rejected (prefill -> decode): instance is not idle"
+
+        def handle(request):
+            if request.method == "GET":
+                state = {"disaggregation_mode": "prefill"}
+                return httpx.Response(200, json={"internal_states": [state]})
+            posted.append(json.loads(request.content))
+            if len(posted) < 3:
+                return httpx.Response(400, json={"success": False, "message": refusal})
+            return httpx.Response(200, json={"success": True, "message": "ok"})
+
+        with patch("narwhal.backends.sglang.role_switch.IDLE_POLL_S", 0.0):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+                await BACKEND.role_switch.switch(client, "http://engine", Role.DECODE, LAUNCH)
+        self.assertEqual(len(posted), 3)
 
     async def test_a_decode_engine_switches_again_for_a_producer_it_has_stale(self):
         modes = {"a": "decode", "b": "decode"}

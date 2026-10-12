@@ -159,6 +159,25 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
         self.assertEqual(len(fleet.scheduler.roles.flips), 1)
 
+    def test_decode_recovers_above_prefill_expand_when_decode_is_over_budget(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2", "e3"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        # At 4P2D decode runs at 1.5; at 3P3D prefill projects 1.1 and decode 1.0.
+        fleet.pressure = {Role.PREFILL: 3.3, Role.DECODE: 3.0}
+        rows = []
+        for _ in range(6):
+            fleet.step()
+            rows.append(dict(fleet.scheduler.roles._last_decision))
+        applied = [row for row in rows if row["result"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        row = applied[0]
+        self.assertEqual((row["current_prefill"], row["prefill"]), (4, 3))
+        self.assertEqual(row["eligibility_rule"], "mixed_pressure")
+        self.assertGreater(row["projected_ttft_ratio"], fleet.scheduler.th.expand)
+        self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 3)
+        ControllerDecisionOut.model_validate(row)
+
     def test_configured_confirmation_count_and_transient_reset(self) -> None:
         fleet = self.fleet
         fleet.controller.confirmations_needed = 4

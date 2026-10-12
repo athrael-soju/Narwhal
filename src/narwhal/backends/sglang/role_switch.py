@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -11,6 +13,8 @@ from .identity import server_info
 from .plan import ROLE_SWITCH_CONNECTORS
 
 SWITCH_PATH = "/pd_role_switch"
+IDLE_WAIT_S = 10.0
+IDLE_POLL_S = 0.2
 
 
 def _scheduler(info: Any) -> dict[str, Any]:
@@ -99,7 +103,12 @@ class SglangRoleSwitch(RoleSwitcher):
         body: dict[str, Any] = {"new_role": role.value}
         if role is Role.DECODE and (memory := graph_memory(state, launch)) is not None:
             body["decode_cuda_graph_memory_gb"] = memory
-        response = await client.post(f"{base}{SWITCH_PATH}", json=body)
+        deadline = time.monotonic() + IDLE_WAIT_S
+        while True:
+            response = await client.post(f"{base}{SWITCH_PATH}", json=body)
+            if "not idle" not in response.text or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(IDLE_POLL_S)
         response.raise_for_status()
         result = response.json()
         if not isinstance(result, dict) or result.get("success") is not True:

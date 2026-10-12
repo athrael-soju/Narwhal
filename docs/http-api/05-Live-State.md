@@ -396,7 +396,7 @@ These decisions add fields to `control.last_decision`:
 | `eligibility_rule`        | Proposal                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                                  |
-| `mixed_pressure`          | Observed prefill recovery exceeds the decode shrink threshold                                                                         |
+| `mixed_pressure`          | Source load above `shrink`, and the receiving role at or above `expand`                                                               |
 | `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) first move, priced on confirmation-span demand        |
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
 | `source_shrink`           | Ordinary consolidation, and a leading departure's later confirmation-span moves                                                       |
