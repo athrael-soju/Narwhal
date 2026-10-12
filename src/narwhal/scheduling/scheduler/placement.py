@@ -431,9 +431,8 @@ class GlobalScheduler:
             if not self.monitor.decode_profile_eligible(inst.iid):
                 self.health.pause_for_prefill(inst.iid)
                 continue
-            observed = max(
-                self.monitor.current_token_interval(inst.iid),
-                self.monitor.stalled_gap(inst.iid),
+            observed = self.monitor.current_token_interval(inst.iid) or self.monitor.stalled_gap(
+                inst.iid
             )
             profile = self.profiles.get(inst.iid)
             if profile is None:

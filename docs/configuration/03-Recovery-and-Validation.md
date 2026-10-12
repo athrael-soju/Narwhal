@@ -12,19 +12,19 @@ These fields set breaker thresholds, liveness probing, failure quarantine and dr
 
 | Field                                 | Default | Meaning                                                                                             | Valid values                                                                |
 | ------------------------------------- | :-----: | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `recovery.eject_after`                | `3`     | Consecutive failures of one class on one engine before breaker action                               | At least 1                                                                  |
-| `recovery.readmit_every`              | `10`    | Monitor intervals between probes of ejected engines                                                 | At least 1                                                                  |
-| `recovery.liveness_every`             | `10`    | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks | `0` disables idle sweeps                                                    |
-| `recovery.liveness_misses`            | `2`     | Consecutive failed liveness probes before ejection                                                  | At least 1                                                                  |
-| `recovery.failure_quarantine_s`       | `0.0`   | Time a failed engine stays excluded from placement while other live engines place its roles         | At least 0, where `0` disables quarantine                                   |
+| `recovery.eject_after`                |   `3`   | Consecutive failures of one class on one engine before breaker action                               | At least 1                                                                  |
+| `recovery.readmit_every`              |  `10`   | Monitor intervals between probes of ejected engines                                                 | At least 1                                                                  |
+| `recovery.liveness_every`             |  `10`   | Monitor intervals between health probes and, for contracted fleets, identity and attestation checks | `0` disables idle sweeps                                                    |
+| `recovery.liveness_misses`            |   `2`   | Consecutive failed liveness probes before ejection                                                  | At least 1                                                                  |
+| `recovery.failure_quarantine_s`       |  `0.0`  | Time a failed engine stays excluded from placement while other live engines place its roles         | At least 0, where `0` disables quarantine                                   |
 | `recovery.health.window_s`            | `30.0`  | Residual-scoring window length                                                                      | At least 1 second                                                           |
-| `recovery.health.drift_band`          | `2.0`   | Multiple of an engine's trailing healthy residual used as the drift threshold                       | Greater than 1.0                                                            |
-| `recovery.health.relative_band`       | `1.5`   | Multiple of the median peer score that bounds the fleet-wide surge veto                             | At least 0, where `0` disables the veto                                     |
-| `recovery.health.min_samples`         | `3`     | Samples required before scoring a window                                                            | From 1 to `floor(recovery.health.window_s / controller.monitor_interval_s)` |
-| `recovery.health.probation_windows`   | `3`     | Consecutive drifting windows before probation                                                       | At least 1                                                                  |
-| `recovery.health.evict_windows`       | `5`     | Consecutive drifting windows before requesting ejection                                             | At least `probation_windows`                                                |
-| `recovery.health.recovery_windows`    | `3`     | Consecutive healthy windows required to clear probation                                             | At least 1                                                                  |
-| `recovery.health.probation_penalty_s` | `1.5`   | Placement penalty in seconds for an engine on probation                                             | At least 0                                                                  |
+| `recovery.health.drift_band`          |  `2.0`  | Multiple of an engine's trailing healthy residual used as the drift threshold                       | Greater than 1.0                                                            |
+| `recovery.health.relative_band`       |  `1.5`  | Multiple of the median peer score that bounds the fleet-wide surge veto                             | At least 0, where `0` disables the veto                                     |
+| `recovery.health.min_samples`         |   `3`   | Samples required before scoring a window                                                            | From 1 to `floor(recovery.health.window_s / controller.monitor_interval_s)` |
+| `recovery.health.probation_windows`   |   `3`   | Consecutive drifting windows before probation                                                       | At least 1                                                                  |
+| `recovery.health.evict_windows`       |   `5`   | Consecutive drifting windows before requesting ejection                                             | At least `probation_windows`                                                |
+| `recovery.health.recovery_windows`    |   `3`   | Consecutive healthy windows required to clear probation                                             | At least 1                                                                  |
+| `recovery.health.probation_penalty_s` |  `1.5`  | Placement penalty in seconds for an engine on probation                                             | At least 0                                                                  |
 
 The probation penalty adds to a prefill placement cost in seconds. For a decode placement cost, Narwhal converts it to tokens at the time per output token (TPOT) target.
 
@@ -45,7 +45,7 @@ A new router process restores each `inference_sources` suspect by the rules in [
 
 ### Decode drift evidence
 
-The drift tracker scores fresh decode residuals and stalled inter-token gaps against the engine's recent healthy baseline. It excludes a placement estimate left over after decode completes.
+The drift tracker compares new decode times—or the longest pause between tokens if an engine stalls—to the engine's normal baseline. It ignores estimates remaining after decoding finishes.
 
 A gap that crosses a prefill boundary pauses decode correction and drift scoring. The first pure decode observation after the pause starts a new scoring window with the previous healthy baseline and probation state.
 

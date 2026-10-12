@@ -35,6 +35,23 @@ class PinnedPlacementTests(unittest.TestCase):
                     scheduler.health_pass()
                 self.assertEqual("e3" in scheduler.ejected, ejected)
 
+    def test_drift_scores_the_measured_interval_and_an_open_gap_only_without_output(self):
+        scheduler = self.router(pinned=False).scheduler
+        monitor = scheduler.monitor
+        monitor.dispatched("e3", Request("r", 10, phase=Phase.DECODE))
+        inst = monitor.instances["e3"]
+        expected = scheduler.profiles.get("e3").token_interval(inst.decode_tokens(), 1)
+        for interval, gap, residual in ((expected, 20 * expected, 1.0), (0.0, 20 * expected, 20.0)):
+            with self.subTest(interval=interval):
+                with (
+                    patch.object(monitor, "current_token_interval", return_value=interval),
+                    patch.object(monitor, "stalled_gap", return_value=gap),
+                    patch.object(scheduler.health, "note") as note,
+                ):
+                    scheduler.health_pass()
+                residuals = {call.args[0]: call.args[1] for call in note.call_args_list}
+                self.assertAlmostEqual(residuals["e3"], residual)
+
     def test_unpinned_fleets_fall_back_to_the_other_role(self):
         router = self.router(pinned=False)
         router.scheduler.eject("e3", "liveness")
