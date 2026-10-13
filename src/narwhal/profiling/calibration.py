@@ -20,12 +20,11 @@ from ..engines.attestation import attested_launches
 from ..engines.client import (
     EngineClient,
     EngineError,
-    PairedHandoff,
     client_options,
     first_output_timeout,
 )
-from ..engines.connector import RendezvousConnector
 from ..engines.dialect import EngineDialect
+from ..engines.handoff import HandoffLegs
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
 from ..runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
@@ -384,7 +383,7 @@ class _Attempt:
     phase: str = "sizing"
     elapsed: float = 0.0
     body: dict[str, Any] = field(default_factory=dict)
-    handoff: PairedHandoff | None = None
+    handoff: HandoffLegs | None = None
 
     def fail(self, exc: Exception, deadline: asyncio.Timeout) -> None:
         expired = first_output_timeout(exc) and exc.status == 504
@@ -615,7 +614,7 @@ async def calibrate(
                 context_limits[iid] = context_limit
             launches = (
                 await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
-                if switcher is not None or isinstance(client.kv, RendezvousConnector)
+                if switcher is not None or client.kv.concurrent
                 else {}
             )
             if switcher is not None:

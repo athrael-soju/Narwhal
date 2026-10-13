@@ -7,7 +7,6 @@ import httpx
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 from ...engines.client import EngineError
-from ...engines.connector import RendezvousConnector
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
 from ...profiling.generation import binding_digest, profile_generation_problems
@@ -172,8 +171,8 @@ async def validate_readmission(
                 spec.iid,
                 "new process identity" if record.restart_required else "process identity",
             )
-            if isinstance(router.engines.kv, RendezvousConnector):
-                # A rendezvous engine serves only paired legs; the fabric pairs generate.
+            if router.engines.kv.concurrent:
+                # An engine with concurrent legs serves only paired legs; the fabric pairs generate.
                 continue
             try:
                 response = await client.post(

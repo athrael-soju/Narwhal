@@ -190,6 +190,7 @@ Module responsibilities break down as follows:
 - `profiling/fitting.py` implements numerical fitting and cross-validation, `model.py` implements profile validation and capacity calculations, and `store.py` implements persistence and fleet queries.
 - `engines/stream.py` decodes server-sent events (SSE) and validates token identity for serving and profiling.
 - `engines/client.py` holds HTTP deadlines.
+- `engines/handoff.py` runs one request's prefill and decode legs in the order the connector declares, for serving, the engine client, the inference probe and profiling pairs. Shared code reads `KvHandoff.leg_order` and never checks a connector's class.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
 - `config/serialization.py` serializes the versioned fleet configuration for file output and CLI printing.
 - `observability/metrics/render.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.

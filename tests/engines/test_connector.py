@@ -32,7 +32,7 @@ class ConnectorTests(unittest.TestCase):
     def test_cross_engine_decode_attaches_descriptor_and_retains_prompt(self):
         body = {"prompt": [10, 20], "stream": False, "kv_transfer_params": {"spoofed": True}}
         decoded = self.connector.decode_body(
-            body, self.result, url="http://consumer", endpoint="/v1/completions"
+            body, result=self.result, url="http://consumer", endpoint="/v1/completions"
         )
         self.assertEqual(decoded["prompt"], [10, 20])
         self.assertTrue(decoded["stream"])
@@ -44,7 +44,7 @@ class ConnectorTests(unittest.TestCase):
             with self.subTest(result=result):
                 body = self.connector.decode_body(
                     {"prompt": "original", "kv_transfer_params": {"spoofed": True}},
-                    result,
+                    result=result,
                     url="http://producer",
                     endpoint="/v1/completions",
                 )
@@ -58,7 +58,7 @@ class ConnectorTests(unittest.TestCase):
         ):
             with self.subTest(result=result), self.assertRaises(ValueError):
                 self.connector.decode_body(
-                    {}, result, url="http://consumer", endpoint="/v1/completions"
+                    {}, result=result, url="http://consumer", endpoint="/v1/completions"
                 )
 
     def test_flat_and_grouped_blocks_accept_zero_and_reject_invalid_ids(self):

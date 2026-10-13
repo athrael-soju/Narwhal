@@ -163,7 +163,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         producer, consumer = await self.engine("e0"), await self.engine("e1")
         body = {"model": "m", "prompt": PROMPT, "max_tokens": 2}
         for key, kv in self.backend.connectors.items():
-            if not isinstance(kv, KvConnector):
+            if kv.concurrent:
                 continue
             with self.subTest(connector=key):
                 client = self.client(kv)
@@ -171,10 +171,20 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(result, PrefillResult)
                 self.assertEqual((result.connector, result.producer_url), (key, producer.url))
                 local = kv.decode_body(
-                    {**body, kv.param_key: {}}, result, url=producer.url, endpoint="/v1/completions"
+                    {**body, kv.param_key: {}},
+                    result=result,
+                    rendezvous=None,
+                    url=producer.url,
+                    endpoint="/v1/completions",
                 )
                 self.assertNotIn(kv.param_key, local)
-                remote = kv.decode_body(body, result, url=consumer.url, endpoint="/v1/completions")
+                remote = kv.decode_body(
+                    body,
+                    result=result,
+                    rendezvous=None,
+                    url=consumer.url,
+                    endpoint="/v1/completions",
+                )
                 self.assertTrue(remote["stream"])
                 tokens = 0
                 async for batch in client.decode(consumer.url, "/v1/completions", body, {}, result):
@@ -184,7 +194,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
     def test_rendezvous_connectors_pair_each_request(self):
         body = {"model": "m", "prompt": PROMPT}
         for key, kv in self.backend.connectors.items():
-            if not isinstance(kv, RendezvousConnector):
+            if not kv.concurrent:
                 continue
             with self.subTest(connector=key):
                 self.assertTrue(0 < kv.decode_wait_s < math.inf)
@@ -192,7 +202,8 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kv.first_token_bound(kv.decode_wait_s / 2), kv.decode_wait_s / 2)
                 first, second = kv.rendezvous({}), kv.rendezvous({})
                 self.assertNotEqual(first, second)
-                for leg in (kv.prefill_body(body, first), kv.decode_body(body, first)):
+                decode = kv.decode_body(body, result=None, rendezvous=first, url="", endpoint="")
+                for leg in (kv.prefill_body(body, first), decode):
                     self.assertEqual({k: leg[k] for k in body}, body)
                     self.assertNotEqual(leg, body)
 

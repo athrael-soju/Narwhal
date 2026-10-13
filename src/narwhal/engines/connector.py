@@ -33,21 +33,74 @@ class PrefillResult:
         return params
 
 
+# "sequential": the prefill leg returns a descriptor that the decode leg continues from.
+# "concurrent": both legs run at once and meet at a rendezvous the router assigns.
+LegOrder = Literal["sequential", "concurrent"]
+
+
 class KvHandoff(ABC):
+    """How a connector moves one request's KV cache from its prefill leg to its decode leg."""
+
     name: str
     # The connector name an engine contract records for this handoff.
     contract_name: str
+    leg_order: ClassVar[LegOrder]
+    # Handoff fields that transfer diagnostics record for each pair.
+    diagnostics_fields: ClassVar[tuple[str, ...]] = ()
+
+    @property
+    def concurrent(self) -> bool:
+        return self.leg_order == "concurrent"
 
     @abstractmethod
     def handoff_bound(self, lease_s: int) -> float: ...
 
+    def first_token_bound(self, limit: float | None) -> float | None:
+        """Return the decode leg's first-token deadline under the caller's limit."""
+        return limit
+
+    def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Assign the fields that pair a concurrent request's legs; None for sequential legs."""
+        return None
+
+    @abstractmethod
+    def prefill_body(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Add the connector's fields to a prefill leg."""
+
+    @abstractmethod
+    def decode_body(
+        self,
+        body: dict[str, Any],
+        *,
+        result: PrefillResult | None,
+        rendezvous: dict[str, Any] | None,
+        url: str,
+        endpoint: str,
+    ) -> dict[str, Any]:
+        """Build the streaming decode leg that continues from the prefill leg."""
+
+    def prefill_result(
+        self, payload: dict[str, Any], *, url: str, endpoint: str, request_id: str | None
+    ) -> PrefillResult | None:
+        """Read the prefill leg's descriptor; a concurrent leg returns none."""
+        return None
+
 
 class KvConnector(KvHandoff):
+    leg_order: ClassVar[LegOrder] = "sequential"
+
     # Same-engine decode must remove this client-supplied field.
     param_key: ClassVar[str]
 
     @abstractmethod
     def prefill_params(self) -> dict[str, Any]: ...
+
+    def prefill_body(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return {**body, **self.prefill_params()}
 
     @abstractmethod
     def extract(self, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -66,7 +119,13 @@ class KvConnector(KvHandoff):
         )
 
     def decode_body(
-        self, body: dict[str, Any], result: PrefillResult | None, *, url: str, endpoint: str
+        self,
+        body: dict[str, Any],
+        *,
+        result: PrefillResult | None,
+        rendezvous: dict[str, Any] | None = None,
+        url: str,
+        endpoint: str,
     ) -> dict[str, Any]:
         leg = {**body, "stream": True}
         leg.pop(self.param_key, None)
@@ -82,17 +141,12 @@ class KvConnector(KvHandoff):
 
 
 class RendezvousConnector(KvHandoff):
+    leg_order: ClassVar[LegOrder] = "concurrent"
     # The engine never times out a decode leg whose prefill is lost.
     decode_wait_s: ClassVar[float]
 
     @abstractmethod
     def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]: ...
-
-    @abstractmethod
-    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]: ...
-
-    @abstractmethod
-    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]: ...
 
     def first_token_bound(self, limit: float | None) -> float:
         return min(limit or math.inf, self.decode_wait_s)

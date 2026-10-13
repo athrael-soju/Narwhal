@@ -83,7 +83,7 @@ narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.jso
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 ```
 
-With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when the consumer's transfer histogram grows in both count and sum: `vllm:nixl_xfer_time_seconds` on vLLM, or the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. Each pair record names the histogram in `transfer_metric` and the growth in `transfer_count_delta` and `transfer_seconds`.
+With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when the consumer's transfer histogram grows in both count and sum: `vllm:nixl_xfer_time_seconds` on vLLM, or the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. Each pair record names the histogram in `transfer_metric` and the growth in `transfer_count_delta` and `transfer_seconds`. It also holds the connector's handoff fields: `transfer_mode`, `remote_engine_id`, `remote_host` and `remote_port` on vLLM, or `bootstrap_host`, `bootstrap_port` and `bootstrap_room` on SGLang.
 
 The run fails in any of these cases:
 
