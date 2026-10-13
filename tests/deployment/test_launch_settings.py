@@ -1,21 +1,16 @@
 """Engine-neutral launch settings render through each backend's declared mapping."""
 
 import copy
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from narwhal.backends import load, names
 from narwhal.deployment.launch_engine.plan import build, option, side_channel_port
-from narwhal.deployment.launch_engine.settings import (
-    KV_SIDE_CHANNEL_PORT_ENV,
-    NAMES,
-    neutral_runtime,
-)
+from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV, NAMES
 from tests.backends.contract import fixtures, launch_record
 from tests.deployment.fixtures import launcher_inputs
-from tools.deployment.prepare_host_env import engine_fields, select_values
+from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values
 
 NEUTRAL = {
     "context_length": 2048,
@@ -26,15 +21,13 @@ NEUTRAL = {
 
 
 class NeutralSettingsTests(unittest.TestCase):
-    def built(self, name: str, changes: dict, *, legacy: list[str] | None = None) -> dict:
-        launcher = load(name).launcher()
+    def built(self, name: str, changes: dict, *, extra: list[str] | None = None) -> dict:
         runtime = copy.deepcopy(fixtures(name).launch_runtime)
-        runtime["extra_args"] = list(legacy or [])
+        runtime["extra_args"] = list(extra or [])
         runtime.update(changes)
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         _, env = launcher_inputs(Path(folder.name))
-        env[launcher.side_channel_port_env] = env.pop("NARWHAL_NIXL_SIDE_CHANNEL_PORT")
         plan, _ = build(launch_record(runtime, None), env, Path(folder.name) / "launch")
         return plan
 
@@ -84,28 +77,20 @@ class NeutralSettingsTests(unittest.TestCase):
                 if off:
                     self.assertEqual(option(plan["args"], off[0]), off[1])
 
-    def test_extra_args_reject_a_flag_a_neutral_field_sets(self):
+    def test_extra_args_reject_a_flag_a_neutral_setting_maps(self):
         for name in names():
             mapping = load(name).launcher().launch_settings.settings
             flag = str(mapping["context_length"].flag)
-            with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "duplicates|sets"):
-                self.built(name, {"context_length": 1024}, legacy=[flag, "1024"])
+            for changes in ({}, {"context_length": 1024}):
+                with (
+                    self.subTest(backend=name, changes=changes),
+                    self.assertRaisesRegex(ValueError, f"unsupported .*: {flag}$"),
+                ):
+                    self.built(name, changes, extra=[flag, "1024"])
             with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "requires prefix"):
                 self.built(name, {"prefix_caching": False, "kv_events": True})
             with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "max_sequences"):
                 self.built(name, {"max_sequences": 0})
-
-    def test_earlier_flags_render_where_they_did(self):
-        for name in names():
-            mapping = load(name).launcher().launch_settings.settings
-            flag = str(mapping["context_length"].flag)
-            with self.subTest(backend=name):
-                args = self.built(name, {}, legacy=[flag, "1024"])["args"]
-                self.assertEqual(args[-2:], [flag, "1024"])
-                moved = neutral_runtime(
-                    {"extra_args": [flag, "1024", "--x"]}, load(name).launcher().launch_settings
-                )
-                self.assertEqual(moved, {"context_length": 1024, "extra_args": ["--x"]})
 
     def test_sglang_fixes_the_page_size_and_caps_sequences(self):
         with self.assertRaisesRegex(ValueError, "runtime.block_size must be 1"):
@@ -115,23 +100,18 @@ class NeutralSettingsTests(unittest.TestCase):
         args = self.built("sglang", {"max_sequences": 64})["args"]
         self.assertEqual(option(args, "--max-running-requests"), "64")
 
-    def test_the_neutral_side_channel_variable_takes_precedence(self):
-        launcher = load("sglang").launcher()
-        env = {launcher.side_channel_port_env: "5600"}
-        self.assertEqual(side_channel_port(launcher, env), 5600)
-        self.assertEqual(
-            side_channel_port(launcher, {**env, KV_SIDE_CHANNEL_PORT_ENV: "5700"}), 5700
-        )
+    def test_the_side_channel_port_comes_from_the_neutral_variable(self):
+        self.assertEqual(side_channel_port({KV_SIDE_CHANNEL_PORT_ENV: "5700"}), 5700)
+        with self.assertRaises(KeyError):
+            side_channel_port({"NARWHAL_SGLANG_BOOTSTRAP_PORT": "5600"})
         base = {"NARWHAL_DEPLOYMENT_REVISION": "a" * 40}
-        base.update({f"NARWHAL_{field}": "synthetic" for field in engine_fields({})})
+        base.update({f"NARWHAL_{field}": "synthetic" for field in ENGINE_FIELDS})
         fleet = {"engines": [], "engine": {}}
         values = select_values("engine", 1, fleet, {**base, KV_SIDE_CHANNEL_PORT_ENV: "5700"})
         self.assertEqual(values[KV_SIDE_CHANNEL_PORT_ENV], "5700")
-        self.assertNotIn("NARWHAL_NIXL_SIDE_CHANNEL_PORT", values)
-        self.assertEqual(
-            json.dumps(select_values("engine", 1, fleet, base)["NARWHAL_NIXL_SIDE_CHANNEL_PORT"]),
-            '"synthetic"',
-        )
+        del base[KV_SIDE_CHANNEL_PORT_ENV]
+        with self.assertRaisesRegex(ValueError, f"^{KV_SIDE_CHANNEL_PORT_ENV} is unset"):
+            select_values("engine", 1, fleet, {**base, "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600"})
 
 
 if __name__ == "__main__":

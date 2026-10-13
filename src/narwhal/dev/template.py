@@ -14,7 +14,6 @@ from importlib import metadata, resources
 from pathlib import Path
 from typing import Any
 
-from narwhal.backends import current_fields
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.backend import launcher
@@ -31,13 +30,6 @@ def reference() -> dict:
 
 def default_template() -> dict:
     return _read_template("small-cuda-v1.json")
-
-
-def current_ports(document: dict) -> dict:
-    ports = document.get("ports")
-    if isinstance(ports, dict):
-        document["ports"] = current_fields("dev_ports", ports)
-    return document
 
 
 def _read_template(filename: str) -> dict:
@@ -177,12 +169,12 @@ def materialize(
     existing = None
     saved = None
     if output.exists():
-        existing = current_ports(json.loads((output / "instance.json").read_text()))
+        existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
-        saved = current_ports(json.loads((output / "template.json").read_text()))
+        saved = json.loads((output / "template.json").read_text())
     source = template if template is not None else saved
-    spec = current_ports(copy.deepcopy(source if source is not None else default_template()))
+    spec = copy.deepcopy(source if source is not None else default_template())
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
         raise ValueError("Narwhal dev template requires schema version 1")
     allocation = {

@@ -185,11 +185,10 @@ class LaunchPlanTests(unittest.TestCase):
             "kv_events_endpoint": lambda r, e: r["runtime"]["extra_args"].extend(
                 ["--kv-events-config", '{"endpoint": "tcp://*:5557"}']
             ),
-            "kv_events_disabled": lambda r, e: r["runtime"]["extra_args"].extend(
-                ["--kv-events-config", '{"enable_kv_cache_events": false}']
-            ),
-            "prefix_caching_off": lambda r, e: r["runtime"]["extra_args"].append(
-                "--no-enable-prefix-caching"
+            "kv_events_disabled": lambda r, e: r["runtime"].update(kv_events=False),
+            "prefix_caching_off": lambda r, e: r["runtime"].update(prefix_caching=False),
+            "mapped_flag": lambda r, e: r["runtime"]["extra_args"].extend(
+                ["--max-model-len", "4096"]
             ),
             "managed_env": lambda r, e: r["runtime"]["environment"].update(VLLM_API_KEY="x"),
             "foreign_env": lambda r, e: r["runtime"]["environment"].update(OTHER_FLAG="1"),
@@ -198,7 +197,7 @@ class LaunchPlanTests(unittest.TestCase):
             "registry_digest": lambda r, e: e.update(
                 NARWHAL_ENGINE_IMAGE="registry.example/engine@sha256:" + "a" * 64
             ),
-            "shared_ports": lambda r, e: e.update(NARWHAL_NIXL_SIDE_CHANNEL_PORT="8000"),
+            "shared_ports": lambda r, e: e.update(NARWHAL_KV_SIDE_CHANNEL_PORT="8000"),
         }
         prefixes = {
             f"{prefix}FIXTURE": None for prefix in (*vllm_plan.ENV_PREFIXES, "LD_", "OTHER_")

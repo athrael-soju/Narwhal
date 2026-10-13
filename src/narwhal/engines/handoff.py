@@ -14,17 +14,11 @@ PrefillLeg = Callable[[dict[str, Any] | None], Awaitable[PrefillResult | None]]
 
 
 class HandoffLegs:
-    """One request's prefill and decode legs, run in the order the connector declares.
-
-    A sequential connector finishes the prefill leg first; its descriptor is what the decode leg
-    continues from. A concurrent connector assigns a rendezvous and runs the prefill leg while
-    the decode leg streams.
-    """
+    """One request's prefill and decode legs, run in the order the connector declares."""
 
     def __init__(self, kv: KvHandoff, producer: Mapping[str, Any] | None = None) -> None:
         self.kv = kv
         self.connector = kv.name
-        # The fields that pair a concurrent request's legs, from the producer's launch record.
         self.rendezvous = kv.rendezvous(producer or {})
         self.result: PrefillResult | None = None
         self.prefill_seconds: float | None = None
@@ -32,7 +26,6 @@ class HandoffLegs:
         self.task: asyncio.Task[PrefillResult | None] | None = None
 
     async def start(self, leg: PrefillLeg) -> HandoffLegs:
-        """Run a sequential prefill leg, or start a concurrent one, with this handoff's fields."""
         started = time.monotonic()
 
         async def run() -> PrefillResult | None:
@@ -59,14 +52,12 @@ class HandoffLegs:
         return self.kv.first_token_bound(limit)
 
     def failure(self) -> BaseException | None:
-        """Return the concurrent prefill leg's error once it has failed."""
         task = self.task
         if task is None or not task.done() or task.cancelled():
             return None
         return task.exception()
 
     async def settle(self, *, cancel: bool) -> BaseException | None:
-        """Wait for a concurrent prefill leg, cancelling it first if asked; return its error."""
         task = self.task
         if task is None:
             return None
@@ -87,7 +78,6 @@ class HandoffLegs:
         return self.result.parameters() if self.result is not None else dict(self.rendezvous or {})
 
     def diagnostics(self) -> dict[str, Any]:
-        """Return the handoff fields the connector declares for transfer diagnostics."""
         parameters = self.parameters
         return {name: parameters.get(name) for name in self.kv.diagnostics_fields}
 

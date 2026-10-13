@@ -29,23 +29,19 @@ MAX_RUNNING_REQUESTS = 256
 # decode wait follows it.
 BOOTSTRAP_TIMEOUT_S = 30
 VALUE_OPTIONS = {
-    "--context-length",
     "--mem-fraction-static",
     "--chunked-prefill-size",
     "--max-total-tokens",
     "--max-prefill-tokens",
-    "--tokenizer-path",
     "--reasoning-parser",
     "--load-format",
     "--disaggregation-ib-device",
     "--mamba-ssm-dtype",
     "--max-mamba-cache-size",
-    "--max-running-requests",
     "--mamba-radix-cache-strategy",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
-    "--disable-radix-cache",
     "--disable-cuda-graph",
     "--enable-mixed-chunk",
     "--disable-overlap-schedule",
@@ -113,14 +109,7 @@ def validate_runtime(runtime: dict) -> None:
             "runtime.decode_cuda_graph_memory_gb must be positive; a prefill-launched "
             "engine reserves it when it switches to decode"
         )
-    args = runtime.get("extra_args", [])
-    check_extra_args(args, VALUE_OPTIONS, FLAG_OPTIONS)
-    if "--max-running-requests" in args:
-        cap = option(args, "--max-running-requests")
-        if cap is None or not cap.isdigit() or not 1 <= int(cap) <= MAX_RUNNING_REQUESTS:
-            raise ValueError(
-                f"--max-running-requests must be set once, from 1 to {MAX_RUNNING_REQUESTS}"
-            )
+    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_settings(runtime, SETTINGS)
     check_environment(runtime.get("environment", {}), MANAGED_ENV, ENV_PREFIXES)
 
@@ -133,14 +122,6 @@ def transfer_package(connector_name: str, packages: dict) -> str | None:
         if name == base or (name.startswith(base) and _CUDA_BUILD.fullmatch(name[len(base) :]))
     ]
     return pinned[0] if len(pinned) == 1 and packages[pinned[0]] else None
-
-
-def radix_cache(args: list[str]) -> bool:
-    return "--disable-radix-cache" not in args
-
-
-def publishes_kv_events(args: list[str]) -> bool:
-    return radix_cache(args)
 
 
 def serve_args(
@@ -182,8 +163,7 @@ def serve_args(
                 name,
                 "--enable-pd-role-switch",
             ),
-            # A switched decode engine keeps the prefill launch's radix cache. Without this
-            # flag, decode admission neither counts nor evicts its finished requests and stops
+            # Without it, switched decode admission never evicts finished requests and stops
             # admitting.
             ("--disaggregation-decode-enable-radix-cache",)
             if switch(runtime, SETTINGS, "prefix_caching")

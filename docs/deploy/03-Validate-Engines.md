@@ -226,7 +226,7 @@ The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-l
 
 A failed check names the failing package, tokenizer, or identity check.
 
-The check reads the tokenizer from the final tokenizer flag in the serving arguments, `--tokenizer` on vLLM or `--tokenizer-path` on SGLang, or from the model directory by default. It checks a separate tokenizer's custom-code metadata, and the vLLM check also loads the tokenizer.
+The check reads the tokenizer from `runtime.tokenizer`, passed as `--tokenizer` on vLLM or `--tokenizer-path` on SGLang, or from the model directory by default. It checks a separate tokenizer's custom-code metadata, and the vLLM check also loads the tokenizer.
 
 For a container engine, the check logs to `image-check.log`, and the check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
@@ -291,7 +291,7 @@ Before you reuse a failed deployment:
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
     sglang = plan.get("engine") == "sglang"
-    expected_version = checked.get("engine_version") or checked["sglang_version" if sglang else "vllm_api_version"]
+    expected_version = checked["engine_version"]
     headers = {"Content-Type": "application/json"}
     if os.environ.get("NARWHAL_ENGINE_API_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]

@@ -53,7 +53,7 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 | `runs/deployment-tools/fabric_budget.py`      | Standalone fabric calculator snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                         | Management-checkout `tools/deployment/fabric_budget.py`.                                                                                                                                                 |
 | `runs/deployment-tools/cache_capture_hook.py` | Serving cache-capture snapshot for a vLLM fleet, with its path and SHA-256 in `.env.engine-<n>`.                                                                               | Management-checkout `src/narwhal/backends/vllm/cache_capture_hook.py`.                                                                                                                                   |
 | `runs/deployment/fleet.json`                  | Effective generated fleet copied before deployment edits.                                                                                                                      | Workstation file selected by `NARWHAL_FLEET`.                                                                                                                                                            |
-| `runs/deployment/profiling-limits.json`       | One sequence limit per engine ID, on the router host: `runtime.max_sequences`, else `--max-num-seqs` for vLLM or `--max-running-requests` for SGLang, `256` on SGLang when unset. | Each engine's generated launch record.                                                                                                                                                                   |
+| `runs/deployment/profiling-limits.json`       | One sequence limit per engine ID, on the router host: `runtime.max_sequences`, `256` on SGLang when unset.                                                                      | Each engine's generated launch record.                                                                                                                                                                   |
 
 Engine export requires:
 
@@ -70,7 +70,7 @@ NARWHAL_ATTEST_PORT
 NARWHAL_UCX_TCP_PORT_RANGE
 ```
 
-Engine export also requires the KV side-channel port, `NARWHAL_KV_SIDE_CHANNEL_PORT`. While it is unset, export takes the backend's earlier name, `NARWHAL_NIXL_SIDE_CHANNEL_PORT` on vLLM or `NARWHAL_SGLANG_BOOTSTRAP_PORT` on SGLang, and writes the port under that name.
+Engine export also requires the KV side-channel port, `NARWHAL_KV_SIDE_CHANNEL_PORT`.
 
 With `engine.engine_api_key_env` set, engine export requires the variable it names.
 

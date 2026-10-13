@@ -305,44 +305,31 @@ class EngineLauncherTests(unittest.TestCase):
         )
 
     def test_backend_settings_disable_cache_event_publication(self):
-        for options in (
-            ["--no-enable-prefix-caching"],
-            ["--kv-events-config", '{"enable_kv_cache_events": false}'],
-        ):
-            with self.subTest(options=options), tempfile.TemporaryDirectory() as folder:
+        for fields, published in (({"prefix_caching": False}, 0), ({"kv_events": False}, 1)):
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 record, env = launcher_inputs(root)
-                record["runtime"]["extra_args"] += options
+                record["runtime"].update(fields)
                 Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
                 run = root / "launch"
                 with contextlib.redirect_stdout(io.StringIO()):
                     prepare(run, env)
                 plan = load(run)
                 self.assertIsNone(plan["kv_events"])
-                self.assertEqual(
-                    plan["args"].count("--kv-events-config"), options.count("--kv-events-config")
-                )
+                self.assertEqual(plan["args"].count("--kv-events-config"), published)
                 self.assertNotIn("/narwhal-kv-events", json.dumps(plan["common"]))
 
     def test_cache_event_options_cannot_select_endpoints_or_conflict(self):
-        events = '{"enable_kv_cache_events": false}'
         cases = {
-            "enabled": ["--kv-events-config", '{"enable_kv_cache_events": true}'],
-            "endpoint": [
-                "--kv-events-config",
-                '{"enable_kv_cache_events": false, "endpoint": "tcp://*:5557"}',
-            ],
-            "invalid": ["--kv-events-config", "{"],
-            "repeated": ["--kv-events-config", events, "--kv-events-config", events],
-            "conflicting": ["--enable-prefix-caching", "--no-enable-prefix-caching"],
+            "events": ["--kv-events-config", '{"enable_kv_cache_events": false}'],
+            "prefix_caching": ["--enable-prefix-caching"],
         }
         for name, options in cases.items():
             with self.subTest(name), tempfile.TemporaryDirectory() as folder:
                 record, env = launcher_inputs(Path(folder))
                 record["runtime"]["extra_args"] += options
-                validate_runtime(record["runtime"])
-                with self.assertRaises(ValueError):
-                    build(record, env, Path(folder) / "launch")
+                with self.assertRaisesRegex(ValueError, f"unsupported .*: {options[0]}$"):
+                    validate_runtime(record["runtime"])
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
             with (

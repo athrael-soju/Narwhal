@@ -50,9 +50,9 @@
       "mooncake",
       "--enable-pd-role-switch",
       "--disaggregation-decode-enable-radix-cache",
-      "--kv-events-config",
       "--context-length",
-      "4096"
+      "4096",
+      "--kv-events-config"
     ],
     "bootstrap": {
       "bootstrap_host": "192.0.2.11",

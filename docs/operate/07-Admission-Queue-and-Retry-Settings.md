@@ -25,7 +25,7 @@ Turn the queue on for short bursts when clients should wait for a seat. Set `ser
 
 ## Engine seats and KV handoff
 
-The router derives [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) from attestation and profiles. To change decode seats, relaunch with a different `--max-num-seqs` and attest again, or remeasure the profile. Prefill seats follow the profile and `slo.ttft_s`.
+The router derives [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) from attestation and profiles. To change decode seats, relaunch with a different `runtime.max_sequences` and attest again, or remeasure the profile. Prefill seats follow the profile and `slo.ttft_s`.
 
 The [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) comes from the lease in engine attestation. [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease at engine launch. A longer lease permits a longer decode-seat wait and retains abandoned handoff blocks longer. Relaunch and attest engines after changing it. [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry) defines the client outcome.
 

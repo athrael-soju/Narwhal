@@ -67,12 +67,7 @@ def sglang_observation(address="10.0.0.1"):
 
 def sglang_environment(root):
     env = environment(root)
-    del env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"]
-    env.update(
-        NARWHAL_ENGINE_BACKEND="sglang",
-        NARWHAL_SGLANG_BOOTSTRAP_PORT="5557",
-        NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB="4",
-    )
+    env.update(NARWHAL_ENGINE_BACKEND="sglang", NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB="4")
     return env
 
 
@@ -89,7 +84,7 @@ def environment(root):
         "NARWHAL_FABRIC_INTERFACE": "fabric0",
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",
-        "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5557",
+        "NARWHAL_KV_SIDE_CHANNEL_PORT": "5557",
         "NARWHAL_UCX_TCP_PORT_RANGE": "20000-21000",
         "NARWHAL_DEPLOYMENT_REVISION": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -229,8 +224,7 @@ class DiscoveryTests(unittest.TestCase):
             for node in (1, 2):
                 role = f"engine-{node}"
                 role_env = select_values("engine", node, fleet, env)
-                self.assertEqual(role_env["NARWHAL_SGLANG_BOOTSTRAP_PORT"], "5557")
-                self.assertNotIn("NARWHAL_NIXL_SIDE_CHANNEL_PORT", role_env)
+                self.assertEqual(role_env["NARWHAL_KV_SIDE_CHANNEL_PORT"], "5557")
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
                 )
@@ -266,8 +260,11 @@ class DiscoveryTests(unittest.TestCase):
             extra_args(),
             ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
         )
+        env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--mamba-radix-cache-strategy", "no_buffer"])
+        self.assertEqual(extra_args(), ["--mamba-radix-cache-strategy", "no_buffer"])
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
-        self.assertEqual(extra_args(), [])
+        with self.assertRaisesRegex(ValueError, "unsupported .*: --disable-radix-cache$"):
+            extra_args()
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
@@ -335,7 +332,9 @@ class DiscoveryTests(unittest.TestCase):
             env.update(
                 NARWHAL_GPU_IDS="2,3",
                 NARWHAL_TENSOR_PARALLEL_SIZE="2",
-                NARWHAL_ENGINE_ARGS='["--max-model-len", "8192"]',
+                NARWHAL_CONTEXT_LENGTH="8192",
+                NARWHAL_NODE_1_MAX_SEQUENCES="6",
+                NARWHAL_ENGINE_ARGS='["--enforce-eager"]',
                 NARWHAL_ENGINE_ENV='{"VLLM_ROCM_USE_AITER": "0"}',
             )
             hosts = derive_hosts(env)
@@ -349,12 +348,20 @@ class DiscoveryTests(unittest.TestCase):
                 ["/dev/kfd", "/dev/dri/renderD130", "/dev/dri/renderD131"],
             )
             self.assertEqual(one["runtime"]["environment"]["VLLM_ROCM_USE_AITER"], "0")
-            # Discovery writes the engine-neutral fields that ENGINE_ARGS flags set.
-            self.assertEqual(one["runtime"]["extra_args"], ["--trust-remote-code"])
+            self.assertEqual(
+                one["runtime"]["extra_args"], ["--enforce-eager", "--trust-remote-code"]
+            )
             self.assertEqual(one["runtime"]["context_length"], 8192)
-            self.assertNotIn("max_sequences", one["runtime"])
+            self.assertEqual(one["runtime"]["max_sequences"], 6)
             two = launches["engines"]["engine-2"]["runtime"]
-            self.assertEqual((two["extra_args"], two["context_length"]), ([], 8192))
+            self.assertEqual(
+                (two["extra_args"], two["context_length"], two["max_sequences"]),
+                (["--enforce-eager"], 8192, 8),
+            )
+            env["NARWHAL_ENGINE_ARGS"] = '["--max-model-len", "8192"]'
+            with self.assertRaisesRegex(ValueError, "unsupported .*: --max-model-len$"):
+                build_records(hosts, env, observations, root)
+            env["NARWHAL_ENGINE_ARGS"] = '["--enforce-eager"]'
             env["NARWHAL_MODEL_CONFIG_SHA256"] = "c" * 64
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 build_records(hosts, env, observations, root)

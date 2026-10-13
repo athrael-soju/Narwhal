@@ -425,16 +425,6 @@ class DevTests(unittest.TestCase):
             )
         self.assertEqual(path.read_text(), "operator edit")
 
-    def test_reuse_reads_the_earlier_side_channel_port_name(self):
-        self.initialize(port_base=19000)
-        for name in ("instance.json", "template.json"):
-            document = lifecycle.read(self.root / name)
-            document["ports"]["nixl_first"] = document["ports"].pop("side_channel_first")
-            lifecycle.write(self.root / name, document)
-        self.assertEqual(template.materialize(self.root, port_base=19000), self.root)
-        with self.assertRaisesRegex(ValueError, "--port-base"):
-            template.materialize(self.root, port_base=19001)
-
     def test_cli_reuse_reports_all_conflicts_and_preserves_operator_edits(self):
         self.initialize()
         (self.root / "fleet.json").write_text("operator fleet edit")

@@ -77,14 +77,13 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("launch_digest", legacy)
         self.assertEqual(verify_attestation(legacy, self.contract, self.identity), [])
 
-    def test_response_reads_the_legacy_engine_version_name(self):
+    def test_response_requires_the_engine_version_field(self):
         payload = make_attestation(self.document, self.identity)
         payload["engine"]["vllm_version"] = payload["engine"].pop("version")
         payload["attestation_digest"] = _payload_digest(payload)
-        self.assertEqual(verify_attestation(payload, self.contract, self.identity), [])
-        changed = replace(self.identity, version="other")
-        self.assertTrue(
-            any("engine version" in p for p in verify_attestation(payload, self.contract, changed))
+        self.assertIn(
+            f"engine version is None, the live engine reports {self.identity.version!r}",
+            verify_attestation(payload, self.contract, self.identity),
         )
 
     def test_tampering_and_response_shapes_report_failures(self):
@@ -146,21 +145,18 @@ class AttestationTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(section=section, field=field), self.assertRaises(ValueError):
                     AttestationDocument.load(path)
 
-    def test_document_loader_reads_legacy_contract_names(self):
-        legacy = {
-            "vllm_version": "engine_version",
-            "nixl_version": "transfer_version",
-            "nixl_connector_version": "connector_version",
-        }
-        renamed = {old: new for new, old in legacy.items()}
-        contract = {renamed.get(k, k): v for k, v in self.contract.fields().items()}
-        sources = {renamed.get(k, k): v for k, v in self.document.sources.items()}
+    def test_document_loader_rejects_unknown_contract_names(self):
+        contract = self.contract.fields()
+        contract["vllm_version"] = contract.pop("engine_version")
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "attestation.json"
             path.write_text(
-                json.dumps(versioned(ATTESTATION, {"contract": contract, "sources": sources}))
+                json.dumps(
+                    versioned(ATTESTATION, {"contract": contract, "sources": self.document.sources})
+                )
             )
-            self.assertEqual(AttestationDocument.load(path), self.document)
+            with self.assertRaisesRegex(ValueError, "unknown .*contract field.*vllm_version"):
+                AttestationDocument.load(path)
 
     def test_shipped_attestation_example_is_complete(self):
         document = AttestationDocument.load(ROOT / "config/engine-attestation.example.json")

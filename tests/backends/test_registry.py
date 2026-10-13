@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from narwhal.backends import EngineBackend, current_fields, load, names
+from narwhal.backends import EngineBackend, load, names
 from narwhal.config.loading import load as load_fleet
 from narwhal.deployment.launch_engine.backend import EngineLauncher
 from narwhal.engines.attestation import EngineIdentityReader
@@ -44,14 +44,6 @@ class RegistryTests(unittest.TestCase):
             load("nope")
         with self.assertRaisesRegex(ValueError, "no connector 'nope'.*nixl"):
             load("vllm").connector("nope")
-
-    def test_earlier_field_names_resolve_through_one_mapping(self):
-        self.assertEqual(
-            current_fields("shared_start", {"vllm_version": "1", "sglang_args": ["x"]}),
-            {"engine_version": "1", "engine_args": ["x"]},
-        )
-        with self.assertRaisesRegex(ValueError, "sets both vllm_api_version and sglang_version"):
-            current_fields("checked", {"vllm_api_version": "1", "sglang_version": "2"})
 
     def test_fleet_config_selects_and_validates_the_backend(self):
         fleet = json.loads((ROOT / "tests/data/fleet.json").read_text())

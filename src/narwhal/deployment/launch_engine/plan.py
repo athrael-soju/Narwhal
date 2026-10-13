@@ -89,15 +89,16 @@ def option(args: list[str], name: str) -> str | None:
 
 
 def discovered_settings(
-    observed: dict, setting: Callable[[str, str], str], default_args: Callable[[int], list[str]]
-) -> tuple[str, list, dict, dict]:
+    observed: dict, setting: Callable[[str, str], str], default_args: list[str]
+) -> tuple[str, int, list, dict, dict]:
     dtype = setting("MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
     if dtype not in {"bfloat16", "float16"}:
         raise ValueError("set MODEL_DTYPE to bfloat16 or float16 in .env")
     max_len = min(
         int(observed.get("max_model_len") or MAX_DISCOVERED_CONTEXT), MAX_DISCOVERED_CONTEXT
     )
-    args = json.loads(setting("ENGINE_ARGS", json.dumps(default_args(max_len))))
+    context_length = int(setting("CONTEXT_LENGTH", str(max_len)))
+    args = json.loads(setting("ENGINE_ARGS", json.dumps(default_args)))
     if not isinstance(args, list):
         raise ValueError("ENGINE_ARGS must be a JSON array")
     environment = dict(observed["image_environment"])
@@ -105,7 +106,7 @@ def discovered_settings(
     if not isinstance(overrides, dict):
         raise ValueError("ENGINE_ENV must be a JSON object")
     environment.update(overrides)
-    return dtype, args, environment, overrides
+    return dtype, context_length, args, environment, overrides
 
 
 def ipc_cache_off(ipc_cache: str | None) -> bool:
@@ -121,16 +122,13 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
 
 
 def publishes_kv_events(engine: EngineLauncher, runtime: dict) -> bool:
-    # Publication needs prefix caching, and a launch can turn it off with prefix caching on.
-    return (
-        engine.publishes_kv_events(runtime.get("extra_args", []))
-        and switch(runtime, engine.launch_settings, "prefix_caching")
-        and runtime.get("kv_events") is not False
+    return switch(runtime, engine.launch_settings, "prefix_caching") and switch(
+        runtime, engine.launch_settings, "kv_events"
     )
 
 
-def side_channel_port(engine: EngineLauncher, env: Mapping[str, str]) -> int:
-    return int(env.get(KV_SIDE_CHANNEL_PORT_ENV) or env[engine.side_channel_port_env])
+def side_channel_port(env: Mapping[str, str]) -> int:
+    return int(env[KV_SIDE_CHANNEL_PORT_ENV])
 
 
 def kv_events_policy(
@@ -269,7 +267,7 @@ def build(
     ):
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
-    side_port = side_channel_port(engine, env)
+    side_port = side_channel_port(env)
     attest_port = int(env["NARWHAL_ATTEST_PORT"])
     if (
         any(not 1 <= p <= 65535 for p in (port, side_port, attest_port))
@@ -437,7 +435,6 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
     engine = plan_launcher(plan)
-    # Only a backend with cache capture loads the hook, as the hook's sitecustomize.py.
     capture = cache_capture(engine) is not None
     if capture:
         hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])

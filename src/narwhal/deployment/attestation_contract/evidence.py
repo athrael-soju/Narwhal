@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ...backends import current_fields
 from ..launch_engine.backend import LiveModelDimensions, plan_launcher
 from ..launch_engine.check import read_checked
 from ..launch_engine.runtime import digest, write_private
@@ -25,8 +24,7 @@ def write_private_json(path: Path, value: dict) -> None:
 
 
 def read_shared_start(run: Path) -> dict:
-    """Read shared-start.json, resolving the field names an earlier build wrote."""
-    return current_fields("shared_start", read_json(run / "shared-start.json"), "shared-start.json")
+    return read_json(run / "shared-start.json")
 
 
 def checked_plan(run: Path) -> tuple[dict, dict, str]:
@@ -91,7 +89,6 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
 
 
 def live_identity(run: Path, plan: dict, checked: dict) -> dict | str:
-    """Return the live native process identity, or the live container ID."""
     if plan.get("backend") == "native":
         return live_native(run, plan, checked)
     return live_container(run, checked)
@@ -162,7 +159,6 @@ def model_contract(config: dict) -> dict[str, Any]:
 
 
 def config_model_dimensions(run: Path, plan: dict) -> Path:
-    """Write model-dimensions.json from the prepared model configuration."""
     destination = run / "model-dimensions.json"
     path = Path(plan["model_dir"]) / "config.json"
     if digest(path) != plan["model_config_sha256"]:
@@ -184,7 +180,6 @@ def config_model_dimensions(run: Path, plan: dict) -> Path:
 
 
 def model_dimensions(run: Path, plan: dict) -> None:
-    """Write model-dimensions.json, from the engine runtime where the backend reads it."""
     engine = plan_launcher(plan)
     if isinstance(engine, LiveModelDimensions):
         engine.model_dimensions(run, plan)
@@ -193,7 +188,6 @@ def model_dimensions(run: Path, plan: dict) -> None:
 
 
 def capture_model_dimensions(run: Path) -> Path:
-    """Capture the engine's live model dimensions, or record them from the model configuration."""
     plan, _, _ = checked_plan(run)
     engine = plan_launcher(plan)
     if isinstance(engine, LiveModelDimensions):

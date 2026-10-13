@@ -24,7 +24,7 @@ For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit 
 
 ## Engine environment
 
-`prepare` writes the engine's environment file from the record's `runtime.environment` and `environment`, `UCX_TLS`, `UCX_TCP_PORT_RANGE` from `NARWHAL_UCX_TCP_PORT_RANGE`, and the KV side channel. It reads the engine credential, when set, from `NARWHAL_ENGINE_API_KEY` and the side-channel port from `NARWHAL_KV_SIDE_CHANNEL_PORT`, or, while that is unset, from `NARWHAL_NIXL_SIDE_CHANNEL_PORT` on vLLM or `NARWHAL_SGLANG_BOOTSTRAP_PORT` on SGLang.
+`prepare` writes the engine's environment file from the record's `runtime.environment` and `environment`, `UCX_TLS`, `UCX_TCP_PORT_RANGE` from `NARWHAL_UCX_TCP_PORT_RANGE`, and the KV side channel. It reads the engine credential, when set, from `NARWHAL_ENGINE_API_KEY` and the side-channel port from `NARWHAL_KV_SIDE_CHANNEL_PORT`.
 
 A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to `NARWHAL_NODE_<n>_IP`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, and the credential as `VLLM_API_KEY`.
 

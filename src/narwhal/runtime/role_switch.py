@@ -61,8 +61,6 @@ class RoleSwitcher(ABC):
 
 
 class FixedRoles(RoleSwitcher):
-    """Engines keep the roles their fleet pins name; the router never switches them."""
-
     model = RoleModel.FIXED
 
     async def switch(
@@ -75,8 +73,6 @@ class FixedRoles(RoleSwitcher):
 
 
 class RouterRoleSwitch(RoleSwitcher):
-    """The router picks each leg's role, and the engine serves it without a switch."""
-
     model = RoleModel.ROUTER
 
     async def switch(
@@ -89,21 +85,14 @@ class RouterRoleSwitch(RoleSwitcher):
 
 
 class EngineHeldRoles(RoleSwitcher):
-    """An engine holds its role until the router switches it.
-
-    A decode engine keeps each producer's transfer endpoint until it switches itself, and a
-    producer that enters prefill again listens on a new one. The switcher counts each engine's
-    entries into prefill, and records the producer generations each decode engine took handoffs
-    from since its own last switch.
-    """
+    """A decode engine keeps each producer's endpoint until it switches; prefill opens a new one."""
 
     model = RoleModel.ENGINE
 
     def __init__(self) -> None:
         # Times each engine entered prefill through this switcher.
         self._generations: dict[str, int] = {}
-        # Per decode engine, the generation of each producer it took a handoff from since its
-        # own last switch.
+        # Per decode engine, the producer generations it took handoffs from since its last switch.
         self._received: dict[str, dict[str, int]] = {}
 
     @abstractmethod

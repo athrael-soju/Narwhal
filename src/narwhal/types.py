@@ -43,8 +43,6 @@ class Role(StrEnum):
 
 
 class RoleModel(StrEnum):
-    """Who decides the role an engine serves, as a backend declares it."""
-
     # Each engine serves the role its fleet pin names.
     FIXED = "fixed"
     # The router picks each leg's role; any engine serves either leg.

@@ -140,7 +140,6 @@ FIXTURES = ContractFixtures(
     kv_lease=30,
     memory_args=["--gpu-memory-utilization", "0.4"],
     memory_fraction="0.4",
-    no_kv_event_args=["--no-enable-prefix-caching"],
     image_packages={"vllm": "0.29.0", "nixl": "1.0.0", "torch": "2.12.0"},
     launch_runtime=runtime(),
     check_output=check_output,

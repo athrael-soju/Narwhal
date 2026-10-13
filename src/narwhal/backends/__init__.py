@@ -4,7 +4,7 @@ import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint, entry_points
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..deployment.launch_engine.backend import EngineLauncher
@@ -18,8 +18,6 @@ if TYPE_CHECKING:
 
 GROUP = "narwhal.backends"
 DEFAULT_BACKEND = "vllm"
-
-V = TypeVar("V")
 
 
 @dataclass(frozen=True)
@@ -35,16 +33,11 @@ class EngineBackend:
     metrics: EngineMetrics
     fabric: FabricLifecycle
     launcher: Callable[[], EngineLauncher] = field(repr=False)
-    # The role model the backend declares, with its switch operations.
     role_switch: RoleSwitcher = field(repr=False)
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
-    # Earlier field names this backend wrote, by section: "contract", "engine", "dev_ports",
-    # "checked" for checked.json and "shared_start" for shared-start.json.
-    renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def role_switcher(self, connector: str) -> RoleSwitcher:
-        """Return the backend's switcher, or fixed roles for a connector it cannot switch."""
         from ..runtime.role_switch import FixedRoles
 
         switcher = self.role_switch
@@ -81,28 +74,3 @@ def load(name: str) -> EngineBackend:
     if not isinstance(backend, EngineBackend) or backend.name != name:
         raise ValueError(f"entry point {name!r} does not build the {name!r} EngineBackend")
     return backend
-
-
-def renamed_fields(section: str) -> dict[str, str]:
-    return {
-        old: new
-        for name in names()
-        for old, new in load(name).renamed_fields.get(section, {}).items()
-    }
-
-
-def current_fields(section: str, raw: Mapping[str, V], label: str | None = None) -> dict[str, V]:
-    """Resolve each earlier field name in a section; reject two names for one field."""
-    renamed = renamed_fields(section)
-    current: dict[str, V] = {}
-    earlier: dict[str, str] = {}
-    for key, value in raw.items():
-        name = renamed.get(key, key)
-        if name in current:
-            first = earlier.get(name)
-            pair = (first, key if name != key else name) if first else (key, name)
-            raise ValueError(f"{label or section} sets both {pair[0]} and {pair[1]}")
-        if name != key:
-            earlier[name] = key
-        current[name] = value
-    return current

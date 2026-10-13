@@ -32,8 +32,6 @@ MODEL_FIELDS = ("model_architecture", "kv_heads", "head_size", "hidden_layers")
 
 @dataclass(frozen=True)
 class AttestationContext:
-    """The checked, live launch that an attestation document describes."""
-
     run: Path
     plan: dict
     checked: dict
@@ -50,11 +48,8 @@ class AttestationContext:
 
 @dataclass(frozen=True)
 class AttestationEvidence:
-    """What a backend reads from its own evidence for the attestation document."""
-
     engine_version: object
-    # Contract fields other than the engine version, image, transfer version and model
-    # dimensions.
+    # Fields besides the engine version, image, transfer version and model dimensions.
     contract: dict
     # The evidence file behind the engine version and each field in contract.
     sources: dict[str, Path]
@@ -110,7 +105,6 @@ def bound_dimensions(
 
 
 def engine_document(run: Path, startup_log: Path) -> dict:
-    """Build the engine attestation document from a checked, live launch."""
     plan, checked, plan_hash = checked_plan(run)
     engine = plan_launcher(plan)
     native = plan.get("backend") == "native"

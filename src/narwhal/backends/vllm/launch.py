@@ -21,7 +21,6 @@ class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelForma
     runtime_script = LAUNCHER
     cache_hook = Path(__file__).with_name("cache_capture_hook.py")
     side_channel = "NIXL"
-    side_channel_port_env = "NARWHAL_NIXL_SIDE_CHANNEL_PORT"
     api_key_env = "VLLM_API_KEY"
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
@@ -59,9 +58,6 @@ class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelForma
     def check_model(self, runtime: dict, model: str) -> None:
         if model.endswith(".gguf") and not runtime["expected_packages"].get("vllm-gguf-plugin"):
             raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
-
-    def publishes_kv_events(self, extra_args: list[str]) -> bool:
-        return policy.publishes_kv_events(extra_args)
 
     def serve(
         self,

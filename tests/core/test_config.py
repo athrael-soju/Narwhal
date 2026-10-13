@@ -10,7 +10,6 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from narwhal.backends import renamed_fields
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document
 from narwhal.diagnostics.check import cli as check_cli
@@ -296,14 +295,10 @@ class ConfigTests(unittest.TestCase):
                     replace(cfg, **{field: value}).validate()
         replace(cfg, engines=cfg.engines[:1], min_prefill=1, min_decode=1).validate()
 
-    def test_engine_contract_reads_legacy_field_names(self):
+    def test_engine_contract_rejects_unknown_field_names(self):
         raw = copy.deepcopy(self.raw)
-        contract = raw["engine_contract"]
-        for old, new in renamed_fields("contract").items():
-            contract[old] = contract.pop(new)
-        self.assertEqual(self.load(raw).engine_contract, self.load(self.raw).engine_contract)
-        contract["engine_version"] = contract["vllm_version"]
-        with self.assertRaisesRegex(ValueError, "both vllm_version and engine_version"):
+        raw["engine_contract"]["vllm_version"] = raw["engine_contract"].pop("engine_version")
+        with self.assertRaisesRegex(ValueError, "vllm_version"):
             self.load(raw)
 
     def test_engine_and_hardware_contracts_reject_unsafe_bindings(self):

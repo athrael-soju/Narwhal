@@ -5,9 +5,8 @@ import os
 from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
-from ..backends import DEFAULT_BACKEND, current_fields
+from ..backends import DEFAULT_BACKEND
 from ..backends import load as load_backend
 from ..contracts import canonical_digest
 from ..scheduling.control import SLO, Thresholds
@@ -33,10 +32,6 @@ class SharedDeviceAllocation:
     gpu_uuid: str
     device_allowance: float
     gpu_memory_utilization: float
-
-
-def current_contract_names(raw: dict[str, Any]) -> dict[str, Any]:
-    return current_fields("contract", raw, "engine contract")
 
 
 @dataclass(frozen=True)

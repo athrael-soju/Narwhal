@@ -26,7 +26,6 @@ FABRIC_BUDGET_SOURCE = Path(__file__).with_name("fabric_budget.py")
 
 
 def role_files(host: Host, capture: bool) -> list[str]:
-    """Name a host's deployment files; capture adds the cache capture hook for engines."""
     files = [f".env.{role}" for role in host.roles]
     files += [f"engine-launch.{role}.json" for role in host.roles if role.startswith("engine-")]
     if any(role.startswith("engine-") for role in host.roles):

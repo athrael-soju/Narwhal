@@ -123,7 +123,7 @@
           "false",
           "false",
           "/model",
-          "[\"--model\", \"/model\", \"--served-model-name\", \"synthetic\", \"--tensor-parallel-size\", \"2\", \"--dtype\", \"bfloat16\", \"--kv-cache-dtype\", \"auto\", \"--block-size\", \"128\", \"--kv-events-config\", \"{\\\"enable_kv_cache_events\\\": true, \\\"publisher\\\": \\\"zmq\\\", \\\"endpoint\\\": \\\"ipc:///narwhal-kv-events/events.sock\\\", \\\"replay_endpoint\\\": \\\"ipc:///narwhal-kv-events/replay.sock\\\"}\", \"--kv-transfer-config\", \"{\\\"kv_connector\\\": \\\"NixlConnector\\\", \\\"kv_role\\\": \\\"kv_both\\\", \\\"kv_load_failure_policy\\\": \\\"fail\\\", \\\"kv_connector_extra_config\\\": {\\\"backends\\\": [\\\"UCX\\\"], \\\"enforce_handshake_compat\\\": true, \\\"kv_lease_duration\\\": 30}}\", \"--max-model-len\", \"4096\", \"--enforce-eager\"]"
+          "[\"--model\", \"/model\", \"--served-model-name\", \"synthetic\", \"--tensor-parallel-size\", \"2\", \"--dtype\", \"bfloat16\", \"--kv-cache-dtype\", \"auto\", \"--block-size\", \"128\", \"--max-model-len\", \"4096\", \"--kv-events-config\", \"{\\\"enable_kv_cache_events\\\": true, \\\"publisher\\\": \\\"zmq\\\", \\\"endpoint\\\": \\\"ipc:///narwhal-kv-events/events.sock\\\", \\\"replay_endpoint\\\": \\\"ipc:///narwhal-kv-events/replay.sock\\\"}\", \"--kv-transfer-config\", \"{\\\"kv_connector\\\": \\\"NixlConnector\\\", \\\"kv_role\\\": \\\"kv_both\\\", \\\"kv_load_failure_policy\\\": \\\"fail\\\", \\\"kv_connector_extra_config\\\": {\\\"backends\\\": [\\\"UCX\\\"], \\\"enforce_handshake_compat\\\": true, \\\"kv_lease_duration\\\": 30}}\", \"--enforce-eager\"]"
         ],
         "log": "image-check.log"
       }
@@ -200,12 +200,12 @@
           "auto",
           "--block-size",
           "128",
+          "--max-model-len",
+          "4096",
           "--kv-events-config",
           "{\"enable_kv_cache_events\": true, \"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}",
           "--kv-transfer-config",
           "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
-          "--max-model-len",
-          "4096",
           "--enforce-eager"
         ],
         "log": "launch.log"

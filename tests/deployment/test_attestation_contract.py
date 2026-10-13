@@ -100,7 +100,7 @@ class AttestationContractTests(unittest.TestCase):
             "plan_sha256": plan_hash,
             "python_executable": sys.executable,
             "expected_packages": plan["expected_packages"],
-            "vllm_api_version": "0.29.0",
+            "engine_version": "0.29.0",
         }
         save(run / "checked.json", checked)
         process = {"pid": 1234, "boot_id": "boot", "start_ticks": 5678}
@@ -111,7 +111,7 @@ class AttestationContractTests(unittest.TestCase):
                 "status": "running",
                 "plan_sha256": plan_hash,
                 "process": process,
-                "vllm_version": "0.29.0",
+                "engine_version": "0.29.0",
                 "process_start_time_seconds": 100.0,
             },
         )
@@ -265,7 +265,7 @@ class AttestationContractTests(unittest.TestCase):
             {
                 "plan_sha256": plan_hash,
                 "image_id": image,
-                "vllm_api_version": "0.29.0",
+                "engine_version": "0.29.0",
                 "ucx_version": "1.22.0",
                 "peer_release": True,
             },

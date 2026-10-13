@@ -117,7 +117,7 @@ class ContainerAllowanceTests(unittest.TestCase):
                     env.update(
                         NARWHAL_ENGINE_PORT=str(8000 + number),
                         NARWHAL_ATTEST_PORT=str(8100 + number),
-                        NARWHAL_NIXL_SIDE_CHANNEL_PORT=str(5600 + number),
+                        NARWHAL_KV_SIDE_CHANNEL_PORT=str(5600 + number),
                     )
                     env[f"NARWHAL_NODE_{number}_IP"] = "192.0.2.11"
                     env[f"NARWHAL_NODE_{number}_URL"] = f"http://192.0.2.11:{8000 + number}"

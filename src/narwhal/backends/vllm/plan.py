@@ -13,16 +13,12 @@ from ...deployment.launch_engine.settings import LaunchSettings, Setting, check_
 from ...deployment.launch_engine.settings import serve_args as render
 
 VALUE_OPTIONS = {
-    "--max-model-len",
     "--gpu-memory-utilization",
     "--max-num-batched-tokens",
-    "--max-num-seqs",
     "--reasoning-parser",
     "--attention-backend",
-    "--tokenizer",
     "--hf-config-path",
     "--load-format",
-    "--kv-events-config",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -31,8 +27,6 @@ FLAG_OPTIONS = {
     "--async-scheduling",
     "--no-disable-hybrid-kv-cache-manager",
     "--disable-hybrid-kv-cache-manager",
-    "--enable-prefix-caching",
-    "--no-enable-prefix-caching",
 }
 # NIXL engine_ttl for CUDA IPC peers with the UCX IPC cache off; the router's first peer
 # release round follows it.
@@ -102,27 +96,6 @@ def validate_runtime(runtime: dict) -> None:
         ENV_PREFIXES,
         forbidden=(*SECRET_WORDS, "SKIP_COMPAT"),
     )
-
-
-def publishes_kv_events(args: list[str]) -> bool:
-    # Publication follows prefix caching unless --kv-events-config disables it.
-    if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
-        raise ValueError("runtime.extra_args must select prefix caching at most once")
-    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
-    if len(supplied) > 1:
-        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
-    if supplied:
-        try:
-            value = json.loads(supplied[0])
-        except ValueError:
-            value = None
-        if value != {"enable_kv_cache_events": False}:
-            raise ValueError(
-                "runtime.extra_args --kv-events-config may only set "
-                '{"enable_kv_cache_events": false}; the launcher selects event endpoints'
-            )
-        return False
-    return "--no-enable-prefix-caching" not in args
 
 
 def serve_args(

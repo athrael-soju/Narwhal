@@ -17,7 +17,6 @@ BOOTSTRAP_HOST_ENV = "NARWHAL_SGLANG_BOOTSTRAP_HOST"
 class SglangLauncher(EngineLauncher):
     runtime_script = LAUNCHER
     side_channel = "bootstrap"
-    side_channel_port_env = "NARWHAL_SGLANG_BOOTSTRAP_PORT"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
@@ -55,9 +54,6 @@ class SglangLauncher(EngineLauncher):
 
     def side_channel_address(self, env: Mapping[str, str]) -> tuple[str, int]:
         return env[BOOTSTRAP_HOST_ENV], int(env[BOOTSTRAP_PORT_ENV])
-
-    def publishes_kv_events(self, extra_args: list[str]) -> bool:
-        return policy.publishes_kv_events(extra_args)
 
     def serve(
         self,

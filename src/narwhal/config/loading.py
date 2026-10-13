@@ -23,7 +23,6 @@ from .model import (
     SharedDeviceAllocation,
     attested_contract_fields,
     checks_handshake,
-    current_contract_names,
 )
 
 
@@ -186,10 +185,6 @@ def load(path: str | Path) -> FleetConfig:
         contract_raw = None
     engine_contract: EngineContract | None = None
     if contract_raw is not None:
-        try:
-            contract_raw = current_contract_names(contract_raw)
-        except ValueError as exc:
-            problems.append(str(exc))
         _check_unknown(problems, "engine_contract", contract_raw, _ENGINE_CONTRACT_KEYS)
         attested = attested_contract_fields(str(engine_raw.get("backend", DEFAULT_BACKEND)))
         # A backend without a handshake check leaves the field null.

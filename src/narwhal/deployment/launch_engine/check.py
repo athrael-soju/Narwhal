@@ -6,7 +6,6 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...backends import current_fields
 from .. import stages
 from .backend import plan_launcher
 from .docker import docker
@@ -15,6 +14,7 @@ from .plan import (
     container_options,
     env_file_name,
     kv_events_directory,
+    option,
     read_env,
     requires_remote_code,
 )
@@ -26,8 +26,6 @@ CONTAINER_LAUNCHER = "/narwhal-hooks/launch_engine.py"
 
 @dataclass(frozen=True)
 class CheckContext:
-    """One runtime check: the plan, its namespace and the settings the probe confirms."""
-
     run: Path
     plan: dict
     log: str
@@ -50,8 +48,6 @@ class CheckContext:
 
 @dataclass(frozen=True)
 class ProbeResult:
-    """What a backend reads from its probe output."""
-
     version: object
     prefix_caching: object
     kv_events: object
@@ -61,11 +57,6 @@ class ProbeResult:
     notes: tuple[str, ...] = ()
 
 
-def last_option(args: list[str], name: str) -> str | None:
-    positions = [i for i, arg in enumerate(args[:-1]) if arg == name]
-    return args[positions[-1] + 1] if positions else None
-
-
 def check(run: Path, plan: dict) -> None:
     engine = plan_launcher(plan)
     native = plan.get("backend") == "native"
@@ -73,7 +64,7 @@ def check(run: Path, plan: dict) -> None:
     mapping = engine.launch_settings
     default_tokenizer = plan["model_dir"] if native else "/model"
     flag = mapping.settings["tokenizer"].flag
-    tokenizer = (flag and last_option(plan["args"], flag)) or default_tokenizer
+    tokenizer = (flag and option(plan["args"], flag)) or default_tokenizer
     trust_remote_code = mapping.remote_code_flag in plan["args"]
     # The probe checks a separate tokenizer's metadata in the serving namespace.
     if (
@@ -147,8 +138,7 @@ def check(run: Path, plan: dict) -> None:
 
 
 def read_checked(run: Path) -> dict:
-    """Read checked.json, resolving the field names an earlier build wrote."""
-    return current_fields("checked", json.loads((run / "checked.json").read_text()), "checked.json")
+    return json.loads((run / "checked.json").read_text())
 
 
 def require_checked(run: Path, plan: dict) -> None:
@@ -221,9 +211,6 @@ def write_checked(run: Path, plan: dict, fields: dict, inspection: dict | None) 
     else:
         assert inspection is not None
         evidence["image_id"] = inspection["Id"]
-    # A file with an earlier build's field names stands when it records the same values.
-    if (run / "checked.json").exists() and read_checked(run) == evidence:
-        return
     write_once(
         run / "checked.json",
         json.dumps(evidence),

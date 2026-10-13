@@ -3,25 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ...deployment.launch_engine.plan import discovered_settings
-from ...deployment.launch_engine.settings import neutral_runtime
-from .plan import SETTINGS
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
+DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
-    dtype, args, environment, overrides = discovered_settings(
-        observed,
-        setting,
-        lambda max_len: [
-            "--max-model-len",
-            str(max_len),
-            "--max-num-seqs",
-            "8",
-            "--gpu-memory-utilization",
-            "0.9",
-            "--enforce-eager",
-        ],
+    dtype, context_length, args, environment, overrides = discovered_settings(
+        observed, setting, DEFAULT_ARGS
     )
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
@@ -32,27 +21,19 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         ):
             raise ValueError("convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
         environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
-    record = {
+    return {
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
         "kv_cache_dtype": "auto",
         "block_size": int(setting("BLOCK_SIZE", "128")),
+        "context_length": context_length,
+        "max_sequences": int(setting("MAX_SEQUENCES", "8")),
         "environment": environment,
         "extra_args": args,
     }
-    return neutral_runtime(record, SETTINGS)
 
 
 def sequence_limit(runtime: dict) -> int:
-    if "max_sequences" in runtime:
-        return int(runtime["max_sequences"])
-    args = runtime.get("extra_args", [])
-    values = []
-    for index, arg in enumerate(args):
-        if arg == "--max-num-seqs" and index + 1 < len(args):
-            values.append(args[index + 1])
-        elif isinstance(arg, str) and arg.startswith("--max-num-seqs="):
-            values.append(arg.partition("=")[2])
-    if len(values) != 1 or not str(values[0]).isdigit() or int(values[0]) < 1:
-        raise ValueError("runtime needs a positive max_sequences or one --max-num-seqs")
-    return int(values[0])
+    if "max_sequences" not in runtime:
+        raise ValueError("runtime.max_sequences is required")
+    return int(runtime["max_sequences"])

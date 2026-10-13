@@ -156,7 +156,7 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`.                              |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.max_sequences` or `runtime.extra_args` sets it.
+The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `runtime.max_sequences` has no `--max-num-seqs` and takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.max_sequences` sets it.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 

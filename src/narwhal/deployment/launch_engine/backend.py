@@ -18,18 +18,14 @@ class EngineLauncher(ABC):
     # Standalone module copied into each launch's hook as launch_engine.py.
     runtime_script: ClassVar[Path]
     side_channel: ClassVar[str]
-    # The backend's earlier name for the KV side-channel port variable.
-    side_channel_port_env: ClassVar[str]
     api_key_env: ClassVar[str]
     # Discovery pins the image distributions whose names fully match this pattern, and copies
     # image variables with these prefixes except the launcher-managed ones.
     image_packages: ClassVar[str]
     environment_prefixes: ClassVar[tuple[str, ...]]
     managed_environment: ClassVar[frozenset[str]]
-    # How the backend applies each engine-neutral launch setting.
     launch_settings: ClassVar[LaunchSettings]
-    # The runtime check prints the summary once the probe passes, names the engine's prefix
-    # cache in its cache line and names the version it reads in its version error.
+    # Runtime check output: the pass summary, the cache line's name and the version label.
     check_summary: ClassVar[str]
     prefix_cache_name: ClassVar[str]
     version_label: ClassVar[str]
@@ -56,9 +52,6 @@ class EngineLauncher(ABC):
     def side_channel_address(self, env: Mapping[str, str]) -> tuple[str, int]: ...
 
     @abstractmethod
-    def publishes_kv_events(self, extra_args: list[str]) -> bool: ...
-
-    @abstractmethod
     def serve(
         self,
         record: dict,
@@ -79,8 +72,7 @@ class EngineLauncher(ABC):
         """Return the interpreter arguments of the in-image probe; raise for a failed input."""
 
     @abstractmethod
-    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
-        """Read the probe output and apply the engine-specific assertions."""
+    def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
 
     @abstractmethod
     def capture_connector(self, run: Path) -> Path: ...
@@ -93,8 +85,7 @@ class EngineLauncher(ABC):
         """Name the pinned package whose version the contract records as transfer_version."""
 
     @abstractmethod
-    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence:
-        """Read the backend's own evidence for the engine attestation document."""
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence: ...
 
     @abstractmethod
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict: ...
@@ -128,29 +119,21 @@ class CacheCapture(ABC):
 
 
 class LiveModelDimensions(ABC):
-    """Optional launcher capability: model dimensions read from the engine runtime.
-
-    A backend without it records the dimensions from the model configuration.
-    """
+    """Optional capability; without it, dimensions come from the model configuration."""
 
     @abstractmethod
     def model_dimensions(self, run: Path, plan: dict) -> None:
         """Write model-dimensions.json from the engine image."""
 
     @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path:
-        """Capture the running engine's model dimensions."""
+    def capture_model_dimensions(self, run: Path) -> Path: ...
 
 
 class ModelFormats(ABC):
-    """Optional launcher capability: model files the engine loads beside checkpoint directories.
-
-    A native launch of a backend without it takes a checkpoint directory.
-    """
+    """Optional capability: a native launch may name a model file, not only a directory."""
 
     @abstractmethod
-    def check_model(self, runtime: dict, model: str) -> None:
-        """Check that the runtime can load the model directory or file."""
+    def check_model(self, runtime: dict, model: str) -> None: ...
 
 
 def cache_capture(engine: EngineLauncher) -> CacheCapture | None:

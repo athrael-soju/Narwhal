@@ -56,8 +56,7 @@ class _Joined(httpx.AsyncByteStream):
 
 
 class PairedTransport(httpx.AsyncBaseTransport):
-    """Send a request to one engine as one leg of a concurrent handoff, and its peer leg to the
-    paired engine."""
+    """Send one leg of a concurrent handoff to one engine and its peer leg to the other."""
 
     def __init__(
         self, inner: httpx.AsyncBaseTransport, kv: KvHandoff, dialect: EngineDialect

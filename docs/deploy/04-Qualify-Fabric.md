@@ -39,7 +39,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
     export DECODE_URL='http://<decode engine address>:<decode engine port>'
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" measure-transfer \
       --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
-      --bootstrap-host "$PREFILL_IP" --bootstrap-port "${NARWHAL_KV_SIDE_CHANNEL_PORT:-$NARWHAL_SGLANG_BOOTSTRAP_PORT}" \
+      --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
       --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
       --prompt-tokens 1024 --out-dir "$FABRIC_RUN/transfer"
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \

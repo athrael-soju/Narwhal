@@ -43,7 +43,7 @@ For a vLLM engine, `contract.connector_version` comes from the installed connect
 
 For an SGLang engine, the capture saves selected `/server_info` fields and the process start time, read from the engine's container or PID on the host, to `server-info.json`. The `/server_info` fields supply `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the version of the pinned `mooncake-transfer-engine` package, or of its one pinned CUDA build, such as `mooncake-transfer-engine-cuda13`.
 
-Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `--max-running-requests` to the logged value, or raise the capacity the log names, such as `--max-mamba-cache-size`, and relaunch the engine.
+Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `runtime.max_sequences` to the logged value, or raise the capacity the log names, such as `--max-mamba-cache-size`, and relaunch the engine.
 
 ### Capturing the model dimensions
 

@@ -53,10 +53,10 @@
           "mooncake",
           "--enable-pd-role-switch",
           "--disaggregation-decode-enable-radix-cache",
-          "--kv-events-config",
-          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}",
           "--context-length",
-          "4096"
+          "4096",
+          "--kv-events-config",
+          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}"
         ],
         "attestation_port": 8010,
         "common": [
@@ -190,10 +190,10 @@
             "mooncake",
             "--enable-pd-role-switch",
             "--disaggregation-decode-enable-radix-cache",
-            "--kv-events-config",
-            "{\"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}",
             "--context-length",
-            "4096"
+            "4096",
+            "--kv-events-config",
+            "{\"publisher\": \"zmq\", \"endpoint\": \"ipc:///narwhal-kv-events/events.sock\", \"replay_endpoint\": \"ipc:///narwhal-kv-events/replay.sock\"}"
           ],
           "log": "<root>/container/launch/launch.log",
           "stage": "docker-create"
@@ -265,10 +265,10 @@
           "mooncake",
           "--enable-pd-role-switch",
           "--disaggregation-decode-enable-radix-cache",
-          "--kv-events-config",
-          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
           "--context-length",
           "4096",
+          "--kv-events-config",
+          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
           "--mem-fraction-static",
           "0.4"
         ],
@@ -355,10 +355,10 @@
         "mooncake",
         "--enable-pd-role-switch",
         "--disaggregation-decode-enable-radix-cache",
-        "--kv-events-config",
-        "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
         "--context-length",
         "4096",
+        "--kv-events-config",
+        "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
         "--mem-fraction-static",
         "0.4"
       ],
@@ -420,10 +420,10 @@
           "mooncake",
           "--enable-pd-role-switch",
           "--disaggregation-decode-enable-radix-cache",
-          "--kv-events-config",
-          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
           "--context-length",
           "4096",
+          "--kv-events-config",
+          "{\"publisher\": \"zmq\", \"endpoint\": \"ipc://<kv-events-root>/<name>/events.sock\", \"replay_endpoint\": \"ipc://<kv-events-root>/<name>/replay.sock\"}",
           "--mem-fraction-static",
           "0.4"
         ],

@@ -41,9 +41,5 @@ def backend() -> EngineBackend:
         fabric=SglangFabric(),
         launcher=_launcher,
         role_switch=SglangRoleSwitch(),
-        renamed_fields={
-            "checked": {"sglang_version": "engine_version"},
-            "shared_start": {"sglang_version": "engine_version", "sglang_args": "engine_args"},
-        },
         icon=resources.files(__name__).joinpath("icon.png").read_bytes(),
     )

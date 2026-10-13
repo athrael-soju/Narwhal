@@ -235,7 +235,7 @@ class DeploymentHTTPProbeTests(unittest.TestCase):
                     json.dumps(
                         {
                             "plan_sha256": hashlib.sha256(data).hexdigest(),
-                            "vllm_api_version": "0.29.0",
+                            "engine_version": "0.29.0",
                         }
                     )
                 )

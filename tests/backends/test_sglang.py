@@ -342,13 +342,8 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(environment={"SGLANG_SECRET": "x"}), "SGLANG_SECRET"),
             (runtime_record(environment={"VLLM_FOO": "1"}), "VLLM_FOO"),
             (runtime_record(role="decode"), "runtime.role is set by the router"),
-            (runtime_record(extra_args=["--max-running-requests", "512"]), "from 1 to 256"),
-            (
-                runtime_record(
-                    extra_args=["--max-running-requests", "8", "--max-running-requests", "9"]
-                ),
-                "set once",
-            ),
+            (runtime_record(max_sequences=512), "from 1 to 256"),
+            (runtime_record(extra_args=["--max-running-requests", "8"]), "--max-running-requests"),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 plan.validate_runtime(record)
@@ -381,7 +376,7 @@ class LaunchTests(unittest.TestCase):
         self.assertIsNone(re.fullmatch(discovery.IMAGE_PACKAGES, "mooncake-transfer-engine-extra"))
 
     def test_a_switching_engine_without_the_radix_cache_needs_no_decode_radix_flag(self):
-        args, _ = serve(runtime_record(extra_args=["--disable-radix-cache"]))
+        args, _ = serve(runtime_record(prefix_caching=False))
         self.assertIn("--enable-pd-role-switch", args)
         self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
 
@@ -392,7 +387,7 @@ class LaunchTests(unittest.TestCase):
             )
 
     def test_a_launch_may_lower_the_request_cap(self):
-        record = runtime_record(extra_args=["--max-running-requests", "64"])
+        record = runtime_record(max_sequences=64)
         plan.validate_runtime(record)
         args, _ = serve(record)
         self.assertEqual(option(args, "--max-running-requests"), "64")
@@ -547,7 +542,7 @@ class EngineDocumentTests(unittest.TestCase):
         if native:
             launch["python_executable"] = "/opt/sglang/bin/python"
             checked = {
-                "sglang_version": "0.5.21",
+                "engine_version": "0.5.21",
                 "backend": "native",
                 "python_executable": launch["python_executable"],
                 "expected_packages": PINS,

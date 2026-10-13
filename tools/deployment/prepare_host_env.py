@@ -23,13 +23,9 @@ ENGINE_FIELDS = (
     "ENGINE_PORT",
     "ATTEST_PORT",
     "UCX_TCP_PORT_RANGE",
+    KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_"),
 )
 ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
-
-
-def engine_fields(fleet: dict) -> tuple[str, ...]:
-    side_channel = launcher(fleet.get("engine", {}).get("backend")).side_channel_port_env
-    return (*ENGINE_FIELDS, side_channel.removeprefix("NARWHAL_"))
 
 
 def select_values(
@@ -74,14 +70,7 @@ def select_values(
             values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
-        neutral = KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_")
-        fields = engine_fields(fleet)
-        for field in fields:
-            # The neutral side-channel variable replaces the backend's earlier name when set.
-            if field == fields[-1] and (
-                env.get(f"NARWHAL_NODE_{node}_{neutral}") or env.get(f"NARWHAL_{neutral}")
-            ):
-                field = neutral
+        for field in ENGINE_FIELDS:
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
             include(name, override if override in env else name)

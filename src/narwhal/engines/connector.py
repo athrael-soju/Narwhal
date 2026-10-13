@@ -66,8 +66,7 @@ class KvHandoff(ABC):
     @abstractmethod
     def prefill_body(
         self, body: dict[str, Any], rendezvous: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        """Add the connector's fields to a prefill leg."""
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     def decode_body(
@@ -78,13 +77,11 @@ class KvHandoff(ABC):
         rendezvous: dict[str, Any] | None,
         url: str,
         endpoint: str,
-    ) -> dict[str, Any]:
-        """Build the streaming decode leg that continues from the prefill leg."""
+    ) -> dict[str, Any]: ...
 
     def prefill_result(
         self, payload: dict[str, Any], *, url: str, endpoint: str, request_id: str | None
     ) -> PrefillResult | None:
-        """Read the prefill leg's descriptor; a concurrent leg returns none."""
         return None
 
 

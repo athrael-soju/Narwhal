@@ -20,10 +20,10 @@ import httpx
 
 from narwhal.backends import EngineBackend, load, names
 from narwhal.deployment.attestation_contract.document import engine_document
-from narwhal.deployment.attestation_contract.evidence import read_shared_start
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.check import check, read_checked
 from narwhal.deployment.launch_engine.plan import load as load_plan
+from narwhal.deployment.launch_engine.settings import SWITCHES, mapped_flags
 from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
 from narwhal.engines.attestation import EngineIdentity, fetch_engine_identity
@@ -87,8 +87,6 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(kv, KvConnector | RendezvousConnector)
                 for lease in (6, 30, 600):
                     self.assertTrue(0 < kv.handoff_bound(lease) <= lease)
-        for section, renamed in backend.renamed_fields.items():
-            self.assertTrue(all(isinstance(v, str) for v in renamed.values()), section)
 
     def test_dialect_fields_and_request_identity(self):
         dialect = self.backend.dialect
@@ -279,7 +277,6 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(capture is None or capture.cache_hook.is_file())
         for value in (
             launcher.side_channel,
-            launcher.side_channel_port_env,
             launcher.api_key_env,
         ):
             self.assertTrue(value)
@@ -289,8 +286,20 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(launcher.api_key_env, launcher.engine_env("192.0.2.11", 5600, ""))
         self.assertEqual(launcher.memory_fraction(fixture.memory_args), fixture.memory_fraction)
         self.assertIsNone(launcher.memory_fraction([]))
-        self.assertTrue(launcher.publishes_kv_events(fixture.kv_event_args))
-        self.assertFalse(launcher.publishes_kv_events(fixture.no_kv_event_args))
+
+    def test_extra_args_reject_every_flag_a_neutral_setting_maps(self):
+        launcher, runtime = self.backend.launcher(), self.fixtures.launch_runtime
+        flags = mapped_flags(launcher.launch_settings)
+        self.assertLessEqual(
+            {"context_length", "max_sequences", "tokenizer", "prefix_caching", "kv_events"},
+            set(flags.values()),
+        )
+        for flag, name in flags.items():
+            for fields in ({}, {name: runtime.get(name, True if name in SWITCHES else 1)}):
+                with self.subTest(flag=flag, fields=fields):
+                    record = {**runtime, **fields, "extra_args": [flag, "1"]}
+                    with self.assertRaisesRegex(ValueError, re.escape(flag)):
+                        launcher.validate_runtime(record)
 
     def test_launcher_discovers_a_valid_runtime_for_each_connector(self):
         launcher, fixture = self.backend.launcher(), self.fixtures
@@ -414,7 +423,7 @@ class BackendFlows(unittest.TestCase):
         self.assertEqual("cache_capture_code_sha256" in plan, capture)
 
     def test_launch_ports_must_be_distinct(self):
-        for name in ("NARWHAL_ATTEST_PORT", self.launcher.side_channel_port_env):
+        for name in ("NARWHAL_ATTEST_PORT", "NARWHAL_KV_SIDE_CHANNEL_PORT"):
             with self.subTest(port=name), self.assertRaisesRegex(ValueError, "must be distinct"):
                 self.prepared(**{name: "8000"})
 
@@ -513,32 +522,12 @@ class BackendFlows(unittest.TestCase):
             self.check(run, plan, stages)
         self.assertFalse((run / "checked.json").exists())
 
-    def test_checked_evidence_uses_the_neutral_names_and_reads_earlier_ones(self):
-        renamed = self.backend.renamed_fields
+    def test_checked_evidence_uses_the_neutral_names(self):
         run, plan, _ = self.prepared()
-        stages = self.check(run, plan)
+        self.check(run, plan)
         written = json.loads((run / "checked.json").read_text())
         self.assertIn("engine_version", written)
-        self.assertFalse(set(written) & set(renamed["checked"]))
-        # A repeated check accepts a file with the earlier names and the same values.
-        earlier_names = {new: old for old, new in renamed["checked"].items()}
-        earlier = {earlier_names.get(key, key): value for key, value in written.items()}
-        (run / "checked.json").write_text(json.dumps(earlier))
         self.assertEqual(read_checked(run), written)
-        self.check(run, plan, stages)
-        self.assertEqual(json.loads((run / "checked.json").read_text()), earlier)
-
-    def test_evidence_with_an_earlier_and_a_current_name_is_rejected(self):
-        for section, label, reader in (
-            ("checked", "checked.json", read_checked),
-            ("shared_start", "shared-start.json", read_shared_start),
-        ):
-            for old, new in self.backend.renamed_fields[section].items():
-                with self.subTest(field=old), tempfile.TemporaryDirectory() as folder:
-                    run = Path(folder)
-                    (run / label).write_text(json.dumps({old: "a", new: "a"}))
-                    with self.assertRaisesRegex(ValueError, f"^{label} sets both {old} and {new}$"):
-                        reader(run)
 
     def test_the_attestation_document_binds_the_prepared_model(self):
         run, plan, _ = self.prepared()
@@ -582,7 +571,6 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
         return patch.dict(os.environ, {self.launcher.api_key_env: "inherited-key"}, clear=True)
 
     def launched(self, native: bool) -> dict:
-        """Prepare, check and start one launch, recording each step."""
         root = self.root / ("native" if native else "container")
         root.mkdir()
         run, plan, printed = prepared(root, self.launcher, self.fixtures, native=native)

@@ -41,15 +41,12 @@ class ContractFixtures:
     kv_lease: int | None
     memory_args: list[str]
     memory_fraction: str
-    # The runtime section of a launch record.
     launch_runtime: dict[str, Any]
     # Stdout of the backend's runtime check probe for a launch plan.
     check_output: Callable[[dict], str]
     # Writes the evidence a started container's captures leave in its launch directory.
     attestation_evidence: Callable[[Path, dict, str], None]
     startup_log: str
-    kv_event_args: list[str] = field(default_factory=list)
-    no_kv_event_args: list[str] = field(default_factory=list)
     # Distributions an engine image reports to discovery, and the .env fields discovery reads.
     image_packages: dict[str, str] = field(default_factory=dict)
     discovery_settings: dict[str, str] = field(default_factory=dict)
@@ -126,7 +123,6 @@ def prepared(
     config = root / "model" / "config.json"
     config.write_text(json.dumps(MODEL_CONFIG))
     env["NARWHAL_MODEL_CONFIG_SHA256"] = digest(config)
-    env[launcher.side_channel_port_env] = env.pop("NARWHAL_NIXL_SIDE_CHANNEL_PORT")
     capture = cache_capture(launcher)
     if capture is not None:
         env["NARWHAL_CACHE_CAPTURE_HOOK"] = str(capture.cache_hook)

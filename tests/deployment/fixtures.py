@@ -193,8 +193,9 @@ def runtime():
         "model_dtype": "bfloat16",
         "kv_cache_dtype": "auto",
         "block_size": 128,
+        "context_length": 4096,
         "environment": {"VLLM_ROCM_USE_AITER": "1"},
-        "extra_args": ["--max-model-len", "4096", "--enforce-eager"],
+        "extra_args": ["--enforce-eager"],
     }
 
 
@@ -215,7 +216,7 @@ def launcher_inputs(root):
         "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(VLLM_HOOK),
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",
-        "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600",
+        "NARWHAL_KV_SIDE_CHANNEL_PORT": "5600",
         "NARWHAL_UCX_TCP_PORT_RANGE": "39000-39999",
         "NARWHAL_NODE_1_IP": "192.0.2.11",
         "NARWHAL_NODE_1_URL": "http://192.0.2.11:8000",

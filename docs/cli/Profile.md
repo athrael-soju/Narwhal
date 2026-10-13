@@ -37,7 +37,7 @@ These options select engines, choose the mode, and set the output files:
 | `--refit-samples PATH` | optional | Sample sidecar to refit. |
 | `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeated at least twice. |
 | `--out PATH` | optional | New profile store for `--refit-samples` and `--merge`, written with a matching sample sidecar. |
-| `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's sequence limit, `--max-num-seqs` on vLLM and `--max-running-requests` on SGLang, applied to live decode cohorts. |
+| `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's sequence limit from `runtime.max_sequences`, applied to live decode cohorts. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
 
