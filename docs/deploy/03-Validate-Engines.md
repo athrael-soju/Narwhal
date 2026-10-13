@@ -291,7 +291,7 @@ Before you reuse a failed deployment:
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
     sglang = plan.get("engine") == "sglang"
-    expected_version = checked["sglang_version" if sglang else "vllm_api_version"]
+    expected_version = checked.get("engine_version") or checked["sglang_version" if sglang else "vllm_api_version"]
     headers = {"Content-Type": "application/json"}
     if os.environ.get("NARWHAL_ENGINE_API_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]

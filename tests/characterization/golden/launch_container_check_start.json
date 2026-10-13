@@ -131,6 +131,7 @@
     "printed": "Runtime identity, package pins, connector import and tokenizer passed.\nPrefix caching is on; cache events publish under <kv-events-root>/<name>.\n"
   },
   "checked": {
+    "engine_version": "0.29.0",
     "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "kv_events": {
       "endpoint": "ipc:///narwhal-kv-events/events.sock",
@@ -139,8 +140,7 @@
     "peer_release": true,
     "plan_sha256": "<sha256>",
     "prefix_caching": true,
-    "ucx_version": "1.22.0",
-    "vllm_api_version": "0.29.0"
+    "ucx_version": "1.22.0"
   },
   "start": {
     "docker": [

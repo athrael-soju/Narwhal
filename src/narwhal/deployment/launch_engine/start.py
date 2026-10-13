@@ -13,7 +13,7 @@ from urllib.request import urlopen
 
 from .. import stages
 from .backend import cache_capture, plan_launcher
-from .check import require_checked
+from .check import read_checked, require_checked
 from .docker import docker, run_runtime_script
 from .plan import container_options, env_file_name, load, read_env
 from .runtime import digest, write_private
@@ -147,7 +147,7 @@ def validate_shared_runs(
         if backend == "container":
             require_checked(run, plan)
         else:
-            checked = json.loads((run / "checked.json").read_text())
+            checked = read_checked(run)
             if (
                 checked.get("backend") != "native"
                 or checked.get("plan_sha256") != digest(run / "launch.json")
@@ -276,7 +276,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     docker(["inspect", "--format", "{{json .Config.Cmd}}", cid], run, "launch.log")
                 )
                 image_id = docker(["inspect", "--format", "{{.Image}}", cid], run, "launch.log")
-                checked = json.loads((run / "checked.json").read_text())
+                checked = read_checked(run)
                 if (
                     not state.get("Running")
                     or type(state.get("Pid")) is not int
@@ -291,7 +291,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     status="running",
                     process_id=state["Pid"],
                     image_id=image_id,
-                    **{plan_launcher(plan).args_field: command},
+                    engine_args=command,
                     gpu_after=after,
                     observed_delta_mib=after["used_mib"] - before["used_mib"],
                     aggregate_delta_mib=aggregate_delta,

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
 from narwhal.backends import EngineBackend, load, names
+from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import load as load_plan
@@ -247,9 +248,6 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
             launcher.side_channel,
             launcher.side_channel_port_env,
             launcher.api_key_env,
-            launcher.args_field,
-            launcher.version_field,
-            launcher.checked_version_field,
         ):
             self.assertTrue(value)
         env = launcher.engine_env("192.0.2.11", 5600, "key")
@@ -380,7 +378,7 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
     def started_native(self, run: Path) -> dict:
         checked = json.loads((run / "checked.json").read_text())
         live = SimpleNamespace(
-            version=checked[self.launcher.checked_version_field],
+            version=checked["engine_version"],
             process_start_time_seconds=1234.5,
         )
         readings = iter((1000, 6100))
@@ -419,7 +417,7 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
         log.write_text(self.fixtures.startup_log)
         checked = json.loads((run / "checked.json").read_text())
         with running_container(checked["image_id"]):
-            document = self.launcher.engine_document(run, log)
+            document = engine_document(run, log)
         document["sources"] = {
             field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)
             for field, source in document["sources"].items()

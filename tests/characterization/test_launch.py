@@ -13,9 +13,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from narwhal.backends.vllm import attestation as attestation_document
 from narwhal.backends.vllm import plan as vllm_plan
-from narwhal.backends.vllm.attestation import engine_document
+from narwhal.deployment.attestation_contract import evidence as attestation_evidence
+from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import build, load, prepare
@@ -420,7 +420,7 @@ class AttestationContractTests(unittest.TestCase):
             (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
             log = run / "startup.log"
             log.write_text("Using FLASH_ATTN attention backend.\n")
-            with patch.object(attestation_document, "live_container", return_value=CONTAINER_ID):
+            with patch.object(attestation_evidence, "live_container", return_value=CONTAINER_ID):
                 document = engine_document(run, log)
             document["sources"] = {
                 field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)

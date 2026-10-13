@@ -85,7 +85,7 @@ class EngineLauncherTests(unittest.TestCase):
                 list(checked),
                 [
                     "plan_sha256",
-                    "vllm_api_version",
+                    "engine_version",
                     "prefix_caching",
                     "kv_events",
                     "ucx_version",
@@ -392,7 +392,7 @@ class EngineLauncherTests(unittest.TestCase):
                     list(checked),
                     [
                         "plan_sha256",
-                        "vllm_api_version",
+                        "engine_version",
                         "prefix_caching",
                         "kv_events",
                         "ucx_version",
@@ -730,7 +730,7 @@ class EngineLauncherTests(unittest.TestCase):
                     else:
                         check(run, plan)
                         marker = json.loads((run / "checked.json").read_text())
-                        self.assertEqual(marker["vllm_api_version"], "0.29.0")
+                        self.assertEqual(marker["engine_version"], "0.29.0")
                         self.assertIs(marker["prefix_caching"], True)
                         self.assertEqual(
                             marker["kv_events"]["endpoint"], plan["kv_events"]["endpoint"]
@@ -1000,7 +1000,7 @@ class SharedEngineStartTests(unittest.TestCase):
                 self.assertEqual(record["status"], "running")
                 self.assertEqual(record["process_id"], 1234)
                 self.assertEqual(record["image_id"], "sha256:test")
-                self.assertEqual(record["vllm_args"], plan["args"])
+                self.assertEqual(record["engine_args"], plan["args"])
                 self.assertEqual(record["budget_mib"], 6000)
 
     def test_pressure_failure_preserves_original_cause_if_sensor_fails(self):

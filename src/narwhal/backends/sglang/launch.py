@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import EngineLauncher
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from . import attestation, dev, discovery
@@ -18,15 +19,13 @@ class SglangLauncher(EngineLauncher):
     side_channel = "bootstrap"
     side_channel_port_env = "NARWHAL_SGLANG_BOOTSTRAP_PORT"
     api_key_env = API_KEY_ENV
-    args_field = "sglang_args"
-    version_field = "sglang_version"
-    checked_version_field = "sglang_version"
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
     launch_settings = policy.SETTINGS
     check_summary = "Runtime identity, package pins and server arguments passed."
     prefix_cache_name = "The radix cache"
+    launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     version_label = "SGLang"
 
     def validate_runtime(self, runtime: dict) -> None:
@@ -90,8 +89,13 @@ class SglangLauncher(EngineLauncher):
     def capture_native(self, run: Path) -> Path:
         return attestation.capture_native(run)
 
-    def engine_document(self, run: Path, startup_log: Path) -> dict:
-        return attestation.engine_document(run, startup_log)
+    def transfer_package(self, plan: dict) -> str | None:
+        return policy.transfer_package(
+            plan["connector"]["transfer_backend"], plan["expected_packages"]
+        )
+
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence:
+        return attestation.attestation_evidence(context)
 
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict:
         return dev.runtime(template, model_dir, memory_fraction)

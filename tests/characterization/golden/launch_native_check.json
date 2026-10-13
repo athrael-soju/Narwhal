@@ -1,6 +1,7 @@
 {
   "checked": {
     "backend": "native",
+    "engine_version": "0.29.0",
     "expected_packages": {
       "nixl": "1.0.0",
       "vllm": "0.29.0"
@@ -13,8 +14,7 @@
     "plan_sha256": "<sha256>",
     "prefix_caching": true,
     "python_executable": "<python>",
-    "ucx_version": "1.22.0",
-    "vllm_api_version": "0.29.0"
+    "ucx_version": "1.22.0"
   },
   "command": [
     "<python>",

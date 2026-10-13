@@ -39,9 +39,9 @@ The sidecar reads the startup log from `$ENGINE_RUN/startup.log`.
 .venv/bin/python -m narwhal.deployment.attestation_contract.cli capture-connector --run "$ENGINE_RUN"
 ```
 
-For a vLLM engine, `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the pinned NIXL package.
+For a vLLM engine, `contract.connector_version` comes from the installed connector's `NIXL_CONNECTOR_VERSION` and is part of the peer compatibility hash. `transfer_version` records the version of the pinned `nixl` package, or of `nixl-rocm` when `nixl` is not pinned.
 
-For an SGLang engine, the capture saves selected `/server_info` fields and the process start time, read from the engine's container or PID on the host, to `server-info.json`. The `/server_info` fields supply `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the pinned Mooncake or NIXL package.
+For an SGLang engine, the capture saves selected `/server_info` fields and the process start time, read from the engine's container or PID on the host, to `server-info.json`. The `/server_info` fields supply `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the version of the pinned `mooncake-transfer-engine` package, or of its one pinned CUDA build, such as `mooncake-transfer-engine-cuda13`.
 
 Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `--max-running-requests` to the logged value, or raise the capacity the log names, such as `--max-mamba-cache-size`, and relaunch the engine.
 

@@ -183,7 +183,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                 patch("narwhal.deployment.native_engine._ports_free"),
                 patch(
                     "narwhal.deployment.native_engine._checked_plan",
-                    return_value={"vllm_api_version": "0.29.0"},
+                    return_value={"engine_version": "0.29.0"},
                 ),
                 patch("narwhal.deployment.native_engine.gpu_memory") as memory,
                 patch("narwhal.deployment.native_engine.subprocess.Popen") as popen,
@@ -214,7 +214,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                 record = json.loads((run / "shared-start.json").read_text())
                 self.assertEqual(record["status"], "running")
                 self.assertEqual(record["model_revision"], "pinned-model-commit")
-                self.assertEqual(record["vllm_version"], "0.29.0")
+                self.assertEqual(record["engine_version"], "0.29.0")
                 self.assertEqual(record["process_start_time_seconds"], 1234.5)
                 self.assertEqual(record["budget_mib"], 6000)
                 self.assertEqual(record["device_allowance_mib"], 27000)
@@ -222,7 +222,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                 self.assertEqual(
                     record["aggregate_delta_mib"], 5100 if plan["role"] == "engine-1" else 10200
                 )
-                self.assertEqual(record["vllm_args"], plan["args"])
+                self.assertEqual(record["engine_args"], plan["args"])
 
     def test_stop_requires_recorded_process_start_and_terminates_owned_group(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -291,7 +291,7 @@ class NativeEngineOwnershipTests(unittest.TestCase):
                 patch("narwhal.deployment.native_engine._ports_free"),
                 patch(
                     "narwhal.deployment.native_engine._checked_plan",
-                    return_value={"vllm_api_version": "0.29.0"},
+                    return_value={"engine_version": "0.29.0"},
                 ),
                 patch(
                     "narwhal.deployment.native_engine.gpu_memory",

@@ -19,6 +19,7 @@ from narwhal.runtime.listeners import check_http_bind
 
 from . import stages
 from .launch_engine.backend import cache_capture, engine_backend, plan_launcher
+from .launch_engine.check import read_checked
 from .launch_engine.plan import (
     kv_events_directory,
     launch_headers,
@@ -107,7 +108,7 @@ def _signal_members(members: dict[int, int], sig: signal.Signals) -> None:
 def _checked_plan(run: Path, plan: dict) -> dict:
     if plan.get("backend") != "native":
         raise ValueError("native start requires a native launch plan")
-    checked = json.loads((run / "checked.json").read_text())
+    checked = read_checked(run)
     if (
         checked.get("backend") != "native"
         or checked.get("plan_sha256") != digest(run / "launch.json")
@@ -269,7 +270,7 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 "gpu_baseline_used_mib": baseline_used,
                 "budget_mib": float(budget),
                 "device_allowance_mib": float(allowance),
-                plan_launcher(plan).args_field: plan["args"],
+                "engine_args": plan["args"],
                 "expected_packages": plan["expected_packages"],
                 "model_sha256": plan.get("model_sha256", plan["model_config_sha256"]),
             }
@@ -293,16 +294,15 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 identity = process_identity(process.pid)
                 write_private(run / "native-process.json", json.dumps(identity, indent=2) + "\n")
                 _wait_ready(run, plan, identity, ready_seconds)
-                engine = plan_launcher(plan)
                 live = native_identity(run, plan, identity["pid"])
-                if live.version != _checked_plan(run, plan)[engine.checked_version_field]:
+                if live.version != _checked_plan(run, plan)["engine_version"]:
                     raise ValueError("live engine version differs from the checked native runtime")
                 after = gpu_memory(gpu_uuid)
                 aggregate_delta = after["used_mib"] - baseline_used
                 record.update(
                     status="running",
                     process=identity,
-                    **{engine.version_field: live.version},
+                    engine_version=live.version,
                     process_start_time_seconds=live.process_start_time_seconds,
                     model_revision=plan["model_revision"],
                     gpu_after=after,

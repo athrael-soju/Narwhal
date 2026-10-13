@@ -38,7 +38,8 @@ class EngineBackend:
     role_switch: RoleSwitcher | None = None
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
-    # Earlier field names this backend wrote, by section ("contract", "engine", "dev_ports").
+    # Earlier field names this backend wrote, by section: "contract", "engine", "dev_ports",
+    # "checked" for checked.json and "shared_start" for shared-start.json.
     renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def role_switcher(self, connector: str) -> RoleSwitcher | None:
@@ -88,6 +89,18 @@ def renamed_fields(section: str) -> dict[str, str]:
     }
 
 
-def current_fields(section: str, raw: Mapping[str, V]) -> dict[str, V]:
+def current_fields(section: str, raw: Mapping[str, V], label: str | None = None) -> dict[str, V]:
+    """Resolve each earlier field name in a section; reject two names for one field."""
     renamed = renamed_fields(section)
-    return {renamed.get(key, key): value for key, value in raw.items()}
+    current: dict[str, V] = {}
+    earlier: dict[str, str] = {}
+    for key, value in raw.items():
+        name = renamed.get(key, key)
+        if name in current:
+            first = earlier.get(name)
+            pair = (first, key if name != key else name) if first else (key, name)
+            raise ValueError(f"{label or section} sets both {pair[0]} and {pair[1]}")
+        if name != key:
+            earlier[name] = key
+        current[name] = value
+    return current
