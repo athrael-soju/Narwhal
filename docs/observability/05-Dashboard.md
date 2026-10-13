@@ -111,7 +111,7 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's backend, current role, state and load, 8 engines per page. **Engine role history** beside it lists the same engines in the same rows and shows how their roles changed over the interval.
+The engine table shows each engine's backend, current role, state and load, 8 engines per page. **Engine role history** beside it lists the same engines in the same rows, 8 per page, and shows how their roles changed over the interval. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The engine columns read the vLLM or SGLang series the engine exports. The **Resident** and **Engine running** bars scale to the busiest engine.
 
