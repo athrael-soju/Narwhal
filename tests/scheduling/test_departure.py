@@ -398,7 +398,7 @@ class PostMoveHoldTests(unittest.TestCase):
 
 
 class SurgeTests(unittest.TestCase):
-    """A prefill surge with no open departure takes a decode engine above decode shrink."""
+    """A prefill surge takes a decode engine above shrink and reverses a departure to decode."""
 
     def test_a_burst_after_a_quiet_phase_moves_back_toward_prefill(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -423,6 +423,28 @@ class SurgeTests(unittest.TestCase):
         )
         self.assertGreater(decode_ratio, th.shrink)
         self.assertLessEqual(decode_ratio, th.expand)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+    def test_a_surge_reverses_and_closes_a_departure_toward_decode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=2)
+            sim.run(180, (DECODE_HEAVY[0], DECODE_HEAVY[1], DECODE_HEAVY[2] * 0.3))
+            burst = sim.now
+            sim.controller.reactive.departure = Departure(-1, burst, moved=True)
+            sim.run(100, (DECODE_LEANING[0], DECODE_LEANING[1], DECODE_LEANING[2] * 2.5))
+            sim.close()
+        th = sim.scheduler.th
+        after = [d for d in sim.decisions if d["at"] > burst]
+        applied = [d for d in after if d["result"] == "applied"]
+        self.assertTrue(applied)
+        move = applied[0]
+        self.assertEqual((move["current_prefill"], move["prefill"]), (2, 3))
+        self.assertTrue(move["prefill_surge"])
+        self.assertLess(move["departure_age_s"], sim.controller.window_s)
+        self.assertGreater(move["projected_tpot_ratio"], th.shrink)
+        self.assertLessEqual(move["projected_tpot_ratio"], th.expand)
+        self.assertEqual(move["required_confirmations"], 3)
+        self.assertNotIn("departure_age_s", after[after.index(move) + 1])
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
 

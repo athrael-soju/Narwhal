@@ -384,7 +384,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
 | `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or whether `mixed_pressure`, `steady_demand` or a prefill surge applies                                     |
 | `prefill_relief`                                  | Whether projected prefill load above `shrink` let a decode-to-prefill move skip the arrival-evidence window and short-horizon pause |
-| `prefill_surge`                                   | Whether projected prefill load above `expand`, with no open departure, let a decode-to-prefill move take an engine from decode load at or below `expand`          |
+| `prefill_surge`                                   | Whether projected prefill load above `expand`, with no open departure toward prefill, let a decode-to-prefill move take an engine from decode load at or below `expand` |
 
 These decisions add fields to `control.last_decision`:
 

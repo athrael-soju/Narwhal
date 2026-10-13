@@ -313,13 +313,14 @@ class ReactivePolicy:
             and max(current.ttft_ratio, short_current.ttft_ratio) > th.shrink
             and (evidence.blocked_gate != "risk" or evidence.risk_kind == "p_to_d_recovery")
         )
-        # Projected prefill load above expand, with no open departure to pace the walk, is a
-        # surge: a move back to prefill may take decode capacity while the decode pool stays at
-        # or below expand. The movement margin applies.
+        # Projected prefill load above expand is a surge: a move back to prefill may take decode
+        # capacity while the decode pool stays at or below expand, and may reverse an open
+        # departure toward decode. A departure toward prefill keeps pacing its own walk. The
+        # movement margin applies.
         prefill_surge = (
             prefill_relief
-            and departure is None
             and max(current.ttft_ratio, short_current.ttft_ratio) > th.expand
+            and (departure is None or departure.heading < 0)
         )
 
         def surge_move(row: Evaluation) -> bool:
@@ -408,7 +409,7 @@ class ReactivePolicy:
                 and covered
                 and floors
                 and (candidate.prefill < current_p or evidence.allowed or prefill_relief)
-                and candidate.prefill not in held_reverse
+                and (candidate.prefill not in held_reverse or surge_move(row))
             ):
                 return False
             if urgent_ready and recovery_projection is not None:
@@ -499,7 +500,7 @@ class ReactivePolicy:
             if not floors_safe:
                 floor = "min_decode" if candidate.prefill > current_p else "min_prefill"
                 reason = f"{floor} blocks the adjacent split"
-            elif candidate.prefill in held_reverse:
+            elif candidate.prefill in held_reverse and not surge_move(held):
                 toward = "decode" if candidate.prefill > current_p else "prefill"
                 reason = f"departure toward {toward} holds the reverse move"
             elif candidate.prefill > current_p and not (evidence.allowed or prefill_relief):
@@ -595,8 +596,11 @@ class ReactivePolicy:
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
-            elif departure.moved and direction == departure.heading:
-                # A window move along the heading ends the reverse hold.
+            elif candidate_p in held_reverse or (
+                departure.moved and direction == departure.heading
+            ):
+                # A window move along the heading ends the reverse hold, and a surge move that
+                # reverses the departure ends it.
                 self.departure = None
         if moved is not None and target is Role.DECODE:
             # A move to decode re-arms the consolidation evidence window.

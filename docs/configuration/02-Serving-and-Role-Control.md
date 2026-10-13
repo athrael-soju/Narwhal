@@ -528,10 +528,10 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 A prefill surge lets a `source_shrink` move to prefill take an engine from a decode pool whose projected load is at or below `controller.thresholds.expand`. A surge holds when all of these hold:
 
 - the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.expand`
-- no departure is open
+- no departure toward prefill is open
 - [`prefill_relief`](#evidence-gating-for-decode-to-prefill-consolidation) applies
 
-The decision records the surge in `prefill_surge`.
+A surge move may reverse an open departure toward decode, and closes it. The decision records the surge in `prefill_surge`.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
@@ -592,8 +592,9 @@ A departure closes at the first of these:
 - before the first move, the best adjacent split on confirmation-span demand lies in the other direction
 - before the first move, the best adjacent split on confirmation-span demand improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`
 - after the first move, the role controller applies a window-demand move in the departure's direction
+- the role controller applies a prefill surge move that reverses the departure
 
-Once a departure has moved, it holds moves in the opposite direction until it closes.
+Once a departure has moved, it holds moves in the opposite direction until it closes. A prefill surge move is exempt from this hold.
 
 Demand is steady when both hold:
 
