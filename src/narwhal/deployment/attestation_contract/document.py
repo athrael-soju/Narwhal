@@ -53,7 +53,6 @@ class AttestationEvidence:
     contract: dict
     # The evidence file behind the engine version and each field in contract.
     sources: dict[str, Path]
-    # Launch keys after the shared ones.
     launch: dict = field(default_factory=dict)
 
 

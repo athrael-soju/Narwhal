@@ -39,8 +39,6 @@ LegOrder = Literal["sequential", "concurrent"]
 
 
 class KvHandoff(ABC):
-    """How a connector moves one request's KV cache from its prefill leg to its decode leg."""
-
     name: str
     # The connector name an engine contract records for this handoff.
     contract_name: str

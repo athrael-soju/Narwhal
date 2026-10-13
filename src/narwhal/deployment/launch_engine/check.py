@@ -20,7 +20,6 @@ from .plan import (
 )
 from .runtime import digest, write_once
 
-# Where the launch's copied runtime script sits in the serving namespace.
 CONTAINER_LAUNCHER = "/narwhal-hooks/launch_engine.py"
 
 
