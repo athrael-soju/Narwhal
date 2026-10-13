@@ -63,13 +63,23 @@ def panel_queries(element):
     ]
 
 
+def layout_items(spec):
+    """Every grid item in the dashboard's rows, with y counted from the top of the dashboard."""
+    items, top = [], 0
+    for row in spec["layout"]["spec"]["rows"]:
+        grid = row["spec"]["layout"]["spec"]["items"]
+        items.extend(
+            {**item, "spec": {**item["spec"], "y": top + item["spec"]["y"]}} for item in grid
+        )
+        top += max(item["spec"]["y"] + item["spec"]["height"] for item in grid)
+    return items
+
+
 def titled(title):
     spec = dashboard()["spec"]
     [name] = [name for name, item in spec["elements"].items() if item["spec"]["title"] == title]
     [grid] = [
-        item["spec"]
-        for item in spec["layout"]["spec"]["items"]
-        if item["spec"]["element"]["name"] == name
+        item["spec"] for item in layout_items(spec) if item["spec"]["element"]["name"] == name
     ]
     return spec["elements"][name]["spec"], grid
 
@@ -445,9 +455,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     def test_router_event_loop_stays_the_last_row(self):
         spec = dashboard()["spec"]
         _, loop = titled("Router event loop")
-        self.assertEqual(
-            loop["y"], max(item["spec"]["y"] for item in spec["layout"]["spec"]["items"])
-        )
+        self.assertEqual(loop["y"], max(item["spec"]["y"] for item in layout_items(spec)))
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()
@@ -616,7 +624,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         elements = spec["elements"]
         row = sorted(
             (item["spec"]["x"], item["spec"]["element"]["name"])
-            for item in spec["layout"]["spec"]["items"]
+            for item in layout_items(spec)
             if item["spec"]["y"] == 4
         )
         titles = [elements[name]["spec"]["title"] for _, name in row]
@@ -747,10 +755,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         outcomes = spec["elements"]["panel-11"]["spec"]["id"]
         # Fleet events sits beside Request outcomes at a quarter of the row, and the
         # role history sits beside the engine table.
-        grid = {
-            item["spec"]["element"]["name"]: item["spec"]
-            for item in spec["layout"]["spec"]["items"]
-        }
+        grid = {item["spec"]["element"]["name"]: item["spec"] for item in layout_items(spec)}
         self.assertEqual(grid["panel-37"]["y"], grid["panel-11"]["y"])
         self.assertEqual(
             (grid["panel-11"]["x"], grid["panel-11"]["width"], grid["panel-37"]["x"]), (0, 18, 18)

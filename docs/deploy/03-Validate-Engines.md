@@ -161,7 +161,7 @@ The launcher builds one launch plan per engine with these properties:
 
 For the [capacity trial](../measure/03-Load-Trial.md), set `runtime.prefix_caching` to `false` before preparing the launch plans. The [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings) list each backend's flag for it.
 
-To add the flag after launch:
+To turn prefix caching off after launch:
 
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.

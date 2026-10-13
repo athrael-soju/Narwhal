@@ -389,7 +389,7 @@
         "spec": {
           "id": 7,
           "title": "",
-          "description": "One row per engine, in engine ID order. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (the engine has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and Engine running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
+          "description": "One row per engine, in engine ID order, 8 engines per page. Empty rows fill the last page. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Backlogged (the engine has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and Engine running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -545,6 +545,25 @@
                     },
                     "refId": "T"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(label_replace(label_replace(vector(1), \"iid\", \"龘1\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 1) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘2\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 2) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘3\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 3) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘4\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 4) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘5\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 5) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘6\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 6) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘7\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 7) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"龘8\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 8) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0)))",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "Z"
+                  }
                 }
               ],
               "transformations": [
@@ -564,7 +583,7 @@
                     "id": "filterFieldsByName",
                     "options": {
                       "include": {
-                        "pattern": "^(iid|backend|Value #[^B]*)$"
+                        "pattern": "^(iid|backend|style|Value #[^BZ]*)$"
                       }
                     }
                   }
@@ -617,7 +636,8 @@
                     "displayName": "Engine",
                     "desc": false
                   }
-                ]
+                ],
+                "enablePagination": true
               },
               "fieldConfig": {
                 "defaults": {
@@ -637,7 +657,8 @@
                   ],
                   "noValue": "N/A",
                   "custom": {
-                    "minWidth": 70
+                    "minWidth": 70,
+                    "styleField": "style"
                   }
                 },
                 "overrides": [
@@ -678,6 +699,10 @@
                       {
                         "id": "custom.align",
                         "value": "center"
+                      },
+                      {
+                        "id": "noValue",
+                        "value": "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                       }
                     ]
                   },
@@ -971,6 +996,18 @@
                         "value": 80
                       }
                     ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "style"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.hidden",
+                        "value": true
+                      }
+                    ]
                   }
                 ]
               }
@@ -983,7 +1020,7 @@
         "spec": {
           "id": 8,
           "title": "Engine role history",
-          "description": "Role over time for the selected engines. Quarantined, Draining, Ejected, Validating, Blocked, Unreachable and Restarting periods replace the role for their duration, in the Engines State colours.",
+          "description": "Role over time for the engines in the Engines table, in the same rows. Quarantined, Draining, Ejected, Validating, Blocked, Unreachable and Restarting periods replace the role for their duration, in the Engines State colours.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -994,7 +1031,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\")) > 0",
+                        "expr": "(max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\")) > 0) and on(iid) (count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))",
                         "legendFormat": "{{iid}}"
                       }
                     },
@@ -1003,6 +1040,23 @@
                       "uid": "${DS_PROMETHEUS}"
                     },
                     "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(label_replace(vector(0), \"iid\", \"​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 1)) or (label_replace(vector(0), \"iid\", \"​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 2)) or (label_replace(vector(0), \"iid\", \"​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 3)) or (label_replace(vector(0), \"iid\", \"​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 4)) or (label_replace(vector(0), \"iid\", \"​​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 5)) or (label_replace(vector(0), \"iid\", \"​​​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 6)) or (label_replace(vector(0), \"iid\", \"​​​​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 7)) or (label_replace(vector(0), \"iid\", \"​​​​​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 8)) or (label_replace(vector(0), \"iid\", \"​​​​​​​​​\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0) + 1) >= 9))",
+                        "legendFormat": "{{iid}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "Z"
                   }
                 }
               ],
@@ -1074,6 +1128,10 @@
                         "10": {
                           "text": "Restarting",
                           "color": "#8E9196"
+                        },
+                        "0": {
+                          "text": " ",
+                          "color": "transparent"
                         }
                       }
                     }
@@ -1084,7 +1142,8 @@
                   },
                   "custom": {
                     "fillOpacity": 75
-                  }
+                  },
+                  "displayName": "​"
                 },
                 "overrides": []
               }
@@ -3516,253 +3575,366 @@
       }
     },
     "layout": {
-      "kind": "GridLayout",
+      "kind": "RowsLayout",
       "spec": {
-        "items": [
+        "rows": [
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 0,
-              "y": 0,
-              "width": 24,
-              "height": 4,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-32"
+              "title": "Headline",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 24,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-32"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 4,
+                        "width": 14,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-105"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 14,
+                        "y": 4,
+                        "width": 7,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-106"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 21,
+                        "y": 4,
+                        "width": 3,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-1"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "hideHeader": true
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "Engines",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 16,
+                        "height": 12,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-7"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 0,
+                        "width": 8,
+                        "height": 12,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-8"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 0,
-              "y": 4,
-              "width": 14,
-              "height": 4,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-105"
+              "title": "Request outcomes and fleet events",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 18,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-11"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 18,
+                        "y": 0,
+                        "width": 6,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-37"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 14,
-              "y": 4,
-              "width": 7,
-              "height": 4,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-106"
+              "title": "Pool assignments",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 24,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-10"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 21,
-              "y": 4,
-              "width": 3,
-              "height": 4,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-1"
+              "title": "Latency and token throughput",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-50"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-51"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-49"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 0,
-              "y": 8,
-              "width": 16,
-              "height": 11,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-7"
+              "title": "Pool pressure, admission and queue depth",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-9"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-57"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-58"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 18,
-              "y": 19,
-              "width": 6,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-37"
+              "title": "Request waiting time and retries",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-52"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-12"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 16,
+                        "y": 0,
+                        "width": 8,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-59"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           },
           {
-            "kind": "GridLayoutItem",
+            "kind": "RowsLayoutRow",
             "spec": {
-              "x": 0,
-              "y": 27,
-              "width": 24,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-10"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 8,
-              "width": 8,
-              "height": 11,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-8"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 19,
-              "width": 18,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-11"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 35,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-50"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 8,
-              "y": 35,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-51"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 51,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-52"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 43,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-9"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 8,
-              "y": 51,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-12"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 35,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-49"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 0,
-              "y": 59,
-              "width": 24,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-53"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 8,
-              "y": 43,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-57"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 43,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-58"
-              }
-            }
-          },
-          {
-            "kind": "GridLayoutItem",
-            "spec": {
-              "x": 16,
-              "y": 51,
-              "width": 8,
-              "height": 8,
-              "element": {
-                "kind": "ElementReference",
-                "name": "panel-59"
+              "title": "Router event loop",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 24,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-53"
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             }
           }

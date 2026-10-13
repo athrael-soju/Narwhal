@@ -6,10 +6,17 @@ description: Freeze the deployment inputs and discover the hosts of a Narwhal fl
 
 ## Loading the private environment
 
-1. In a fresh management checkout, copy `.env.example` to `.env`.
-2. Restrict `.env` to mode 0600.
-3. Fill every field.
-4. Load `.env` with shell tracing disabled:
+1. In a fresh management checkout, install Narwhal and activate its environment:
+
+    ```bash
+    make setup
+    . .venv/bin/activate
+    ```
+
+2. Copy `.env.example` to `.env`.
+3. Restrict `.env` to mode 0600.
+4. Fill every field.
+5. Load `.env` with shell tracing disabled:
 
     ```bash
     set +x

@@ -6,6 +6,8 @@ description: Read the Narwhal Orchestrator dashboard from the service-level head
 
 The **Narwhal Orchestrator** dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine, outcome and pool panels below it show how the fleet carries the load and why requests drop. The latency, admission, queue, retry and router event-loop panels at the bottom show where delays and failures start.
 
+Below the headline row, the panels sit in titled rows that match the sections of this page. Select a row title to collapse or expand its panels.
+
 Open the dashboard through the tunnel in [Accessing the dashboard from a workstation](02-Access.md#accessing-the-dashboard-from-a-workstation).
 
 ## Walkthrough
@@ -109,21 +111,21 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's backend, current role, state and load. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the interval.
+The engine table shows each engine's backend, current role, state and load, 8 engines per page. **Engine role history** beside it lists the same engines in the same rows and shows how their roles changed over the interval.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The engine columns read the vLLM or SGLang series the engine exports. The **Resident** and **Engine running** bars scale to the busiest engine.
 
-| Column                       | Shows                                                                                                                                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Engine                       | Engine ID (`iid`)                                                                                                                                                                                      |
-| Backend                      | Logo of the engine's backend, vLLM or SGLang                                                                                                                                                           |
-| Role                         | Current pool assignment: Prefill, Decode or Colocated                                                                                                                                                  |
-| State                        | The most serious [engine state](#engine-states)                                                                                                                                                        |
-| Resident                     | Narwhal requests currently on the engine                                                                                                                                                               |
-| Engine running               | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
-| KV cache                     | KV cache use from `vllm:kv_cache_usage_perc` or `sglang:token_usage`, amber from 80% and red from 95%                                                                                                  |
-| Prefix hits                  | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, or `sglang:cached_tokens_total` over `sglang:prompt_tokens_total` |
-| Tokens/s                     | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |
+| Column         | Shows                                                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Engine         | Engine ID (`iid`)                                                                                                                                                                                      |
+| Backend        | Logo of the engine's backend, vLLM or SGLang                                                                                                                                                           |
+| Role           | Current pool assignment: Prefill, Decode or Colocated                                                                                                                                                  |
+| State          | The most serious [engine state](#engine-states)                                                                                                                                                        |
+| Resident       | Narwhal requests currently on the engine                                                                                                                                                               |
+| Engine running | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
+| KV cache       | KV cache use from `vllm:kv_cache_usage_perc` or `sglang:token_usage`, amber from 80% and red from 95%                                                                                                  |
+| Prefix hits    | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, or `sglang:cached_tokens_total` over `sglang:prompt_tokens_total` |
+| Tokens/s       | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
 
