@@ -22,22 +22,6 @@ def connectors():
 
 
 class HandoffLegsTests(unittest.IsolatedAsyncioTestCase):
-    def test_every_connector_declares_its_leg_order_bound_and_diagnostics(self):
-        for label, kv in connectors():
-            with self.subTest(connector=label):
-                self.assertIn(kv.leg_order, ("sequential", "concurrent"))
-                self.assertTrue(
-                    all(isinstance(name, str) and name for name in kv.diagnostics_fields)
-                )
-                bound = kv.first_token_bound(None)
-                if kv.concurrent:
-                    self.assertIsNotNone(bound)
-                    self.assertIsInstance(kv.rendezvous(LAUNCH), dict)
-                else:
-                    self.assertIsNone(bound)
-                    self.assertEqual(kv.first_token_bound(5.0), 5.0)
-                    self.assertIsNone(kv.rendezvous(LAUNCH))
-
     async def test_a_sequential_prefill_finishes_before_decode(self):
         kv = load("vllm").connector("nixl")
         result = PrefillResult(

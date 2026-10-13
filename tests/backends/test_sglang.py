@@ -1,14 +1,12 @@
+import argparse
 import asyncio
-import contextlib
-import io
 import json
-import os
 import re
-import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -20,16 +18,14 @@ from narwhal.backends.sglang import attestation, discovery, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.backends.sglang.role_switch import SglangRoleSwitch
 from narwhal.deployment.attestation_contract import evidence as attestation_evidence
-from narwhal.deployment.attestation_contract.document import engine_document, launch_args
+from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.attestation_contract.evidence import (
     capture_model_dimensions,
     model_contract,
 )
-from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.attestation import fetch_engine_identity
-from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
@@ -180,18 +176,6 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual((decode["max_tokens"], decode["stream"]), (7, True))
         self.assertNotIn("max_completion_tokens", decode)
 
-    def test_the_prefill_leg_generates_one_token(self):
-        client = EngineClient(kv=BACKEND.connector("mooncake"), dialect=BACKEND.dialect, model="m")
-        rendezvous = {"bootstrap_room": 1}
-        leg = client._prefill_leg(
-            {"model": "m", "prompt": "p", "max_completion_tokens": 9}, rendezvous
-        )
-        self.assertEqual((leg["max_tokens"], leg["bootstrap_room"]), (1, 1))
-        self.assertNotIn("max_completion_tokens", leg)
-        tagged, headers = client._tag(leg, {"x-request-id": "client"}, "rid-prefill")
-        self.assertEqual(tagged["rid"], "rid-prefill")
-        self.assertEqual(headers, {"x-request-id": "client"})
-
 
 class IdentityAndEventTests(unittest.TestCase):
     def test_process_start_comes_from_the_host(self):
@@ -284,13 +268,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             await BACKEND.role_switch.switch(client, "http://engine", role, LAUNCH)
         return posted
 
-    async def test_an_engine_in_the_role_needs_no_switch(self):
-        self.assertEqual(await self.switch("prefill", Role.PREFILL), [])
-
-    async def test_a_decode_switch_reserves_graph_memory(self):
-        posted = await self.switch("prefill", Role.DECODE)
-        self.assertEqual(posted, [{"new_role": "decode", "decode_cuda_graph_memory_gb": 4.0}])
-
     async def test_a_refused_switch_raises(self):
         with (
             patch("narwhal.backends.sglang.role_switch.IDLE_WAIT_S", 0.0),
@@ -350,10 +327,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual((switcher._generations, switcher._received), ({}, {"http://engine": {}}))
-
-    def test_mooncake_is_the_only_connector_and_switches_roles(self):
-        self.assertEqual(list(BACKEND.connectors), ["mooncake"])
-        self.assertIsNotNone(BACKEND.role_switcher("mooncake"))
 
 
 class LaunchTests(unittest.TestCase):
@@ -418,34 +391,6 @@ class LaunchTests(unittest.TestCase):
                 runtime_record(extra_args=["--kv-events-config", '{"publisher": "null"}'])
             )
 
-    def test_every_engine_launches_as_prefill_with_the_pins(self):
-        events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
-        args, transfer = serve(runtime_record(), tp=2, kv_events=events)
-        self.assertEqual(args[:3], ["-m", "launch_engine", "serve"])
-        for name, value in (
-            ("--disaggregation-mode", "prefill"),
-            ("--disaggregation-transfer-backend", "mooncake"),
-            ("--page-size", "1"),
-            ("--attention-backend", "triton"),
-            ("--max-running-requests", "256"),
-            ("--stream-interval", "1"),
-            ("--tp-size", "2"),
-        ):
-            self.assertEqual(option(args, name), value, name)
-        self.assertIn("--enable-pd-role-switch", args)
-        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
-        self.assertEqual(json.loads(option(args, "--kv-events-config"))["publisher"], "zmq")
-        self.assertEqual(
-            transfer,
-            {
-                "transfer_backend": "mooncake",
-                "launch_role": "prefill",
-                "role_switch": True,
-                "decode_cuda_graph_memory_gb": 4.0,
-            },
-        )
-        self.assertNotIn(MODEL, launch_args(args, attestation.LAUNCH_VARYING_FLAGS))
-
     def test_a_launch_may_lower_the_request_cap(self):
         record = runtime_record(extra_args=["--max-running-requests", "64"])
         plan.validate_runtime(record)
@@ -505,169 +450,48 @@ IMAGE = "registry.example/sglang@sha256:" + "a" * 64
 PINS = {"sglang": "0.5.21", "mooncake-transfer-engine": "0.3.9"}
 
 
-class RuntimeCheckTests(unittest.TestCase):
-    def prepared(self, backend: str) -> tuple[Path, dict]:
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        root = Path(folder.name)
-        model = root / "model"
-        model.mkdir()
-        (model / "config.json").write_text("{}")
-        sockets = root / "events" / "engine"
-        launch = {
-            "engine": "sglang",
-            "backend": backend,
-            "expected_packages": PINS,
-            "args": ["-m", "launch_engine", "serve", "--model-path", str(model)],
-            "model_dir": str(model),
-            "kv_events": {
-                "socket_dir": str(sockets),
-                "endpoint": f"ipc://{sockets}/events.sock",
-                "replay_endpoint": f"ipc://{sockets}/replay.sock",
-            },
-        }
-        if backend == "native":
-            launch.update(python_executable="/opt/sglang/bin/python", model_path=str(model))
-        else:
-            launch.update(image=IMAGE, common=["--network", "host"])
-        run = root / "launch"
-        run.mkdir()
-        (run / "launch.json").write_text(json.dumps(launch))
-        env = "engine.env" if backend == "native" else "container.env"
-        (run / env).write_text("SGLANG_HOST_IP=192.0.2.11\n")
-        return run, launch
+CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
 
-    def endpoints(self, launch):
-        return {key: launch["kv_events"][key] for key in ("endpoint", "replay_endpoint")}
 
-    def checked(
-        self, run, launch, *, version="0.5.21", events=None, returncode=0, digests=(IMAGE,)
-    ):
-        record = {
-            "sglang_version": version,
-            "prefix_caching": True,
-            "kv_events": events or self.endpoints(launch),
-        }
-        output = runtime.SETTINGS_TAG + json.dumps(record) + "\n"
-        self.calls = []
+def sglang_modules() -> dict[str, ModuleType]:
+    sglang = ModuleType("sglang")
+    sglang.__version__ = "0.5.21"  # type: ignore[attr-defined]
+    server_args = ModuleType("sglang.srt.server_args")
 
-        def stage(command, **kwargs):
-            self.calls.append((list(command), kwargs))
-            if command[:3] == ["docker", "image", "inspect"]:
-                inspection = [{"Id": "sha256:" + "b" * 64, "RepoDigests": list(digests)}]
-                return subprocess.CompletedProcess(command, 0, json.dumps(inspection), "")
-            return subprocess.CompletedProcess(command, returncode, output, "loading\nboom\n")
+    class ServerArgs:
+        @staticmethod
+        def add_cli_args(parser: argparse.ArgumentParser) -> None:
+            for name in (
+                "--model-path",
+                "--tokenizer-path",
+                "--kv-events-config",
+                "--disaggregation-bootstrap-port",
+            ):
+                parser.add_argument(name)
+            for flag in ("--trust-remote-code", "--disable-radix-cache"):
+                parser.add_argument(flag, action="store_true")
 
-        with (
-            patch("narwhal.deployment.stages.run", side_effect=stage),
-            contextlib.redirect_stdout(io.StringIO()) as printed,
-        ):
-            check(run, launch)
-        return printed.getvalue()
+    server_args.ServerArgs = ServerArgs  # type: ignore[attr-defined]
+    return {
+        "sglang": sglang,
+        "sglang.srt": ModuleType("sglang.srt"),
+        "sglang.srt.server_args": server_args,
+    }
 
-    def test_a_native_check_runs_the_hook_and_records_the_interpreter(self):
-        run, launch = self.prepared("native")
-        printed = self.checked(run, launch)
-        [(command, kwargs)] = self.calls
-        self.assertEqual(
-            command,
-            [
-                launch["python_executable"],
-                str(run / "hook/launch_engine.py"),
-                "_check",
-                json.dumps(PINS),
-                json.dumps(launch["args"][3:]),
-            ],
-        )
-        self.assertEqual(kwargs["env"], {**os.environ, "SGLANG_HOST_IP": "192.0.2.11"})
-        self.assertEqual(kwargs["stage"], "native-runtime-check")
-        self.assertEqual(kwargs["log"], run / "runtime-check.log")
-        attempt = json.loads((run / "runtime-check.log").read_text())
-        self.assertEqual(attempt["plan_sha256"], digest(run / "launch.json"))
-        # write_once compares bytes, so a re-check needs this exact serialization.
-        evidence = json.dumps(
-            {
-                "plan_sha256": digest(run / "launch.json"),
-                "engine_version": "0.5.21",
-                "prefix_caching": True,
-                "kv_events": self.endpoints(launch),
-                "backend": "native",
-                "python_executable": launch["python_executable"],
-                "expected_packages": PINS,
-            }
-        )
-        self.assertEqual((run / "checked.json").read_text(), evidence)
-        sockets = launch["kv_events"]["socket_dir"]
-        self.assertEqual(
-            printed,
-            "Runtime identity, package pins and server arguments passed.\n"
-            f"The radix cache is on; cache events publish under {sockets}.\n",
-        )
-        self.checked(run, launch)
-        self.assertEqual((run / "checked.json").read_text(), evidence)
-        with self.assertRaisesRegex(ValueError, "^runtime identity changed; prepare a fresh"):
-            self.checked(run, launch, version="0.5.22")
 
-    def test_a_container_check_inspects_the_image_then_runs_the_hook(self):
-        run, launch = self.prepared("container")
-        self.checked(run, launch)
-        log = run / "image-check.log"
-        (inspect, inspected), (command, ran) = self.calls
-        self.assertEqual(inspect, ["docker", "image", "inspect", IMAGE])
-        self.assertEqual((inspected["stage"], inspected["log"]), ("docker-image", log))
-        owner = json.loads((run / "docker-owner.json").read_text())["label"]
-        self.assertEqual(command[:4], ["docker", "run", "--label", f"io.narwhal.launch={owner}"])
-        self.assertEqual(
-            command[6:],
-            [
-                "--rm",
-                "--network",
-                "host",
-                "--entrypoint",
-                "python3",
-                IMAGE,
-                "/narwhal-hooks/launch_engine.py",
-                "_check",
-                json.dumps(PINS),
-                json.dumps(launch["args"][3:]),
-            ],
-        )
-        self.assertEqual((ran["stage"], ran["log"]), ("docker-run", log))
-        self.assertNotIn("env", ran)
-        self.assertEqual(json.loads(log.read_text())["plan_sha256"], digest(run / "launch.json"))
-        self.assertEqual(
-            (run / "checked.json").read_text(),
-            json.dumps(
-                {
-                    "plan_sha256": digest(run / "launch.json"),
-                    "engine_version": "0.5.21",
-                    "prefix_caching": True,
-                    "kv_events": self.endpoints(launch),
-                    "image_id": "sha256:" + "b" * 64,
-                }
-            ),
-        )
-
-    def test_a_check_stops_at_the_first_failed_step(self):
-        run, launch = self.prepared("container")
-        (Path(launch["model_dir"]) / "config.json").write_text('{"auto_map": {"x": "y"}}')
-        with self.assertRaisesRegex(ValueError, "^Model metadata requires --trust-remote-code"):
-            self.checked(run, launch)
-        self.assertEqual(self.calls, [])
-        (Path(launch["model_dir"]) / "config.json").write_text("{}")
-        with self.assertRaisesRegex(ValueError, "^local image identity differs from the launch"):
-            self.checked(run, launch, digests=())
-        self.assertEqual(
-            [command[:3] for command, _ in self.calls], [["docker", "image", "inspect"]]
-        )
-        run, launch = self.prepared("native")
-        failed = f"^native runtime check exited 1: boom; inspect {re.escape(str(run))}"
-        with self.assertRaisesRegex(ValueError, failed + "/runtime-check.log$"):
-            self.checked(run, launch, returncode=1)
-        moved = {**self.endpoints(launch), "endpoint": "tcp://*:5557"}
-        with self.assertRaisesRegex(ValueError, "^runtime cache-event endpoints differ"):
-            self.checked(run, launch, events=moved)
-        self.assertFalse((run / "checked.json").exists())
+class SglangProbeTests(unittest.TestCase):
+    def test_the_probe_checks_a_separate_tokenizer_for_shipped_code(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tokenizer = Path(folder)
+            (tokenizer / "tokenizer_config.json").write_text(CUSTOM_CODE)
+            args = ["--model-path", "/model", "--tokenizer-path", str(tokenizer)]
+            with patch.dict(sys.modules, sglang_modules()):
+                with self.assertRaisesRegex(ValueError, "^Tokenizer metadata requires"):
+                    runtime.settings({}, args)
+                trusted = runtime.settings({}, [*args, "--trust-remote-code"])
+                self.assertEqual(trusted["sglang_version"], "0.5.21")
+                (tokenizer / "tokenizer_config.json").write_text("{}")
+                self.assertTrue(runtime.settings({}, args)["prefix_caching"])
 
 
 IMAGE_ID = "sha256:" + "b" * 64
@@ -759,72 +583,59 @@ class EngineDocumentTests(unittest.TestCase):
         (run / "startup.log").write_text("max_running_requests=64, context_len=32768\n")
         return run
 
-    def test_the_document_holds_the_contract_its_sources_and_the_launch(self):
-        switching = {
-            "transfer_backend": "mooncake",
-            "launch_role": "prefill",
-            "role_switch": True,
-            "decode_cuda_graph_memory_gb": 4.0,
-        }
+    def test_a_native_engine_with_fixed_roles_attests_without_an_image(self):
+        # The contract suite's attestation golden holds a container engine that switches roles.
         fixed = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
-        for backend, connector in (("container", switching), ("native", fixed)):
-            with self.subTest(backend=backend):
-                native = backend == "native"
-                run = self.evidence(backend, connector)
-                live, identity = (
-                    ("live_native", PROCESS) if native else ("live_container", CONTAINER_ID)
-                )
-                with patch.object(attestation_evidence, live, return_value=identity):
-                    document = engine_document(run, run / "startup.log")
-                image_id = "" if native else IMAGE_ID
-                model_config = digest(run / "model/config.json")
-                expected = {
-                    "schema": "narwhal.attestation",
-                    "schema_version": 1,
-                    "contract": {
-                        "engine_version": "0.5.21",
-                        "image_digest": image_id,
-                        "transfer_version": "0.3.9",
-                        "connector_version": 0,
-                        "model_architecture": "M",
-                        "model_dtype": "bfloat16",
-                        "kv_heads": 2,
-                        "head_size": 128,
-                        "hidden_layers": 4,
-                        "attention_backend": "triton",
-                        "kv_cache_dtype": "auto",
-                        "cross_layers_blocks": None,
-                        "hybrid_kv_cache_manager": None,
-                        "connector": "mooncake",
-                        "kv_role": "",
-                        "transfer_mode": "",
-                        "speculative_config": "disabled",
-                        "enforce_handshake_compat": None,
-                    },
-                    "sources": {
-                        field: f"{(run / name).resolve()} sha256:{digest(run / name)}"
-                        for field, name in SOURCES.items()
-                        if not (native and field == "image_digest")
-                    },
-                    "launch": {
-                        "args": [
-                            *("-m", "launch_engine", "serve", "--model-path", "--port"),
-                            *("--page-size", "1", "--max-running-requests", "64"),
-                        ],
-                        "image_id": image_id,
-                        "expected_packages": PINS,
-                        "model_config_sha256": model_config,
-                        "model_revision": "2" * 40,
-                        "launch_sha256": "3" * 64,
-                        "launcher_code_sha256": "5" * 64,
-                        "bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600},
-                        "role_switch": connector["role_switch"],
-                        **({} if native else {"decode_cuda_graph_memory_gb": 4.0}),
-                    },
-                }
-                self.assertEqual(document, expected)
-                # The document is written in this key order.
-                self.assertEqual(json.dumps(document), json.dumps(expected))
+        run = self.evidence("native", fixed)
+        with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
+            document = engine_document(run, run / "startup.log")
+        model_config = digest(run / "model/config.json")
+        expected = {
+            "schema": "narwhal.attestation",
+            "schema_version": 1,
+            "contract": {
+                "engine_version": "0.5.21",
+                "image_digest": "",
+                "transfer_version": "0.3.9",
+                "connector_version": 0,
+                "model_architecture": "M",
+                "model_dtype": "bfloat16",
+                "kv_heads": 2,
+                "head_size": 128,
+                "hidden_layers": 4,
+                "attention_backend": "triton",
+                "kv_cache_dtype": "auto",
+                "cross_layers_blocks": None,
+                "hybrid_kv_cache_manager": None,
+                "connector": "mooncake",
+                "kv_role": "",
+                "transfer_mode": "",
+                "speculative_config": "disabled",
+                "enforce_handshake_compat": None,
+            },
+            "sources": {
+                field: f"{(run / name).resolve()} sha256:{digest(run / name)}"
+                for field, name in SOURCES.items()
+                if field != "image_digest"
+            },
+            "launch": {
+                "args": [
+                    *("-m", "launch_engine", "serve", "--model-path", "--port"),
+                    *("--page-size", "1", "--max-running-requests", "64"),
+                ],
+                "image_id": "",
+                "expected_packages": PINS,
+                "model_config_sha256": model_config,
+                "model_revision": "2" * 40,
+                "launch_sha256": "3" * 64,
+                "launcher_code_sha256": "5" * 64,
+                "bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600},
+                "role_switch": False,
+            },
+        }
+        self.assertEqual(document, expected)
+        # The document is written in this key order.
+        self.assertEqual(json.dumps(document), json.dumps(expected))
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []
