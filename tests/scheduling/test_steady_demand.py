@@ -165,7 +165,6 @@ class SteadyDemandTests(unittest.TestCase):
 
         rows = self.run_steps(10)
 
-        # The shift is a prefill surge: its move is the only one, and the steady rule waits.
         self.assertEqual([flip.to for flip in fleet.scheduler.roles.flips], [Role.PREFILL])
         applied = [row for row in shifted if row["result"] == "applied"]
         self.assertEqual(len(applied), 1)
@@ -337,7 +336,6 @@ class DecodeWaitTests(unittest.TestCase):
         row = applied[0]
         th = sim.scheduler.th
         self.assertEqual((row["current_prefill"], row["prefill"]), (6, 7))
-        # Projected prefill load above expand moves as a surge before the steady span completes.
         self.assertTrue(row["prefill_surge"])
         self.assertEqual(row["confirmations"], 3)
         self.assertLessEqual(row["projected_decode_wait_ratio"], th.expand)
