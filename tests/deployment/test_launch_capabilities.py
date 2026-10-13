@@ -8,14 +8,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.backends import load, names
+from narwhal.backends import load
 from narwhal.deployment.launch_engine import cli
 from narwhal.deployment.launch_engine.backend import (
     CacheCapture,
     EngineLauncher,
     LiveModelDimensions,
     ModelFormats,
-    cache_capture,
 )
 from tests.backends.contract import fixtures, prepared
 
@@ -40,15 +39,6 @@ class LaunchCapabilityTests(unittest.TestCase):
         launcher = load("sglang").launcher()
         for capability in CAPABILITIES:
             self.assertNotIsInstance(launcher, capability)
-
-    def test_a_launch_copies_pins_and_enables_the_hook_only_with_cache_capture(self):
-        for name in names():
-            with self.subTest(backend=name):
-                run, plan, _ = self.prepared(name)
-                capture = cache_capture(load(name).launcher()) is not None
-                self.assertEqual((run / "hook/sitecustomize.py").exists(), capture)
-                self.assertEqual("cache_capture_sha256" in plan, capture)
-                self.assertEqual("cache_capture_code_sha256" in plan, capture)
 
     def test_the_cli_lists_capture_actions_for_backends_with_cache_capture(self):
         with contextlib.redirect_stdout(io.StringIO()) as shown, self.assertRaises(SystemExit):

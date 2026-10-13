@@ -1,4 +1,6 @@
 import contextlib
+import copy
+import dataclasses
 import io
 import itertools
 import json
@@ -6,6 +8,7 @@ import math
 import os
 import re
 import socket
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Mapping
@@ -17,8 +20,9 @@ import httpx
 
 from narwhal.backends import EngineBackend, load, names
 from narwhal.deployment.attestation_contract.document import engine_document
+from narwhal.deployment.attestation_contract.evidence import read_shared_start
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
-from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.check import check, read_checked
 from narwhal.deployment.launch_engine.plan import load as load_plan
 from narwhal.deployment.launch_engine.start import start
 from narwhal.deployment.native_engine import start_shared
@@ -26,9 +30,9 @@ from narwhal.engines.attestation import EngineIdentity, fetch_engine_identity
 from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
 from narwhal.engines.connector import KvConnector, PrefillResult, RendezvousConnector
 from narwhal.engines.stream import sse_token_bearing
-from narwhal.runtime.role_switch import RoleSwitcher, restore_roles
+from narwhal.runtime.role_switch import FixedRoles, RoleSwitcher, restore_roles
 from narwhal.serving.completion import completion_body_error
-from narwhal.types import Role
+from narwhal.types import Role, RoleModel
 from tests.backends.contract import (
     CONTAINER_ID,
     Engines,
@@ -44,6 +48,8 @@ from tests.wire import engine_transports, serving_app
 from tools.measurement import simulated_engine as sim
 
 PROMPT = "contract probe"
+CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
+LAUNCH = {"bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600}}
 
 
 class BackendContract(unittest.IsolatedAsyncioTestCase):
@@ -207,6 +213,22 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual({k: leg[k] for k in body}, body)
                     self.assertNotEqual(leg, body)
 
+    def test_every_connector_declares_its_leg_order_bound_and_diagnostics(self):
+        for key, kv in self.backend.connectors.items():
+            with self.subTest(connector=key):
+                self.assertIn(kv.leg_order, ("sequential", "concurrent"))
+                self.assertTrue(
+                    all(isinstance(name, str) and name for name in kv.diagnostics_fields)
+                )
+                bound = kv.first_token_bound(None)
+                if kv.concurrent:
+                    self.assertIsNotNone(bound)
+                    self.assertIsInstance(kv.rendezvous(LAUNCH), dict)
+                else:
+                    self.assertIsNone(bound)
+                    self.assertEqual(kv.first_token_bound(5.0), 5.0)
+                    self.assertIsNone(kv.rendezvous(LAUNCH))
+
     def test_kv_event_batches_decode(self):
         decoder = self.backend.kv_events
         self.assertIsInstance(decoder.recomputes_final_token, bool)
@@ -311,11 +333,32 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                         launcher.discovered_runtime(observed, settings.get, connector)
                     self.assertEqual(str(raised.exception), message)
 
+    def test_every_connector_has_a_declared_role_model(self):
+        for connector in self.backend.connectors:
+            with self.subTest(connector=connector):
+                switcher = self.backend.role_switcher(connector)
+                self.assertIsInstance(switcher, RoleSwitcher)
+                self.assertIsInstance(switcher.model, RoleModel)
+                self.assertEqual(switcher.engine_held, switcher.model is RoleModel.ENGINE)
+                # Only an engine that holds its role can refuse a switch while busy.
+                self.assertTrue(not switcher.requires_idle or switcher.engine_held)
+        if self.backend.role_switch.connectors is not None:
+            switcher = self.backend.role_switcher("unswitched")
+            self.assertIsInstance(switcher, FixedRoles)
+            self.assertIs(switcher.model, RoleModel.FIXED)
+
+    async def test_roles_the_engine_does_not_hold_never_switch_or_go_stale(self):
+        switcher = self.backend.role_switch
+        if switcher.engine_held:
+            return
+        for roles in (switcher, FixedRoles()):
+            with self.subTest(model=roles.model):
+                await roles.place(None, ("http://a", None), ("http://b", None))
+                self.assertFalse(roles.stale_handoff("http://a", "http://b"))
+                self.assertIsNone(await roles.role(None, "http://a"))
+
     async def test_role_switch_capability(self):
         switcher = self.backend.role_switch
-        if switcher is None:
-            return
-        self.assertIsInstance(switcher, RoleSwitcher)
         self.assertIsInstance(switcher.requires_idle, bool)
         transport = httpx.MockTransport(
             lambda request: httpx.Response(200, text=json.dumps({"success": True}))
@@ -323,6 +366,197 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=transport) as client:
             for role in (Role.DECODE, Role.PREFILL):
                 await switcher.switch(client, "http://engine", role, {})
+
+
+class BackendFlows(unittest.TestCase):
+    """The shared launch, runtime check and attestation steps, run on each backend's fixtures."""
+
+    name: str
+
+    def setUp(self):
+        self.backend = load(self.name)
+        self.launcher = self.backend.launcher()
+        self.fixtures = fixtures(self.name)
+
+    def prepared(self, *, native: bool = False, fixture=None, **environment: str):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        return prepared(
+            Path(folder.name),
+            self.launcher,
+            fixture or self.fixtures,
+            native=native,
+            **environment,
+        )
+
+    def check(self, run: Path, plan: dict, stages=None) -> Stages:
+        stages = stages or Stages(plan, self.fixtures.check_output(plan))
+        with (
+            patch("narwhal.deployment.stages.run", side_effect=stages),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            check(run, plan)
+        return stages
+
+    def start(self, run: Path) -> None:
+        plan = load_plan(run)
+        with (
+            patch("narwhal.deployment.stages.run", side_effect=Stages(plan, "")),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            start(run, plan)
+
+    def test_a_launch_enables_the_capture_hook_only_with_cache_capture(self):
+        run, plan, _ = self.prepared()
+        capture = cache_capture(self.launcher) is not None
+        self.assertEqual((run / "hook/sitecustomize.py").exists(), capture)
+        self.assertEqual("cache_capture_sha256" in plan, capture)
+        self.assertEqual("cache_capture_code_sha256" in plan, capture)
+
+    def test_launch_ports_must_be_distinct(self):
+        for name in ("NARWHAL_ATTEST_PORT", self.launcher.side_channel_port_env):
+            with self.subTest(port=name), self.assertRaisesRegex(ValueError, "must be distinct"):
+                self.prepared(**{name: "8000"})
+
+    def test_start_requires_a_matching_check_and_keeps_the_container_id(self):
+        run, plan, _ = self.prepared()
+        self.assertEqual((run / "container.env").stat().st_mode & 0o777, 0o600)
+        with (
+            patch("narwhal.deployment.stages.run") as invoke,
+            self.assertRaises(FileNotFoundError),
+        ):
+            start(run, plan)
+        invoke.assert_not_called()
+        self.check(run, plan)
+        self.start(run)
+        self.assertEqual((run / "container.id").read_text().strip(), CONTAINER_ID)
+        with (
+            patch("narwhal.deployment.stages.run") as invoke,
+            self.assertRaisesRegex(ValueError, "already has a container"),
+        ):
+            start(run, load_plan(run))
+        invoke.assert_not_called()
+        (run / "container.env").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "environment changed"):
+            load_plan(run)
+
+    def test_a_changed_image_or_plan_stops_before_the_engine_starts(self):
+        run, plan, _ = self.prepared()
+        output = self.fixtures.check_output(plan)
+        other = Stages({**plan, "image": "sha256:" + "d" * 64}, output)
+        with self.assertRaisesRegex(ValueError, "^local image identity differs"):
+            self.check(run, plan, other)
+        self.assertFalse((run / "checked.json").exists())
+        self.check(run, plan)
+        plan["args"].append("--changed")
+        (run / "launch.json").write_text(json.dumps(plan))
+        with (
+            patch("narwhal.deployment.stages.run") as invoke,
+            self.assertRaisesRegex(ValueError, "plan changed"),
+        ):
+            start(run, plan)
+        invoke.assert_not_called()
+
+    def test_the_model_metadata_check_reads_the_tokenizer_setting(self):
+        for runtime in ({}, {"tokenizer": "/model/tokenizer"}):
+            with self.subTest(runtime=runtime):
+                fixture = self.fixtures
+                fixture = dataclasses.replace(
+                    fixture, launch_runtime={**fixture.launch_runtime, **runtime}
+                )
+                run, plan, _ = self.prepared(fixture=fixture)
+                (Path(plan["model_dir"]) / "tokenizer_config.json").write_text(CUSTOM_CODE)
+                stages = Stages(plan, fixture.check_output(plan))
+                if runtime:
+                    # A separate tokenizer leaves the model directory's tokenizer files unused.
+                    self.check(run, plan, stages)
+                    self.assertTrue((run / "checked.json").exists())
+                    continue
+                with self.assertRaisesRegex(ValueError, "^Model metadata requires --trust-remote"):
+                    self.check(run, plan, stages)
+                self.assertEqual(stages.calls, [])
+
+    def test_a_native_check_requires_the_planned_model_path(self):
+        run, plan, _ = self.prepared(native=True)
+        plan["model_path"] = str(run / "missing")
+        with self.assertRaisesRegex(ValueError, "^native model path is missing"):
+            check(run, plan)
+
+    def test_a_repeated_check_keeps_its_evidence_and_rejects_a_changed_runtime(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                run, plan, _ = self.prepared(native=native)
+                self.check(run, plan)
+                evidence = (run / "checked.json").read_text()
+                self.check(run, plan)
+                self.assertEqual((run / "checked.json").read_text(), evidence)
+                changed = {**json.loads(evidence), "engine_version": "0.0.0"}
+                (run / "checked.json").write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, "^runtime identity changed"):
+                    self.check(run, plan)
+
+    def test_a_check_stops_at_a_failed_probe_or_moved_cache_events(self):
+        run, plan, _ = self.prepared(native=True)
+
+        def failed(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, "", "loading\nboom\n")
+
+        with (
+            patch("narwhal.deployment.stages.run", side_effect=failed),
+            self.assertRaisesRegex(ValueError, "^native runtime check exited 1: boom; inspect"),
+        ):
+            check(run, plan)
+        moved = copy.deepcopy(plan)
+        moved["kv_events"]["endpoint"] = "tcp://*:5557"
+        stages = Stages(plan, self.fixtures.check_output(moved))
+        with self.assertRaisesRegex(ValueError, "^runtime cache-event endpoints differ"):
+            self.check(run, plan, stages)
+        self.assertFalse((run / "checked.json").exists())
+
+    def test_checked_evidence_uses_the_neutral_names_and_reads_earlier_ones(self):
+        renamed = self.backend.renamed_fields
+        run, plan, _ = self.prepared()
+        stages = self.check(run, plan)
+        written = json.loads((run / "checked.json").read_text())
+        self.assertIn("engine_version", written)
+        self.assertFalse(set(written) & set(renamed["checked"]))
+        # A repeated check accepts a file with the earlier names and the same values.
+        earlier_names = {new: old for old, new in renamed["checked"].items()}
+        earlier = {earlier_names.get(key, key): value for key, value in written.items()}
+        (run / "checked.json").write_text(json.dumps(earlier))
+        self.assertEqual(read_checked(run), written)
+        self.check(run, plan, stages)
+        self.assertEqual(json.loads((run / "checked.json").read_text()), earlier)
+
+    def test_evidence_with_an_earlier_and_a_current_name_is_rejected(self):
+        for section, label, reader in (
+            ("checked", "checked.json", read_checked),
+            ("shared_start", "shared-start.json", read_shared_start),
+        ):
+            for old, new in self.backend.renamed_fields[section].items():
+                with self.subTest(field=old), tempfile.TemporaryDirectory() as folder:
+                    run = Path(folder)
+                    (run / label).write_text(json.dumps({old: "a", new: "a"}))
+                    with self.assertRaisesRegex(ValueError, f"^{label} sets both {old} and {new}$"):
+                        reader(run)
+
+    def test_the_attestation_document_binds_the_prepared_model(self):
+        run, plan, _ = self.prepared()
+        self.check(run, plan)
+        self.start(run)
+        plan = load_plan(run)
+        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
+        log = run / "startup.log"
+        log.write_text(self.fixtures.startup_log)
+        image = json.loads((run / "checked.json").read_text())["image_id"]
+        with running_container(image):
+            document = engine_document(run, log)
+            self.assertEqual(
+                list(document), ["schema", "schema_version", "contract", "sources", "launch"]
+            )
+            (Path(plan["model_dir"]) / "config.json").write_text("{}")
+            with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
+                engine_document(run, log)
 
 
 class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
@@ -535,7 +769,10 @@ for _name in names():
     globals()[f"{_name.title()}ContractTests"] = type(
         f"{_name.title()}ContractTests", (BackendContract,), {"name": _name}
     )
+    globals()[f"{_name.title()}FlowTests"] = type(
+        f"{_name.title()}FlowTests", (BackendFlows,), {"name": _name}
+    )
     globals()[f"{_name.title()}CharacterizationTests"] = type(
         f"{_name.title()}CharacterizationTests", (BackendCharacterization,), {"name": _name}
     )
-del BackendContract, BackendCharacterization, _name
+del BackendContract, BackendFlows, BackendCharacterization, _name

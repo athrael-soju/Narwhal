@@ -27,7 +27,6 @@ from narwhal.deployment.launch_engine.plan import (
 )
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.start import (
-    start,
     start_shared,
     validate_shared_gpu,
     validate_shared_runs,
@@ -39,15 +38,6 @@ from tests.deployment.fixtures import (
     patched_docker,
     runtime,
     vllm_check_output,
-)
-
-IMAGE_CHECK_OUTPUT = vllm_check_output(
-    {
-        "kv_events": {
-            "endpoint": "ipc:///narwhal-kv-events/events.sock",
-            "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock",
-        }
-    }
 )
 
 
@@ -459,13 +449,9 @@ class EngineLauncherTests(unittest.TestCase):
         for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
             self.assertIs(releases_peers("1.22.0", value), disabled)
 
-    def test_launch_ports_and_shared_budget_are_bound_to_plan(self):
+    def test_the_shared_budget_and_transports_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
-            for name in ("NARWHAL_ATTEST_PORT", "NARWHAL_NIXL_SIDE_CHANNEL_PORT"):
-                changed = {**env, name: env["NARWHAL_ENGINE_PORT"]}
-                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "distinct"):
-                    build(record, changed, Path(folder) / "launch")
             record["gpu_visibility_env"] = "CUDA_VISIBLE_DEVICES"
             record["gpu_ids"] = ["GPU-0"]
             record["tensor_parallel_size"] = 1
@@ -492,20 +478,6 @@ class EngineLauncherTests(unittest.TestCase):
             plan, values = build(record, env, Path(folder) / "launch")
             self.assertEqual(plan["ucx_tls"], "tcp,sm,self,cuda_copy")
             self.assertEqual(values["UCX_TLS"], plan["ucx_tls"])
-
-    def test_image_check_rejects_missing_custom_code_flag_before_container_work(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            _, env = launcher_inputs(root)
-            (root / "model/tokenizer_config.json").write_text(
-                json.dumps({"auto_map": {"AutoTokenizer": "tokenization_custom.CustomTokenizer"}})
-            )
-            run = root / "launch"
-            prepare(run, env)
-            with patched_docker() as mocked:
-                with self.assertRaisesRegex(ValueError, "requires --trust-remote-code"):
-                    check(run, load(run))
-                mocked.assert_not_called()
 
     def test_image_check_rejects_convolutional_layout_before_model_load(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -613,62 +585,6 @@ class EngineLauncherTests(unittest.TestCase):
                             handshake_policy(run, plan)
                         self.assertFalse((run / "handshake-policy.json").exists())
                     self.assertEqual(docker.call_count, 1)
-
-    def test_start_requires_matching_image_check_and_retains_container_id(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            _, env = launcher_inputs(root)
-            run = root / "launch"
-            prepare(run, env)
-            self.assertEqual((run / "container.env").stat().st_mode & 0o777, 0o600)
-            plan = load(run)
-            with patched_docker() as mocked:
-                with self.assertRaises(FileNotFoundError):
-                    start(run, plan)
-                mocked.assert_not_called()
-            with patched_docker(
-                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
-            ) as mocked:
-                check(run, plan)
-                self.assertIn("--rm", mocked.call_args_list[1].args[0])
-            with patched_docker(side_effect=["c" * 64, "started"]) as mocked:
-                start(run, load(run))
-                self.assertEqual(mocked.call_args_list[0].args[0][0], "create")
-                self.assertEqual(mocked.call_args_list[1].args[0], ["start", "c" * 64])
-            self.assertEqual((run / "container.id").read_text().strip(), "c" * 64)
-            with patched_docker() as mocked:
-                with self.assertRaisesRegex(ValueError, "already has a container"):
-                    start(run, load(run))
-                mocked.assert_not_called()
-            (run / "container.env").write_text("changed")
-            with self.assertRaisesRegex(ValueError, "environment changed"):
-                load(run)
-
-    def test_wrong_image_and_changed_plan_stop_before_engine_creation(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            _, env = launcher_inputs(root)
-            run = root / "launch"
-            prepare(run, env)
-            plan = load(run)
-            with (
-                patched_docker(
-                    return_value=json.dumps([{"Id": "sha256:" + "d" * 64}]),
-                ),
-                self.assertRaisesRegex(ValueError, "image identity"),
-            ):
-                check(run, plan)
-            self.assertFalse((run / "checked.json").exists())
-            with patched_docker(
-                side_effect=[json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}]), IMAGE_CHECK_OUTPUT],
-            ):
-                check(run, plan)
-            plan["args"].append("--enforce-eager")
-            (run / "launch.json").write_text(json.dumps(plan))
-            with patched_docker() as mocked:
-                with self.assertRaisesRegex(ValueError, "plan changed"):
-                    start(run, plan)
-                mocked.assert_not_called()
 
     def test_image_check_executes_registered_connector_import_and_propagates_failure(self):
         module_name = "vllm.distributed.kv_transfer.kv_connector.v1.nixl"
