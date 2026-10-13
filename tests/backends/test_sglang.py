@@ -19,6 +19,10 @@ from narwhal.backends import load
 from narwhal.backends.sglang import attestation, discovery, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.backends.sglang.role_switch import SglangRoleSwitch
+from narwhal.deployment.attestation_contract.evidence import (
+    capture_model_dimensions,
+    model_contract,
+)
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
@@ -536,7 +540,7 @@ class LaunchTests(unittest.TestCase):
             },
         }
         self.assertEqual(
-            attestation.model_contract(config),
+            model_contract(config),
             {
                 "contract": {"kv_heads": 2, "head_size": 128, "hidden_layers": 4},
                 "model_architecture": "M",
@@ -550,7 +554,7 @@ class LaunchTests(unittest.TestCase):
         (run / "launch.json").write_text(json.dumps({"engine": "sglang"}))
         (run / "checked.json").write_text(json.dumps({"plan_sha256": "0" * 64}))
         with self.assertRaisesRegex(ValueError, "another serving plan"):
-            load("sglang").launcher().model_dimensions(run, {"engine": "sglang"})
+            capture_model_dimensions(run)
         self.assertFalse((run / "model-dimensions.json").exists())
 
 

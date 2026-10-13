@@ -34,7 +34,7 @@ An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang 
 
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
-| `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and the cache-capture hook |
+| `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and on vLLM the cache-capture hook |
 | `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json`, read in the image on vLLM and from the model's `config.json` on SGLang |
@@ -51,7 +51,7 @@ These actions check their inputs:
 
 | Action | Checks |
 | --- | --- |
-| `prepare` | Model configuration hash and cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
+| `prepare` | Model configuration hash and, on vLLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
 | `check` | Image identity for `container`, the model path and model file hash for `native`, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer needs remote code, and the cache-event endpoints the server arguments resolve to. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |

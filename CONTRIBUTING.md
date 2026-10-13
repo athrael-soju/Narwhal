@@ -240,7 +240,7 @@ Import each name from the subpackage module that defines it.
 | `deployment/launch_engine/captures.py`                                       | Model dimension, cache layout, cache registration and handshake captures |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
-| `deployment/attestation_contract/evidence.py`                                | Checked plan and live engine binding                                     |
+| `deployment/attestation_contract/evidence.py`                                | Checked plan, live engine binding and model dimensions                   |
 | `deployment/attestation_contract/capture.py`                                 | Live NIXL, model, transfer and HTTP captures                             |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
 | `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |

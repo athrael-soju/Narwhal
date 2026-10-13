@@ -6,9 +6,12 @@ import subprocess
 from pathlib import Path
 
 from ... import command_results as results
+from ...backends import load as load_backend
+from ...backends import names
 from ...cli_support import add_version_argument
 from .. import native_engine
-from .backend import plan_launcher
+from ..attestation_contract.evidence import model_dimensions
+from .backend import cache_capture, engine_backend, plan_launcher
 from .check import check
 from .plan import load, prepare
 from .start import READY_SECONDS, start, start_shared
@@ -16,6 +19,52 @@ from .start import READY_SECONDS, start, start_shared
 
 def main(argv: list[str] | None = None) -> int:
     return results.invoke("narwhal-engine", argv, _main, operation="engine")
+
+
+# Actions of a backend with cache capture, with the launch backends each one runs on.
+CAPTURE_ACTIONS = {
+    "measure-cache": (
+        "Run a temporary sizing container from a checked, unused plan; write "
+        "cache-layout.json and remove the completed sizing container",
+        "container only",
+    ),
+    "handshake-policy": (
+        "Inspect the installed connector compatibility policy using a checked plan; write "
+        "handshake-policy.json",
+        "container and native",
+    ),
+    "capture-cache": (
+        "Capture cache-layout.json from the running container recorded by a checked plan",
+        "container only",
+    ),
+    "cache-registration": (
+        "Resolve cache block grouping from a checked plan and a startup log or runtime "
+        "layout; write cache-registration.json",
+        "container and native",
+    ),
+}
+
+
+ACTIONS = (
+    "prepare",
+    "check",
+    "measure-cache",
+    "model-dimensions",
+    "handshake-policy",
+    "start",
+    "capture-cache",
+    "cache-registration",
+    "start-shared",
+    "stop-native",
+)
+
+
+def capture_backends() -> list[str]:
+    return [
+        load_backend(name).label
+        for name in names()
+        if cache_capture(load_backend(name).launcher()) is not None
+    ]
 
 
 def _main(argv: list[str]) -> int:
@@ -29,29 +78,28 @@ def _main(argv: list[str]) -> int:
         "environment into a fresh directory; supports container and native backends.",
         "check": "Check the prepared model, tokenizer, runtime packages and connector; "
         "write checked.json for the plan's container or native backend.",
-        "measure-cache": "Run a temporary sizing container from a checked, unused plan; "
-        "write cache-layout.json and remove the completed sizing container (container only).",
         "model-dimensions": "Inspect model dimensions using a checked plan; "
         "write model-dimensions.json (container only).",
-        "handshake-policy": "Inspect the installed connector compatibility policy using a checked "
-        "plan; write handshake-policy.json (container and native).",
         "start": "Start one serving container from a checked plan and record container.id; "
         "verify HTTP readiness separately (container only).",
-        "capture-cache": "Capture cache-layout.json from the running container recorded by "
-        "a checked plan (container only).",
-        "cache-registration": "Resolve cache block grouping from a checked plan and a startup "
-        "log or runtime layout; write cache-registration.json (container and native).",
         "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
         "engine's readiness and memory allowance, and record shared-start.json "
         "(container and native).",
         "stop-native": "Stop owned process groups after validating the recorded native "
         "process identities in the run directory (native only).",
     }
+    capturing = capture_backends()
+    if capturing:
+        engines = ", ".join(capturing)
+        for name, (text, modes) in CAPTURE_ACTIONS.items():
+            descriptions[name] = f"{text} ({modes}; {engines})."
+    descriptions = {name: descriptions[name] for name in ACTIONS if name in descriptions}
     sub = parser.add_subparsers(dest="command", required=True)
     public = {
         name: sub.add_parser(name, help=description, description=description)
         for name, description in descriptions.items()
     }
+    capture_actions = [name for name in CAPTURE_ACTIONS if name in public]
     preparation = public["prepare"]
     preparation.add_argument("--out", type=Path, required=True, help="fresh launch directory")
     preparation.add_argument(
@@ -60,22 +108,24 @@ def _main(argv: list[str]) -> int:
         default="container",
         help="launch backend (default: %(default)s)",
     )
-    for command in (
-        "check",
-        "measure-cache",
-        "model-dimensions",
-        "handshake-policy",
-        "start",
-        "capture-cache",
-    ):
+    for command in ("check", "model-dimensions", "start", *capture_actions):
+        if command == "cache-registration":
+            continue
         public[command].add_argument(
             "--run", type=Path, required=True, help="prepared launch directory"
         )
-    registration = public["cache-registration"]
-    registration.add_argument("--run", type=Path, required=True, help="checked launch directory")
-    source = registration.add_mutually_exclusive_group(required=True)
-    source.add_argument("--startup-log", type=Path, help="serving log with a resolved KV layout")
-    source.add_argument("--runtime-layout", type=Path, help="captured runtime cache layout JSON")
+    if "cache-registration" in public:
+        registration = public["cache-registration"]
+        registration.add_argument(
+            "--run", type=Path, required=True, help="checked launch directory"
+        )
+        source = registration.add_mutually_exclusive_group(required=True)
+        source.add_argument(
+            "--startup-log", type=Path, help="serving log with a resolved KV layout"
+        )
+        source.add_argument(
+            "--runtime-layout", type=Path, help="captured runtime cache layout JSON"
+        )
     shared = public["start-shared"]
     shared.add_argument(
         "--run",
@@ -158,21 +208,31 @@ def _main(argv: list[str]) -> int:
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )
-            engine = plan_launcher(plan)
-            if args.command == "cache-registration":
-                engine.registration_layout(
-                    run,
-                    plan,
-                    args.runtime_layout or args.startup_log,
-                    args.runtime_layout is not None,
-                )
+            if args.command in CAPTURE_ACTIONS:
+                capture = cache_capture(plan_launcher(plan))
+                if capture is None:
+                    label = engine_backend(plan.get("engine")).label
+                    raise ValueError(
+                        f"{label} has no cache capture; {args.command} applies to "
+                        f"{', '.join(capturing)}"
+                    )
+                if args.command == "cache-registration":
+                    capture.registration_layout(
+                        run,
+                        plan,
+                        args.runtime_layout or args.startup_log,
+                        args.runtime_layout is not None,
+                    )
+                    return 0
+                {
+                    "measure-cache": capture.measure_cache,
+                    "capture-cache": capture.capture_cache,
+                    "handshake-policy": capture.handshake_policy,
+                }[args.command](run, plan)
                 return 0
             {
                 "check": check,
-                "measure-cache": engine.measure_cache,
-                "capture-cache": engine.capture_cache,
-                "model-dimensions": engine.model_dimensions,
-                "handshake-policy": engine.handshake_policy,
+                "model-dimensions": model_dimensions,
                 "start": start,
             }[args.command](run, plan)
     except (

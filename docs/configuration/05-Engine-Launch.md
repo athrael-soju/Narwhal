@@ -166,7 +166,7 @@ For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buff
 
 `--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. Give each engine on a host its own device.
 
-`narwhal-engine prepare` rejects a native SGLang launch whose model path is a GGUF file.
+`narwhal-engine prepare` rejects a native SGLang launch whose model path is a file.
 
 ### Runtime check
 

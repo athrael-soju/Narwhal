@@ -15,7 +15,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine.backend import EngineLauncher
+from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.plan import load, prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheEvent
@@ -114,7 +114,12 @@ def launch_record(runtime: dict, shared: dict | None) -> dict:
 
 
 def prepared(
-    root: Path, launcher: EngineLauncher, fixture: ContractFixtures, *, native: bool
+    root: Path,
+    launcher: EngineLauncher,
+    fixture: ContractFixtures,
+    *,
+    native: bool,
+    **environment: str,
 ) -> tuple[Path, dict, str]:
     """Prepare a two-GPU container launch, or a native launch on one shared GPU."""
     _, env = launcher_inputs(root)
@@ -122,8 +127,10 @@ def prepared(
     config.write_text(json.dumps(MODEL_CONFIG))
     env["NARWHAL_MODEL_CONFIG_SHA256"] = digest(config)
     env[launcher.side_channel_port_env] = env.pop("NARWHAL_NIXL_SIDE_CHANNEL_PORT")
-    env["NARWHAL_CACHE_CAPTURE_HOOK"] = str(launcher.cache_hook)
-    env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = digest(launcher.cache_hook)
+    capture = cache_capture(launcher)
+    if capture is not None:
+        env["NARWHAL_CACHE_CAPTURE_HOOK"] = str(capture.cache_hook)
+        env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = digest(capture.cache_hook)
     runtime = copy.deepcopy(fixture.launch_runtime)
     shared = None
     if native:
@@ -132,6 +139,7 @@ def prepared(
         env.pop("NARWHAL_ENGINE_IMAGE")
         env["NARWHAL_MODEL_REVISION"] = "a" * 40
         env["NARWHAL_NODE_1_ATTESTATION_URL"] = "http://192.0.2.11:8010/v1/attestation"
+    env.update(environment)
     Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(launch_record(runtime, shared)))
     run = root / "launch"
     with contextlib.redirect_stdout(io.StringIO()) as printed:

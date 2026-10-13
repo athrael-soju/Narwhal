@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 class EngineLauncher(ABC):
     # Standalone module copied into each launch's hook as launch_engine.py.
     runtime_script: ClassVar[Path]
-    # Delivered as the hook's sitecustomize.py.
-    cache_hook: ClassVar[Path]
     side_channel: ClassVar[str]
     # The backend's earlier name for the KV side-channel port variable.
     side_channel_port_env: ClassVar[str]
@@ -58,9 +56,6 @@ class EngineLauncher(ABC):
     def side_channel_address(self, env: Mapping[str, str]) -> tuple[str, int]: ...
 
     @abstractmethod
-    def check_model(self, runtime: dict, model: str) -> None: ...
-
-    @abstractmethod
     def publishes_kv_events(self, extra_args: list[str]) -> bool: ...
 
     @abstractmethod
@@ -88,27 +83,7 @@ class EngineLauncher(ABC):
         """Read the probe output and apply the engine-specific assertions."""
 
     @abstractmethod
-    def measure_cache(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def capture_cache(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def model_dimensions(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def handshake_policy(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def registration_layout(
-        self, run: Path, plan: dict, source: Path, from_runtime: bool
-    ) -> None: ...
-
-    @abstractmethod
     def capture_connector(self, run: Path) -> Path: ...
-
-    @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path: ...
 
     @abstractmethod
     def capture_native(self, run: Path) -> Path: ...
@@ -124,6 +99,57 @@ class EngineLauncher(ABC):
 
     @abstractmethod
     def check_dev_files(self, runtime: dict) -> None: ...
+
+
+class CacheCapture(ABC):
+    """Optional launcher capability: the engine's KV cache layout, read through a hook."""
+
+    # Delivered as the launch hook's sitecustomize.py, pinned in the plan and enabled at start.
+    cache_hook: ClassVar[Path]
+
+    @abstractmethod
+    def measure_cache(self, run: Path, plan: dict) -> None: ...
+
+    @abstractmethod
+    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+    @abstractmethod
+    def registration_layout(
+        self, run: Path, plan: dict, source: Path, from_runtime: bool
+    ) -> None: ...
+
+    @abstractmethod
+    def handshake_policy(self, run: Path, plan: dict) -> None: ...
+
+
+class LiveModelDimensions(ABC):
+    """Optional launcher capability: model dimensions read from the engine runtime.
+
+    A backend without it records the dimensions from the model configuration.
+    """
+
+    @abstractmethod
+    def model_dimensions(self, run: Path, plan: dict) -> None:
+        """Write model-dimensions.json from the engine image."""
+
+    @abstractmethod
+    def capture_model_dimensions(self, run: Path) -> Path:
+        """Capture the running engine's model dimensions."""
+
+
+class ModelFormats(ABC):
+    """Optional launcher capability: model files the engine loads beside checkpoint directories.
+
+    A native launch of a backend without it takes a checkpoint directory.
+    """
+
+    @abstractmethod
+    def check_model(self, runtime: dict, model: str) -> None:
+        """Check that the runtime can load the model directory or file."""
+
+
+def cache_capture(engine: EngineLauncher) -> CacheCapture | None:
+    return engine if isinstance(engine, CacheCapture) else None
 
 
 def run_import_check(script: str, label: str, *, traceback_fails: bool = False) -> None:

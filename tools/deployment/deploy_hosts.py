@@ -18,18 +18,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from narwhal.deployment.engine_launch import expose_colocated_gpus, load_launches
-from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.backend import cache_capture, launcher
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
 FABRIC_BUDGET_SOURCE = Path(__file__).with_name("fabric_budget.py")
 
 
-def role_files(host: Host) -> list[str]:
+def role_files(host: Host, capture: bool) -> list[str]:
+    """Name a host's deployment files; capture adds the cache capture hook for engines."""
     files = [f".env.{role}" for role in host.roles]
     files += [f"engine-launch.{role}.json" for role in host.roles if role.startswith("engine-")]
     if any(role.startswith("engine-") for role in host.roles):
-        files.extend(("fabric_budget.py", "cache_capture_hook.py"))
+        files.extend(
+            ("fabric_budget.py", "cache_capture_hook.py") if capture else ("fabric_budget.py",)
+        )
     if "router" in host.roles:
         files.extend(("fleet.local.json", "profiling-limits.json"))
     return files
@@ -83,6 +86,10 @@ def prepare_bundle(source: Path, revision: str, output: Path) -> None:
             raise ValueError("Source bundle clone differs from the approved revision")
 
 
+def delivers_hook(manifest: dict) -> bool:
+    return any(name.endswith("/cache_capture_hook.py") for name in manifest["hashes"])
+
+
 def snapshot(hosts: list[Host], env: dict[str, str]) -> dict:
     return {
         "hosts": [asdict(host) for host in hosts],
@@ -110,11 +117,14 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
     expose_colocated_gpus(launches, [list(host.roles) for host in hosts])
     budget_tool = FABRIC_BUDGET_SOURCE.read_bytes()
     budget_hash = hashlib.sha256(budget_tool).hexdigest()
-    capture_tool = launcher(fleet.get("engine", {}).get("backend")).cache_hook.read_bytes()
-    capture_hash = hashlib.sha256(capture_tool).hexdigest()
+    capture = cache_capture(launcher(fleet.get("engine", {}).get("backend")))
+    capture_tool = b"" if capture is None else capture.cache_hook.read_bytes()
     for role in engine_roles:
         selected[role]["NARWHAL_FABRIC_BUDGET_SHA256"] = budget_hash
-        selected[role]["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = capture_hash
+        if capture is not None:
+            selected[role]["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"] = hashlib.sha256(
+                capture_tool
+            ).hexdigest()
     access_names = {name for h in hosts for name in (h.ssh_env, h.password_env) if name}
     if any(access_names.intersection(values) for values in selected.values()):
         raise ValueError(
@@ -136,14 +146,18 @@ def prepare(hosts: list[Host], env: dict[str, str], output: Path, source: Path) 
                 )
         if any(role.startswith("engine-") for role in host.roles):
             write_private(directory / "fabric_budget.py", budget_tool)
-            write_private(directory / "cache_capture_hook.py", capture_tool)
+            if capture is not None:
+                write_private(directory / "cache_capture_hook.py", capture_tool)
         if "router" in host.roles:
             write_private(directory / "fleet.local.json", fleet_path.read_bytes())
             write_private(
                 directory / "profiling-limits.json",
                 json.dumps(limits, indent=2).encode() + b"\n",
             )
-    paths = ["source.bundle", *[f"{h.id}/{name}" for h in hosts for name in role_files(h)]]
+    paths = [
+        "source.bundle",
+        *[f"{h.id}/{name}" for h in hosts for name in role_files(h, capture is not None)],
+    ]
     manifest = {
         **snapshot(hosts, env),
         "revision": revision,
@@ -165,7 +179,8 @@ def load_run(run: Path, hosts: list[Host], env: dict[str, str]) -> dict:
         raise ValueError("Prepared remote directory has an invalid format")
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", manifest["revision"]):
         raise ValueError("Prepared revision must contain the full commit SHA")
-    paths = {"source.bundle", *[f"{h.id}/{name}" for h in hosts for name in role_files(h)]}
+    capture = delivers_hook(manifest)
+    paths = {"source.bundle", *[f"{h.id}/{name}" for h in hosts for name in role_files(h, capture)]}
     if set(manifest["hashes"]) != paths:
         raise ValueError("Prepared file list differs from the assigned roles")
     for name in paths:
@@ -212,7 +227,7 @@ ln "$temporary" {path}"""
 def install_script(host: Host, manifest: dict) -> str:
     root, revision = manifest["remote_dir"], manifest["revision"]
     copies = []
-    for name in role_files(host):
+    for name in role_files(host, delivers_hook(manifest)):
         target = f"config/{name}" if name.endswith(".json") else name
         if name.startswith(".env."):
             target = f"runs/deployment/{name}"
@@ -264,7 +279,7 @@ def install(hosts: list[Host], manifest: dict, run: Path, ssh: SSH) -> None:
         print(f"{host.id}: source, {', '.join(host.roles)}, installation", flush=True)
         sources = {
             name: name if name == "source.bundle" else f"{host.id}/{name}"
-            for name in ["source.bundle", *role_files(host)]
+            for name in ["source.bundle", *role_files(host, delivers_hook(manifest))]
         }
         expected = {name: manifest["hashes"][local] for name, local in sources.items()}
         absent = missing_files(ssh, host, root, expected)

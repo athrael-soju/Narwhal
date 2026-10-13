@@ -20,7 +20,7 @@ from narwhal.config import FleetConfig
 from narwhal.deployment import native_engine, stages
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.engine_launch import selected_launch
-from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.backend import cache_capture, launcher
 from narwhal.deployment.launch_engine.plan import prepare
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
@@ -380,7 +380,15 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
     engine_key = FleetConfig.load(run / "fleet.json").resolve_engine_key()
     allocation = read(root / "engine-launch.json")
     engine_launcher = launcher(spec["runtime"].get("backend"))
-    hook = engine_launcher.cache_hook
+    capture = cache_capture(engine_launcher)
+    hook = (
+        {}
+        if capture is None
+        else {
+            "NARWHAL_CACHE_CAPTURE_HOOK": str(capture.cache_hook),
+            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(capture.cache_hook),
+        }
+    )
     runs = []
     for index, engine in enumerate(fleet["engines"]):
         number = index + 1
@@ -394,8 +402,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "NARWHAL_MODEL_PATH": config["model_path"],
             "NARWHAL_MODEL_REVISION": config["model_revision"],
             "NARWHAL_MODEL_CONFIG_SHA256": config["model_config_sha256"],
-            "NARWHAL_CACHE_CAPTURE_HOOK": str(hook),
-            "NARWHAL_CACHE_CAPTURE_HOOK_SHA256": digest(hook),
+            **hook,
             "NARWHAL_ENGINE_PORT": str(config["ports"]["engine_first"] + index),
             "NARWHAL_ATTEST_PORT": str(config["ports"]["attestation_first"] + index),
             KV_SIDE_CHANNEL_PORT_ENV: str(config["ports"]["side_channel_first"] + index),

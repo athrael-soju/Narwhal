@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 
 from narwhal.backends import EngineBackend, load, names
-from narwhal.deployment.launch_engine.backend import EngineLauncher
+from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import load as load_plan
 from narwhal.deployment.launch_engine.start import start
@@ -241,7 +241,8 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         launcher, fixture = self.backend.launcher(), self.fixtures
         self.assertIsInstance(launcher, EngineLauncher)
         self.assertTrue(launcher.runtime_script.is_file())
-        self.assertTrue(launcher.cache_hook.is_file())
+        capture = cache_capture(launcher)
+        self.assertTrue(capture is None or capture.cache_hook.is_file())
         for value in (
             launcher.side_channel,
             launcher.side_channel_port_env,

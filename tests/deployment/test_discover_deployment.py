@@ -222,10 +222,10 @@ class DiscoveryTests(unittest.TestCase):
             prepare(hosts, env, run, ROOT)
             limits = json.loads((run / "node-1/profiling-limits.json").read_text())
             self.assertEqual(limits["engines"], {"n1": 256, "n2": 256})
-            self.assertEqual(
-                (run / "node-1/cache_capture_hook.py").read_bytes(),
-                (ROOT / "src/narwhal/backends/sglang/cache_capture_hook.py").read_bytes(),
-            )
+            # SGLang has no cache capture, so its engines receive no capture hook.
+            self.assertFalse((run / "node-1/cache_capture_hook.py").exists())
+            manifest = json.loads((run / "manifest.json").read_text())
+            self.assertNotIn("node-1/cache_capture_hook.py", manifest["hashes"])
             for node in (1, 2):
                 role = f"engine-{node}"
                 role_env = select_values("engine", node, fleet, env)

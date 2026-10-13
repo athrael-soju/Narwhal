@@ -11,7 +11,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .backend import EngineLauncher, launcher, plan_launcher
+from .backend import (
+    EngineLauncher,
+    ModelFormats,
+    cache_capture,
+    engine_backend,
+    launcher,
+    plan_launcher,
+)
 from .runtime import code_digest, digest, write_private
 from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
@@ -315,7 +322,11 @@ def build(
         else "/model"
     )
     if backend == "native":
-        engine.check_model(runtime, model_ref)
+        if isinstance(engine, ModelFormats):
+            engine.check_model(runtime, model_ref)
+        elif Path(model_ref).is_file():
+            label = engine_backend(runtime.get("backend")).label
+            raise ValueError(f"{label} launches take a model directory, not a model file")
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
@@ -425,16 +436,21 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     plan, values = build(record, env, output.resolve(), backend=backend)
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
-    hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
-    hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
-    if digest(hook_source) != hook_sha:
-        raise ValueError("cache capture hook differs from its delivered hash")
-    script = plan_launcher(plan).runtime_script
+    engine = plan_launcher(plan)
+    # Only a backend with cache capture loads the hook, as the hook's sitecustomize.py.
+    capture = cache_capture(engine) is not None
+    if capture:
+        hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
+        hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
+        if digest(hook_source) != hook_sha:
+            raise ValueError("cache capture hook differs from its delivered hash")
+    script = engine.runtime_script
     output.mkdir(mode=0o700, parents=True)
     (output / "cache").mkdir(mode=0o700)
     (output / "hook").mkdir(mode=0o700)
     kv_events_directory(plan)
-    write_private(output / "hook/sitecustomize.py", hook_source.read_text())
+    if capture:
+        write_private(output / "hook/sitecustomize.py", hook_source.read_text())
     write_private(output / "hook/launch_engine.py", script.read_text())
     env_file = "container.env" if backend == "container" else "engine.env"
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
@@ -443,16 +459,19 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         launch_sha256=digest(source),
         launcher_sha256=digest(script),
         launcher_code_sha256=code_digest(script),
-        cache_capture_sha256=hook_sha,
-        cache_capture_code_sha256=code_digest(hook_source),
-        model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
+    if capture:
+        plan.update(
+            cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
+        )
+    plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
     if backend == "native" and Path(plan["model_path"]).is_file():
         plan["model_sha256"] = digest(Path(plan["model_path"]))
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
     for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):
-        (output / "hook" / name).chmod(0o644)
+        if (output / "hook" / name).exists():
+            (output / "hook" / name).chmod(0o644)
     (output / "hook").chmod(0o755)
     check_name = "image" if backend == "container" else "native runtime"
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
