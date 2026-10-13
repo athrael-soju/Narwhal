@@ -14,59 +14,59 @@ Returns the live router and scheduler state as a `narwhal.state` schema version 
 
 The state document carries these top-level fields:
 
-| Field                     | Meaning                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| `schema`                  | `narwhal.state`                                                                           |
-| `schema_version`          | State schema version, `1`                                                                 |
-| `journal_run`             | Run ID of the current router process in the request journal                               |
-| `served`                  | Completed requests                                                                        |
-| `slo_met`                 | Completed requests that met both `slo.ttft_s` and `slo.tpot_s`                            |
-| `failed`                  | Requests that ended in an error                                                           |
-| `offered`                 | Completion requests received                                                              |
-| `unsized_offered`         | Requests that ended before workload sizing                                                |
-| `expired`                 | Requests whose deadline expired                                                           |
-| `cancelled`               | Requests whose client disconnected                                                        |
-| `invalid_requests`        | Requests refused with HTTP `400`, `404`, or `413` before admission                        |
-| `controller`              | Active role controller, `reactive`                                                        |
-| `token_accounting`        | `token_ids` when the engines supply token IDs, otherwise `unavailable`                    |
-| `control`                 | Role-controller mode and decision counts                                                  |
-| `monitoring`              | Timing and failure state of the engine monitoring loop                                    |
-| `ha`                      | High-availability state: readiness, standby status, lease, and failover block             |
-| `lifecycle`               | Drain state, resident work, and lifecycle events                                          |
-| `admission`               | Router and phase occupancy, queue state, limits, and admission mode                       |
+| Field                     | Meaning                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `schema`                  | `narwhal.state`                                                                                               |
+| `schema_version`          | State schema version, `1`                                                                                     |
+| `journal_run`             | Run ID of the current router process in the request journal                                                   |
+| `served`                  | Completed requests                                                                                            |
+| `slo_met`                 | Completed requests that met both `slo.ttft_s` and `slo.tpot_s`                                                |
+| `failed`                  | Requests that ended in an error                                                                               |
+| `offered`                 | Completion requests received                                                                                  |
+| `unsized_offered`         | Requests that ended before workload sizing                                                                    |
+| `expired`                 | Requests whose deadline expired                                                                               |
+| `cancelled`               | Requests whose client disconnected                                                                            |
+| `invalid_requests`        | Requests refused with HTTP `400`, `404`, or `413` before admission                                            |
+| `controller`              | Active role controller, `reactive`                                                                            |
+| `token_accounting`        | `token_ids` when the engines supply token IDs, otherwise `unavailable`                                        |
+| `control`                 | Role-controller mode and decision counts                                                                      |
+| `monitoring`              | Timing and failure state of the engine monitoring loop                                                        |
+| `ha`                      | High-availability state: readiness, standby status, lease, and failover block                                 |
+| `lifecycle`               | Drain state, resident work, and lifecycle events                                                              |
+| `admission`               | Router and phase occupancy, queue state, limits, and admission mode                                           |
 | `outcome_reasons`         | `failed`, `refused`, `rejected`, and `expired` counts by [reason](../telemetry/01-Journal.md#outcome-reasons) |
-| `seats`                   | Each engine's prefill and decode seats and the inputs that set them                      |
-| `handoff`                 | Each engine's attested KV lease and the handoff bound derived from it                    |
-| `serving`                 | Retained HTTP work, attempts, and retry state                                             |
-| `http_pools`              | Data and control connection pools, and the pool-wait timeout                              |
-| `pools`                   | Engines grouped by prefill or decode role                                                 |
-| `load`                    | Load of each pool as a ratio to the service-level objective (SLO) target, `1.0` at target |
-| `thresholds`              | Thresholds the reactive controller applies                                                |
-| `slo`                     | Time to first token (TTFT) and time per output token (TPOT) targets                       |
-| `first_token_timeout_s`   | Deadline to the first decode token                                                        |
-| `first_token_calibration` | First-token calibration verified at router startup, with a label for each engine          |
-| `resident`                | In-flight prefill and decode work on each engine                                          |
-| `pinned`                  | Engines excluded from role changes                                                        |
-| `min_prefill`             | Configured minimum number of live prefill engines                                         |
-| `min_decode`              | Configured minimum number of live decode engines                                          |
-| `below_floor`             | Current and cumulative breaches of the prefill floor                                      |
-| `ejected`                 | Engines the breaker ejected                                                               |
-| `peer_release`            | Peer release rounds for each engine out of placement                                      |
-| `draining`                | Engines excluded by a lifecycle action                                                    |
-| `probation`               | Engines on probation, which carry a placement penalty                                     |
-| `health`                  | Drift-window accounting for each engine                                                   |
-| `quarantined`             | Engines under a timed quarantine or an inference hold                                     |
-| `holds`                   | The engines in `quarantined`, split into timed quarantines and inference holds            |
-| `breaker`                 | Failure streaks, probe state, and ejection, hold, probe and readmission counts            |
-| `residency`               | Each engine's prefix-residency synchronization with its attestation sidecar               |
-| `decode_floor`            | Decode floor state and restoration count                                                  |
-| `attainment`              | SLO outcome buckets for diagnostics                                                       |
-| `demand_history`          | Retained demand, shape counts, and overflow state                                         |
-| `demand_evidence`         | Consolidation evidence used by decode-to-prefill gates                                    |
-| `unserved`                | Phase placements where every eligible candidate exceeded the configured SLO               |
-| `panic_bypasses`          | Prefill-to-decode moves that panic logic allowed during cooldown                          |
-| `flips_refused`           | The 20 most recent refused role changes                                                   |
-| `flips`                   | The most recent role changes, up to `flip_history`                                        |
+| `seats`                   | Each engine's prefill and decode seats and the inputs that set them                                           |
+| `handoff`                 | Each engine's attested KV lease and the handoff bound derived from it                                         |
+| `serving`                 | Retained HTTP work, attempts, and retry state                                                                 |
+| `http_pools`              | Data and control connection pools, and the pool-wait timeout                                                  |
+| `pools`                   | Engines grouped by prefill or decode role                                                                     |
+| `load`                    | Load of each pool as a ratio to the service-level objective (SLO) target, `1.0` at target                     |
+| `thresholds`              | Thresholds the reactive controller applies                                                                    |
+| `slo`                     | Time to first token (TTFT) and time per output token (TPOT) targets                                           |
+| `first_token_timeout_s`   | Deadline to the first decode token                                                                            |
+| `first_token_calibration` | First-token calibration verified at router startup, with a label for each engine                              |
+| `resident`                | In-flight prefill and decode work on each engine                                                              |
+| `pinned`                  | Engines excluded from role changes                                                                            |
+| `min_prefill`             | Configured minimum number of live prefill engines                                                             |
+| `min_decode`              | Configured minimum number of live decode engines                                                              |
+| `below_floor`             | Current and cumulative breaches of the prefill floor                                                          |
+| `ejected`                 | Engines the breaker ejected                                                                                   |
+| `peer_release`            | Peer release rounds for each engine out of placement                                                          |
+| `draining`                | Engines excluded by a lifecycle action                                                                        |
+| `probation`               | Engines on probation, which carry a placement penalty                                                         |
+| `health`                  | Drift-window accounting for each engine                                                                       |
+| `quarantined`             | Engines under a timed quarantine or an inference hold                                                         |
+| `holds`                   | The engines in `quarantined`, split into timed quarantines and inference holds                                |
+| `breaker`                 | Failure streaks, probe state, and ejection, hold, probe and readmission counts                                |
+| `residency`               | Each engine's prefix-residency synchronization with its attestation sidecar                                   |
+| `decode_floor`            | Decode floor state and restoration count                                                                      |
+| `attainment`              | SLO outcome buckets for diagnostics                                                                           |
+| `demand_history`          | Retained demand, shape counts, and overflow state                                                             |
+| `demand_evidence`         | Consolidation evidence used by decode-to-prefill gates                                                        |
+| `unserved`                | Phase placements where every eligible candidate exceeded the configured SLO                                   |
+| `panic_bypasses`          | Prefill-to-decode moves that panic logic allowed during cooldown                                              |
+| `flips_refused`           | The 20 most recent refused role changes                                                                       |
+| `flips`                   | The most recent role changes, up to `flip_history`                                                            |
 
 After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero.
 
@@ -135,13 +135,13 @@ A confirmed ejection resets the engine's `health` counts to zero.
 
 The remaining `breaker` fields count transitions since process start. Each is a list of rows with an `iid`, the fields below, and a `count`:
 
-| Field          | Row fields                    | Counts                                                                |
-| -------------- | ----------------------------- | --------------------------------------------------------------------- |
-| `ejections`    | `cause`                       | Ejections, by [ejection cause](../telemetry/04-Failures.md#ejections-holds-and-readmissions) |
-| `hold_starts`  | `kind`                        | Holds started, by [hold kind](../telemetry/04-Failures.md#hold-kinds) |
-| `hold_ends`    | `kind`, `cause`               | Holds ended, by hold kind and hold-end cause                          |
-| `probes`       | `kind`, `outcome`             | Verification probes, by [outcome](../telemetry/04-Failures.md#verification-probe-outcomes) |
-| `readmissions` | `evidence`                    | Returns of an ejected engine to placement, by recovery evidence       |
+| Field          | Row fields        | Counts                                                                                       |
+| -------------- | ----------------- | -------------------------------------------------------------------------------------------- |
+| `ejections`    | `cause`           | Ejections, by [ejection cause](../telemetry/04-Failures.md#ejections-holds-and-readmissions) |
+| `hold_starts`  | `kind`            | Holds started, by [hold kind](../telemetry/04-Failures.md#hold-kinds)                        |
+| `hold_ends`    | `kind`, `cause`   | Holds ended, by hold kind and hold-end cause                                                 |
+| `probes`       | `kind`, `outcome` | Verification probes, by [outcome](../telemetry/04-Failures.md#verification-probe-outcomes)   |
+| `readmissions` | `evidence`        | Returns of an ejected engine to placement, by recovery evidence                              |
 
 A new router process starts these counts at zero.
 
@@ -151,19 +151,19 @@ A new router process starts these counts at zero.
 
 `holds.timed` lists engines under a timed quarantine from `recovery.failure_quarantine_s`:
 
-| Field         | Meaning                                       |
-| ------------- | --------------------------------------------- |
-| `iid`         | Engine                                        |
-| `held_s`      | Seconds since the hold started                |
-| `remaining_s` | Seconds until the quarantine deadline         |
+| Field         | Meaning                               |
+| ------------- | ------------------------------------- |
+| `iid`         | Engine                                |
+| `held_s`      | Seconds since the hold started        |
+| `remaining_s` | Seconds until the quarantine deadline |
 
 `holds.inference` lists engines held until an inference probe passes:
 
-| Field                | Meaning                                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `iid`                | Engine                                                                                               |
-| `held_s`             | Seconds since the hold started                                                                       |
-| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when none was recorded                     |
+| Field                | Meaning                                                                          |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `iid`                | Engine                                                                           |
+| `held_s`             | Seconds since the hold started                                                   |
+| `recorded_producers` | Producers whose KV transfers to this engine failed, empty when none was recorded |
 
 [Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the order in which the probe tries producers.
 
@@ -240,58 +240,58 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 
 `admission` fields:
 
-| Field              | Meaning                                                               |
-| ------------------ | --------------------------------------------------------------------- |
-| `inflight`         | Requests holding a router admission seat                              |
-| `queued`           | Current admission queue depth                                         |
-| `queue_capacity`   | Configured maximum queue depth                                        |
-| `queue_high_water` | Peak queue depth                                                      |
-| `waiting_prefill`  | Requests waiting for prefill dispatch                                 |
-| `waiting_decode`   | Requests waiting for decode dispatch                                  |
-| `limit`            | [In-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit): `--max-concurrent` when set, otherwise `serving.max_connections` |
-| `loop_lag_s`       | Latest router event-loop wake-up lateness                              |
-| `sizing_delay_s`   | Median request sizing delay over the last 2 seconds, `0` below 8 sized requests |
-| `saturation_threshold_s` | Value of `loop_lag_s` or `sizing_delay_s` at which the router answers a saturation 429, a quarter of `slo.ttft_s` |
-| `rejected`         | HTTP `429` in-flight-limit and saturation rejections, and HTTP `503` router-readiness rejections |
-| `refused`          | Requests refused by global predictive admission                       |
-| `engine_auth`      | `boundary` or `engine-credential`                                     |
-| `mode`             | `serving.admission`: `predictive` or `open`                           |
-| `margin`           | `serving.admission_margin`                                            |
+| Field                    | Meaning                                                                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inflight`               | Requests holding a router admission seat                                                                                                             |
+| `queued`                 | Current admission queue depth                                                                                                                        |
+| `queue_capacity`         | Configured maximum queue depth                                                                                                                       |
+| `queue_high_water`       | Peak queue depth                                                                                                                                     |
+| `waiting_prefill`        | Requests waiting for prefill dispatch                                                                                                                |
+| `waiting_decode`         | Requests waiting for decode dispatch                                                                                                                 |
+| `limit`                  | [In-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit): `--max-concurrent` when set, otherwise `serving.max_connections` |
+| `loop_lag_s`             | Latest router event-loop wake-up lateness                                                                                                            |
+| `sizing_delay_s`         | Median request sizing delay over the last 2 seconds, `0` below 8 sized requests                                                                      |
+| `saturation_threshold_s` | Value of `loop_lag_s` or `sizing_delay_s` at which the router answers a saturation 429, a quarter of `slo.ttft_s`                                    |
+| `rejected`               | HTTP `429` in-flight-limit and saturation rejections, and HTTP `503` router-readiness rejections                                                     |
+| `refused`                | Requests refused by global predictive admission                                                                                                      |
+| `engine_auth`            | `boundary` or `engine-credential`                                                                                                                    |
+| `mode`                   | `serving.admission`: `predictive` or `open`                                                                                                          |
+| `margin`                 | `serving.admission_margin`                                                                                                                           |
 
 `seats` fields:
 
-| Field                       | Meaning                                                                                                 |
-| --------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `mean_input_len`            | Mean sized input length that sets prefill seats, `null` before a request is sized in the window          |
-| `engines.<iid>.prefill`     | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit           |
-| `engines.<iid>.decode`      | Decode seats, `0` for no limit                                                                          |
+| Field                          | Meaning                                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `mean_input_len`               | Mean sized input length that sets prefill seats, `null` before a request is sized in the window                                           |
+| `engines.<iid>.prefill`        | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit                                           |
+| `engines.<iid>.decode`         | Decode seats, `0` for no limit                                                                                                            |
 | `engines.<iid>.sequence_limit` | vLLM `--max-num-seqs` or SGLang `--max-running-requests` from the engine's verified attestation, `null` when the launch arguments omit it |
 
 `handoff` fields, one entry per engine:
 
-| Field                  | Meaning                                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `<iid>.kv_lease_s`     | `kv_lease_duration` from the engine's verified attestation, `null` when the attestation records none |
-| `<iid>.renewal_s`      | The connector's lease-renewal interval, `kv_lease_s // 6`                                            |
-| `<iid>.bound_s`        | [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) for requests this engine prefills |
+| Field              | Meaning                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `<iid>.kv_lease_s` | `kv_lease_duration` from the engine's verified attestation, `null` when the attestation records none                   |
+| `<iid>.renewal_s`  | The connector's lease-renewal interval, `kv_lease_s // 6`                                                              |
+| `<iid>.bound_s`    | [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) for requests this engine prefills |
 
 `serving` fields:
 
-| Field                      | Meaning                                                       |
-| -------------------------- | ------------------------------------------------------------- |
+| Field                      | Meaning                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------- |
 | `http_retained`            | Completion requests counted against the in-flight limit, from arrival until the response ends |
-| `http_retained_limit`      | In-flight limit plus `serving.queue_capacity`                 |
-| `http_retained_high_water` | Peak number of retained requests                              |
-| `prefill_attempts`         | Cumulative prefill dispatches                                 |
-| `decode_attempts`          | Cumulative decode dispatches                                  |
-| `retry_attempts`           | Prefill attempts after the first                              |
-| `retry_credits`            | Available shared retry credit                                 |
-| `retry_credits_spent`      | Shared retry credit consumed                                  |
-| `retry_denied`             | Retries that the retry budget refused                         |
-| `served_after_retry`       | Completed requests whose final attempt followed a failed one  |
-| `attempt_failures`         | Failed attempts as `phase`, `reason`, and `count` rows        |
-| `decode_tokens_observed`   | Decode tokens the router observed                             |
-| `upstream_seconds`         | Total time in engine HTTP calls by phase, across all attempts |
+| `http_retained_limit`      | In-flight limit plus `serving.queue_capacity`                                                 |
+| `http_retained_high_water` | Peak number of retained requests                                                              |
+| `prefill_attempts`         | Cumulative prefill dispatches                                                                 |
+| `decode_attempts`          | Cumulative decode dispatches                                                                  |
+| `retry_attempts`           | Prefill attempts after the first                                                              |
+| `retry_credits`            | Available shared retry credit                                                                 |
+| `retry_credits_spent`      | Shared retry credit consumed                                                                  |
+| `retry_denied`             | Retries that the retry budget refused                                                         |
+| `served_after_retry`       | Completed requests whose final attempt followed a failed one                                  |
+| `attempt_failures`         | Failed attempts as `phase`, `reason`, and `count` rows                                        |
+| `decode_tokens_observed`   | Decode tokens the router observed                                                             |
+| `upstream_seconds`         | Total time in engine HTTP calls by phase, across all attempts                                 |
 
 ## Scheduler and controller state
 
@@ -360,7 +360,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `unsized_offers`                                  | [Unsized offers](06-SLO-and-Demand.md#unsized-offers) in `controller.reactive.window_s`                                                                           |
 | `projected_ttft_ratio`                            | Demand model's projected TTFT for the candidate split, as a ratio to the TTFT target                                                                              |
 | `projected_tpot_ratio`                            | Demand model's projected TPOT for the candidate split, as a ratio to the TPOT target                                                                              |
-| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions)                                            |
+| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions)                                               |
 | `objective`                                       | Candidate split's objective                                                                                                                                       |
 | `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                                                                                          |
 | `decode_request_limit`                            | Applied decode request limit                                                                                                                                      |
@@ -380,7 +380,7 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                                                                          |
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                      |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
-| `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or whether `mixed_pressure`, `steady_demand` or a prefill surge applies                                     |
+| `source_pressure_safe`                            | Whether source pool load is low enough to safely remove an engine, or meets an exception rule                                                                     |
 
 These decisions add fields to `control.last_decision`:
 
@@ -405,12 +405,12 @@ These decisions add fields to `control.last_decision`:
 
 `demand_horizon_s`, `prefill_work`, `arrivals` and `decode_work` cover these spans:
 
-| Decision                                                                                               | `demand_horizon_s`                                                                               | `prefill_work`, `arrivals`     | `decode_work`                                                                                                   |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| Hold before scoring                                                                                    |                                                                                                  | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
+| Decision                                                                                               | `demand_horizon_s`                                                                            | `prefill_work`, `arrivals`     | `decode_work`                                                                                                   |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Hold before scoring                                                                                    |                                                                                               | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
 | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) confirmation-span move | [Confirmation span](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) | Confirmation span              | Larger of residency over the latest `controller.reactive.step_s` and expected decode over the confirmation span |
-| Other decode-to-prefill proposal                                                                       | `controller.reactive.window_s`                                                                   | `controller.reactive.window_s` | Larger of the `controller.reactive.evidence_span_s` and `controller.reactive.window_s` estimates                |
-| Every other scored decision                                                                            | `controller.reactive.window_s`                                                                   | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
+| Other decode-to-prefill proposal                                                                       | `controller.reactive.window_s`                                                                | `controller.reactive.window_s` | Larger of the `controller.reactive.evidence_span_s` and `controller.reactive.window_s` estimates                |
+| Every other scored decision                                                                            | `controller.reactive.window_s`                                                                | `controller.reactive.window_s` | `controller.reactive.window_s`                                                                                  |
 
 #### Projected-TTFT recovery fields
 

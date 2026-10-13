@@ -28,7 +28,7 @@ The trigger clears once every queued request is projected to finish within `slo.
 
 Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds capacity to a role whose load reaches `controller.thresholds.expand`. With complete demand, a move from decode to prefill then needs one confirmation. The [`mixed_pressure` rule](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) allows expansion while the other role's load is above `controller.thresholds.shrink`. Both kinds of move must pass the profile, safety, and confirmation checks.
 
-A move from decode to prefill needs stable decode demand and a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation), the period in which the router collects enough arrivals to judge demand. While the window is open, the role controller may still move a prefill engine to decode when the source load is at or below `controller.thresholds.shrink`, and may repair a role's floor in either direction. When projected prefill load is above `controller.thresholds.shrink`, a move from decode to prefill needs a closed window only when a first-token timeout reset it.
+Moving an engine from decode to prefill requires steady decode traffic and enough observed requests to measure demand (a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation)). While gathering this data, the controller can still move an engine from prefill to decode if prefill load is at or below `controller.thresholds.shrink`, or move an engine in either direction to restore a role's minimum count. If prefill load is above `controller.thresholds.shrink`, moving from decode to prefill requires waiting for enough arrivals only if a first-token timeout recently reset the measurement window.
 
 A prefill surge allows a move from decode to prefill when all of these are true:
 
@@ -69,7 +69,7 @@ While the shift lasts, a departure keeps moving engines in its direction on conf
 | Reversing | Its first move                                        |
 | Other     | `controller.reactive.evidence_span_s` after it starts |
 
-Once a departure has moved an engine, the role controller blocks moves in the opposite direction until [the departure closes](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions), at most `controller.reactive.window_s` after it started. A prefill surge move is exempt from this block.
+After moving an engine, the controller blocks reverse moves until the departure ends (at most `controller.reactive.window_s` later). Prefill surges bypass this restriction.
 
 ### Steady demand
 
