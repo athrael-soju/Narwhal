@@ -186,10 +186,8 @@ async def _place(
 def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set[str]) -> set[str]:
     """Return the decode engines that a decode leg skips.
 
-    A full engine holds a decode leg until a seat frees. A rendezvous producer holds its prefill
-    until the consumer admits the leg. While an engine has a free seat, the leg skips the full
-    engines. When every engine is full, the leg goes to the engine whose seat the profiles project
-    to free first.
+    While an engine has a free seat, the leg skips the full engines. When every engine is full, it
+    skips all but the engine whose seat the profiles project to free first.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
     seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}

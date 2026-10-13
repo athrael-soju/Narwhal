@@ -199,7 +199,7 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 | `engine_timeout`    | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
 | `local_pool`        | A wait for a router data connection to the engine reached `engine.pool_timeout_s`.         |
 
-Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places prefill legs without checking seats. An engine holds the prefills above its seats until a seat frees. A decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat. When every decode engine is full, the router places the leg on the engine whose seat the profiles project to free first. That engine holds the leg until the seat frees.
+Cause: admitted load exceeds what the engines serve within their timeouts. In `open` admission mode, the router skips the predictive checks. With `serving.queue_capacity` at `0`, the router places prefill legs without checking seats, and an engine queues prefill legs above its seats. A decode leg skips engines whose [decode seats](configuration/02-Serving-and-Role-Control.md#engine-seats) are full while another live decode engine has a free seat. When every decode engine is full, the router places the leg on the engine whose seat the profiles project to free first.
 
 Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 
