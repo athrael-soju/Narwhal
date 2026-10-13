@@ -54,6 +54,8 @@ def backend() -> EngineBackend:
             },
             "engine": {"vllm_version": "version"},
             "dev_ports": {"nixl_first": "side_channel_first"},
+            "checked": {"vllm_api_version": "engine_version"},
+            "shared_start": {"vllm_version": "engine_version", "vllm_args": "engine_args"},
         },
         icon=resources.files(__name__).joinpath("icon.png").read_bytes(),
     )

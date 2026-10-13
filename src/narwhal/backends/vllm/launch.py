@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import (
     CacheCapture,
     EngineLauncher,
@@ -22,15 +23,13 @@ class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelForma
     side_channel = "NIXL"
     side_channel_port_env = "NARWHAL_NIXL_SIDE_CHANNEL_PORT"
     api_key_env = "VLLM_API_KEY"
-    args_field = "vllm_args"
-    version_field = "vllm_version"
-    checked_version_field = "vllm_api_version"
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
     launch_settings = policy.SETTINGS
     check_summary = "Runtime identity, package pins, connector import and tokenizer passed."
     prefix_cache_name = "Prefix caching"
+    launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
     version_label = "API"
 
     def validate_runtime(self, runtime: dict) -> None:
@@ -118,8 +117,11 @@ class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelForma
     def capture_native(self, run: Path) -> Path:
         return attestation.capture_native(run)
 
-    def engine_document(self, run: Path, startup_log: Path) -> dict:
-        return attestation.engine_document(run, startup_log)
+    def transfer_package(self, plan: dict) -> str | None:
+        return attestation.nixl_package(plan)
+
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence:
+        return attestation.attestation_evidence(context)
 
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict:
         return dev.runtime(template, model_dir, memory_fraction)

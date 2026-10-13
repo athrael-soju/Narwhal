@@ -185,8 +185,7 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 | Field               | Value                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `plan_sha256`       | SHA-256 of `launch.json`                                                                                      |
-| `vllm_api_version`  | vLLM only: value of `vllm.version.__version__`                                                                |
-| `sglang_version`    | SGLang only: value of `sglang.__version__`                                                                    |
+| `engine_version`    | Value of `vllm.version.__version__` on vLLM, or of `sglang.__version__` on SGLang                             |
 | `prefix_caching`    | `true` when the resolved serving arguments keep prefix caching on                                             |
 | `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off                         |
 | `ucx_version`       | vLLM only: version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
@@ -198,7 +197,7 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 
 `peer_release` is `true` for an engine without CUDA IPC peers. For an engine with CUDA IPC peers, it is `true` only when UCX is 1.22 or later and `UCX_CUDA_IPC_CACHE` is off. When it is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 
-On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `vllm_api_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM, or from `/server_info` on SGLang, with the checked version.
+On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM, or from `/server_info` on SGLang, with the checked version.
 
 Record the application revision, launcher digest and container ID with each deployment.
 

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..backends import DEFAULT_BACKEND, renamed_fields
+from ..backends import DEFAULT_BACKEND, current_fields
 from ..backends import load as load_backend
 from ..contracts import canonical_digest
 from ..scheduling.control import SLO, Thresholds
@@ -36,13 +36,7 @@ class SharedDeviceAllocation:
 
 
 def current_contract_names(raw: dict[str, Any]) -> dict[str, Any]:
-    out = dict(raw)
-    for old, new in renamed_fields("contract").items():
-        if old in out:
-            if new in out:
-                raise ValueError(f"engine contract sets both {old} and {new}")
-            out[new] = out.pop(old)
-    return out
+    return current_fields("contract", raw, "engine contract")
 
 
 @dataclass(frozen=True)

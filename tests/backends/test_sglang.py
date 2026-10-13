@@ -19,6 +19,8 @@ from narwhal.backends import load
 from narwhal.backends.sglang import attestation, discovery, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.backends.sglang.role_switch import SglangRoleSwitch
+from narwhal.deployment.attestation_contract import evidence as attestation_evidence
+from narwhal.deployment.attestation_contract.document import engine_document, launch_args
 from narwhal.deployment.attestation_contract.evidence import (
     capture_model_dimensions,
     model_contract,
@@ -501,7 +503,7 @@ class LaunchTests(unittest.TestCase):
                 "decode_cuda_graph_memory_gb": 4.0,
             },
         )
-        self.assertNotIn(MODEL, attestation.launch_args(args))
+        self.assertNotIn(MODEL, launch_args(args, attestation.LAUNCH_VARYING_FLAGS))
 
     def test_a_launch_may_lower_the_request_cap(self):
         record = runtime_record(extra_args=["--max-running-requests", "64"])
@@ -645,7 +647,7 @@ class RuntimeCheckTests(unittest.TestCase):
         evidence = json.dumps(
             {
                 "plan_sha256": digest(run / "launch.json"),
-                "sglang_version": "0.5.21",
+                "engine_version": "0.5.21",
                 "prefix_caching": True,
                 "kv_events": self.endpoints(launch),
                 "backend": "native",
@@ -697,7 +699,7 @@ class RuntimeCheckTests(unittest.TestCase):
             json.dumps(
                 {
                     "plan_sha256": digest(run / "launch.json"),
-                    "sglang_version": "0.5.21",
+                    "engine_version": "0.5.21",
                     "prefix_caching": True,
                     "kv_events": self.endpoints(launch),
                     "image_id": "sha256:" + "b" * 64,
@@ -753,9 +755,13 @@ class EngineDocumentTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         run = Path(folder.name)
         native = backend == "native"
+        (run / "model").mkdir()
+        (run / "model/config.json").write_text("{}")
+        model_config = digest(run / "model/config.json")
         launch = {
             "engine": "sglang",
             "backend": backend,
+            "model_dir": str(run / "model"),
             "image": "" if native else IMAGE,
             "endpoint": "http://192.0.2.11:8000",
             "args": [
@@ -764,14 +770,14 @@ class EngineDocumentTests(unittest.TestCase):
             ],
             "connector": connector,
             "expected_packages": PINS,
-            "model_config_sha256": "1" * 64,
+            "model_config_sha256": model_config,
             "revision": "main",
             "model_revision": "2" * 40,
             "launch_sha256": "3" * 64,
             "launcher_sha256": "4" * 64,
             "launcher_code_sha256": "5" * 64,
         }
-        checked = {"sglang_version": "0.5.21", "image_id": IMAGE_ID}
+        checked = {"engine_version": "0.5.21", "image_id": IMAGE_ID}
         identity: dict = {"image_id": IMAGE_ID, "container_id": CONTAINER_ID}
         if native:
             launch["python_executable"] = "/opt/sglang/bin/python"
@@ -791,7 +797,7 @@ class EngineDocumentTests(unittest.TestCase):
             "plan_sha256": plan_hash,
             "image": launch["image"],
             "revision": "main",
-            "model_config_sha256": "1" * 64,
+            "model_config_sha256": model_config,
         }
         (run / "model-dimensions.json").write_text(json.dumps(dimensions))
         server = {
@@ -827,9 +833,10 @@ class EngineDocumentTests(unittest.TestCase):
                 live, identity = (
                     ("live_native", PROCESS) if native else ("live_container", CONTAINER_ID)
                 )
-                with patch.object(attestation, live, return_value=identity):
-                    document = attestation.engine_document(run, run / "startup.log")
+                with patch.object(attestation_evidence, live, return_value=identity):
+                    document = engine_document(run, run / "startup.log")
                 image_id = "" if native else IMAGE_ID
+                model_config = digest(run / "model/config.json")
                 expected = {
                     "schema": "narwhal.attestation",
                     "schema_version": 1,
@@ -865,7 +872,7 @@ class EngineDocumentTests(unittest.TestCase):
                         ],
                         "image_id": image_id,
                         "expected_packages": PINS,
-                        "model_config_sha256": "1" * 64,
+                        "model_config_sha256": model_config,
                         "model_revision": "2" * 40,
                         "launch_sha256": "3" * 64,
                         "launcher_code_sha256": "5" * 64,
@@ -908,14 +915,14 @@ class EngineDocumentTests(unittest.TestCase):
                     else ("live_container", CONTAINER_ID, "container_start")
                 )
                 with (
-                    patch.object(attestation, live, return_value=identity),
+                    patch.object(attestation_evidence, live, return_value=identity),
                     patch.object(attestation, start, return_value=100.0) as started,
                     serving,
                 ):
                     path = attestation.capture_server(run)
                     with self.assertRaisesRegex(ValueError, "^Server evidence already exists"):
                         attestation.capture_server(run)
-                    attestation.engine_document(run, run / "startup.log")
+                    engine_document(run, run / "startup.log")
                     started.assert_called_once_with(PROCESS["pid"] if native else CONTAINER_ID)
                     [request] = requests
                     self.assertEqual(str(request.url), "http://192.0.2.11:8000/server_info")
@@ -938,7 +945,7 @@ class EngineDocumentTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, f"^Server evidence {field} differs from the checked serving"
                     ):
-                        attestation.engine_document(run, run / "startup.log")
+                        engine_document(run, run / "startup.log")
 
 
 class RouterRoleTests(unittest.IsolatedAsyncioTestCase):

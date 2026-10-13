@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...backends import current_fields
 from .. import stages
 from .backend import plan_launcher
 from .docker import docker
@@ -127,7 +128,7 @@ def check(run: Path, plan: dict) -> None:
     if result.kv_events != expected:
         raise context.failure("runtime cache-event endpoints differ from the launch plan")
     evidence = {
-        engine.checked_version_field: result.version,
+        "engine_version": result.version,
         "prefix_caching": result.prefix_caching,
         "kv_events": result.kv_events,
         **result.fields,
@@ -145,8 +146,13 @@ def check(run: Path, plan: dict) -> None:
         print(f"{cache} is on; cache events publish under {planned['socket_dir']}.")
 
 
+def read_checked(run: Path) -> dict:
+    """Read checked.json, resolving the field names an earlier build wrote."""
+    return current_fields("checked", json.loads((run / "checked.json").read_text()), "checked.json")
+
+
 def require_checked(run: Path, plan: dict) -> None:
-    checked = json.loads((run / "checked.json").read_text())
+    checked = read_checked(run)
     if checked["plan_sha256"] != digest(run / "launch.json"):
         raise ValueError("launch plan changed after its runtime check")
     if plan.get("backend") == "native" and (
@@ -215,6 +221,9 @@ def write_checked(run: Path, plan: dict, fields: dict, inspection: dict | None) 
     else:
         assert inspection is not None
         evidence["image_id"] = inspection["Id"]
+    # A file with an earlier build's field names stands when it records the same values.
+    if (run / "checked.json").exists() and read_checked(run) == evidence:
+        return
     write_once(
         run / "checked.json",
         json.dumps(evidence),

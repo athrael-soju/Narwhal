@@ -386,31 +386,7 @@
         "backend": "native",
         "budget_mib": 12000.0,
         "device_allowance_mib": 27000.0,
-        "expected_packages": {
-          "mooncake-transfer-engine": "0.3.9",
-          "sglang": "0.5.21"
-        },
-        "gpu_after": {
-          "total_mib": 30000,
-          "used_mib": 6100
-        },
-        "gpu_baseline_used_mib": 1000,
-        "gpu_before": {
-          "total_mib": 30000,
-          "used_mib": 1000
-        },
-        "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "model_sha256": "<sha256>",
-        "observed_delta_mib": 5100,
-        "plan_sha256": "<sha256>",
-        "process": {
-          "boot_id": "boot",
-          "pid": 101,
-          "start_ticks": 10
-        },
-        "process_start_time_seconds": 1234.5,
-        "role": "engine-1",
-        "sglang_args": [
+        "engine_args": [
           "-m",
           "launch_engine",
           "serve",
@@ -451,7 +427,31 @@
           "--mem-fraction-static",
           "0.4"
         ],
-        "sglang_version": "0.5.21",
+        "engine_version": "0.5.21",
+        "expected_packages": {
+          "mooncake-transfer-engine": "0.3.9",
+          "sglang": "0.5.21"
+        },
+        "gpu_after": {
+          "total_mib": 30000,
+          "used_mib": 6100
+        },
+        "gpu_baseline_used_mib": 1000,
+        "gpu_before": {
+          "total_mib": 30000,
+          "used_mib": 1000
+        },
+        "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "model_sha256": "<sha256>",
+        "observed_delta_mib": 5100,
+        "plan_sha256": "<sha256>",
+        "process": {
+          "boot_id": "boot",
+          "pid": 101,
+          "start_ticks": 10
+        },
+        "process_start_time_seconds": 1234.5,
+        "role": "engine-1",
         "shared_device": {
           "device_allowance": 0.9,
           "gpu_memory_utilization": 0.4,

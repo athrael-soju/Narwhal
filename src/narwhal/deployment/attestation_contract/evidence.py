@@ -6,7 +6,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...backends import current_fields
 from ..launch_engine.backend import LiveModelDimensions, plan_launcher
+from ..launch_engine.check import read_checked
 from ..launch_engine.runtime import digest, write_private
 from ..native_engine import native_identity, process_identity
 
@@ -22,10 +24,15 @@ def write_private_json(path: Path, value: dict) -> None:
     write_private(path, json.dumps(value, indent=2) + "\n")
 
 
+def read_shared_start(run: Path) -> dict:
+    """Read shared-start.json, resolving the field names an earlier build wrote."""
+    return current_fields("shared_start", read_json(run / "shared-start.json"), "shared-start.json")
+
+
 def checked_plan(run: Path) -> tuple[dict, dict, str]:
     plan_path = run / "launch.json"
     plan = read_json(plan_path)
-    checked = read_json(run / "checked.json")
+    checked = read_checked(run)
     plan_hash = digest(plan_path)
     if checked.get("plan_sha256") != plan_hash:
         raise ValueError("Runtime check belongs to another serving plan")
@@ -66,22 +73,28 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
             raise ValueError("Native serving process identity changed")
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Native serving process is no longer running") from error
-    engine = plan_launcher(plan)
-    startup = read_json(run / "shared-start.json")
+    startup = read_shared_start(run)
     if (
         startup.get("status") != "running"
         or startup.get("plan_sha256") != digest(run / "launch.json")
         or startup.get("process") != process
-        or startup.get(engine.version_field) != checked[engine.checked_version_field]
+        or startup.get("engine_version") != checked["engine_version"]
     ):
         raise ValueError("Native startup evidence differs from the live serving plan")
     identity = native_identity(run, plan, process["pid"])
     if (
-        identity.version != startup[engine.version_field]
+        identity.version != startup["engine_version"]
         or identity.process_start_time_seconds != startup["process_start_time_seconds"]
     ):
         raise ValueError("Native engine HTTP identity changed since launch")
     return process
+
+
+def live_identity(run: Path, plan: dict, checked: dict) -> dict | str:
+    """Return the live native process identity, or the live container ID."""
+    if plan.get("backend") == "native":
+        return live_native(run, plan, checked)
+    return live_container(run, checked)
 
 
 def live_binding(

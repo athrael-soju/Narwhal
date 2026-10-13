@@ -113,7 +113,7 @@ class SharedStageFailureTests(unittest.TestCase):
                     patch.object(native_engine, "validate_shared_runs", return_value=selected),
                     patch.object(native_engine, "_ports_free"),
                     patch.object(
-                        native_engine, "_checked_plan", return_value={"vllm_api_version": "test"}
+                        native_engine, "_checked_plan", return_value={"engine_version": "test"}
                     ),
                     patch.object(
                         native_engine,

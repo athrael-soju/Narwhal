@@ -20,12 +20,12 @@ from narwhal.backends.vllm.attestation import (
     attention_backends,
     capture_model_dimensions,
     capture_nixl,
-    engine_document,
-    launch_args,
 )
+from narwhal.backends.vllm.launch import VllmLauncher
 from narwhal.config import EngineContract
+from narwhal.deployment.attestation_contract import evidence as attestation_evidence
 from narwhal.deployment.attestation_contract import sidecar as attestation_sidecar
-from narwhal.deployment.attestation_contract.document import generate
+from narwhal.deployment.attestation_contract.document import engine_document, generate, launch_args
 from narwhal.deployment.attestation_contract.evidence import live_native, read_json
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 # Attestation modules that look up `live_container`.
-LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_sidecar)
+LIVE_CONTAINER_CALLERS = (attestation_capture, attestation_evidence, attestation_sidecar)
 
 
 @contextlib.contextmanager
@@ -68,7 +68,7 @@ class LaunchArgsTests(unittest.TestCase):
             "64",
         ]
         self.assertEqual(
-            launch_args(args),
+            launch_args(args, VllmLauncher.launch_varying_flags),
             [
                 "-m",
                 "vllm.entrypoints.openai.api_server",

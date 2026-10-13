@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from ..attestation_contract.document import AttestationContext, AttestationEvidence
     from .check import CheckContext, ProbeResult
     from .settings import LaunchSettings
 
@@ -20,9 +21,6 @@ class EngineLauncher(ABC):
     # The backend's earlier name for the KV side-channel port variable.
     side_channel_port_env: ClassVar[str]
     api_key_env: ClassVar[str]
-    args_field: ClassVar[str]
-    version_field: ClassVar[str]
-    checked_version_field: ClassVar[str]
     # Discovery pins the image distributions whose names fully match this pattern, and copies
     # image variables with these prefixes except the launcher-managed ones.
     image_packages: ClassVar[str]
@@ -35,6 +33,8 @@ class EngineLauncher(ABC):
     check_summary: ClassVar[str]
     prefix_cache_name: ClassVar[str]
     version_label: ClassVar[str]
+    # Flags whose values change per launch; the attested launch arguments omit their values.
+    launch_varying_flags: ClassVar[frozenset[str]]
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...
@@ -89,7 +89,12 @@ class EngineLauncher(ABC):
     def capture_native(self, run: Path) -> Path: ...
 
     @abstractmethod
-    def engine_document(self, run: Path, startup_log: Path) -> dict: ...
+    def transfer_package(self, plan: dict) -> str | None:
+        """Name the pinned package whose version the contract records as transfer_version."""
+
+    @abstractmethod
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence:
+        """Read the backend's own evidence for the engine attestation document."""
 
     @abstractmethod
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict: ...

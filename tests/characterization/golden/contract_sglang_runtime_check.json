@@ -57,14 +57,14 @@
       }
     ],
     "checked": {
+      "engine_version": "0.5.21",
       "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "kv_events": {
         "endpoint": "ipc:///narwhal-kv-events/events.sock",
         "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock"
       },
       "plan_sha256": "<sha256>",
-      "prefix_caching": true,
-      "sglang_version": "0.5.21"
+      "prefix_caching": true
     },
     "printed": "Runtime identity, package pins and server arguments passed.\nThe radix cache is on; cache events publish under <kv-events-root>/<name>.\n"
   },
@@ -97,6 +97,7 @@
     ],
     "checked": {
       "backend": "native",
+      "engine_version": "0.5.21",
       "expected_packages": {
         "mooncake-transfer-engine": "0.3.9",
         "sglang": "0.5.21"
@@ -107,8 +108,7 @@
       },
       "plan_sha256": "<sha256>",
       "prefix_caching": true,
-      "python_executable": "<python>",
-      "sglang_version": "0.5.21"
+      "python_executable": "<python>"
     },
     "printed": "Runtime identity, package pins and server arguments passed.\nThe radix cache is on; cache events publish under <kv-events-root>/<name>.\n"
   }

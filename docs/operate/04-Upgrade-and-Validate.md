@@ -104,3 +104,15 @@ Discovery and `narwhal dev` write [engine-neutral launch settings](../configurat
 The side-channel port variable `NARWHAL_KV_SIDE_CHANNEL_PORT` replaces `NARWHAL_NIXL_SIDE_CHANNEL_PORT` and `NARWHAL_SGLANG_BOOTSTRAP_PORT`, which still apply while it is unset.
 
 Launch records with the earlier flags still load, and the launcher passes the same arguments for them. A record written with the new fields passes those flags in another position, which gives the engine a new [`launch_digest`](../configuration/01-Fleet-Schema.md#attestation). After you regenerate launch records, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline), then run preflight.
+
+### Upgrading to engine-neutral evidence names
+
+`narwhal-engine` writes `checked.json` and `shared-start.json` with these field names:
+
+| File                | Earlier names                        | Current name     |
+| ------------------- | ------------------------------------ | ---------------- |
+| `checked.json`      | `vllm_api_version`, `sglang_version` | `engine_version` |
+| `shared-start.json` | `vllm_version`, `sglang_version`     | `engine_version` |
+| `shared-start.json` | `vllm_args`, `sglang_args`           | `engine_args`    |
+
+Launch directories with the earlier names still load, and a repeated `check` accepts a `checked.json` that records the same values under them. A file that holds both an earlier and a current name for one field is rejected. The attestation document and its `launch_digest` do not change.
