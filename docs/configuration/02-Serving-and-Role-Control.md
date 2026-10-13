@@ -8,11 +8,11 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 
 ### Global admission
 
-| Field                        | Default        | Meaning                                                                | Values                                                 |
-| ---------------------------- | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
-| `serving.admission`          | `"predictive"` | Admission mode.                                                        | `predictive` or `open`                                 |
-| `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.             | Zero or greater                                        |
-| `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine. | At least 1                                   |
+| Field                        | Default        | Meaning                                                                                              | Values                                                 |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `serving.admission`          | `"predictive"` | Admission mode.                                                                                      | `predictive` or `open`                                 |
+| `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.                                           | Zero or greater                                        |
+| `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine.                    | At least 1                                             |
 | `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 
 In `predictive` mode, the router returns HTTP 429 when a request fails the time to first token (TTFT) check or the decode admission check. `open` mode disables predictive refusals.
@@ -105,27 +105,27 @@ In `predictive` mode, only an original request's first attempt is priced against
 
 ### Waiting, engine seats, and retries
 
-| Field                         | Default    | Meaning                                                                                                               | Values                                                                     |
-| ----------------------------- | :--------: | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `serving.queue_capacity`      | `0`        | Maximum requests waiting for admission.                                                                               | `0` rejects immediately at saturation                                      |
-| `serving.queue_timeout_s`     | `0.0`      | Most time one request waits for an admission seat and prefill seats combined, capped by the original request deadline. | Positive when `serving.queue_capacity` is positive                         |
-| `serving.max_attempts`        | `2`        | Maximum complete prefill and decode attempts per original request.                                                    | 1 to 3                                                                     |
-| `serving.retry_base_s`        | `0.1`      | Initial exponential-backoff ceiling.                                                                                  | Positive                                                                   |
-| `serving.retry_cap_s`         | `1.0`      | Maximum backoff ceiling.                                                                                              | At least `serving.retry_base_s`                                            |
-| `serving.retry_budget`        | `10`       | Starting and maximum size of the retry-credit pool, with each retry spending one credit when it dispatches.          | Zero or greater                                                            |
-| `serving.retry_replenish`     | `0.1`      | Credits added after each successful original request.                                                                 | 0 to 1                                                                     |
-| `serving.max_request_bytes`   | `4194304`  | Maximum HTTP request-body size.                                                                                       | At least 1                                                                 |
-| `serving.max_response_bytes`  | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output. | At least 1                                                                 |
+| Field                        |  Default   | Meaning                                                                                                                | Values                                             |
+| ---------------------------- | :--------: | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `serving.queue_capacity`     |    `0`     | Maximum requests waiting for admission.                                                                                | `0` rejects immediately at saturation              |
+| `serving.queue_timeout_s`    |   `0.0`    | Most time one request waits for an admission seat and prefill seats combined, capped by the original request deadline. | Positive when `serving.queue_capacity` is positive |
+| `serving.max_attempts`       |    `2`     | Maximum complete prefill and decode attempts per original request.                                                     | 1 to 3                                             |
+| `serving.retry_base_s`       |   `0.1`    | Initial exponential-backoff ceiling.                                                                                   | Positive                                           |
+| `serving.retry_cap_s`        |   `1.0`    | Maximum backoff ceiling.                                                                                               | At least `serving.retry_base_s`                    |
+| `serving.retry_budget`       |    `10`    | Starting and maximum size of the retry-credit pool, with each retry spending one credit when it dispatches.            | Zero or greater                                    |
+| `serving.retry_replenish`    |   `0.1`    | Credits added after each successful original request.                                                                  | 0 to 1                                             |
+| `serving.max_request_bytes`  | `4194304`  | Maximum HTTP request-body size.                                                                                        | At least 1                                         |
+| `serving.max_response_bytes` | `16777216` | Maximum bytes retained for each non-streaming attempt, and for the metadata a stream buffers before its first output.  | At least 1                                         |
 
 #### Queue waits
 
 With `serving.queue_capacity` above `0`, a request can wait at three stages. Each wait has its own bound:
 
-| Wait           | The request waits while                                                                         | The wait ends at                                                                                                         | Response when the bound ends the wait     |
-| -------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
-| Admission seat | Requests hold every seat under the [in-flight limit](#in-flight-limit)                          | `serving.queue_timeout_s`                                                                                                | HTTP `504`, error type `queue_expired`    |
-| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full          | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left    | HTTP `504`, error type `expired`          |
-| Decode seat    | Every engine that can take the decode leg has its decode seats full                             | The producer's [KV handoff bound](#kv-handoff-bound)                                                                     | HTTP `504`, error type `handoff_expired`  |
+| Wait           | The request waits while                                                                | The wait ends at                                                                                                      | Response when the bound ends the wait    |
+| -------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Admission seat | Requests hold every seat under the [in-flight limit](#in-flight-limit)                 | `serving.queue_timeout_s`                                                                                             | HTTP `504`, error type `queue_expired`   |
+| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left | HTTP `504`, error type `expired`         |
+| Decode seat    | Every engine that can take the decode leg has its decode seats full                    | The producer's [KV handoff bound](#kv-handoff-bound)                                                                  | HTTP `504`, error type `handoff_expired` |
 
 The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. The router sets each wait's timer at its bound, and the timer fires when the router's event loop runs it. Under event-loop lag, reported as `narwhal_router_loop_lag_seconds`, a wait can run past its bound by about the lag, and a seat that frees in that time still serves the request. The [router saturation](#router-saturation) check rejects new requests once the lag reaches a quarter of `slo.ttft_s`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
 
@@ -139,11 +139,11 @@ The router prices an admission-seat wait before it sizes the request. That price
 
 A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
 
-| Hold begins                                                                     | Requests that end with the 503                                                                     | Requests that continue                                        |
-| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [Whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                         |
-| Degraded engine monitoring                                                      | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
-| Lost or failed router lease                                                     | Requests waiting for an admission or prefill seat                                                  | Prefilled requests, which wait for a decode seat and decode   |
+| Hold begins                                                                | Requests that end with the 503                                                                           | Requests that continue                                      |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [Whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave) | Requests waiting for an admission, prefill or decode seat, and prefilled requests before decode dispatch | Requests with a dispatched decode leg                       |
+| Degraded engine monitoring                                                 | Requests waiting for an admission or prefill seat                                                        | Prefilled requests, which wait for a decode seat and decode |
+| Lost or failed router lease                                                | Requests waiting for an admission or prefill seat                                                        | Prefilled requests, which wait for a decode seat and decode |
 
 A request in its prefill leg when a whole-wave hold begins receives the 503 when its prefill completes. The router also returns the 503 to a request that reaches prefill placement during a whole-wave hold. The same applies while the router is standby, fenced or in degraded engine monitoring.
 
@@ -151,18 +151,18 @@ A request in its prefill leg when a whole-wave hold begins receives the 503 when
 
 The router derives each engine's prefill and decode seats from engine evidence:
 
-| Seats   | Value |
-| ------- | ----- |
-| Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`. |
+| Seats   | Value                                                                                                                  |
+| ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`.                              |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
 The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.extra_args` sets it.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
-The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
+The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats, and an engine queues prefill legs above its seats.
 
-In an SGLang fleet with the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first.
+With the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, the router places the leg on the engine whose seat the profiles project to free first.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
@@ -423,7 +423,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval |
+| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream.   |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
@@ -485,10 +485,10 @@ An adjacent split differs from the current split by one engine moved between pre
 
 The worst projected SLO ratio of a split is the largest of its projected TTFT, TPOT, and decode queueing ratios.
 
-| Move              | Projected source load                                            |
-| ----------------- | ---------------------------------------------------------------- |
-| Prefill-to-decode | The candidate's projected TTFT ratio                             |
-| Decode-to-prefill | The larger of the candidate's TPOT and decode queueing ratios    |
+| Move              | Projected source load                                         |
+| ----------------- | ------------------------------------------------------------- |
+| Prefill-to-decode | The candidate's projected TTFT ratio                          |
+| Decode-to-prefill | The larger of the candidate's TPOT and decode queueing ratios |
 
 The decode queueing ratio projects the slots of the [decode admission check](#decode-admission-check) onto the split's decode engines:
 
@@ -508,8 +508,8 @@ Adjacent-split decisions use these spans:
 | Span              | Length                                                                                                                   | Default |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------ | :-----: |
 | Window            | `controller.reactive.window_s`                                                                                           |  120 s  |
-| Settled run       | `controller.reactive.evidence_span_s`                                                                                    |   60 s  |
-| Confirmation span | `controller.reactive.step_s` times max(`controller.reactive.confirmations`, `controller.thresholds.sustained_intervals`) |   15 s  |
+| Settled run       | `controller.reactive.evidence_span_s`                                                                                    |  60 s   |
+| Confirmation span | `controller.reactive.step_s` times max(`controller.reactive.confirmations`, `controller.thresholds.sustained_intervals`) |  15 s   |
 | Reversal lookback | `controller.reactive.window_s` plus `controller.reactive.evidence_span_s`                                                |  180 s  |
 
 Each scored decision records in `eligibility_rule` the first of these rules that matches:
@@ -524,6 +524,14 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
+
+If prefill demand spikes, engines can move from decode to prefill under `source_shrink` even if decode load is higher than usual (up to `controller.thresholds.expand`). This requires:
+
+- projected prefill load exceeds `controller.thresholds.expand` during the window or confirmation span
+- no engine is currently moving to prefill
+- no first-token timeouts have occurred within the [arrival-evidence window](#evidence-gating-for-decode-to-prefill-consolidation)
+
+Triggering this move cancels any pending moves to decode.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
@@ -549,8 +557,8 @@ Departures need these settled runs:
 
 | Departure | Settled-run length                                                | Default |
 | --------- | ----------------------------------------------------------------- | :-----: |
-| Reversing | `controller.reactive.evidence_span_s` minus the confirmation span |   45 s  |
-| Other     | `controller.reactive.evidence_span_s`                             |   60 s  |
+| Reversing | `controller.reactive.evidence_span_s` minus the confirmation span |  45 s   |
+| Other     | `controller.reactive.evidence_span_s`                             |  60 s   |
 
 The role controller opens a departure when all of these hold:
 
@@ -584,8 +592,9 @@ A departure closes at the first of these:
 - before the first move, the best adjacent split on confirmation-span demand lies in the other direction
 - before the first move, the best adjacent split on confirmation-span demand improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`
 - after the first move, the role controller applies a window-demand move in the departure's direction
+- the role controller applies a prefill surge move
 
-Once a departure has moved, it holds moves in the opposite direction until it closes.
+After its first move, a departure blocks moves in the opposite direction until it closes, except for prefill surge moves.
 
 Demand is steady when both hold:
 
@@ -608,6 +617,7 @@ One confirmation is enough in three cases:
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
   - the eligibility rule is `source_shrink`
+  - the projected source load is at or below `controller.thresholds.shrink`
   - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`
 
 Every other move needs this many confirmations:
@@ -628,7 +638,7 @@ Any of these resets the confirmation sequence:
 
 Prefill-to-decode moves require:
 
-- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`
+- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`, on both window demand and confirmation-span demand
 - an elapsed `controller.thresholds.cooldown_s`, or an armed cooldown bypass
 
 The cooldown bypass arms after `controller.thresholds.sustained_intervals` consecutive passes with both:
@@ -650,6 +660,8 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 ```
 
 A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
+
+If projected prefill load exceeds `controller.thresholds.shrink`, moving an engine from decode to prefill bypasses the short-horizon pause and ignores arrival-evidence resets caused by prefill-to-decode moves. It is still blocked if the window was reset by a first-token timeout. When bypassed, `evidence_blocked_gate` reports which check was skipped.
 
 The `source_shrink` and `settled_departure` rules move engines toward decode while the window is open.
 

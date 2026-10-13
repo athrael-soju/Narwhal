@@ -116,6 +116,8 @@ class InstanceMonitor:
         self._last_output: dict[str, float] = {}
         # Requests past their first decode gap, which includes transfer and queue time.
         self._decode_started: set[str] = set()
+        # Decode streams whose engine output has ended and await release.
+        self._decode_ended: set[str] = set()
         self._last_prefill_activity: dict[str, float] = {}
 
     def add(self, instance: Instance) -> None:
@@ -158,6 +160,7 @@ class InstanceMonitor:
                 self._decode_tokens[iid] -= replaced.length
             inst.decode[request.rid] = request
             self._decode_tokens[iid] += request.length
+            self._decode_ended.discard(request.rid)
 
     def first_token(self, iid: str, rid: str) -> None:
         """Move a request out of prefill and start its token clock."""
@@ -194,6 +197,10 @@ class InstanceMonitor:
             req.output_len += 1
             self._decode_tokens[iid] += 1
 
+    def output_ended(self, rid: str) -> None:
+        """Record that a decode stream's engine output has ended before its release."""
+        self._decode_ended.add(rid)
+
     def output_since(self, iid: str, since: float) -> bool:
         """Return whether `iid` completed a prefill or emitted a decode token after `since`."""
         return self._last_output.get(iid, float("-inf")) > since
@@ -207,6 +214,7 @@ class InstanceMonitor:
         had_prefill = inst.prefill.pop(rid, None)
         self._last_token.pop(rid, None)
         self._decode_started.discard(rid)
+        self._decode_ended.discard(rid)
         if had_prefill is not None:
             self._prefill_changed(iid)
             self._reprice(iid)
@@ -251,13 +259,16 @@ class InstanceMonitor:
     def stalled_gap(self, iid: str) -> float:
         """Return the longest open inter-token gap on an engine.
 
-        Requests awaiting their first decode token are excluded.
+        Requests awaiting their first decode token and streams whose output has ended are
+        excluded.
         """
         now = self._clock()
         gaps = [
             now - self._last_token[rid]
             for rid in self.instances[iid].decode
-            if rid in self._last_token and rid in self._decode_started
+            if rid in self._last_token
+            and rid in self._decode_started
+            and rid not in self._decode_ended
         ]
         return max(gaps, default=0.0)
 

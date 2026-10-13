@@ -238,6 +238,19 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(row["decode_tpot_s"], 0)
         self.assertGreater(row["upstream_seconds"]["decode"], 0)
 
+    async def test_a_finished_stream_leaves_decode_pressure_before_its_release(self):
+        self.chunks = [wire(token("a", [1])), wire(token("b", [2], "length")), 0.4]
+        self.chunks.append("data: [DONE]\n\n")
+        app = self.app()
+        call = asyncio.create_task(self.call(app))
+        await asyncio.sleep(0.2)
+        monitor = self.router.monitor
+        iid = next(iid for iid, inst in monitor.instances.items() if inst.decode)
+        self.assertIn(iid, {i for i, inst in monitor.instances.items() if inst.decode})
+        self.assertEqual(monitor.stalled_gap(iid), 0.0)
+        status, _ = await call
+        self.assertEqual(status, 200)
+
     # The chunked relay.
 
     async def test_frames_in_one_read_reach_the_client_in_one_write(self):
