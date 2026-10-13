@@ -368,8 +368,6 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `decode_correction`                               | Fleet median of each engine's bounded ratio of live to profiled decode latency                                                                                    |
 | `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery`                                                        |
 | `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                                                                           |
-| `stalled_decode_gap_s`, `stalled_decode_gap_engine` | Longest open inter-token gap of a decode stream, which feeds [decode load](../configuration/02-Serving-and-Role-Control.md#load-definitions), and the engine that holds it |
-| `ended_decode_gap_s`                              | Longest wait from an ended decode stream's last token to its release, which decode load leaves out                                                               |
 | `recovery_prefill_ratio`, `queued_prefill_s`      | The [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio) and its queued prefill seconds                                                          |
 | `recovery_decode_ratio`                           | Value of the [decode recovery ratio](06-SLO-and-Demand.md#decode-recovery-ratio)                                                                                  |
 | `eligibility_rule`                                | Rule applied to a scored proposal                                                                                                                                 |
@@ -383,8 +381,6 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 | `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                      |
 | `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
 | `source_pressure_safe`                            | Whether source-pool pressure is at or below `shrink`, or whether `mixed_pressure`, `steady_demand` or a prefill surge applies                                     |
-| `prefill_relief`                                  | Whether projected prefill load above `shrink` let a decode-to-prefill move skip the arrival-evidence window and short-horizon pause |
-| `prefill_surge`                                   | Whether projected prefill load above `expand`, with no open departure toward prefill, let a decode-to-prefill move take an engine from decode load at or below `expand` |
 
 These decisions add fields to `control.last_decision`:
 

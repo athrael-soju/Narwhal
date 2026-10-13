@@ -529,9 +529,9 @@ A prefill surge lets a `source_shrink` move to prefill take an engine from a dec
 
 - the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.expand`
 - no departure toward prefill is open
-- [`prefill_relief`](#evidence-gating-for-decode-to-prefill-consolidation) applies
+- no first-token timeout has reset the [arrival-evidence window](#evidence-gating-for-decode-to-prefill-consolidation)
 
-A surge move may reverse an open departure toward decode, and closes it. The decision records the surge in `prefill_surge`.
+A surge move may reverse an open departure toward decode, and closes it.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
@@ -661,7 +661,7 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 
 A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
 
-When the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.shrink`, a decode-to-prefill move skips both the window that a prefill-to-decode move resets and the short-horizon pause. A window that a first-token timeout resets still holds the move. The decision records this in `prefill_relief`, and `evidence_blocked_gate` names the gate it skipped.
+When the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.shrink`, a decode-to-prefill move skips both the window that a prefill-to-decode move resets and the short-horizon pause. A window that a first-token timeout resets still holds the move. `evidence_blocked_gate` names the gate it skipped.
 
 The `source_shrink` and `settled_departure` rules move engines toward decode while the window is open.
 

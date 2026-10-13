@@ -168,7 +168,8 @@ class SteadyDemandTests(unittest.TestCase):
         self.assertEqual([flip.to for flip in fleet.scheduler.roles.flips], [Role.PREFILL])
         applied = [row for row in shifted if row["result"] == "applied"]
         self.assertEqual(len(applied), 1)
-        self.assertTrue(applied[0]["prefill_surge"])
+        self.assertEqual(applied[0]["eligibility_rule"], "source_shrink")
+        self.assertGreater(applied[0]["projected_tpot_ratio"], fleet.scheduler.th.shrink)
         self.assertEqual(applied[0]["required_confirmations"], 3)
         self.assertTrue(all(row["eligibility_rule"] == "source_shrink" for row in rows))
         ControllerDecisionOut.model_validate(rows[-1])
@@ -336,7 +337,7 @@ class DecodeWaitTests(unittest.TestCase):
         row = applied[0]
         th = sim.scheduler.th
         self.assertEqual((row["current_prefill"], row["prefill"]), (6, 7))
-        self.assertTrue(row["prefill_surge"])
+        self.assertEqual(row["eligibility_rule"], "source_shrink")
         self.assertEqual(row["confirmations"], 3)
         self.assertLessEqual(row["projected_decode_wait_ratio"], th.expand)
         self.assertGreater(row["projected_tpot_ratio"], th.shrink)

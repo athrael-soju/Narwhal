@@ -128,15 +128,13 @@ class MonitorMathTests(unittest.TestCase):
         self.clock.now = 1.2
         # b's stream is open and silent past any TPOT target; a's stream has ended.
         self.assertAlmostEqual(self.monitor.stalled_gap("d0"), 1.1)
-        self.assertAlmostEqual(self.monitor.ended_gap("d0"), 1.0)
         self.monitor.finished("d0", "b")
         self.assertEqual(self.monitor.stalled_gap("d0"), 0.0)
         # A retried decode leg reopens the stream.
         self.monitor.dispatched("d0", request)
         self.assertAlmostEqual(self.monitor.stalled_gap("d0"), 1.0)
-        self.assertEqual(self.monitor.ended_gap("d0"), 0.0)
         self.monitor.finished("d0", "a")
-        self.assertEqual((self.monitor.stalled_gap("d0"), self.monitor.ended_gap("d0")), (0.0, 0.0))
+        self.assertEqual(self.monitor.stalled_gap("d0"), 0.0)
 
     def test_decode_load_follows_open_streams_and_skips_ended_ones(self):
         slo = SLO(ttft_s=2.0, tpot_s=0.05)

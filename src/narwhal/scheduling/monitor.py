@@ -272,16 +272,6 @@ class InstanceMonitor:
         ]
         return max(gaps, default=0.0)
 
-    def ended_gap(self, iid: str) -> float:
-        """Return the longest wait from a decode stream's last token to its release on an engine."""
-        now = self._clock()
-        gaps = [
-            now - self._last_token[rid]
-            for rid in self.instances[iid].decode
-            if rid in self._decode_ended and rid in self._last_token
-        ]
-        return max(gaps, default=0.0)
-
     def mean_prefill_price(self, iid: str) -> float:
         """Return mean resident prefill cost for the previous interval."""
         return self._prices[iid].published

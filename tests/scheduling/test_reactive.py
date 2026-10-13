@@ -773,7 +773,6 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(fleet.confirm())
         decision = fleet.scheduler.roles._last_decision
         self.assertEqual(decision["evidence_blocked_gate"], "trend")
-        self.assertTrue(decision["prefill_relief"])
         self.assertGreater(decision["projected_ttft_ratio"], 0.0)
 
     def test_short_horizon_prefill_pressure_holds_a_move_toward_decode(self) -> None:

@@ -392,9 +392,24 @@ class PostMoveHoldTests(unittest.TestCase):
         self.assertEqual((move["current_prefill"], move["prefill"]), (6, 7))
         self.assertEqual(move["evidence_blocked_gate"], "risk")
         self.assertEqual(move["risk_kind"], "p_to_d_recovery")
-        self.assertTrue(move["prefill_relief"])
         self.assertLess(move["risk_age_s"], sim.controller.safety.evidence_span_s)
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+
+def decode_ratio(decision: dict) -> float:
+    return max(
+        decision["projected_tpot_ratio"], decision.get("projected_decode_queue_ratio") or 0.0
+    )
+
+
+def surge_move(decision: dict, th) -> bool:
+    """An applied source_shrink move to prefill whose decode source is above shrink."""
+    return (
+        decision["result"] == "applied"
+        and decision["prefill"] > decision["current_prefill"]
+        and decision["eligibility_rule"] == "source_shrink"
+        and decode_ratio(decision) > th.shrink
+    )
 
 
 class SurgeTests(unittest.TestCase):
@@ -408,21 +423,13 @@ class SurgeTests(unittest.TestCase):
             sim.run(180, (DECODE_LEANING[0], DECODE_LEANING[1], DECODE_LEANING[2] * 2.5))
             sim.close()
         th = sim.scheduler.th
-        surges = [
-            d
-            for d in sim.decisions
-            if d["result"] == "applied" and d["at"] > burst and d.get("prefill_surge")
-        ]
+        surges = [d for d in sim.decisions if d["at"] > burst and surge_move(d, th)]
         self.assertTrue(surges)
         move = surges[0]
         self.assertEqual(move["prefill"], move["current_prefill"] + 1)
         self.assertNotIn("departure_age_s", move)
         self.assertTrue(move["source_pressure_safe"])
-        decode_ratio = max(
-            move["projected_tpot_ratio"], move.get("projected_decode_queue_ratio") or 0.0
-        )
-        self.assertGreater(decode_ratio, th.shrink)
-        self.assertLessEqual(decode_ratio, th.expand)
+        self.assertLessEqual(decode_ratio(move), th.expand)
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
     def test_a_surge_reverses_and_closes_a_departure_toward_decode(self):
@@ -439,10 +446,9 @@ class SurgeTests(unittest.TestCase):
         self.assertTrue(applied)
         move = applied[0]
         self.assertEqual((move["current_prefill"], move["prefill"]), (2, 3))
-        self.assertTrue(move["prefill_surge"])
+        self.assertTrue(surge_move(move, th))
         self.assertLess(move["departure_age_s"], sim.controller.window_s)
-        self.assertGreater(move["projected_tpot_ratio"], th.shrink)
-        self.assertLessEqual(move["projected_tpot_ratio"], th.expand)
+        self.assertLessEqual(decode_ratio(move), th.expand)
         self.assertEqual(move["required_confirmations"], 3)
         self.assertNotIn("departure_age_s", after[after.index(move) + 1])
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
@@ -467,22 +473,11 @@ class AlternationTests(unittest.TestCase):
                 self.assertFalse(rules & {"settled_departure", "steady_demand"})
                 self.assertFalse([d for d in sim.decisions if "departure_age_s" in d])
                 reversals = sim.scheduler.roles.control_snapshot()["flip_reversals"]
-                toward_prefill = [
-                    d
-                    for d in sim.decisions
-                    if d["result"] == "applied" and d["prefill"] > d["current_prefill"]
-                ]
-                surges = [d for d in toward_prefill if d["prefill_surge"]]
+                th = sim.scheduler.th
+                surges = [d for d in sim.decisions if surge_move(d, th)]
                 self.assertTrue(reversals == 0 or surges)
                 for move in surges:
-                    self.assertTrue(move["prefill_relief"])
-                    self.assertLessEqual(
-                        max(
-                            move["projected_tpot_ratio"],
-                            move.get("projected_decode_queue_ratio") or 0.0,
-                        ),
-                        sim.scheduler.th.expand,
-                    )
+                    self.assertLessEqual(decode_ratio(move), th.expand)
 
 
 class ShortViewTests(unittest.TestCase):
