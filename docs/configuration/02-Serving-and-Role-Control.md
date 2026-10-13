@@ -160,9 +160,9 @@ The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-runnin
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
-The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats, and an engine queues prefills above its seats.
+The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats. An engine holds the prefills above its seats until a seat frees.
 
-With the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first, and the leg waits in that engine's queue.
+With the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, the router places the leg on the engine whose seat the profiles project to free first. That engine holds the leg until the seat frees.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
@@ -423,7 +423,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval. An open gap belongs to a decode stream that has emitted a token and not yet ended. A stream ends when the engine sends a finish reason or closes it |
+| Observed token interval                       | The engine's mean token interval, or the larger of that and its longest open inter-token gap when the engine has no completed inter-token gap in the current monitoring interval. An open inter-token gap is the time since the latest token of a decode stream. It counts from the stream's first decode token until the stream ends. A stream ends when the engine sends a finish reason or closes the stream |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
@@ -525,13 +525,13 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-A prefill surge lets a `source_shrink` move to prefill take an engine from a decode pool whose projected load is at or below `controller.thresholds.expand`. A surge holds when all of these hold:
+In a prefill surge, a `source_shrink` move to prefill may take an engine from a decode pool whose projected load is at or below `controller.thresholds.expand`. A prefill surge applies when all of these are true:
 
 - the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.expand`
 - no departure toward prefill is open
 - no first-token timeout has reset the [arrival-evidence window](#evidence-gating-for-decode-to-prefill-consolidation)
 
-A surge move may reverse an open departure toward decode, and closes it.
+A surge move may reverse an open departure toward decode. The departure then closes.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
@@ -661,7 +661,12 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 
 A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
 
-When the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.shrink`, a decode-to-prefill move skips both the window that a prefill-to-decode move resets and the short-horizon pause. A window that a first-token timeout resets still holds the move. `evidence_blocked_gate` names the gate it skipped.
+A decode-to-prefill move skips two gates when the current split's projected prefill load is above `controller.thresholds.shrink` on window or confirmation-span demand:
+
+- the arrival-evidence window that a prefill-to-decode move resets
+- the short-horizon pause
+
+A window that a first-token timeout resets still holds the move. `evidence_blocked_gate` names the gate that the move skipped.
 
 The `source_shrink` and `settled_departure` rules move engines toward decode while the window is open.
 
