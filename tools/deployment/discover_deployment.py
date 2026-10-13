@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from narwhal.deployment.engine_launch import load_launches
 from narwhal.deployment.launch_engine.backend import engine_backend
 from narwhal.deployment.launch_engine.plan import conv_state_layers
+from narwhal.types import RoleModel
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
@@ -277,7 +278,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
     backend.connector(connector)
     engine = backend.launcher()
-    pin = backend.role_switcher(connector) is None
+    pin = backend.role_switcher(connector).model is RoleModel.FIXED
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()

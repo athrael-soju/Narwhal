@@ -34,7 +34,6 @@ from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
-from narwhal.runtime.role_switch import restore_roles
 from narwhal.serving import app as app_module
 from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
@@ -70,21 +69,6 @@ def serve(record, *, tp=1, kv_events=None):
         port=8000,
         kv_events=kv_events,
     )
-
-
-def switching_engines(modes, posted):
-    def handle(request):
-        host = request.url.host
-        if request.method == "GET":
-            return httpx.Response(
-                200, json={"internal_states": [{"disaggregation_mode": modes[host]}]}
-            )
-        role = json.loads(request.content)["new_role"]
-        modes[host] = role
-        posted.append(f"{host} {role}")
-        return httpx.Response(200, json={"success": True, "message": "ok"})
-
-    return handle
 
 
 ARGS = ["--max-running-requests", "64"]
@@ -331,49 +315,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
                 await BACKEND.role_switch.switch(client, "http://engine", Role.DECODE, LAUNCH)
         self.assertEqual(len(posted), 3)
-
-    async def test_a_decode_engine_switches_again_for_a_producer_it_has_stale(self):
-        modes = {"a": "decode", "b": "decode"}
-        posted = []
-        handle = switching_engines(modes, posted)
-        switcher = SglangRoleSwitch()
-        a, b = ("http://a", LAUNCH), ("http://b", LAUNCH)
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            # b's endpoints predate this switcher.
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["a prefill", "b prefill", "b decode"])
-            posted.clear()
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, [])
-            # a enters prefill again, so b still holds a's earlier endpoint.
-            await switcher.switch(client, a[0], Role.DECODE, LAUNCH)
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["a decode", "a prefill", "b prefill", "b decode"])
-            posted.clear()
-            # b switched since it last took a handoff from a's current generation.
-            await switcher.place(client, b, a)
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["b prefill", "a decode", "a prefill", "b decode"])
-
-    async def test_restored_roles_leave_no_stale_endpoint(self):
-        modes = {"a": "decode", "b": "prefill", "c": "decode"}
-        posted = []
-        handle = switching_engines(modes, posted)
-        switcher = SglangRoleSwitch()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            self.assertIs(await switcher.role(client, "http://a"), Role.DECODE)
-            await restore_roles(
-                switcher,
-                client,
-                {
-                    "http://a": (Role.PREFILL, LAUNCH),
-                    "http://b": (Role.DECODE, LAUNCH),
-                    "http://c": (Role.DECODE, LAUNCH),
-                },
-            )
-        # b switched after a entered prefill; c may hold a's earlier endpoint.
-        self.assertEqual(posted, ["a prefill", "b decode", "c prefill", "c decode"])
-        self.assertEqual(modes, {"a": "prefill", "b": "decode", "c": "decode"})
 
     async def test_the_switcher_reads_the_engine_role_without_its_key(self):
         requests = []

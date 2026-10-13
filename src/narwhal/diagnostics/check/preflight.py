@@ -12,7 +12,7 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, client_options
-from ...runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
+from ...runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ...types import Role
 from .engines import (
     colocated_restart_risk,
@@ -70,11 +70,11 @@ async def run(
     rep = report or Report()
     client = EngineClient(**client_options(cfg))
     # The gates switch engines to place each pair; a running router keeps the roles it set.
-    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    switcher = load_backend(cfg.backend).role_switcher(cfg.connector)
     roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
     try:
         live = await gate_reach(cfg, client, rep)
-        if switcher is not None:
+        if switcher.engine_held:
             roles = await _live_roles(cfg, live, switcher)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
@@ -109,7 +109,7 @@ async def run(
             )
     finally:
         try:
-            if switcher is not None and roles:
+            if switcher.engine_held and roles:
                 async with httpx.AsyncClient(
                     timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
                 ) as control:

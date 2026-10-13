@@ -6,13 +6,19 @@ from typing import Any, ClassVar
 
 import httpx
 
-from ..types import Role
+from ..types import Role, RoleModel
 
 
 class RoleSwitcher(ABC):
-    requires_idle: ClassVar[bool]
+    model: ClassVar[RoleModel]
+    # Whether the engine refuses a switch while it holds requests.
+    requires_idle: ClassVar[bool] = False
     # The connectors whose engines switch roles; None means every connector.
     connectors: ClassVar[frozenset[str] | None] = None
+
+    @property
+    def engine_held(self) -> bool:
+        return self.model is RoleModel.ENGINE
 
     @abstractmethod
     async def switch(
@@ -54,8 +60,10 @@ class RoleSwitcher(ABC):
         return None
 
 
-class RouterRoleSwitch(RoleSwitcher):
-    requires_idle = False
+class FixedRoles(RoleSwitcher):
+    """Engines keep the roles their fleet pins name; the router never switches them."""
+
+    model = RoleModel.FIXED
 
     async def switch(
         self,
@@ -66,9 +74,95 @@ class RouterRoleSwitch(RoleSwitcher):
     ) -> None: ...
 
 
-def engine_side(switcher: RoleSwitcher | None) -> RoleSwitcher | None:
-    # A switcher that needs an idle engine changes the engine itself, not only the router.
-    return switcher if switcher is not None and switcher.requires_idle else None
+class RouterRoleSwitch(RoleSwitcher):
+    """The router picks each leg's role, and the engine serves it without a switch."""
+
+    model = RoleModel.ROUTER
+
+    async def switch(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None = None,
+    ) -> None: ...
+
+
+class EngineHeldRoles(RoleSwitcher):
+    """An engine holds its role until the router switches it.
+
+    A decode engine keeps each producer's transfer endpoint until it switches itself, and a
+    producer that enters prefill again listens on a new one. The switcher counts each engine's
+    entries into prefill, and records the producer generations each decode engine took handoffs
+    from since its own last switch.
+    """
+
+    model = RoleModel.ENGINE
+
+    def __init__(self) -> None:
+        # Times each engine entered prefill through this switcher.
+        self._generations: dict[str, int] = {}
+        # Per decode engine, the generation of each producer it took a handoff from since its
+        # own last switch.
+        self._received: dict[str, dict[str, int]] = {}
+
+    @abstractmethod
+    async def change_role(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None,
+    ) -> bool:
+        """Switch the engine at `base` to `role`; return False when it already serves it."""
+
+    async def switch(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None = None,
+    ) -> None:
+        base = base.rstrip("/")
+        if not await self.change_role(client, base, role, launch):
+            return
+        self._received[base] = {}
+        if role is Role.PREFILL:
+            self._generations[base] = self._generations.get(base, 0) + 1
+
+    async def place(
+        self,
+        client: httpx.AsyncClient,
+        producer: tuple[str, Mapping[str, Any] | None],
+        consumer: tuple[str, Mapping[str, Any] | None],
+    ) -> None:
+        await super().place(client, producer, consumer)
+        if self.stale_handoff(producer[0], consumer[0]):
+            await self.refresh(client, consumer[0], Role.DECODE, consumer[1])
+        self.record_handoff(producer[0], consumer[0])
+
+    def stale_handoff(self, producer: str, consumer: str) -> bool:
+        # An engine this switcher has not switched may hold endpoints from before it.
+        source, target = producer.rstrip("/"), consumer.rstrip("/")
+        received = self._received.get(target)
+        generation = self._generations.get(source, 0)
+        return received is None or received.get(source, generation) != generation
+
+    def record_handoff(self, producer: str, consumer: str) -> None:
+        if not self.stale_handoff(producer, consumer):
+            source, target = producer.rstrip("/"), consumer.rstrip("/")
+            self._received[target][source] = self._generations.get(source, 0)
+
+    async def refresh(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        role: Role,
+        launch: Mapping[str, Any] | None = None,
+    ) -> None:
+        other = Role.DECODE if role is Role.PREFILL else Role.PREFILL
+        await self.switch(client, base, other, launch)
+        await self.switch(client, base, role, launch)
 
 
 async def current_roles(

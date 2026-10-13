@@ -25,14 +25,13 @@ from ...runtime.lifecycle.manager import LifecycleManager
 from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
-from ...runtime.role_switch import engine_side
 from ...runtime.standby import ready as router_ready
 from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
 from ...scheduling.health import DriftTracker
 from ...scheduling.monitor import InstanceMonitor
 from ...scheduling.scheduler.placement import GlobalScheduler
-from ...types import Instance, Phase, Role
+from ...types import Instance, Phase, Role, RoleModel
 from ..admission import AdmissionQueue, PlacementRefused, QueueExpired, QueueFull
 from ..completion import output_cap
 from ..dispatch import Dispatcher, placement_hold
@@ -177,15 +176,15 @@ class NarwhalRouter:
         self.verifier = SuspectVerifier(self)
         self.peer_release = PeerRelease(self._clock, self.backend.fabric)
         self.transfer_refresh = TransferRefresh()
-        switcher = self.backend.role_switcher(cfg.connector)
-        # A router-side switch lets any engine serve either leg; otherwise each serves its role.
-        self.role_switch = engine_side(switcher)
+        # Router-chosen roles let any engine serve either leg; otherwise each serves its role.
+        self.role_switch = self.backend.role_switcher(cfg.connector)
         self.role_switches: set[asyncio.Task[None]] = set()
-        self.scheduler.availability.roles_bound = switcher is None or switcher.requires_idle
-        if switcher is None:
+        model = self.role_switch.model
+        self.scheduler.availability.roles_bound = model is not RoleModel.ROUTER
+        if model is RoleModel.FIXED:
             self.scheduler.pinned = frozenset(spec.iid for spec in cfg.engines)
-        elif self.role_switch is not None:
-            self.scheduler.switch_requires_idle = True
+        elif model is RoleModel.ENGINE:
+            self.scheduler.switch_requires_idle = self.role_switch.requires_idle
             self.scheduler.on_flip = self._begin_switch
             self.scheduler.stale_handoff = self.stale_handoff
         # The journal writes this into its run metadata when it opens.
@@ -335,7 +334,7 @@ class NarwhalRouter:
 
     async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:
         switcher = self.role_switch
-        if switcher is None:
+        if not switcher.engine_held:
             return None
         self.scheduler.availability.switching.add(iid)
         try:
@@ -354,15 +353,12 @@ class NarwhalRouter:
         return None
 
     def stale_handoff(self, producer: str, consumer: str) -> bool:
-        switcher, instances = self.role_switch, self.monitor.instances
-        return switcher is not None and switcher.stale_handoff(
-            instances[producer].url, instances[consumer].url
-        )
+        instances = self.monitor.instances
+        return self.role_switch.stale_handoff(instances[producer].url, instances[consumer].url)
 
     def note_handoff(self, producer: str, consumer: str) -> None:
-        if self.role_switch is not None:
-            instances = self.monitor.instances
-            self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
+        instances = self.monitor.instances
+        self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
 
     def attested(self, iid: str, payload: Any) -> None:
         identity = self.backend.identity

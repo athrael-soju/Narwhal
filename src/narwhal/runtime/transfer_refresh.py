@@ -52,7 +52,7 @@ def refresh_consumers(router: NarwhalRouter) -> None:
     holds the least loaded of them out of new placements until its work drains.
     """
     state = router.transfer_refresh
-    if router.role_switch is None or state.tasks:
+    if not router.role_switch.engine_held or state.tasks:
         return
     stale = stale_consumers(router)
     instances = router.monitor.instances
@@ -79,7 +79,7 @@ def refresh_consumers(router: NarwhalRouter) -> None:
 
 
 async def refresh_idle_consumers(router: NarwhalRouter) -> None:
-    if router.role_switch is None:
+    if not router.role_switch.engine_held:
         return
     instances = router.monitor.instances
     for iid, producers in stale_consumers(router).items():

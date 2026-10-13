@@ -22,7 +22,7 @@ from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import EngineDialect
 from ...provenance import stamp
-from ...runtime.role_switch import RoleSwitcher, engine_side
+from ...runtime.role_switch import RoleSwitcher
 from ...types import Role
 from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
@@ -288,9 +288,9 @@ async def run(
     dialect = backend.dialect
     metrics = backend.metrics
     kv = backend.connector(cfg.connector)
-    switcher = engine_side(backend.role_switcher(cfg.connector))
+    switcher = backend.role_switcher(cfg.connector)
     paired = kv.concurrent
-    if paired and switcher is None:
+    if paired and not switcher.engine_held:
         raise ValueError(
             f"profiling measures both roles of each engine, and engine.connector "
             f"{cfg.connector} keeps {backend.label} engine roles fixed"
@@ -405,7 +405,7 @@ async def run(
                 )
                 engine_evidence["generation_evidence"] = generation.document
                 roles = None
-                if pairing is not None and switcher is not None:
+                if pairing is not None and switcher.engine_held:
                     peer = (
                         _peer(spec, cfg.engines)
                         if colocated_workload is not None
