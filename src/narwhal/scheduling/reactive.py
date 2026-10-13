@@ -133,6 +133,10 @@ class ReactivePolicy:
         # Incomplete demand selects recovery, which acts on sustained destination pressure.
         recovery = not demand.complete
         observed_prefill, observed_decode = observed_load
+        decode_gaps = {
+            key: rounded(value) if isinstance(value, float) else value
+            for key, value in controller.scheduler.decode_gaps().items()
+        }
         # Recovery evidence holds while known prefill backlog exceeds the pool's latency budget.
         recovery_prefill = snapshot.prefill_recovery_ratio
         recovery_ready = (
@@ -165,6 +169,7 @@ class ReactivePolicy:
                 "queued_prefill_s": rounded(snapshot.queued_prefill_s),
                 "observed_decode_ratio": rounded(observed_decode),
                 "recovery_decode_ratio": rounded(snapshot.decode_pressure),
+                **decode_gaps,
             }
             if prefill_recovery is not None:
                 details.update(prefill_recovery.details(now))
@@ -423,6 +428,7 @@ class ReactivePolicy:
             details["recovery_prefill_ratio"] = rounded(recovery_prefill)
             details["queued_prefill_s"] = rounded(snapshot.queued_prefill_s)
             details["observed_decode_ratio"] = rounded(observed_decode)
+            details.update(decode_gaps)
             details["decode_capacity_safe"] = capacity_safe
             details["role_floors_safe"] = floors_safe
             details["source_pressure_safe"] = source_safe(row)

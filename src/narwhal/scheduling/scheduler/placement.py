@@ -296,6 +296,25 @@ class GlobalScheduler:
         phase_load = self.prefill_load if role is Role.PREFILL else self.decode_load
         return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
 
+    def decode_gaps(self) -> dict[str, object]:
+        """Return the longest open decode gap and the longest wait after an ended stream.
+
+        The open gap feeds decode load; the ended-stream wait does not.
+        """
+        stalled, ended, engine = 0.0, 0.0, None
+        for instance in self.live_instances():
+            if not instance.decode:
+                continue
+            gap = self.monitor.stalled_gap(instance.iid)
+            if gap > stalled:
+                stalled, engine = gap, instance.iid
+            ended = max(ended, self.monitor.ended_gap(instance.iid))
+        return {
+            "stalled_decode_gap_s": stalled,
+            "stalled_decode_gap_engine": engine,
+            "ended_decode_gap_s": ended,
+        }
+
     def decode_exclusion(self, request: Request, exclude: Collection[str] = ()) -> set[str]:
         """A decode leg on its own producer reuses that engine's prefix cache and never pulls
         the KV handoff, so the producer holds the blocks until its lease expires.

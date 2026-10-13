@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
+from narwhal.scheduling.control import SLO
+from narwhal.scheduling.costs import decode_load
 from narwhal.scheduling.monitor import InstanceMonitor
 from narwhal.types import Instance, Phase, Request, Role
 from tests.fixtures import profile
@@ -113,6 +115,46 @@ class MonitorMathTests(unittest.TestCase):
         self.assertAlmostEqual(self.monitor.stalled_gap("d0"), 0.6)
         self.monitor.finished("d0", "a")
         self.assertEqual(self.monitor.stalled_gap("d0"), 0.0)
+
+    def test_an_ended_stream_leaves_the_stalled_gap_until_a_new_decode_leg(self):
+        request = self.decode("a", 1000)
+        self.decode("b", 1000)
+        self.clock.now = 0.1
+        self.monitor.output_token("d0", "a")
+        self.monitor.output_token("d0", "b")
+        self.clock.now = 0.2
+        self.monitor.output_token("d0", "a")
+        self.monitor.output_ended("a")
+        self.clock.now = 1.2
+        # b's stream is open and silent past any TPOT target; a's stream has ended.
+        self.assertAlmostEqual(self.monitor.stalled_gap("d0"), 1.1)
+        self.assertAlmostEqual(self.monitor.ended_gap("d0"), 1.0)
+        self.monitor.finished("d0", "b")
+        self.assertEqual(self.monitor.stalled_gap("d0"), 0.0)
+        # A retried decode leg reopens the stream.
+        self.monitor.dispatched("d0", request)
+        self.assertAlmostEqual(self.monitor.stalled_gap("d0"), 1.0)
+        self.assertEqual(self.monitor.ended_gap("d0"), 0.0)
+        self.monitor.finished("d0", "a")
+        self.assertEqual((self.monitor.stalled_gap("d0"), self.monitor.ended_gap("d0")), (0.0, 0.0))
+
+    def test_decode_load_follows_open_streams_and_skips_ended_ones(self):
+        slo = SLO(ttft_s=2.0, tpot_s=0.05)
+        self.decode("a", 1000)
+        self.clock.now = 0.1
+        self.monitor.output_token("d0", "a")
+        self.clock.now = 0.11
+        self.monitor.output_token("d0", "a")
+        self.monitor.roll_interval()
+        inst = self.monitor.instances["d0"]
+
+        def load():
+            return decode_load(inst, monitor=self.monitor, profiles=self.store, slo=slo)
+
+        self.clock.now = 0.5
+        self.assertGreater(load(), 1.0)
+        self.monitor.output_ended("a")
+        self.assertLess(load(), 1.0)
 
     def test_handoff_delay_is_the_first_decode_gap_of_the_latest_interval(self):
         self.decode("a", 1000)
