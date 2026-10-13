@@ -313,10 +313,8 @@ class ReactivePolicy:
             and max(current.ttft_ratio, short_current.ttft_ratio) > th.shrink
             and (evidence.blocked_gate != "risk" or evidence.risk_kind == "p_to_d_recovery")
         )
-        # Projected prefill load above expand is a surge: a move back to prefill may take decode
-        # capacity while the decode pool stays at or below expand, and may reverse an open
-        # departure toward decode. A departure toward prefill keeps pacing its own walk. The
-        # movement margin applies.
+        # Projected prefill load above expand is a surge. A surge move to prefill may take a decode
+        # engine while decode load stays at or below expand, and may reverse a departure to decode.
         prefill_surge = (
             prefill_relief
             and max(current.ttft_ratio, short_current.ttft_ratio) > th.expand
@@ -550,8 +548,8 @@ class ReactivePolicy:
             if direction > 0
             else max(current.tpot_ratio, current.decode_queue_ratio)
         )
-        # Relaxing shrink requires repeated pressure, even with complete demand, and so does a
-        # surge move from a source above shrink. The settled run confirms a departure.
+        # A move from a source above shrink requires repeated pressure, even with complete demand.
+        # The settled run confirms a departure.
         confirmations = (
             1
             if urgent_ready
@@ -599,8 +597,7 @@ class ReactivePolicy:
             elif candidate_p in held_reverse or (
                 departure.moved and direction == departure.heading
             ):
-                # A window move along the heading ends the reverse hold, and a surge move that
-                # reverses the departure ends it.
+                # A window move along the heading or a surge move against it closes the departure.
                 self.departure = None
         if moved is not None and target is Role.DECODE:
             # A move to decode re-arms the consolidation evidence window.

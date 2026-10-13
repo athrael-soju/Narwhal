@@ -451,8 +451,7 @@ class SurgeTests(unittest.TestCase):
 class AlternationTests(unittest.TestCase):
     """Demand that alternates within one window keeps window pricing.
 
-    Above capacity, a prefill surge may take a decode engine back, so the split can follow the
-    alternation; every move back toward prefill that leaves decode above shrink is a surge move.
+    Above capacity, every move back to prefill that leaves decode above shrink is a surge move.
     """
 
     def test_alternation_above_the_calibrated_load_opens_no_departure(self):
