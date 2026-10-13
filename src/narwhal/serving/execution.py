@@ -16,6 +16,7 @@ from ..engines.handoff import HandoffLegs, PrefillLeg
 from ..engines.stream import (
     SseEvent,
     rewrite_sse,
+    sse_finished,
     sse_token_bearing,
     sse_token_count,
     sse_token_ids,
@@ -168,7 +169,7 @@ async def _place(
         finally:
             state.waited("prefill" if prefill else "decode", router._clock() - began)
     exclude = set(failed)
-    if not prefill and router.engines.kv.concurrent:
+    if not prefill:
         exclude |= _seated_decode_engines(router, req, exclude)
     try:
         inst = router.scheduler.schedule(req, exclude=exclude)
@@ -181,14 +182,15 @@ async def _place(
 
 
 def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set[str]) -> set[str]:
-    """A concurrent producer holds its prefill until the consumer admits the decode leg, so a leg
-    placed on a full engine waits on both engines. The leg skips full engines while one has a
-    free seat, and otherwise goes to the engine whose seat is projected to free first.
+    """Return the decode engines that a decode leg skips.
+
+    While an engine has a free seat, the leg skips the full engines. When every engine is full, it
+    skips all but the engine whose seat the profiles project to free first.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
     seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}
     full = {inst.iid for inst in pool if seats[inst.iid] and len(inst.decode) >= seats[inst.iid]}
-    if len(full) < len(pool):
+    if len(full) < len(pool) or not pool:
         return full
     occupancy = decode_occupancy(
         router.scheduler,
@@ -548,6 +550,7 @@ async def _decode_attempt(
             try:
                 batch = await state.wait(lambda: anext(upstream))
             except StopAsyncIteration:
+                router.monitor.output_ended(state.rid)
                 break
             frames: list[str] = []
             events: list[SseEvent] = []
@@ -570,6 +573,8 @@ async def _decode_attempt(
                         state.last_at = now
                     for _ in range(n):
                         router.monitor.output_token(prepared.decode.iid, state.rid)
+                    if sse_finished(event):
+                        router.monitor.output_ended(state.rid)
                     state.tokens += n
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n

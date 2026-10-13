@@ -162,6 +162,17 @@ def sse_token_ids(event: SseEvent) -> tuple[int, ...] | None:
         return None
 
 
+def sse_finished(event: SseEvent) -> bool:
+    """Return whether the event carries a choice's finish reason."""
+    obj = event.data
+    if obj is None:
+        return False
+    choices = obj.get("choices")
+    return isinstance(choices, list) and any(
+        isinstance(choice, dict) and choice.get("finish_reason") is not None for choice in choices
+    )
+
+
 def sse_token_bearing(event: SseEvent, dialect: EngineDialect, endpoint: str | None = None) -> bool:
     if dialect.token_ids if endpoint is None else dialect.streams_token_ids(endpoint):
         ids = sse_token_ids(event)

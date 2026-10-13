@@ -155,15 +155,22 @@ class SteadyDemandTests(unittest.TestCase):
     def test_shifting_demand_restarts_the_steady_span(self) -> None:
         fleet = self.fleet
         self.run_steps(8)
+        shifted = []
         for _ in range(15):
             fleet.controller.saw_arrival(4000, wanted_len=10, at=fleet.now)
             fleet.now += 1.0
             fleet.controller.step()
-        self.assertIsNone(fleet.scheduler.roles._last_decision["steady_demand_s"])
+            shifted.append(dict(fleet.scheduler.roles._last_decision))
+        self.assertIsNone(shifted[-1]["steady_demand_s"])
 
         rows = self.run_steps(10)
 
-        self.assertEqual(fleet.scheduler.roles.flips, [])
+        self.assertEqual([flip.to for flip in fleet.scheduler.roles.flips], [Role.PREFILL])
+        applied = [row for row in shifted if row["result"] == "applied"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["eligibility_rule"], "source_shrink")
+        self.assertGreater(applied[0]["projected_tpot_ratio"], fleet.scheduler.th.shrink)
+        self.assertEqual(applied[0]["required_confirmations"], 3)
         self.assertTrue(all(row["eligibility_rule"] == "source_shrink" for row in rows))
         ControllerDecisionOut.model_validate(rows[-1])
 
@@ -330,7 +337,8 @@ class DecodeWaitTests(unittest.TestCase):
         row = applied[0]
         th = sim.scheduler.th
         self.assertEqual((row["current_prefill"], row["prefill"]), (6, 7))
-        self.assertEqual(row["eligibility_rule"], "steady_demand")
+        self.assertEqual(row["eligibility_rule"], "source_shrink")
+        self.assertEqual(row["confirmations"], 3)
         self.assertLessEqual(row["projected_decode_wait_ratio"], th.expand)
         self.assertGreater(row["projected_tpot_ratio"], th.shrink)
         self.assertLessEqual(row["projected_tpot_ratio"], th.expand)

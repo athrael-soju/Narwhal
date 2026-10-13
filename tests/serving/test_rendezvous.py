@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from narwhal.serving import execution
 from narwhal.types import Phase, Request, Role
-from tests.fixtures import role_scheduler
+from tests.fixtures import fleet, role_scheduler
 from tests.serving.test_http_accounting import HttpHarness
 from tests.wire import FakeRendezvous, RendezvousLegs, engine_transports
 
@@ -50,6 +50,41 @@ class RendezvousServingTests(HttpHarness):
         self.assert_released()
 
 
+class DescriptorSeatedDecodeTests(HttpHarness):
+    """With the queue off, a descriptor-handoff decode leg follows free decode seats."""
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = fleet(self.root, engines=("e0", "e3", "e4", "e5"))
+        self.cfg.tokenize = False
+        self.cfg.admission = "open"
+
+    def fill(self, iid, rid, left, input_len=128):
+        request = Request(rid, input_len, phase=Phase.DECODE, output_len=8, wanted_len=8 + left)
+        self.router.monitor.instances[iid].decode[rid] = request
+
+    async def decode_engine(self, client, limits):
+        self.router.sequence_limits = limits
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 200, response.text)
+        return self.terminal_rows()[-1]["decode_iid"]
+
+    async def test_a_decode_leg_skips_a_cheaper_full_engine_while_one_has_a_free_seat(self):
+        client = self.client()
+        self.fill("e3", "small", 100)
+        for iid in ("e4", "e5"):
+            for n in range(3):
+                self.fill(iid, f"{iid}-{n}", 100, input_len=8000)
+        self.assertEqual(await self.decode_engine(client, {"e3": 1, "e4": 8, "e5": 8}), "e4")
+
+    async def test_with_every_seat_taken_the_leg_goes_where_a_seat_frees_first(self):
+        client = self.client()
+        self.fill("e3", "late", 400)
+        self.fill("e4", "first", 5, input_len=8000)
+        self.fill("e5", "later", 300)
+        self.assertEqual(await self.decode_engine(client, {"e3": 1, "e4": 1, "e5": 1}), "e4")
+
+
 class SeatedDecodeTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -81,6 +116,8 @@ class SeatedDecodeTests(unittest.TestCase):
         self.resident("d2", "r3", 100)
         self.assertEqual(self.skipped(), {"d1"})
         self.assertEqual(self.skipped({"d1"}), set())
+        # Placement falls back to other roles when every decode engine is excluded.
+        self.assertEqual(self.skipped({"d1", "d2"}), set())
 
     def test_with_every_seat_taken_the_leg_goes_where_a_seat_frees_first(self):
         self.resident("d1", "r1", 400)

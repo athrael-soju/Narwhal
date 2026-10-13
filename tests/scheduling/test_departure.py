@@ -361,7 +361,7 @@ class SustainedShiftTests(unittest.TestCase):
 
 
 class PostMoveHoldTests(unittest.TestCase):
-    """A departure toward decode restarts the evidence hold on decode consolidation."""
+    """A departure toward decode re-arms the evidence window that prefill pressure can bypass."""
 
     def test_evidence_hold_outlasts_the_departure_hold(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -380,27 +380,85 @@ class PostMoveHoldTests(unittest.TestCase):
             self.assertGreater(row["objective_delta"], sim.controller.movement_margin)
             ControllerDecisionOut.model_validate({k: v for k, v in row.items() if k != "event"})
 
-            # A departure one window old holds no reverse move.
+            # A departure one window old holds no reverse move, and projected prefill pressure
+            # above shrink moves back toward prefill inside the re-armed evidence window.
             sim.controller.reactive.departure = Departure(
                 -1, sim.now - sim.controller.window_s, moved=True
             )
             sim.run(50, PREFILL_HEAVY)
-            row = sim.decisions[-1]
-            self.assertIsNone(sim.controller.reactive.departure)
-            self.assertEqual(row["evidence_blocked_gate"], "risk")
-            self.assertTrue(row["reason"].startswith("p to d recovery"))
-            self.assertEqual(len(sim.scheduler.roles.flips), 1)
-
-            sim.run(30, PREFILL_HEAVY)
             sim.close()
+        self.assertIsNone(sim.controller.reactive.departure)
         move = [d for d in sim.decisions if d["result"] == "applied"][-1]
         self.assertEqual((move["current_prefill"], move["prefill"]), (6, 7))
-        self.assertEqual(move["evidence_blocked_gate"], "none")
-        self.assertGreaterEqual(move["risk_age_s"], sim.controller.safety.evidence_span_s)
+        self.assertEqual(move["evidence_blocked_gate"], "risk")
+        self.assertEqual(move["risk_kind"], "p_to_d_recovery")
+        self.assertLess(move["risk_age_s"], sim.controller.safety.evidence_span_s)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+
+def decode_ratio(decision: dict) -> float:
+    return max(
+        decision["projected_tpot_ratio"], decision.get("projected_decode_queue_ratio") or 0.0
+    )
+
+
+def surge_move(decision: dict, th) -> bool:
+    """An applied source_shrink move to prefill whose decode source is above shrink."""
+    return (
+        decision["result"] == "applied"
+        and decision["prefill"] > decision["current_prefill"]
+        and decision["eligibility_rule"] == "source_shrink"
+        and decode_ratio(decision) > th.shrink
+    )
+
+
+class SurgeTests(unittest.TestCase):
+    """A prefill surge takes a decode engine above shrink and reverses a departure to decode."""
+
+    def test_a_burst_after_a_quiet_phase_moves_back_toward_prefill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=2)
+            sim.run(180, (DECODE_HEAVY[0], DECODE_HEAVY[1], DECODE_HEAVY[2] * 0.3))
+            burst = sim.now
+            sim.run(180, (DECODE_LEANING[0], DECODE_LEANING[1], DECODE_LEANING[2] * 2.5))
+            sim.close()
+        th = sim.scheduler.th
+        surges = [d for d in sim.decisions if d["at"] > burst and surge_move(d, th)]
+        self.assertTrue(surges)
+        move = surges[0]
+        self.assertEqual(move["prefill"], move["current_prefill"] + 1)
+        self.assertNotIn("departure_age_s", move)
+        self.assertTrue(move["source_pressure_safe"])
+        self.assertLessEqual(decode_ratio(move), th.expand)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+    def test_a_surge_reverses_and_closes_a_departure_toward_decode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=2)
+            sim.run(180, (DECODE_HEAVY[0], DECODE_HEAVY[1], DECODE_HEAVY[2] * 0.3))
+            burst = sim.now
+            sim.controller.reactive.departure = Departure(-1, burst, moved=True)
+            sim.run(100, (DECODE_LEANING[0], DECODE_LEANING[1], DECODE_LEANING[2] * 2.5))
+            sim.close()
+        th = sim.scheduler.th
+        after = [d for d in sim.decisions if d["at"] > burst]
+        applied = [d for d in after if d["result"] == "applied"]
+        self.assertTrue(applied)
+        move = applied[0]
+        self.assertEqual((move["current_prefill"], move["prefill"]), (2, 3))
+        self.assertTrue(surge_move(move, th))
+        self.assertLess(move["departure_age_s"], sim.controller.window_s)
+        self.assertLessEqual(decode_ratio(move), th.expand)
+        self.assertEqual(move["required_confirmations"], 3)
+        self.assertNotIn("departure_age_s", after[after.index(move) + 1])
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
 
 class AlternationTests(unittest.TestCase):
-    """Demand that alternates within one window keeps window pricing."""
+    """Demand that alternates within one window keeps window pricing.
+
+    Above capacity, every move back to prefill that leaves decode above shrink is a surge move.
+    """
 
     def test_alternation_above_the_calibrated_load_opens_no_departure(self):
         for period, intensity in ((60, 1.1), (60, 1.3), (90, 1.1), (90, 1.3)):
@@ -414,7 +472,12 @@ class AlternationTests(unittest.TestCase):
                 rules = {d.get("eligibility_rule") for d in sim.decisions}
                 self.assertFalse(rules & {"settled_departure", "steady_demand"})
                 self.assertFalse([d for d in sim.decisions if "departure_age_s" in d])
-                self.assertEqual(sim.scheduler.roles.control_snapshot()["flip_reversals"], 0)
+                reversals = sim.scheduler.roles.control_snapshot()["flip_reversals"]
+                th = sim.scheduler.th
+                surges = [d for d in sim.decisions if surge_move(d, th)]
+                self.assertTrue(reversals == 0 or surges)
+                for move in surges:
+                    self.assertLessEqual(decode_ratio(move), th.expand)
 
 
 class ShortViewTests(unittest.TestCase):
