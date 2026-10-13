@@ -67,6 +67,7 @@ SETTINGS = LaunchSettings(
     model_flag="--model-path",
     tensor_parallel_flag="--tp-size",
     kv_events_flag="--kv-events-config",
+    remote_code_flag="--trust-remote-code",
     kv_events_fields={},
     settings={
         "block_size": Setting(flag="--page-size", fixed=PAGE_SIZE),

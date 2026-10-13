@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from . import attestation, dev, discovery
 from . import check as runtime_check
 from . import plan as policy
@@ -29,6 +30,9 @@ class SglangLauncher(EngineLauncher):
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
     launch_settings = policy.SETTINGS
+    check_summary = "Runtime identity, package pins and server arguments passed."
+    prefix_cache_name = "The radix cache"
+    version_label = "SGLang"
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
@@ -83,8 +87,11 @@ class SglangLauncher(EngineLauncher):
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)
 
-    def check(self, run: Path, plan: dict) -> None:
-        runtime_check.check(run, plan)
+    def runtime_probe(self, context: CheckContext) -> list[str]:
+        return runtime_check.probe(context)
+
+    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
+        return runtime_check.result(context, output)
 
     def measure_cache(self, run: Path, plan: dict) -> None:
         raise _no_step("cache sizing")

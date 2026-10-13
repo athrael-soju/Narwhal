@@ -172,8 +172,9 @@ For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buff
 
 `narwhal-engine check` runs these checks before model startup:
 
-- `--trust-remote-code` against the mounted checkpoint's metadata
+- `--trust-remote-code` against the checkpoint's metadata, and against a separate tokenizer's metadata in the image or on the native host
 - image identity, for the container backend
+- the model path and model file hash, for the native backend
 - exact distribution versions
 - the cache-event endpoints that the serving arguments resolve to
 - on vLLM, KV connector configuration and import, checkpoint tokenizer construction, the convolutional-state layout of the pinned image for SSM models, and resolution of the serving arguments into vLLM's engine configuration

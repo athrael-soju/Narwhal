@@ -27,6 +27,22 @@ def serve(args: list[str]) -> None:
     os.execv(command[0], command)
 
 
+def ships_code(directory: Path) -> bool:
+    # A checkpoint's auto_map names classes that it ships as code.
+    def has_auto_map(value: object) -> bool:
+        if isinstance(value, dict):
+            return bool(value.get("auto_map")) or any(has_auto_map(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_auto_map(item) for item in value)
+        return False
+
+    for name in ("config.json", "tokenizer_config.json"):
+        path = directory / name
+        if path.is_file() and has_auto_map(json.loads(path.read_text())):
+            return True
+    return False
+
+
 def settings(expected: dict[str, str], args: list[str]) -> dict:
     import importlib.metadata as metadata
 
@@ -39,6 +55,15 @@ def settings(expected: dict[str, str], args: list[str]) -> dict:
     parser = argparse.ArgumentParser()
     ServerArgs.add_cli_args(parser)
     parsed = parser.parse_args([*args, "--disaggregation-bootstrap-port", "1"])
+    # The launcher checks the model's metadata; a separate tokenizer resolves here.
+    tokenizer = parsed.tokenizer_path
+    if (
+        tokenizer
+        and tokenizer != parsed.model_path
+        and not parsed.trust_remote_code
+        and ships_code(Path(tokenizer))
+    ):
+        raise ValueError("Tokenizer metadata requires --trust-remote-code in the launch record")
     events = json.loads(parsed.kv_events_config) if parsed.kv_events_config else None
     return {
         "sglang_version": sglang.__version__,

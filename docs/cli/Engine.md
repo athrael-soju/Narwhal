@@ -52,7 +52,7 @@ These actions check their inputs:
 | Action | Checks |
 | --- | --- |
 | `prepare` | Model configuration hash and cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
-| `check` | Image identity for `container`, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model needs remote code, and the cache-event endpoints the server arguments resolve to. On vLLM, also the KV connector class, the tokenizer, the native model file hash, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. |
+| `check` | Image identity for `container`, the model path and model file hash for `native`, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer needs remote code, and the cache-event endpoints the server arguments resolve to. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |
 
