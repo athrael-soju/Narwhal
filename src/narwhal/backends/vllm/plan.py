@@ -69,6 +69,7 @@ SETTINGS = LaunchSettings(
     model_flag="--model",
     tensor_parallel_flag="--tensor-parallel-size",
     kv_events_flag="--kv-events-config",
+    remote_code_flag="--trust-remote-code",
     kv_events_fields={"enable_kv_cache_events": True},
     settings={
         "block_size": Setting(flag="--block-size", required=True),

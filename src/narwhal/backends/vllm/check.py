@@ -4,54 +4,20 @@ import inspect
 import json
 from pathlib import Path
 
-from ...deployment.launch_engine.check import (
-    inspect_image,
-    run_native_check,
-    start_check,
-    write_checked,
-)
-from ...deployment.launch_engine.docker import docker
+from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from ...deployment.launch_engine.plan import (
-    container_options,
-    env_file_name,
     model_conv_state_layers,
-    read_env,
     releases_peers,
     requires_remote_code,
 )
-from ...deployment.launch_engine.runtime import digest
 from .runtime import engine_arguments
 
 
-def check(run: Path, plan: dict) -> None:
-    native = plan.get("backend") == "native"
-    log = start_check(run, plan)
-    default_tokenizer = plan["model_dir"] if native else "/model"
-    tokenizer_path = default_tokenizer
-    for index, argument in enumerate(plan["args"]):
-        if argument == "--tokenizer":
-            tokenizer_path = plan["args"][index + 1]
-    trust_remote_code = "--trust-remote-code" in plan["args"]
-    if (
-        requires_remote_code(
-            Path(plan["model_dir"]), include_tokenizer=tokenizer_path == default_tokenizer
-        )
-        and not trust_remote_code
-    ):
-        raise ValueError("Model metadata requires --trust-remote-code in the launch record")
-    environment = read_env(run / env_file_name(plan))
+def probe(context: CheckContext) -> list[str]:
+    plan = context.plan
     ds_required = model_conv_state_layers(Path(plan["model_dir"]))
-    if ds_required and environment.get("VLLM_SSM_CONV_STATE_LAYOUT") != "DS":
+    if ds_required and context.environment.get("VLLM_SSM_CONV_STATE_LAYOUT") != "DS":
         raise ValueError("Convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
-    if native:
-        model_path = Path(plan["model_path"])
-        if not model_path.exists():
-            raise ValueError(f"native model path is missing: {model_path}")
-        if plan.get("model_sha256") and digest(model_path) != plan["model_sha256"]:
-            raise ValueError("native model file changed after launch preparation")
-        inspection = None
-    else:
-        inspection = inspect_image(run, plan, log)
     # Tokenizer metadata resolves in the serving namespace, including image-local paths.
     script = (
         "from pathlib import Path\n"
@@ -118,87 +84,58 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
 }))
 """
     )
-    arguments = [
+    return [
         "-c",
         script,
         json.dumps(plan["expected_packages"]),
         json.dumps(plan["connector"]),
-        json.dumps(trust_remote_code),
+        json.dumps(context.trust_remote_code),
         json.dumps(ds_required),
-        tokenizer_path,
+        context.tokenizer,
         json.dumps(engine_arguments(plan)),
     ]
-    if native:
-        output = run_native_check(run, plan, log, arguments, environment)
-    else:
-        output = docker(
-            [
-                "run",
-                "--rm",
-                *container_options(plan),
-                "--entrypoint",
-                "python3",
-                plan["image"],
-                *arguments,
-            ],
-            run,
-            "image-check.log",
-        )
+
+
+def result(context: CheckContext, output: str) -> ProbeResult:
+    plan = context.plan
     prefix = "NARWHAL_IMAGE_RUNTIME="
     records = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
     ]
     if len(records) != 1:
-        raise ValueError(f"runtime check requires one runtime version record; inspect {run / log}")
+        raise context.failure("runtime check requires one runtime version record")
     if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
-        raise ValueError(f"runtime check requires one tokenizer confirmation; inspect {run / log}")
-    api_version = records[0].get("vllm_api_version")
-    if not isinstance(api_version, str) or not api_version.strip():
-        raise ValueError(f"runtime check returned an invalid API version; inspect {run / log}")
+        raise context.failure("runtime check requires one tokenizer confirmation")
     ucx = records[0].get("ucx_version")
     if ucx is not None and not isinstance(ucx, str):
-        raise ValueError(f"runtime check returned an invalid UCX version; inspect {run / log}")
+        raise context.failure("runtime check returned an invalid UCX version")
     prefix = "NARWHAL_CACHE_SETTINGS="
     settings = [
         json.loads(line[len(prefix) :]) for line in output.splitlines() if line.startswith(prefix)
     ]
-    if len(settings) != 1 or type(settings[0].get("prefix_caching")) is not bool:
-        raise ValueError(f"runtime check requires one resolved cache setting; inspect {run / log}")
-    planned = plan.get("kv_events")
-    expected = (
-        None if planned is None else {key: planned[key] for key in ("endpoint", "replay_endpoint")}
-    )
-    if settings[0].get("kv_events") != expected:
-        raise ValueError(
-            f"runtime cache-event endpoints differ from the launch plan; inspect {run / log}"
-        )
-    ipc_cache = environment.get("UCX_CUDA_IPC_CACHE")
+    if len(settings) != 1:
+        raise context.failure("runtime check requires one resolved cache setting")
+    ipc_cache = context.environment.get("UCX_CUDA_IPC_CACHE")
     ipc_peers = plan.get(
         "cuda_ipc_peers", "engine_ttl" in plan["connector"]["kv_connector_extra_config"]
     )
-    evidence = {
-        "vllm_api_version": api_version,
-        "prefix_caching": settings[0]["prefix_caching"],
-        "kv_events": settings[0]["kv_events"],
-        "ucx_version": ucx,
-        "peer_release": not ipc_peers or releases_peers(ucx, ipc_cache),
-    }
-    write_checked(run, plan, evidence, inspection)
-    print("Runtime identity, package pins, connector import and tokenizer passed.")
-    if ipc_peers and evidence["peer_release"]:
-        print(
+    peer_release = not ipc_peers or releases_peers(ucx, ipc_cache)
+    notes = []
+    if ipc_peers and peer_release:
+        notes.append(
             "UCX_CUDA_IPC_CACHE is off: peers release a stopped engine's GPU memory, and "
             "transfers from a restarted or idle-evicted producer map its KV memory per transfer."
         )
-    if not evidence["peer_release"]:
-        print(
+    if not peer_release:
+        notes.append(
             f"UCX {ucx or 'version unknown'} with UCX_CUDA_IPC_CACHE={ipc_cache or 'y'} keeps "
             "a stopped CUDA IPC peer's GPU memory mapped; recover a crashed engine with a "
             "whole-wave restart."
         )
-    if not evidence["prefix_caching"]:
-        print("Prefix caching is off; the engine publishes no cache events.")
-    elif planned is None or evidence["kv_events"] is None:
-        print("Prefix caching is on; cache-event publication is disabled.")
-    else:
-        print(f"Prefix caching is on; cache events publish under {planned['socket_dir']}.")
+    return ProbeResult(
+        version=records[0].get("vllm_api_version"),
+        prefix_caching=settings[0].get("prefix_caching"),
+        kv_events=settings[0].get("kv_events"),
+        fields={"ucx_version": ucx, "peer_release": peer_release},
+        notes=tuple(notes),
+    )

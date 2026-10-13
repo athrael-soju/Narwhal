@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from .check import CheckContext, ProbeResult
     from .settings import LaunchSettings
 
 
@@ -31,6 +32,11 @@ class EngineLauncher(ABC):
     managed_environment: ClassVar[frozenset[str]]
     # How the backend applies each engine-neutral launch setting.
     launch_settings: ClassVar[LaunchSettings]
+    # The runtime check prints the summary once the probe passes, names the engine's prefix
+    # cache in its cache line and names the version it reads in its version error.
+    check_summary: ClassVar[str]
+    prefix_cache_name: ClassVar[str]
+    version_label: ClassVar[str]
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...
@@ -74,7 +80,12 @@ class EngineLauncher(ABC):
     def memory_fraction(self, args: list[str]) -> str | None: ...
 
     @abstractmethod
-    def check(self, run: Path, plan: dict) -> None: ...
+    def runtime_probe(self, context: CheckContext) -> list[str]:
+        """Return the interpreter arguments of the in-image probe; raise for a failed input."""
+
+    @abstractmethod
+    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
+        """Read the probe output and apply the engine-specific assertions."""
 
     @abstractmethod
     def measure_cache(self, run: Path, plan: dict) -> None: ...

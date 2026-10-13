@@ -16,9 +16,10 @@ import msgpack
 from starlette.requests import Request as HTTPRequest
 
 from narwhal.backends import load
-from narwhal.backends.sglang import attestation, check, discovery, plan, runtime
+from narwhal.backends.sglang import attestation, discovery, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.backends.sglang.role_switch import SglangRoleSwitch
+from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.attestation import fetch_engine_identity
@@ -567,6 +568,7 @@ class RuntimeCheckTests(unittest.TestCase):
         (model / "config.json").write_text("{}")
         sockets = root / "events" / "engine"
         launch = {
+            "engine": "sglang",
             "backend": backend,
             "expected_packages": PINS,
             "args": ["-m", "launch_engine", "serve", "--model-path", str(model)],
@@ -578,7 +580,7 @@ class RuntimeCheckTests(unittest.TestCase):
             },
         }
         if backend == "native":
-            launch["python_executable"] = "/opt/sglang/bin/python"
+            launch.update(python_executable="/opt/sglang/bin/python", model_path=str(model))
         else:
             launch.update(image=IMAGE, common=["--network", "host"])
         run = root / "launch"
@@ -613,7 +615,7 @@ class RuntimeCheckTests(unittest.TestCase):
             patch("narwhal.deployment.stages.run", side_effect=stage),
             contextlib.redirect_stdout(io.StringIO()) as printed,
         ):
-            check.check(run, launch)
+            check(run, launch)
         return printed.getvalue()
 
     def test_a_native_check_runs_the_hook_and_records_the_interpreter(self):

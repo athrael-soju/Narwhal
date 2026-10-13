@@ -42,6 +42,8 @@ class LaunchSettings:
     model_flag: str
     tensor_parallel_flag: str
     kv_events_flag: str
+    # The flag that lets the engine run model or tokenizer code shipped with the checkpoint.
+    remote_code_flag: str
     # Fields an enabled cache-event configuration holds before its publisher and endpoints.
     kv_events_fields: Mapping[str, object]
     settings: Mapping[str, Setting] = field(default_factory=dict)

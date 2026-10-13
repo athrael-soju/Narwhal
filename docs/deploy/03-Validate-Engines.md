@@ -226,9 +226,9 @@ The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-l
 
 A failed check names the failing package, tokenizer, or identity check.
 
-The vLLM check loads the final `--tokenizer` value in the serving arguments, or the model directory by default.
+The check reads the tokenizer from the final tokenizer flag in the serving arguments, `--tokenizer` on vLLM or `--tokenizer-path` on SGLang, or from the model directory by default. It checks a separate tokenizer's custom-code metadata, and the vLLM check also loads the tokenizer.
 
-For a container engine, the check logs to `image-check.log`, and the vLLM check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the vLLM check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
+For a container engine, the check logs to `image-check.log`, and the check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
 When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
 

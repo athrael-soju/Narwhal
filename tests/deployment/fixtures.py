@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 
 from narwhal.backends import load as load_backend
 from narwhal.backends.vllm import captures as launch_captures
-from narwhal.backends.vllm import check as vllm_check
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import check as launch_check
 from narwhal.deployment.launch_engine import docker as launch_docker
@@ -23,7 +22,7 @@ from narwhal.deployment.launch_engine.runtime import digest
 
 VLLM_HOOK = load_backend("vllm").launcher().cache_hook
 # Launcher modules whose functions call `docker`.
-DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start, vllm_check)
+DOCKER_CALLERS = (launch_captures, launch_check, launch_docker, launch_start)
 
 
 @contextlib.contextmanager
