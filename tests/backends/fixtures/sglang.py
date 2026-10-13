@@ -4,8 +4,8 @@ from pathlib import Path
 
 import msgpack
 
-from narwhal.backends.sglang import attestation
 from narwhal.backends.sglang.runtime import SETTINGS_TAG
+from narwhal.deployment.attestation_contract.evidence import config_model_dimensions
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.kv_events import CacheCleared, RemovedBlocks, StoredBlocks
 from tests.backends.contract import ContractFixtures
@@ -42,7 +42,7 @@ def check_output(plan: dict) -> str:
 
 
 def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
-    attestation.model_dimensions(run, plan)
+    config_model_dimensions(run, plan)
     server = {
         "version": "0.5.21",
         "dtype": "bfloat16",

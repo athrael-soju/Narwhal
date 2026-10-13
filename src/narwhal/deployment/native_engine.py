@@ -18,7 +18,7 @@ from narwhal.engines.host_process import process_clock
 from narwhal.runtime.listeners import check_http_bind
 
 from . import stages
-from .launch_engine.backend import engine_backend, plan_launcher
+from .launch_engine.backend import cache_capture, engine_backend, plan_launcher
 from .launch_engine.plan import (
     kv_events_directory,
     launch_headers,
@@ -119,7 +119,9 @@ def _checked_plan(run: Path, plan: dict) -> dict:
     model = Path(plan["model_path"])
     if not model.exists() or (plan.get("model_sha256") and digest(model) != plan["model_sha256"]):
         raise ValueError("model file changed after launch preparation")
-    if digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]:
+    if cache_capture(plan_launcher(plan)) is not None and (
+        digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]
+    ):
         raise ValueError("cache capture hook changed after launch preparation")
     if digest(run / "hook/launch_engine.py") != plan["launcher_sha256"]:
         raise ValueError("cache capture launcher changed after launch preparation")
@@ -129,14 +131,15 @@ def _checked_plan(run: Path, plan: dict) -> dict:
 
 
 def _environment(run: Path, plan: dict) -> dict[str, str]:
-    return {
-        **os.environ,
-        plan_launcher(plan).api_key_env: "",
-        **read_env(run / "engine.env"),
-        "NARWHAL_CAPTURE_CACHE": "1",
-        "NARWHAL_CACHE_PLAN": str(run / "hook/launch.json"),
-        "NARWHAL_CACHE_OUTPUT": str(run / "cache-layout.json"),
-    }
+    engine = plan_launcher(plan)
+    environment = {**os.environ, engine.api_key_env: "", **read_env(run / "engine.env")}
+    if cache_capture(engine) is not None:
+        environment.update(
+            NARWHAL_CAPTURE_CACHE="1",
+            NARWHAL_CACHE_PLAN=str(run / "hook/launch.json"),
+            NARWHAL_CACHE_OUTPUT=str(run / "cache-layout.json"),
+        )
+    return environment
 
 
 def _ports_free(selected: list[tuple[Path, dict]]) -> None:

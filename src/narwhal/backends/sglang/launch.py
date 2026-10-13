@@ -13,13 +13,8 @@ from .runtime import API_KEY_ENV, BOOTSTRAP_PORT_ENV, LAUNCHER
 BOOTSTRAP_HOST_ENV = "NARWHAL_SGLANG_BOOTSTRAP_HOST"
 
 
-def _no_step(step: str) -> ValueError:
-    return ValueError(f"SGLang engines report their KV cache over HTTP and need no {step} step")
-
-
 class SglangLauncher(EngineLauncher):
     runtime_script = LAUNCHER
-    cache_hook = Path(__file__).with_name("cache_capture_hook.py")
     side_channel = "bootstrap"
     side_channel_port_env = "NARWHAL_SGLANG_BOOTSTRAP_PORT"
     api_key_env = API_KEY_ENV
@@ -62,10 +57,6 @@ class SglangLauncher(EngineLauncher):
     def side_channel_address(self, env: Mapping[str, str]) -> tuple[str, int]:
         return env[BOOTSTRAP_HOST_ENV], int(env[BOOTSTRAP_PORT_ENV])
 
-    def check_model(self, runtime: dict, model: str) -> None:
-        if model.endswith(".gguf"):
-            raise ValueError("SGLang launches take a model directory, not a GGUF file")
-
     def publishes_kv_events(self, extra_args: list[str]) -> bool:
         return policy.publishes_kv_events(extra_args)
 
@@ -93,26 +84,8 @@ class SglangLauncher(EngineLauncher):
     def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
         return runtime_check.result(context, output)
 
-    def measure_cache(self, run: Path, plan: dict) -> None:
-        raise _no_step("cache sizing")
-
-    def capture_cache(self, run: Path, plan: dict) -> None:
-        raise _no_step("cache capture")
-
-    def model_dimensions(self, run: Path, plan: dict) -> None:
-        attestation.capture_model_dimensions(run)
-
-    def handshake_policy(self, run: Path, plan: dict) -> None:
-        raise ValueError("SGLang has no handshake compatibility policy to inspect")
-
-    def registration_layout(self, run: Path, plan: dict, source: Path, from_runtime: bool) -> None:
-        raise _no_step("cache registration")
-
     def capture_connector(self, run: Path) -> Path:
         return attestation.capture_server(run)
-
-    def capture_model_dimensions(self, run: Path) -> Path:
-        return attestation.capture_model_dimensions(run)
 
     def capture_native(self, run: Path) -> Path:
         return attestation.capture_native(run)

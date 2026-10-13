@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.launch_engine.backend import (
+    CacheCapture,
+    EngineLauncher,
+    LiveModelDimensions,
+    ModelFormats,
+)
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from . import attestation, captures, dev, discovery
 from . import check as runtime_check
@@ -11,7 +16,7 @@ from . import plan as policy
 from .runtime import LAUNCHER
 
 
-class VllmLauncher(EngineLauncher):
+class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelFormats):
     runtime_script = LAUNCHER
     cache_hook = Path(__file__).with_name("cache_capture_hook.py")
     side_channel = "NIXL"

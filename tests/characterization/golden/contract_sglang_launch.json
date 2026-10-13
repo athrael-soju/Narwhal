@@ -16,8 +16,7 @@
       ],
       "hook_files": [
         "launch.json",
-        "launch_engine.py",
-        "sitecustomize.py"
+        "launch_engine.py"
       ],
       "plan": {
         "args": [
@@ -60,8 +59,6 @@
           "4096"
         ],
         "attestation_port": 8010,
-        "cache_capture_code_sha256": "<sha256>",
-        "cache_capture_sha256": "<sha256>",
         "common": [
           "--network",
           "host",
@@ -157,12 +154,6 @@
             "/dev/nvidia1",
             "--gpus",
             "all",
-            "--env",
-            "NARWHAL_CAPTURE_CACHE=1",
-            "--env",
-            "NARWHAL_CACHE_PLAN=/narwhal-hooks/launch.json",
-            "--env",
-            "NARWHAL_CACHE_OUTPUT=/tmp/narwhal-cache-layout.json",
             "--entrypoint",
             "python3",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -237,8 +228,7 @@
       ],
       "hook_files": [
         "launch.json",
-        "launch_engine.py",
-        "sitecustomize.py"
+        "launch_engine.py"
       ],
       "plan": {
         "args": [
@@ -285,8 +275,6 @@
         "attestation_port": 8010,
         "attestation_url": "http://192.0.2.11:8010/v1/attestation",
         "backend": "native",
-        "cache_capture_code_sha256": "<sha256>",
-        "cache_capture_sha256": "<sha256>",
         "common": [],
         "connector": {
           "decode_cuda_graph_memory_gb": 4.0,
@@ -376,9 +364,6 @@
       ],
       "env": {
         "CUDA_VISIBLE_DEVICES": "0",
-        "NARWHAL_CACHE_OUTPUT": "<root>/native/launch/cache-layout.json",
-        "NARWHAL_CACHE_PLAN": "<root>/native/launch/hook/launch.json",
-        "NARWHAL_CAPTURE_CACHE": "1",
         "NARWHAL_SGLANG_API_KEY": "engine-only-secret",
         "NARWHAL_SGLANG_BOOTSTRAP_HOST": "192.0.2.11",
         "NARWHAL_SGLANG_BOOTSTRAP_PORT": "5600",

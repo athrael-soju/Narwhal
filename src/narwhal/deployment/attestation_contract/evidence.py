@@ -4,8 +4,9 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from ..launch_engine.backend import plan_launcher
+from ..launch_engine.backend import LiveModelDimensions, plan_launcher
 from ..launch_engine.runtime import digest, write_private
 from ..native_engine import native_identity, process_identity
 
@@ -126,3 +127,62 @@ def require_prior_dimensions(run: Path, plan: dict, plan_hash: str, contract: ob
         )
         if previous.get("contract") != contract:
             raise ValueError("Live model dimensions differ from the retained plan capture")
+
+
+def model_contract(config: dict) -> dict[str, Any]:
+    text = config.get("text_config", config)
+    heads = text.get("num_attention_heads")
+    head_size = text.get("head_dim") or (
+        text["hidden_size"] // heads if isinstance(heads, int) and heads > 0 else None
+    )
+    values = {
+        "kv_heads": text.get("num_key_value_heads", heads),
+        "head_size": head_size,
+        "hidden_layers": text.get("num_hidden_layers"),
+    }
+    if any(type(value) is not int or value < 1 for value in values.values()):
+        raise ValueError("model config lacks positive KV head, head size and layer counts")
+    architectures = config.get("architectures") or []
+    if not architectures or not isinstance(architectures[0], str):
+        raise ValueError("model config names no architecture")
+    return {"contract": values, "model_architecture": architectures[0]}
+
+
+def config_model_dimensions(run: Path, plan: dict) -> Path:
+    """Write model-dimensions.json from the prepared model configuration."""
+    destination = run / "model-dimensions.json"
+    path = Path(plan["model_dir"]) / "config.json"
+    if digest(path) != plan["model_config_sha256"]:
+        raise ValueError("Model configuration changed after launch preparation")
+    record = {
+        **model_contract(json.loads(path.read_text())),
+        "sources": {"model_config": f"{path.resolve()} sha256:{digest(path)}"},
+        "plan_sha256": digest(run / "launch.json"),
+        "image": plan["image"],
+        "revision": plan["revision"],
+        "model_config_sha256": plan["model_config_sha256"],
+    }
+    if destination.exists():
+        if read_json(destination) != record:
+            raise ValueError("Model dimensions differ from the retained capture")
+        return destination
+    write_private_json(destination, record)
+    return destination
+
+
+def model_dimensions(run: Path, plan: dict) -> None:
+    """Write model-dimensions.json, from the engine runtime where the backend reads it."""
+    engine = plan_launcher(plan)
+    if isinstance(engine, LiveModelDimensions):
+        engine.model_dimensions(run, plan)
+    else:
+        config_model_dimensions(run, plan)
+
+
+def capture_model_dimensions(run: Path) -> Path:
+    """Capture the engine's live model dimensions, or record them from the model configuration."""
+    plan, _, _ = checked_plan(run)
+    engine = plan_launcher(plan)
+    if isinstance(engine, LiveModelDimensions):
+        return engine.capture_model_dimensions(run)
+    return config_model_dimensions(run, plan)

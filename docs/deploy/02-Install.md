@@ -36,7 +36,7 @@ The prepared run holds these files at mode 0600:
 | `<host-id>/engine-launch.engine-<n>.json`                                 | The selected launch record for each engine role                          |
 | `<host-id>/fleet.local.json`                                              | The fleet configuration from discovery, on the router host               |
 | `<host-id>/profiling-limits.json`                                         | Profiling limits from each engine's sequence limit, on the router host   |
-| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper snapshots, on engine hosts                                        |
+| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper snapshots, on engine hosts; `cache_capture_hook.py` on vLLM only  |
 | `manifest.json`                                                           | The private manifest                                                     |
 
 The manifest records:
@@ -52,9 +52,9 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | Helper snapshot                                        | Path variable                | SHA-256 variable                    |
 | ------------------------------------------------------ | ---------------------------- | ----------------------------------- |
 | `tools/deployment/fabric_budget.py`                    | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256`      |
-| `src/narwhal/backends/<backend>/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
+| `src/narwhal/backends/vllm/cache_capture_hook.py`      | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
-`<backend>` is the fleet's `engine.backend`, `vllm` by default.
+The cache-capture hook ships only when the fleet's `engine.backend` is `vllm`, the default.
 
 ## Installing engine 1 and the remaining hosts
 
