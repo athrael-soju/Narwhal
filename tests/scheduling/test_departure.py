@@ -397,8 +397,41 @@ class PostMoveHoldTests(unittest.TestCase):
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
 
+class SurgeTests(unittest.TestCase):
+    """A prefill surge with no open departure takes a decode engine above decode shrink."""
+
+    def test_a_burst_after_a_quiet_phase_moves_back_toward_prefill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=2)
+            sim.run(180, (DECODE_HEAVY[0], DECODE_HEAVY[1], DECODE_HEAVY[2] * 0.3))
+            burst = sim.now
+            sim.run(180, (DECODE_LEANING[0], DECODE_LEANING[1], DECODE_LEANING[2] * 2.5))
+            sim.close()
+        th = sim.scheduler.th
+        surges = [
+            d
+            for d in sim.decisions
+            if d["result"] == "applied" and d["at"] > burst and d.get("prefill_surge")
+        ]
+        self.assertTrue(surges)
+        move = surges[0]
+        self.assertEqual(move["prefill"], move["current_prefill"] + 1)
+        self.assertNotIn("departure_age_s", move)
+        self.assertTrue(move["source_pressure_safe"])
+        decode_ratio = max(
+            move["projected_tpot_ratio"], move.get("projected_decode_queue_ratio") or 0.0
+        )
+        self.assertGreater(decode_ratio, th.shrink)
+        self.assertLessEqual(decode_ratio, th.expand)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+
 class AlternationTests(unittest.TestCase):
-    """Demand that alternates within one window keeps window pricing."""
+    """Demand that alternates within one window keeps window pricing.
+
+    Above capacity, a prefill surge may take a decode engine back, so the split can follow the
+    alternation; every move back toward prefill that leaves decode above shrink is a surge move.
+    """
 
     def test_alternation_above_the_calibrated_load_opens_no_departure(self):
         for period, intensity in ((60, 1.1), (60, 1.3), (90, 1.1), (90, 1.3)):
@@ -412,7 +445,23 @@ class AlternationTests(unittest.TestCase):
                 rules = {d.get("eligibility_rule") for d in sim.decisions}
                 self.assertFalse(rules & {"settled_departure", "steady_demand"})
                 self.assertFalse([d for d in sim.decisions if "departure_age_s" in d])
-                self.assertEqual(sim.scheduler.roles.control_snapshot()["flip_reversals"], 0)
+                reversals = sim.scheduler.roles.control_snapshot()["flip_reversals"]
+                toward_prefill = [
+                    d
+                    for d in sim.decisions
+                    if d["result"] == "applied" and d["prefill"] > d["current_prefill"]
+                ]
+                surges = [d for d in toward_prefill if d["prefill_surge"]]
+                self.assertTrue(reversals == 0 or surges)
+                for move in surges:
+                    self.assertTrue(move["prefill_relief"])
+                    self.assertLessEqual(
+                        max(
+                            move["projected_tpot_ratio"],
+                            move.get("projected_decode_queue_ratio") or 0.0,
+                        ),
+                        sim.scheduler.th.expand,
+                    )
 
 
 class ShortViewTests(unittest.TestCase):

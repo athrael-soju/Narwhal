@@ -525,6 +525,14 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
+A prefill surge lets a `source_shrink` move to prefill take an engine from a decode pool whose projected load is at or below `controller.thresholds.expand`. A surge holds when all of these hold:
+
+- the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.expand`
+- no departure is open
+- [`prefill_relief`](#evidence-gating-for-decode-to-prefill-consolidation) applies
+
+The decision records the surge in `prefill_surge`.
+
 The `mixed_pressure` rule moves one engine when all of these hold:
 
 - projected source load is above `controller.thresholds.shrink`
@@ -608,6 +616,7 @@ One confirmation is enough in three cases:
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
   - the eligibility rule is `source_shrink`
+  - the projected source load is at or below `controller.thresholds.shrink`
   - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`
 
 Every other move needs this many confirmations:

@@ -313,6 +313,17 @@ class ReactivePolicy:
             and max(current.ttft_ratio, short_current.ttft_ratio) > th.shrink
             and (evidence.blocked_gate != "risk" or evidence.risk_kind == "p_to_d_recovery")
         )
+        # Projected prefill load above expand, with no open departure to pace the walk, is a
+        # surge: a move back to prefill may take decode capacity while the decode pool stays at
+        # or below expand. The movement margin applies.
+        prefill_surge = (
+            prefill_relief
+            and departure is None
+            and max(current.ttft_ratio, short_current.ttft_ratio) > th.expand
+        )
+
+        def surge_move(row: Evaluation) -> bool:
+            return prefill_surge and row[0].prefill > current_p and row[1] <= th.expand
 
         def evaluate(candidate: SplitScore, base: SplitScore) -> Evaluation:
             return (
@@ -388,7 +399,7 @@ class ReactivePolicy:
             return "source_shrink"
 
         def source_safe(row: Evaluation) -> bool:
-            return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand"
+            return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand" or surge_move(row)
 
         def admitted(row: Evaluation) -> bool:
             candidate, source_ratio, improvement, capacity_safe, covered, mixed, floors = row
@@ -432,6 +443,7 @@ class ReactivePolicy:
             if candidate.prefill > current_p:
                 details.update(evidence.details())
                 details["prefill_relief"] = prefill_relief
+                details["prefill_surge"] = prefill_surge
             details["eligibility_rule"] = rule(row)
             details["demand_horizon_s"] = rounded(
                 confirmation_s if departure_move else controller.window_s
@@ -537,8 +549,8 @@ class ReactivePolicy:
             if direction > 0
             else max(current.tpot_ratio, current.decode_queue_ratio)
         )
-        # Relaxing shrink requires repeated pressure, even with complete demand.
-        # The settled run confirms a departure.
+        # Relaxing shrink requires repeated pressure, even with complete demand, and so does a
+        # surge move from a source above shrink. The settled run confirms a departure.
         confirmations = (
             1
             if urgent_ready
@@ -546,6 +558,7 @@ class ReactivePolicy:
             or (
                 not recovery
                 and eligibility_rule == "source_shrink"
+                and chosen[1] <= th.shrink
                 and destination_ratio >= controller.scheduler.th.expand
             )
             else max(
