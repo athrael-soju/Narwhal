@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import EngineBackend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
@@ -393,11 +394,11 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(report.skipped), 1)
 
     async def test_orchestration_restores_the_roles_engines_served(self):
-        switcher, roles = object(), {"http://e0": ("prefill", None)}
+        switcher, roles = SimpleNamespace(engine_held=True), {"http://e0": ("prefill", None)}
         client = SimpleNamespace(aclose=AsyncMock())
         with (
             patch.object(preflight, "EngineClient", return_value=client),
-            patch.object(preflight, "engine_side", return_value=switcher),
+            patch.object(EngineBackend, "role_switcher", return_value=switcher),
             patch.object(preflight, "gate_reach", new=AsyncMock(return_value={"e0"})),
             patch.object(preflight, "_live_roles", new=AsyncMock(return_value=roles)),
             patch.object(preflight, "colocated_restart_risk", side_effect=RuntimeError("late")),

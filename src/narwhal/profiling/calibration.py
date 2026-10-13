@@ -27,7 +27,7 @@ from ..engines.dialect import EngineDialect
 from ..engines.handoff import HandoffLegs
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
-from ..runtime.role_switch import RoleSwitcher, current_roles, engine_side, restore_roles
+from ..runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ..types import Role
 from .generation import read_generation
 from .probe.engine import engine_context_limit, make_prompt
@@ -412,10 +412,10 @@ class _Lockstep:
         dialect: EngineDialect,
         observation_timeout_s: float,
         context_limits: dict[str, int],
-        launches: Mapping[str, Mapping[str, Any]] | None = None,
-        switcher: RoleSwitcher | None = None,
+        launches: Mapping[str, Mapping[str, Any]],
+        switcher: RoleSwitcher,
     ) -> None:
-        self.launches = launches or {}
+        self.launches = launches
         self.switcher = switcher
         self.cfg = cfg
         self.client = client
@@ -443,7 +443,7 @@ class _Lockstep:
             }
             self.rows[(src, dst, target, index)] = row
             attempts.append(_Attempt(src, dst, target, output_tokens, context_limit, row))
-        if self.switcher is not None:
+        if self.switcher.engine_held:
             async with httpx.AsyncClient(
                 timeout=self.cfg.health_timeout_s, headers=self.cfg.engine_headers()
             ) as control:
@@ -564,11 +564,11 @@ async def calibrate(
     if not pairs:
         raise ValueError("first-token calibration requires a role-permitted engine pair")
     backend = load_backend(cfg.backend)
-    switcher = engine_side(backend.role_switcher(cfg.connector))
+    switcher = backend.role_switcher(cfg.connector)
     slots = {spec.iid: device_key(spec) for spec in cfg.engines}
     phases = (
         [(pairs, calibration_rounds(pairs, slots))]
-        if switcher is None
+        if not switcher.engine_held
         else [(phase, exclusive_rounds(phase, slots)) for phase in role_phases(pairs)]
     )
     groups = [
@@ -614,10 +614,10 @@ async def calibrate(
                 context_limits[iid] = context_limit
             launches = (
                 await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
-                if switcher is not None or client.kv.concurrent
+                if switcher.engine_held or client.kv.concurrent
                 else {}
             )
-            if switcher is not None:
+            if switcher.engine_held:
                 roles = await current_roles(
                     switcher, sizing, {spec.url: launches.get(spec.iid) for spec in cfg.engines}
                 )
@@ -648,7 +648,7 @@ async def calibrate(
                 first += len(rounds)
     finally:
         try:
-            if switcher is not None and roles:
+            if switcher.engine_held and roles:
                 async with httpx.AsyncClient(
                     timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
                 ) as control:

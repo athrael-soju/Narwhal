@@ -14,7 +14,6 @@ from ...engines.client import EngineClient, EngineError, first_output_timeout
 from ...engines.connector import PrefillResult
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
-from ...runtime.role_switch import engine_side
 from .engines import PROBE_PROMPT
 from .evidence import pair_snapshot, same_generation
 from .report import Report
@@ -83,10 +82,10 @@ async def gate_consume(
         **dialect.decode_probe_extras(4),
     }
     pairs = [pair for pair in pairs for _ in range(max(1, repeats))]
-    switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
+    switcher = load_backend(cfg.backend).role_switcher(cfg.connector)
     launches = (
         await attested_launches([by_id[iid] for iid in ids], timeout_s=cfg.health_timeout_s)
-        if switcher is not None or client.kv.concurrent
+        if switcher.engine_held or client.kv.concurrent
         else {}
     )
     seen: set[tuple[str, str]] = set()
@@ -101,7 +100,7 @@ async def gate_consume(
                 before_dst = await pair_snapshot(cfg, dst)
                 record["producer_before"] = before_src
                 record["consumer_before"] = before_dst
-            if switcher is not None:
+            if switcher.engine_held:
                 async with httpx.AsyncClient(
                     timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
                 ) as control:

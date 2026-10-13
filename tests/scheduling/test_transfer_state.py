@@ -64,7 +64,7 @@ class TransferRefreshTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(
             scheduler=scheduler,
             monitor=scheduler.monitor,
-            role_switch=object(),
+            role_switch=SimpleNamespace(engine_held=True),
             transfer_refresh=TransferRefresh(),
             stale_handoff=scheduler.stale_handoff,
             refresh_transfer_state=refresh,

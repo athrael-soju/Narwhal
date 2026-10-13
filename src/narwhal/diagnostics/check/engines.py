@@ -16,7 +16,6 @@ from ...profiling.calibration import verify_calibration
 from ...profiling.probe.engine import engine_context_limit, make_prompt
 from ...profiling.probe.pairing import paired_transport
 from ...profiling.store import ProfileStore
-from ...runtime.role_switch import engine_side
 from ...types import Role
 from .report import Report
 
@@ -253,7 +252,7 @@ async def gate_pace(
     backend = load_backend(cfg.backend)
     dialect = backend.dialect
     kv = backend.connector(cfg.connector)
-    switcher = engine_side(backend.role_switcher(cfg.connector))
+    switcher = backend.role_switcher(cfg.connector)
     # A rendezvous engine prefills only beside a decode peer.
     pairing, launches = await paired_transport(
         lambda: transport or httpx.AsyncHTTPTransport(),
@@ -282,11 +281,11 @@ async def gate_pace(
                 rep.skip(f"{spec.iid} pace: unreachable")
                 continue
             if pairing is not None:
-                peer = _pace_peer(spec, cfg.engines, live, fixed_roles=switcher is None)
+                peer = _pace_peer(spec, cfg.engines, live, fixed_roles=not switcher.engine_held)
                 if peer is None:
                     rep.skip(f"{spec.iid} pace: no live {backend.label} decode peer")
                     continue
-                if switcher is not None:
+                if switcher.engine_held:
                     await switcher.place(
                         c,
                         (spec.url, launches.get(spec.iid)),

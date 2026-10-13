@@ -35,19 +35,21 @@ class EngineBackend:
     metrics: EngineMetrics
     fabric: FabricLifecycle
     launcher: Callable[[], EngineLauncher] = field(repr=False)
-    role_switch: RoleSwitcher | None = None
+    # The role model the backend declares, with its switch operations.
+    role_switch: RoleSwitcher = field(repr=False)
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
     # Earlier field names this backend wrote, by section: "contract", "engine", "dev_ports",
     # "checked" for checked.json and "shared_start" for shared-start.json.
     renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
-    def role_switcher(self, connector: str) -> RoleSwitcher | None:
+    def role_switcher(self, connector: str) -> RoleSwitcher:
+        """Return the backend's switcher, or fixed roles for a connector it cannot switch."""
+        from ..runtime.role_switch import FixedRoles
+
         switcher = self.role_switch
-        if switcher is None or (
-            switcher.connectors is not None and connector not in switcher.connectors
-        ):
-            return None
+        if switcher.connectors is not None and connector not in switcher.connectors:
+            return FixedRoles()
         return switcher
 
     def connector(self, name: str) -> KvHandoff:
