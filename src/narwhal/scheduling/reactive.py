@@ -302,13 +302,37 @@ class ReactivePolicy:
                     key=lambda projection: projection.projected_ttft_s,
                 )
 
+        # A move toward decode also prices the short-horizon prefill demand, so a move that a
+        # rising burst would reverse within the next steps stays held.
+        short_ttft = {p: score.ttft_ratio for p, score in (short.adjacent if short else {}).items()}
+        # Projected prefill pressure above shrink lets a move toward prefill skip the evidence
+        # window that a move to decode re-arms, and the rising-demand trend. A first-token
+        # timeout keeps its risk window.
+        prefill_relief = (
+            not urgent_ready
+            and max(current.ttft_ratio, short_current.ttft_ratio) > th.shrink
+            and (evidence.blocked_gate != "risk" or evidence.risk_kind == "p_to_d_recovery")
+        )
+        # Projected prefill load above expand is a surge: a move back to prefill may take decode
+        # capacity while the decode pool stays at or below expand, and may reverse an open
+        # departure toward decode. A departure toward prefill keeps pacing its own walk. The
+        # movement margin applies.
+        prefill_surge = (
+            prefill_relief
+            and max(current.ttft_ratio, short_current.ttft_ratio) > th.expand
+            and (departure is None or departure.heading < 0)
+        )
+
+        def surge_move(row: Evaluation) -> bool:
+            return prefill_surge and row[0].prefill > current_p and row[1] <= th.expand
+
         def evaluate(candidate: SplitScore, base: SplitScore) -> Evaluation:
             return (
                 candidate,
                 (
                     max(candidate.tpot_ratio, candidate.decode_queue_ratio)
                     if candidate.prefill > current_p
-                    else candidate.ttft_ratio
+                    else max(candidate.ttft_ratio, short_ttft.get(candidate.prefill, 0.0))
                 ),
                 base.objective - candidate.objective,
                 (
@@ -376,7 +400,7 @@ class ReactivePolicy:
             return "source_shrink"
 
         def source_safe(row: Evaluation) -> bool:
-            return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand"
+            return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand" or surge_move(row)
 
         def admitted(row: Evaluation) -> bool:
             candidate, source_ratio, improvement, capacity_safe, covered, mixed, floors = row
@@ -384,8 +408,8 @@ class ReactivePolicy:
                 capacity_safe
                 and covered
                 and floors
-                and (candidate.prefill < current_p or evidence.allowed)
-                and candidate.prefill not in held_reverse
+                and (candidate.prefill < current_p or evidence.allowed or prefill_relief)
+                and (candidate.prefill not in held_reverse or surge_move(row))
             ):
                 return False
             if urgent_ready and recovery_projection is not None:
@@ -419,6 +443,8 @@ class ReactivePolicy:
             )
             if candidate.prefill > current_p:
                 details.update(evidence.details())
+                details["prefill_relief"] = prefill_relief
+                details["prefill_surge"] = prefill_surge
             details["eligibility_rule"] = rule(row)
             details["demand_horizon_s"] = rounded(
                 confirmation_s if departure_move else controller.window_s
@@ -474,10 +500,10 @@ class ReactivePolicy:
             if not floors_safe:
                 floor = "min_decode" if candidate.prefill > current_p else "min_prefill"
                 reason = f"{floor} blocks the adjacent split"
-            elif candidate.prefill in held_reverse:
+            elif candidate.prefill in held_reverse and not surge_move(held):
                 toward = "decode" if candidate.prefill > current_p else "prefill"
                 reason = f"departure toward {toward} holds the reverse move"
-            elif candidate.prefill > current_p and not evidence.allowed:
+            elif candidate.prefill > current_p and not (evidence.allowed or prefill_relief):
                 reason = evidence.reason
             elif mixed_pressure and not snapshot.profiles_complete:
                 reason = "mixed pressure requires fleet profiles"
@@ -524,8 +550,8 @@ class ReactivePolicy:
             if direction > 0
             else max(current.tpot_ratio, current.decode_queue_ratio)
         )
-        # Relaxing shrink requires repeated pressure, even with complete demand.
-        # The settled run confirms a departure.
+        # Relaxing shrink requires repeated pressure, even with complete demand, and so does a
+        # surge move from a source above shrink. The settled run confirms a departure.
         confirmations = (
             1
             if urgent_ready
@@ -533,6 +559,7 @@ class ReactivePolicy:
             or (
                 not recovery
                 and eligibility_rule == "source_shrink"
+                and chosen[1] <= th.shrink
                 and destination_ratio >= controller.scheduler.th.expand
             )
             else max(
@@ -569,8 +596,11 @@ class ReactivePolicy:
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
-            elif departure.moved and direction == departure.heading:
-                # A window move along the heading ends the reverse hold.
+            elif candidate_p in held_reverse or (
+                departure.moved and direction == departure.heading
+            ):
+                # A window move along the heading ends the reverse hold, and a surge move that
+                # reverses the departure ends it.
                 self.departure = None
         if moved is not None and target is Role.DECODE:
             # A move to decode re-arms the consolidation evidence window.

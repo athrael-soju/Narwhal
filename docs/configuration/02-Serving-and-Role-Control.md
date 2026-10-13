@@ -525,6 +525,14 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 - projected source load at or below `controller.thresholds.shrink`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
+A prefill surge lets a `source_shrink` move to prefill take an engine from a decode pool whose projected load is at or below `controller.thresholds.expand`. A surge holds when all of these hold:
+
+- the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.expand`
+- no departure toward prefill is open
+- [`prefill_relief`](#evidence-gating-for-decode-to-prefill-consolidation) applies
+
+A surge move may reverse an open departure toward decode, and closes it. The decision records the surge in `prefill_surge`.
+
 The `mixed_pressure` rule moves one engine when all of these hold:
 
 - projected source load is above `controller.thresholds.shrink`
@@ -584,8 +592,9 @@ A departure closes at the first of these:
 - before the first move, the best adjacent split on confirmation-span demand lies in the other direction
 - before the first move, the best adjacent split on confirmation-span demand improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`
 - after the first move, the role controller applies a window-demand move in the departure's direction
+- the role controller applies a prefill surge move that reverses the departure
 
-Once a departure has moved, it holds moves in the opposite direction until it closes.
+Once a departure has moved, it holds moves in the opposite direction until it closes. A prefill surge move is exempt from this hold.
 
 Demand is steady when both hold:
 
@@ -608,6 +617,7 @@ One confirmation is enough in three cases:
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
   - the eligibility rule is `source_shrink`
+  - the projected source load is at or below `controller.thresholds.shrink`
   - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`
 
 Every other move needs this many confirmations:
@@ -628,7 +638,7 @@ Any of these resets the confirmation sequence:
 
 Prefill-to-decode moves require:
 
-- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`
+- projected prefill load at or below `controller.thresholds.shrink`, or at or below `controller.thresholds.expand` under `steady_demand`, on both window demand and confirmation-span demand
 - an elapsed `controller.thresholds.cooldown_s`, or an armed cooldown bypass
 
 The cooldown bypass arms after `controller.thresholds.sustained_intervals` consecutive passes with both:
@@ -650,6 +660,8 @@ short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_ris
 ```
 
 A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
+
+When the current split's projected prefill load on window or confirmation-span demand is above `controller.thresholds.shrink`, a decode-to-prefill move skips both the window that a prefill-to-decode move resets and the short-horizon pause. A window that a first-token timeout resets still holds the move. The decision records this in `prefill_relief`, and `evidence_blocked_gate` names the gate it skipped.
 
 The `source_shrink` and `settled_departure` rules move engines toward decode while the window is open.
 
