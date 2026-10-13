@@ -160,9 +160,9 @@ The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-runnin
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
-The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places requests without checking seats, and an engine queues requests above its seats.
+The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats, and an engine queues prefills above its seats.
 
-In an SGLang fleet with the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first.
+With the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, it picks the engine whose seat the profiles project to free first, and the leg waits in that engine's queue.
 
 `/narwhal/state` reports each engine's seats under [`seats`](../http-api/05-Live-State.md#admission-and-serving-state), and `/metrics` exports them as `narwhal_engine_seats`.
 
