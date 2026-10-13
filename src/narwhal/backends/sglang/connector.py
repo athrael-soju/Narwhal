@@ -4,13 +4,14 @@ import secrets
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
-from ...engines.connector import RendezvousConnector
+from ...engines.connector import PrefillResult, RendezvousConnector
 
 # Fields that pair one request's prefill and decode legs on the transfer backend.
 BOOTSTRAP_FIELDS = ("bootstrap_host", "bootstrap_port", "bootstrap_room")
 
 
 class SglangRendezvous(RendezvousConnector):
+    diagnostics_fields: ClassVar[tuple[str, ...]] = BOOTSTRAP_FIELDS
     # SGLang never times out a decode leg whose prefill is lost; prefill gives up after
     # SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT, which the launcher sets to this bound.
     decode_wait_s: ClassVar[float] = 30.0
@@ -25,11 +26,21 @@ class SglangRendezvous(RendezvousConnector):
         fields["bootstrap_room"] = secrets.randbits(63)
         return fields
 
-    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**body, **rendezvous}
+    def prefill_body(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return {**body, **(rendezvous or {})}
 
-    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**_lengths(body), **rendezvous, "stream": True}
+    def decode_body(
+        self,
+        body: dict[str, Any],
+        *,
+        result: PrefillResult | None = None,
+        rendezvous: dict[str, Any] | None,
+        url: str = "",
+        endpoint: str = "",
+    ) -> dict[str, Any]:
+        return {**_lengths(body), **(rendezvous or {}), "stream": True}
 
 
 def _lengths(body: dict[str, Any]) -> dict[str, Any]:

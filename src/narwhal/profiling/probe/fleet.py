@@ -20,7 +20,6 @@ import httpx
 from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.connector import RendezvousConnector
 from ...engines.dialect import EngineDialect
 from ...provenance import stamp
 from ...runtime.role_switch import RoleSwitcher, engine_side
@@ -290,7 +289,7 @@ async def run(
     metrics = backend.metrics
     kv = backend.connector(cfg.connector)
     switcher = engine_side(backend.role_switcher(cfg.connector))
-    paired = isinstance(kv, RendezvousConnector)
+    paired = kv.concurrent
     if paired and switcher is None:
         raise ValueError(
             f"profiling measures both roles of each engine, and engine.connector "

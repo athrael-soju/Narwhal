@@ -11,7 +11,7 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, EngineError, first_output_timeout
-from ...engines.connector import PrefillResult, RendezvousConnector
+from ...engines.connector import PrefillResult
 from ...engines.stream import sse_token_bearing, sse_token_count
 from ...engines.validation import can_consume, can_produce, validation_pairs
 from ...runtime.role_switch import engine_side
@@ -25,8 +25,8 @@ async def gate_produce(
 ) -> dict[str, PrefillResult | None]:
     print("produce")
     handoffs: dict[str, PrefillResult | None] = {}
-    if isinstance(client.kv, RendezvousConnector):
-        # A rendezvous prefill leg completes only with its decode leg.
+    if client.kv.concurrent:
+        # A concurrent prefill leg completes only with its decode leg.
         for spec in cfg.engines:
             if spec.iid in live:
                 handoffs[spec.iid] = None
@@ -86,7 +86,7 @@ async def gate_consume(
     switcher = engine_side(load_backend(cfg.backend).role_switcher(cfg.connector))
     launches = (
         await attested_launches([by_id[iid] for iid in ids], timeout_s=cfg.health_timeout_s)
-        if switcher is not None or isinstance(client.kv, RendezvousConnector)
+        if switcher is not None or client.kv.concurrent
         else {}
     )
     seen: set[tuple[str, str]] = set()
@@ -152,15 +152,11 @@ async def gate_consume(
                 )
                 if count_delta < 1 or transfer_seconds <= 0:
                     raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
-                descriptor = handoff.parameters
                 record.update(
                     status="passed",
                     connector=handoff.connector,
                     transfer_metric=load_backend(cfg.backend).metrics.transfer_series,
-                    transfer_mode=descriptor.get("transfer_mode"),
-                    remote_engine_id=descriptor.get("remote_engine_id"),
-                    remote_host=descriptor.get("remote_host"),
-                    remote_port=descriptor.get("remote_port"),
+                    **handoff.diagnostics(),
                     descriptor_sha256=sha256(handoff.descriptor_json.encode()).hexdigest(),
                     prefill_seconds=handoff.prefill_seconds,
                     decode_seconds=decode_seconds,

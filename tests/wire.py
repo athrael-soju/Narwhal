@@ -244,11 +244,15 @@ class FakeRendezvous(RendezvousConnector):
     def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]:
         return {"room": next(self.rooms)}
 
-    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**body, "leg": "prefill", **rendezvous}
+    def prefill_body(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return {**body, "leg": "prefill", **(rendezvous or {})}
 
-    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**body, "leg": "decode", **rendezvous}
+    def decode_body(
+        self, body: dict[str, Any], *, rendezvous: dict[str, Any] | None, **_: Any
+    ) -> dict[str, Any]:
+        return {**body, "leg": "decode", **(rendezvous or {}), "stream": True}
 
 
 class RendezvousLegs:

@@ -84,7 +84,9 @@ class RecordingClient(DescriptorHandoffs):
             self.flight["prefill"][slot] -= 1
         return SimpleNamespace(url=url)
 
-    async def decode(self, url, endpoint, body, headers, handoff, first_token_timeout_s=None):
+    async def decode(
+        self, url, endpoint, body, headers, handoff, first_token_timeout_s=None, rendezvous=None
+    ):
         slot = self._enter("decode", handoff.url, url, int(body["prompt"]))
         try:
             await asyncio.sleep(self.delay("decode", handoff.url, url))

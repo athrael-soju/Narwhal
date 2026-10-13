@@ -192,7 +192,7 @@ class ConnectorTests(unittest.TestCase):
         self.assertLess(rendezvous["bootstrap_room"], 2**63)
         self.assertNotEqual(kv.rendezvous(LAUNCH)["bootstrap_room"], rendezvous["bootstrap_room"])
         body = {"model": "m", "prompt": "p", "max_completion_tokens": 7}
-        decode = kv.decode_body(body, rendezvous)
+        decode = kv.decode_body(body, rendezvous=rendezvous)
         self.assertEqual((decode["max_tokens"], decode["stream"]), (7, True))
         self.assertNotIn("max_completion_tokens", decode)
 
