@@ -144,7 +144,7 @@ class EngineActions:
         before: Mapping[str, Any],
         effect: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Wait up to `router.timeout_s` for the router to return `iid` to service."""
+        """Wait up to `router.timeout_s` until the router neither ejects nor quarantines `iid`."""
         limit = self.service.config.router.timeout_s
         started = time.monotonic()
         seen = before.get("event")
@@ -153,13 +153,14 @@ class EngineActions:
             waited = round(time.monotonic() - started, 3)
             report = {"in_service": False, "waited_s": waited}
             if "error" not in state:
-                if not state["ejected"]:
+                if not state["ejected"] and not state["quarantined"]:
                     return {**report, "in_service": True}
                 problem = _return_blocked(iid, state, seen)
                 if problem:
                     raise ActionError(problem, result={**effect, "service": report})
             if waited >= limit:
-                reason = state.get("error") or f"the router still ejects {iid}"
+                held = "ejects" if state.get("ejected", True) else "quarantines"
+                reason = state.get("error") or f"the router still {held} {iid}"
                 raise ActionError(
                     f"{iid} did not return to service within {limit:g}s: {reason}",
                     status=504,

@@ -1347,10 +1347,20 @@ function activeDrain(iid, slice, recorded) {
   return { action: recorded, deadline: recorded.params.deadline_s, start: before && !before.error ? before.resident : null };
 }
 
-function restartPending(slice) {
+function restartPending(iid, slice) {
   const record = slice && !slice.error ? slice.lifecycle : null;
   if (!record || !record.restart_required || !record.old_process_start) return false;
-  return slice.process_start === record.old_process_start;
+  if (record.wave_id || slice.process_start !== record.old_process_start || !hookConfigured("engine_start")) return false;
+  // The router reports a drained engine's drained process until readmission verifies the
+  // new one, so a Start after the drain in this session is the restart.
+  let drained = 0;
+  let started = 0;
+  for (const action of (state.record ? state.record.actions : [])) {
+    if (action.outcome !== "ok" || !action.params || action.params.engine !== iid) continue;
+    if (action.action === "engine.drain") drained = action.seq;
+    else if (action.action === "engine.start") started = action.seq;
+  }
+  return started <= drained;
 }
 
 function primaryAction(slice, process) {
@@ -1377,7 +1387,7 @@ function engineGate(iid, action, slice, process, others) {
   } else if (action === "readmit") {
     if (!lifecycle) return "The router state is unavailable.";
     if (lifecycle === "active" && slice.ejected) return ejectedReason(iid, slice);
-    if (restartPending(slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
+    if (restartPending(iid, slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
     if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
   } else if (action === "pause") {
     if (paused) return iid + " is paused; resume it first.";
