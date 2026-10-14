@@ -53,7 +53,7 @@ Every engine does both prefill and decode, with local KV. Long prefills share a 
 
 ### Static disaggregation
 
-A fixed prefill pool and a fixed decode pool serve requests. An operator changes pool membership by hand.
+A fixed prefill pool and a fixed decode pool serve requests. An operator changes pool membership by hand. To configure it, set each engine's `role` and set [`pin`](../configuration/01-Fleet-Schema.md#minimal-fleet-definition) to `true` on every engine.
 
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
 

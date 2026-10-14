@@ -105,7 +105,26 @@ The deadline, the measured prefill, and the router overhead must fit the client 
 
 If an engine relaunched with the same process generation, preflight and router startup label the engine `reused`.
 
-Repeat the calibration when the model, process generation, transport, or served context changes:
+### Reusing or repeating the calibration
+
+After a change to the fleet or its engines, run preflight. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
+
+- the fabric route or host behind an unchanged engine URL
+- the longest admitted input, beyond the longest calibrated input
+
+The artifact stays valid when you remove or pin an engine. It stays valid across an engine restart only when the engine's attestation sidecar reports launch evidence, as in [the `calibration` gate](../cli/Check.md#the-calibration-gate).
+
+To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`:
+
+```bash
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
+  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --samples 100 --observation-timeout-s 20 \
+  --calibration-base runs/deployment/first-token-calibration.json \
+  --calibration-out runs/deployment/first-token-calibration-2.json
+```
+
+For each new calibration:
 
 1. Use a fresh artifact path.
 2. Update the fleet config.

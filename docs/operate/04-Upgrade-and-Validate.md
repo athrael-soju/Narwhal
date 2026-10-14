@@ -59,7 +59,7 @@ Incompatible handoff versions need a maintenance window.
     - the profiles
     - the first-token calibration artifact for the live process generations
     - a state handoff the restored build supports
-5. If process generations changed, regenerate the profiles and [first-token calibration](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) before preflight.
+5. Run preflight. If its `profile` or `calibration` gate reports a changed process generation, regenerate the profiles and the [first-token calibration](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration).
 6. For fresh roles and zeroed counters, set `recovery.resume: false` and drop `--resume`.
 7. Confirm exactly one router holds the lease: the rollback router or its fenced peer.
 8. Start the rollback build.

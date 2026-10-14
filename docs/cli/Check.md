@@ -43,6 +43,7 @@ Options for first-token calibration:
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
 | `--observation-timeout-s SECONDS` | optional | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
 | `--calibration-out PATH` | optional | Raw samples and group summaries file. | A new JSON file |
+| `--calibration-base PATH` | optional | Previous calibration artifact. Calibration reuses its complete groups and measures the rest. | An artifact with the same model, contract, `--input-tokens` and `--samples` |
 
 ## Preflight
 
@@ -124,6 +125,8 @@ A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-S
 
 Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
 
+With `--calibration-base`, calibration reuses a base group that completed every sample when both its engines keep their URL and process generation. An engine listed in the base's `changed_generations` or `generation_errors` counts as changed. Calibration measures the other groups, and each reused group's output line ends with `, reused`.
+
 ### Calibration artifact
 
 The artifact at `--calibration-out` holds these fields:
@@ -132,13 +135,14 @@ The artifact at `--calibration-out` holds these fields:
 | --- | --- |
 | `status` | `complete` or `incomplete` |
 | `captured_at_unix` | Unix time of the write |
+| `calibration_base` | The `--calibration-base` path, or `null` |
 | `duration_s` | Seconds from the first engine read to the write |
 | `model`, `contract_fingerprint`, `engine_urls` | The fleet the run measured |
 | `generations` | Each engine's process generation digest at the start of the run |
 | `process_starts` | Each engine's process start time at the start of the run |
 | `changed_generations`, `generation_errors` | Engines whose process changed during the run, and identity reads that failed at its end |
 | `input_tokens`, `samples_per_group`, `observation_timeout_s`, `configured_deadline_s` | The run's inputs |
-| `groups` | Per group: input token range, completed and failed counts, `p99_seconds`, `maximum_seconds` and `candidate_deadline_s` |
+| `groups` | Per group: input token range, completed and failed counts, `p99_seconds`, `maximum_seconds`, `candidate_deadline_s` and `captured_at_unix` |
 | `attempts` | Every attempt, with its `attempt` sweep number, its `round` (`null` in sweep 1), timings, and `status` |
 | `candidate_deadline_s` | The largest group candidate |
 
@@ -158,8 +162,8 @@ An engine's process counts as changed when its attestation digest changes, or wi
 The `calibration` gate reads the artifact at `engine.first_token_calibration_path` and warns when the path is unset. It rejects an artifact in any of these cases:
 
 - The artifact is not `complete`.
-- The artifact names a different model, contract or set of engine addresses.
-- Its groups and attempts fail to cover every directed pair and input length.
+- The artifact names a different model or contract, lacks a configured engine, or records a different address for one.
+- Its groups and attempts fail to cover every current directed pair at every recorded input length.
 - Its recomputed p99, maximum and candidate differ from the recorded ones.
 - It lacks a capture time, a run duration, a process start for every engine or a round for every attempt.
 - `engine.first_token_timeout_s` is at or below its candidate deadline.

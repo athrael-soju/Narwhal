@@ -545,6 +545,42 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_calibration_gate_accepts_evidence_for_a_pinned_engine(self):
+        _, _, transport = await self._calibrated_engines()
+        self.cfg.engines[1].pin = True
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            await engine_gates.gate_calibration(self.cfg, report, transport)
+        self.assertEqual((report.failed, report.calibration["status"]), ([], "measured"))
+
+    async def test_calibration_gate_names_the_fix_for_a_failed_sidecar_or_timeout(self):
+        _, _, transport = await self._calibrated_engines()
+        e3 = httpx.URL(self.cfg.engines[1].url).host
+
+        def sidecar_down(request):
+            if request.url.host == e3 and request.url.path == "/v1/attestation":
+                return httpx.Response(503)
+            return transport.handler(request)
+
+        report = Report()
+        await engine_gates.gate_calibration(self.cfg, report, httpx.MockTransport(sidecar_down))
+        self.assertEqual(len(report.failed), 1)
+        self.assertRegex(
+            report.failed[0],
+            r"(?s)^e3 process generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        )
+        self.cfg.first_token_timeout_s = 0.5
+        report = Report()
+        await engine_gates.gate_calibration(self.cfg, report, transport)
+        self.assertEqual(
+            report.failed,
+            [
+                "engine.first_token_timeout_s 0.5s is not above measured calibration candidate "
+                "0.8s; raise engine.first_token_timeout_s"
+            ],
+        )
+
     async def test_preflight_result_data_includes_first_token_calibration(self):
         client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
         with ExitStack() as stack:

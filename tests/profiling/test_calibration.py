@@ -7,7 +7,8 @@ import random
 import tempfile
 import unittest
 from collections import Counter
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -17,6 +18,7 @@ import httpx
 from narwhal.backends import EngineBackend
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.diagnostics.check import cli as check_cli
 from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
@@ -154,6 +156,106 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("is not above", " ".join(calibration.evidence_problems(self.cfg, document)))
         self.cfg.first_token_timeout_s = 5.1
         self.assertEqual(calibration.evidence_problems(self.cfg, document), [])
+
+    def test_validation_names_the_timeout_fix(self):
+        problems = calibration.evidence_problems(self.cfg, self._complete_document())
+        self.assertEqual(
+            problems,
+            [
+                "engine.first_token_timeout_s 0.01s is not above measured calibration candidate "
+                "5s; raise engine.first_token_timeout_s"
+            ],
+        )
+
+    def test_validation_accepts_engines_and_pairs_the_fleet_no_longer_uses(self):
+        self._four_engines()
+        self.cfg.first_token_timeout_s = 5.1
+        document = self._complete_document()
+        specs = {spec.iid: spec for spec in self.cfg.engines}
+        fleets = {
+            "engine removed": [specs["e0"], specs["e1"], specs["e3"]],
+            "prefill pin": [replace(specs["e0"], pin=True), specs["e1"], specs["e3"], specs["e4"]],
+            "decode pin": [specs["e0"], specs["e1"], replace(specs["e3"], pin=True), specs["e4"]],
+        }
+        for name, engines in fleets.items():
+            with self.subTest(name):
+                self.cfg.engines = engines
+                self.assertEqual(calibration.evidence_problems(self.cfg, document), [])
+
+    def test_validation_rejects_evidence_that_misses_the_current_fleet(self):
+        self._four_engines()
+        self.cfg.first_token_timeout_s = 5.1
+        full = list(self.cfg.engines)
+        specs = {spec.iid: spec for spec in full}
+        pinned = [replace(specs["e0"], pin=True), specs["e1"], specs["e3"], specs["e4"]]
+
+        def without_group(document):
+            key = ("e0", "e3", 8)
+            for name in ("groups", "attempts"):
+                document[name] = [
+                    row for row in document[name] if calibration._group_key(row) != key
+                ]
+
+        cases = {
+            "missing engine": (full[:3], full, None, "has no samples for e4"),
+            "missing pair": (pinned, full, None, "does not cover every directed pair"),
+            "missing input length": (full, full, without_group, "does not cover every directed"),
+            "moved engine": (
+                full,
+                [*full[:3], replace(full[3], url="http://moved.invalid")],
+                None,
+                "engine addresses differ from the fleet for e4",
+            ),
+        }
+        for name, (measured, current, edit, problem) in cases.items():
+            with self.subTest(name):
+                self.cfg.engines = measured
+                document = self._complete_document()
+                if edit:
+                    edit(document)
+                self.cfg.engines = current
+                self.assertIn(problem, " ".join(calibration.evidence_problems(self.cfg, document)))
+
+    async def test_saved_superset_evidence_rejects_a_changed_generation(self):
+        self._four_engines()
+        self.cfg.first_token_timeout_s = 5.1
+        path = Path(self.folder.name) / "calibration.json"
+        path.write_text(json.dumps(self._complete_document()))
+        self.cfg.first_token_calibration_path = path
+        self.cfg.engines = self.cfg.engines[:3]
+        for digest, status in (("old", "measured"), ("new", "rejected")):
+            evidence = {
+                spec.iid: GenerationEvidence(digest if spec.iid == "e0" else "old", {}, 100.0)
+                for spec in self.cfg.engines
+            }
+            with (
+                self.subTest(digest=digest),
+                patch.object(
+                    calibration,
+                    "read_generation",
+                    new=AsyncMock(
+                        side_effect=lambda cfg, spec, known=evidence, **kwargs: known[spec.iid]
+                    ),
+                ),
+            ):
+                check = await calibration.verify_calibration(self.cfg)
+                self.assertEqual(check.status, status)
+        self.assertEqual(check.problems, ("e0 process differs from first-token calibration",))
+
+    async def test_unreadable_generation_names_the_sidecar_fix(self):
+        self.cfg.first_token_timeout_s = 5.1
+        path = Path(self.folder.name) / "calibration.json"
+        path.write_text(json.dumps(self._complete_document()))
+        self.cfg.first_token_calibration_path = path
+        error = httpx.HTTPStatusError(
+            "503", request=httpx.Request("GET", "http://e0"), response=httpx.Response(503)
+        )
+        with patch.object(calibration, "read_generation", new=AsyncMock(side_effect=error)):
+            check = await calibration.verify_calibration(self.cfg)
+        self.assertEqual(check.status, "rejected")
+        for problem in check.problems:
+            self.assertIn("restart its attestation sidecar if it answers HTTP 503", problem)
+            self.assertNotIn("recalibrate", problem)
 
     def test_validation_recomputes_candidate_from_raw_timings(self):
         self.cfg.first_token_timeout_s = 5.1
@@ -306,15 +408,30 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             )
         return code, json.loads(output.read_text())
 
-    async def _run_recorded(self, client, *, samples, input_tokens=(8,), observation_timeout_s=1.0):
-        output = Path(self.folder.name) / "recorded.json"
+    async def _run_recorded(
+        self,
+        client,
+        *,
+        samples,
+        input_tokens=(8,),
+        observation_timeout_s=1.0,
+        name="recorded.json",
+        base=None,
+        digests=(),
+    ):
+        output = Path(self.folder.name) / name
         client.slots = {spec.url: device_key(spec) for spec in self.cfg.engines}
+        digests = dict(digests)
         with (
             patch.object(calibration, "EngineClient", client),
             patch.object(
                 calibration,
                 "read_generation",
-                new=AsyncMock(return_value=GenerationEvidence("g", {}, 100.0)),
+                new=AsyncMock(
+                    side_effect=lambda cfg, spec, **kwargs: GenerationEvidence(
+                        digests.get(spec.iid, "g"), {}, 100.0
+                    )
+                ),
             ),
             patch.object(calibration, "engine_context_limit", new=AsyncMock(return_value=1000)),
             patch.object(
@@ -334,6 +451,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 samples_per_group=samples,
                 observation_timeout_s=observation_timeout_s,
                 out=output,
+                base=base,
             )
         return code, json.loads(output.read_text())
 
@@ -735,6 +853,144 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         for body in requests:
             if body["stream"]:
                 self.assertEqual(body["max_tokens"], expected[int(body["prompt"])])
+
+    def _decoded(self, client):
+        iids = {spec.url: spec.iid for spec in self.cfg.engines}
+        return {
+            (iids[src], iids[dst], target)
+            for leg, src, dst, target, *_ in client.calls
+            if leg == "decode"
+        }
+
+    async def _base(self, client):
+        code, document = await self._run_recorded(client, samples=100, name="base.json")
+        return code, document, Path(self.folder.name) / "base.json"
+
+    async def test_measures_only_failed_groups(self):
+        self._four_engines()
+        urls = {spec.iid: spec.url for spec in self.cfg.engines}
+        failures = iter([EngineError("decode", urls["e1"], 502, "transfer failed")])
+
+        def fail(src, dst):
+            return next(failures, None) if (src, dst) == (urls["e0"], urls["e1"]) else None
+
+        code, base, path = await self._base(RecordingClient(fail=fail))
+        self.assertEqual((code, base["status"]), (1, "incomplete"))
+        client = RecordingClient()
+        code, document = await self._run_recorded(
+            client, samples=100, name="remeasured.json", base=path
+        )
+        self.assertEqual((code, document["status"]), (0, "complete"))
+        self.assertEqual(self._decoded(client), {("e0", "e1", 8)})
+        self.assertEqual(document["calibration_base"], str(path))
+        kept = [
+            row for row in base["attempts"] if (row["producer"], row["consumer"]) != ("e0", "e1")
+        ]
+        self.assertEqual(
+            [
+                row
+                for row in document["attempts"]
+                if (row["producer"], row["consumer"]) != ("e0", "e1")
+            ],
+            kept,
+        )
+        for group in document["groups"]:
+            remeasured = (group["producer"], group["consumer"]) == ("e0", "e1")
+            self.assertEqual(
+                group["captured_at_unix"],
+                document["captured_at_unix"] if remeasured else base["captured_at_unix"],
+            )
+        self.assertEqual(
+            document["candidate_deadline_s"],
+            max(group["candidate_deadline_s"] for group in document["groups"]),
+        )
+        self.cfg.first_token_timeout_s = document["candidate_deadline_s"] + 0.5
+        self.assertEqual(calibration.evidence_problems(self.cfg, document), [])
+
+    async def test_measures_only_groups_the_base_lacks(self):
+        self._four_engines()
+        engines = list(self.cfg.engines)
+        self.cfg.engines = engines[:3]
+        _, _, path = await self._base(RecordingClient())
+        self.cfg.engines = engines
+        client = RecordingClient()
+        code, document = await self._run_recorded(
+            client, samples=100, name="remeasured.json", base=path
+        )
+        self.assertEqual((code, document["status"]), (0, "complete"))
+        self.assertEqual(
+            self._decoded(client),
+            {
+                (src, dst, 8)
+                for src, dst in validation_pairs(engines, mesh=True)
+                if "e4" in (src, dst)
+            },
+        )
+
+    async def test_measures_every_group_of_a_relaunched_engine(self):
+        self._four_engines()
+        _, _, path = await self._base(RecordingClient())
+        client = RecordingClient()
+        code, _ = await self._run_recorded(
+            client, samples=100, name="remeasured.json", base=path, digests={"e4": "relaunched"}
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            self._decoded(client),
+            {
+                (src, dst, 8)
+                for src, dst in validation_pairs(self.cfg.engines, mesh=True)
+                if "e4" in (src, dst)
+            },
+        )
+
+    async def test_refuses_a_base_from_a_different_run(self):
+        self._four_engines()
+        _, base, path = await self._base(RecordingClient())
+        edits = {
+            "model": "other-model",
+            "contract_fingerprint": "other",
+            "input_tokens": [16],
+            "samples_per_group": 101,
+        }
+        for name, value in edits.items():
+            with self.subTest(name):
+                path.write_text(json.dumps({**base, name: value}))
+                with self.assertRaisesRegex(ValueError, f"calibration base {name} differs"):
+                    await self._run_recorded(
+                        RecordingClient(), samples=100, name=f"{name}.json", base=path
+                    )
+
+
+class CalibrationCliTests(unittest.TestCase):
+    def test_calibration_base_reaches_calibration(self):
+        calibrate = AsyncMock(return_value=0)
+        with (
+            patch.object(check_cli.FleetConfig, "load"),
+            patch.object(check_cli, "calibrate", new=calibrate),
+        ):
+            code = check_cli.main(
+                [
+                    "--fleet",
+                    "fleet.json",
+                    "--calibrate-first-token",
+                    "--input-tokens",
+                    "8",
+                    "--observation-timeout-s",
+                    "10",
+                    "--calibration-out",
+                    "runs/new.json",
+                    "--calibration-base",
+                    "runs/base.json",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(calibrate.call_args.kwargs["base"], Path("runs/base.json"))
+
+    def test_calibration_base_requires_calibration(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            check_cli.main(["--fleet", "fleet.json", "--calibration-base", "runs/base.json"])
+        self.assertEqual(raised.exception.code, 2)
 
 
 class CalibrationRoundTests(unittest.TestCase):

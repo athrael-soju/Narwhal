@@ -82,7 +82,7 @@ Each engine entry takes these fields:
 | `url`             | required   | The engine HTTP base URL.                                                                          |
 | `attestation_url` | `""`       | Full attestation sidecar URL, required by `narwhal-check` when the fleet has an `engine_contract`. |
 | `role`            | `"decode"` | The starting role: `"prefill"` or `"decode"`.                                                      |
-| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume.    |
+| `pin`             | `false`    | When true, the engine serves only its configured role through role-controller moves and resume. Set it on an engine that must stay in one role, or on every engine for [static disaggregation](../concepts/01-Request-and-Topology.md#static-disaggregation). |
 | `shared_device`   | `null`     | GPU allocation for an engine that shares one GPU with other engines.                               |
 
 ```json

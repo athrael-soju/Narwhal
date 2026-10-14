@@ -68,6 +68,11 @@ def _main(argv: list[str]) -> int:
         help="fresh JSON path under runs/ for first-token calibration samples",
     )
     ap.add_argument(
+        "--calibration-base",
+        type=Path,
+        help="prior calibration artifact; measure only the groups it lacks or did not complete",
+    )
+    ap.add_argument(
         "--repeats",
         type=int,
         default=1,
@@ -134,6 +139,7 @@ def _main(argv: list[str]) -> int:
     elif (
         args.input_tokens is not None
         or args.calibration_out is not None
+        or args.calibration_base is not None
         or args.observation_timeout_s is not None
         or args.samples != 100
     ):
@@ -171,6 +177,7 @@ def _main(argv: list[str]) -> int:
                     samples_per_group=args.samples,
                     observation_timeout_s=observation_timeout_s,
                     out=calibration_out,
+                    base=args.calibration_base,
                 )
             )
         if args.verify_evidence is not None:
