@@ -33,7 +33,7 @@ The two small templates start one prefill and one decode engine on an NVIDIA GPU
     ip -brief -4 address
     ```
 
-5. Record the name of an interface with exactly one IPv4 address for KV transfer (default `eth0`). Choose a network interface, not a bridge such as `docker0`: UCX filters out bridge devices, and a vLLM engine on one fails to start with `NIXL_ERR_BACKEND`.
+5. Record the name of an interface with exactly one IPv4 address for KV transfer (default `eth0`). Choose an interface other than a bridge such as `docker0`. On a bridge, vLLM engines fail to start with `NIXL_ERR_BACKEND`.
 
 ## Installing the runtime and model
 

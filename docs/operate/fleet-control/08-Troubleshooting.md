@@ -31,7 +31,7 @@ Run an engine action to confirm the fix. Its marker appears on the Narwhal Orche
 
 The router readmits this engine only after its process restarts.
 
-1. Select **Stop**, then **Start**. **Readmit** is enabled once **Start** succeeds.
+1. Select **Stop**, then **Start**. The console enables **Readmit** once **Start** succeeds.
 2. Select **Readmit**. The engine returns to `in service`.
 
 Without the stop and start hooks, restart the engine through its process manager, as in [Replacing the process](../03-Restart-Engines.md#replace-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave). Then select **Readmit**.
@@ -42,7 +42,8 @@ Without the stop and start hooks, restart the engine through its process manager
 
 | Error                                                        | Cause                                                                                   | Fix                                                                                                                                |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `<engine> did not return to service within <n>s`             | The error ends with `the router still ejects <engine>`: the engine process failed to come up, or it answers health checks too slowly. It ends with `the router still quarantines <engine>`: requests to the engine failed, and the router holds it in a [timed quarantine or an inference hold](../../telemetry/04-Failures.md#hold-kinds) |  Read the start hook's output in `hooks/<nnn>-engine_start.log` in the session directory, then the engine's startup log. See [An engine fails to start after a stop](#an-engine-fails-to-start-after-a-stop) |
+| `<engine> did not return to service within <n>s: the router still ejects <engine>` | The engine process failed to come up, or it answers health checks too slowly | Read the start hook's output in `hooks/<nnn>-engine_start.log` in the session directory, then the engine's startup log. See [An engine fails to start after a stop](#an-engine-fails-to-start-after-a-stop) |
+| `<engine> did not return to service within <n>s: the router still quarantines <engine>` | Requests to the engine failed, and the router holds it out of placement | Read the engine's hold in `holds` of `/narwhal/state`. The router lifts it as [Hold kinds](../../telemetry/04-Failures.md#hold-kinds) describes |
 | `<engine> needs fresh profiles before the router readmits it` | The restarted process no longer matches the engine's profiles                           | Profile the engine and restart the router with the new profiles, as in [Activating replacement profiles](../03-Restart-Engines.md#activating-replacement-profiles) |
 | `the router blocked readmission of <engine>`                  | The router's readmission validation failed. The error ends with the router's reason     | Fix the reason, then select **Readmit**                                                                                            |
 

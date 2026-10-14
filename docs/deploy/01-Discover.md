@@ -179,7 +179,7 @@ Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU
 
 With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. Discovery writes `runtime.max_sequences` only when `NARWHAL_MAX_SEQUENCES` is set, from 1 to 256, and the launcher passes `--max-running-requests 256` when it is unset. The default SGLang `runtime.extra_args` is empty. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only.
 
-Discovery writes the maximum context to `runtime.context_length` and the maximum sequences to `runtime.max_sequences`, the [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings). It writes `NARWHAL_ENGINE_ARGS` to `runtime.extra_args` and fails when that list contains a flag that an engine-neutral setting maps.
+Discovery writes the maximum context to `runtime.context_length`, and on vLLM the maximum sequences to `runtime.max_sequences`. Both are [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings). Discovery writes `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`, and fails when that list sets a flag that one of those settings controls.
 
 ## Access failure handling
 

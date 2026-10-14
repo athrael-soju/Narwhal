@@ -31,9 +31,9 @@ A malformed request body returns HTTP 422 with a `detail` alone, and the service
 | Route                             | Action                                                                                   |
 | --------------------------------- | ---------------------------------------------------------------------------------------- |
 | `POST /api/engines/{iid}/pause`   | Runs the `engine_pause` hook                                                             |
-| `POST /api/engines/{iid}/resume`  | Runs the `engine_resume` hook, then waits until the router neither ejects nor quarantines the engine |
+| `POST /api/engines/{iid}/resume`  | Runs the `engine_resume` hook, then waits until the router returns the engine to service |
 | `POST /api/engines/{iid}/stop`    | Runs the `engine_stop` hook                                                              |
-| `POST /api/engines/{iid}/start`   | Runs the `engine_start` hook, then waits until the router neither ejects nor quarantines the engine  |
+| `POST /api/engines/{iid}/start`   | Runs the `engine_start` hook, then waits until the router returns the engine to service  |
 | `POST /api/engines/{iid}/drain`   | Drains the engine. Accepts an optional `deadline_s`, a positive number of seconds        |
 | `POST /api/engines/{iid}/readmit` | Readmits the engine                                                                      |
 | `GET /api/engines`                | The router state of every baseline engine                                                |
