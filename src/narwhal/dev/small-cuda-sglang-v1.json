@@ -37,7 +37,7 @@
     "decode_cuda_graph_memory_gb": 1.0,
     "extra_args": ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
     "environment": {
-      "MOONCAKE_PROTOCOL": "tcp"
+      "MC_FORCE_TCP": "1"
     }
   },
   "allocation": {
