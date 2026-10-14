@@ -23,8 +23,6 @@ The collector creates the bundle directory with mode `0700` and the bundle files
 
 ## Source selection
 
-The options name the router, the local sources to include, and the collection limits.
-
 | Option | Default | Description |
 | --- | --- | --- |
 | `--router URL` | required | Router base URL (HTTP or HTTPS) with host, optional port, and optional path. |
@@ -71,7 +69,7 @@ When an artifact file write fails, its source row records `write_error`, and col
 | `3` | Inspect individual source outcomes in the partial bundle. |
 | `4` | Inspect the reported I/O failure and the retained output directory. |
 
-The [command result contract](Command-Results.md#result-fields) defines the JSON `data` and the status for each exit code.
+With `--format json`, the [command result](Command-Results.md#result-fields) `data` holds `bundle`, `manifest`, `collection_status`, and the `sources` count.
 
 ## Content policy
 

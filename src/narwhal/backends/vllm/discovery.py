@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ...deployment.launch_engine.plan import discovered_settings
+from ...deployment.launch_engine.plan import discovered_launch_settings, discovered_settings
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
 DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
@@ -28,6 +28,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         "block_size": int(setting("BLOCK_SIZE", "128")),
         "context_length": context_length,
         "max_sequences": int(setting("MAX_SEQUENCES", "8")),
+        **discovered_launch_settings(setting),
         "environment": environment,
         "extra_args": args,
     }

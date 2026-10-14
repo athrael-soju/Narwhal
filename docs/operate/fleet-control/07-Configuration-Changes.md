@@ -16,7 +16,7 @@ An overlay is a partial fleet document that the service merges onto the current 
 - `null` removes a key, which returns the field to its default.
 - Any other value, arrays included, replaces the current value.
 
-An overlay may change the `slo`, `controller`, `serving` and `recovery` sections, plus keys that start with `_`. [Serving and role control](../../configuration/02-Serving-and-Role-Control.md) and [Recovery and validation](../../configuration/03-Recovery-and-Validation.md) define those sections' fields.
+An overlay may change the `slo`, `controller`, `serving` and `recovery` sections, with the fields in [Fleet schema](../../configuration/01-Fleet-Schema.md#minimal-fleet-definition), [Serving and role control](../../configuration/02-Serving-and-Role-Control.md) and [Recovery and validation](../../configuration/03-Recovery-and-Validation.md), plus keys that start with `_`.
 
 For example, this overlay adds 10% of the TTFT target to the admission budget:
 

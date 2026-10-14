@@ -92,4 +92,4 @@ These commands add exit codes for specific cases:
 
 ## JSON command results
 
-`narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check` accept `--format json`. With it, the command prints a [versioned command result](Command-Results.md) and derives its exit code from the result `status`.
+`narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check` accept `--format json`. With it, the command prints a [versioned command result](Command-Results.md) and sets its exit code from the result `status`.

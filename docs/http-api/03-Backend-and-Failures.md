@@ -44,8 +44,6 @@ Scoped to the original client request:
 - retries
 - cleanup
 
-Handoff age counts from prefill completion, when the producer's lease starts.
-
 ### KV handoff expiry
 
 The [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) limits the time from prefill completion to decode dispatch. A handoff that reaches the bound ends its attempt:
@@ -117,13 +115,11 @@ A failed exact count puts that engine into count backoff for 1 second. Each furt
 
 After a transient failure, the router moves the exact count to another live engine that has not failed it for this request. A request tries at most `serving.max_attempts` engines for its exact count, and these tries spend no retry credit. A non-transient failure, such as an HTTP 400 for the prompt, ends the count on its first engine.
 
-The exact count goes to the live engine outside count backoff that holds the fewest requests. When every live engine is in count backoff, the exact count goes to the live engine that holds the fewest requests.
-
 When the last exact count fails, or a count fails non-transiently, the request returns the [engine-fault mapping](#engine-failure-handling) status before placement.
 
 ### Breaker ejection and readmission
 
-[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) gives each decode-leg failure's breaker class and the probe that decides ejection or readmission.
+When an engine's consecutive failures in one [breaker class](../concepts/03-Failure-and-State.md#failure-evidence) reach `recovery.eject_after`, the router ejects the engine or runs a probe that decides ejection or readmission.
 
 [Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) keeps an uncovered suspect in placement during its inference probe.
 
@@ -146,7 +142,7 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 
 ### Retries
 
-`serving.max_attempts` sets the prefill/decode attempts per admitted request, from `1` to `3`. The default, `2`, allows one retry. [Retries and quarantine](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine) gives criteria for changing it.
+`serving.max_attempts` sets the prefill/decode attempts per admitted request, from `1` to `3`. The default, `2`, allows one retry. To choose a value, follow [Retries and quarantine](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine).
 
 A fresh attempt starts for a transient fault before visible output when:
 
@@ -170,10 +166,10 @@ A retry excludes, for each role, every engine whose leg failed earlier in the sa
 | Prefill                            | That prefill engine                            |
 | Decode, before visible output      | That decode engine and the attempt's producer  |
 
-A decode failure before visible output also excludes the producer because its KV handoff can cause the failure. The exclusion lasts for that request only.
+Each exclusion lasts for that request only.
 
 When no live engine outside the exclusions can take a role's legs, the request ends with HTTP `503` and error type `backend_unavailable`. Under [aggregate fallback](../concepts/02-Role-Control.md#aggregate-fallback), an unpinned engine of the other role can still take them. The journal records reason `no_engine`, and the final attempt entry carries `retry_reason` `not_dispatched`.
 
-In `predictive` mode, a retry skips the TTFT check and runs the decode admission check. [Retry pricing](../configuration/02-Serving-and-Role-Control.md#retry-pricing) gives the check a retry passes.
+In `predictive` mode, a retry skips the TTFT check and runs the [decode admission check for retries](../configuration/02-Serving-and-Role-Control.md#retry-pricing).
 
 With `recovery.failure_quarantine_s` above `0`, placement of the engine whose leg failed follows [failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine).

@@ -190,10 +190,10 @@ Module responsibilities break down as follows:
 - `profiling/fitting.py` implements numerical fitting and cross-validation, `model.py` implements profile validation and capacity calculations, and `store.py` implements persistence and fleet queries.
 - `engines/stream.py` decodes server-sent events (SSE) and validates token identity for serving and profiling.
 - `engines/client.py` holds HTTP deadlines.
-- `engines/handoff.py` sends a request to its prefill and decode engines. On vLLM it sends to decode once prefill finishes, and on SGLang it sends to both at once.
+- `engines/handoff.py` sends a request to its prefill and decode engines, one after the other or both at once, as the KV connector specifies.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
 - `config/serialization.py` serializes the versioned fleet configuration for file output and CLI printing.
-- `observability/metrics/render.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.
+- `observability/metrics/render.py` renders the metric sections in a fixed order. Metric names, labels, histogram buckets, and conditional emission are part of the metrics contract.
 
 Runtime helpers take `NarwhalRouter` explicitly, and injected HTTP transports should be typed as `httpx.AsyncBaseTransport` with their type errors resolved. Lease renewal requires a configured `FileLease`.
 
@@ -233,16 +233,15 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/exposition.py`                                        | Prometheus text lines and SLO-scaled histograms                          |
 | `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
-| `deployment/launch_engine/runtime.py`                                        | Standard-library code for the engine image and serving hook              |
+| `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
-| `deployment/launch_engine/settings.py`                                       | Runtime fields that become vLLM and SGLang launch flags                  |
+| `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
-| `deployment/launch_engine/captures.py`                                       | Model dimension, cache layout, cache registration and handshake captures |
+| `deployment/launch_engine/backend.py`                                        | Launcher, cache capture and model dimension interfaces for backends      |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
 | `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
-| `deployment/attestation_contract/capture.py`                                 | Live NIXL, model, transfer and HTTP captures                             |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
 | `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |
 | `deployment/attestation_contract/fleet.py`                                   | Router engine contract finalization                                      |
@@ -305,7 +304,7 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Fleet control configurations and hooks    | The ignored `config/fleet-control.*.json` pattern                                                |
 | Fleet control action log and run records  | `runs/fleet-control/`                                                                            |
 
-Site automation provides host credentials, the source distribution, network configuration, and engine process launch. [Gate D: Proving the transfer fabric against the serving cache](docs/deploy/04-Qualify-Fabric.md) defines the engine-facing fabric contract that automation must establish.
+Site automation provides host credentials, the source distribution, network configuration, and engine process launch. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
 
 ## Issues
 

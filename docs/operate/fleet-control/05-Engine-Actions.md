@@ -73,7 +73,7 @@ A disabled action shows the reason in its tooltip or under the menu item.
 - **Pause**, **Resume**, **Stop** and **Start** require their hooks. **Resume** requires a paused engine, and **Start** a stopped or ejected engine.
 - **Drain** requires an engine in service. The router runs one drain or readmit at a time.
 - The router readmits an ejected engine itself once its checks pass, so **Readmit** stays disabled for it. The tooltip shows the router's latest lifecycle event for the engine. When that event is `profile_recovery_blocked`, the engine's state reads `needs profiles`.
-- **Readmit** requires a drained or blocked engine. When the router needs the engine restarted after the drain, **Readmit** stays disabled until **Start** succeeds for that engine in this session. Without an `engine_start` hook, or for an engine in a restart wave, **Readmit** stays enabled, and the router refuses it until the engine restarts. To restart and readmit the engine, follow [Readmit stays disabled after a drain](08-Troubleshooting.md#readmit-stays-disabled-after-a-drain).
+- **Readmit** requires a drained or blocked engine. When this session drained the engine and the router needs it restarted, **Readmit** stays disabled until **Start** succeeds for that engine. In every other case **Readmit** stays enabled, and the router refuses it until the engine restarts. To restart and readmit the engine, follow [Readmit stays disabled after a drain](08-Troubleshooting.md#readmit-stays-disabled-after-a-drain).
 - All engine actions require an active session and are disabled during an [exclusive action](04-Sessions.md#exclusive-actions).
 
 ## Paused and stopped engines

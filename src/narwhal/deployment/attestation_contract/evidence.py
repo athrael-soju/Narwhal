@@ -184,6 +184,7 @@ def model_dimensions(run: Path, plan: dict) -> None:
     if isinstance(engine, LiveModelDimensions):
         engine.model_dimensions(run, plan)
     else:
+        checked_plan(run)
         config_model_dimensions(run, plan)
 
 

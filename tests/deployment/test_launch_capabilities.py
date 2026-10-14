@@ -16,7 +16,8 @@ from narwhal.deployment.launch_engine.backend import (
     LiveModelDimensions,
     ModelFormats,
 )
-from tests.backends.contract import fixtures, prepared
+from narwhal.deployment.launch_engine.check import check
+from tests.backends.contract import Stages, fixtures, prepared
 
 CAPABILITIES = (CacheCapture, LiveModelDimensions, ModelFormats)
 
@@ -77,8 +78,21 @@ class LaunchCapabilityTests(unittest.TestCase):
             self.prepared("sglang", native=True, NARWHAL_MODEL_PATH=model.name)
 
     def test_model_dimensions_come_from_the_model_configuration_without_live_dimensions(self):
-        run, _, _ = self.prepared("sglang")
-        with contextlib.redirect_stdout(io.StringIO()):
+        run, plan, _ = self.prepared("sglang")
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            self.assertRaises(SystemExit) as exited,
+        ):
+            cli.main(["model-dimensions", "--run", str(run)])
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("checked.json", error.getvalue())
+        self.assertFalse((run / "model-dimensions.json").exists())
+        stages = Stages(plan, fixtures("sglang").check_output(plan))
+        with (
+            patch("narwhal.deployment.stages.run", side_effect=stages),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            check(run, plan)
             self.assertEqual(cli.main(["model-dimensions", "--run", str(run)]), 0)
         record = json.loads((run / "model-dimensions.json").read_text())
         self.assertEqual(record["model_architecture"], "FixtureForCausalLM")

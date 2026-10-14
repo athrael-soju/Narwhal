@@ -149,6 +149,9 @@ class ConsoleConfigTests(unittest.TestCase):
         path.write_text(json.dumps(document))
         return path
 
+    def test_readmit_waits_for_start_only_after_a_drain_in_this_session(self) -> None:
+        self.assertIn("return drained > 0 && started < drained;", HTML)
+
     def test_a_grafana_path_links_and_frames_the_page_origin(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             config = load_config(self.write(folder, {"grafana_url": "/", "panels": [5]}), {})

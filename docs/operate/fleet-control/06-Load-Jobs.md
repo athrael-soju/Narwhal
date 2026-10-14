@@ -15,7 +15,7 @@ The service runs one AIPerf job at a time against `router.url`. To change the ra
 
 ## Choose a workload
 
-The hint under the inputs describes the selected workload and the inputs it accepts. [Workloads](09-Configuration-Reference.md#workloads) defines the workload kinds and their keys.
+The hint under the inputs describes the selected workload and the inputs it accepts. To add or change a workload, edit `load.workloads` as in [Workloads](09-Configuration-Reference.md#workloads) and restart the service.
 
 ## Start a job
 
@@ -47,7 +47,7 @@ Each workload kind accepts these inputs:
 | `requests`        | Set `duration_s`, `requests` or both                                 | Optional. Ends the replay after this many requests |
 | `warmup_requests` | Optional                                                             | Rejected                                           |
 
-A `timestamped_trace` workload sends each request at its recorded time. With both `duration_s` and `requests` set, the job stops at the first limit it reaches. In a `multi_turn` workload, `rate` counts turns and `concurrency` counts conversations.
+With both `duration_s` and `requests` set, the job stops at the first limit it reaches. In a `multi_turn` workload, `rate` counts turns and `concurrency` counts conversations.
 
 ## While the job runs
 
@@ -55,7 +55,7 @@ The panel locks its inputs, and the session strip shows the job's progress. **St
 
 ## Benchmark results
 
-**Results** shows the current or last job's figures from AIPerf's per-request records, refreshed every 3 seconds. Warm-up requests are excluded. It shows:
+**Results** shows the current or last job's figures, refreshed every 3 seconds:
 
 - the job's progress against its duration
 - completed requests, errors, requests per second and output tokens per second
@@ -72,6 +72,6 @@ A p95 value turns yellow at 80% of its target and red at 100%.
 
 </div>
 
-**Download results** saves the job document as `<job>.json`. [Load jobs](10-API-Reference.md#load-jobs) in the API reference lists its fields.
+**Download results** saves the [job document](10-API-Reference.md#load-jobs) as `<job>.json`.
 
 A job fails when its trace file is unreadable, AIPerf fails to start or exits non-zero, or the AIPerf summary export is missing or unreadable.

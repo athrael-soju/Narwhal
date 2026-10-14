@@ -30,6 +30,7 @@ The handoff document carries these fields:
 | `ejected`           | Breaker-excluded engines                                                              |
 | `inference_sources` | Suspect engine ID mapped to its inference-probe producer IDs, `""` for a local probe  |
 | `counters`          | `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `invalid_requests`, `unserved`, `refused`, `rejected`, `cancelled` totals |
+| `outcome_reasons`   | `failed`, `refused`, `rejected`, and `expired` counts by reason                       |
 | `lifecycle`         | Drain records, lifecycle events, wave ID, restart policy, and accepted process starts |
 | `demand_risk`       | Newest consolidation-risk event, or `null`                                            |
 
@@ -51,7 +52,7 @@ A new router process applies each handoff field as follows:
 | `ejected`                                                                                | Restored, with a readmission probe due at once           |
 | `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
 | Other `inference_sources` suspect outside `ejected`                                      | Kept live, with an inference probe due at once           |
-| `counters`, `lifecycle`                                                                  | Restored                                                 |
+| `counters`, `outcome_reasons`, `lifecycle`                                               | Restored                                                 |
 | `demand_risk`                                                                            | Restored, with its age measured on the new process clock |
 
 The new process resets:

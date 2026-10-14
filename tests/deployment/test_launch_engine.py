@@ -321,14 +321,16 @@ class EngineLauncherTests(unittest.TestCase):
 
     def test_cache_event_options_cannot_select_endpoints_or_conflict(self):
         cases = {
-            "events": ["--kv-events-config", '{"enable_kv_cache_events": false}'],
+            "kv_events": ["--kv-events-config", '{"enable_kv_cache_events": false}'],
             "prefix_caching": ["--enable-prefix-caching"],
         }
         for name, options in cases.items():
             with self.subTest(name), tempfile.TemporaryDirectory() as folder:
                 record, env = launcher_inputs(Path(folder))
                 record["runtime"]["extra_args"] += options
-                with self.assertRaisesRegex(ValueError, f"unsupported .*: {options[0]}$"):
+                with self.assertRaisesRegex(
+                    ValueError, f"extra_args sets {options[0]}, which runtime.{name} sets"
+                ):
                     validate_runtime(record["runtime"])
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))

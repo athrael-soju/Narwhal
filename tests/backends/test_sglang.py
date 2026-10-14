@@ -381,7 +381,7 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
 
     def test_extra_args_cannot_configure_cache_events(self):
-        with self.assertRaisesRegex(ValueError, "unsupported or incomplete runtime option"):
+        with self.assertRaisesRegex(ValueError, "which runtime.kv_events sets"):
             plan.validate_runtime(
                 runtime_record(extra_args=["--kv-events-config", '{"publisher": "null"}'])
             )

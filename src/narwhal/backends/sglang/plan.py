@@ -109,8 +109,8 @@ def validate_runtime(runtime: dict) -> None:
             "runtime.decode_cuda_graph_memory_gb must be positive; a prefill-launched "
             "engine reserves it when it switches to decode"
         )
-    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_settings(runtime, SETTINGS)
+    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_environment(runtime.get("environment", {}), MANAGED_ENV, ENV_PREFIXES)
 
 

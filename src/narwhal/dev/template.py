@@ -139,6 +139,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def check_instance_ports(value: dict, root: Path) -> None:
+    ports = value.get("ports")
+    missing = sorted(set(_PORT_RANGE_OFFSETS) - set(ports)) if isinstance(ports, dict) else []
+    if missing:
+        raise ValueError(
+            f"instance {root} has no ports.{missing[0]}. "
+            "Create a fresh instance with narwhal dev init --instance <new-directory>"
+        )
+
+
 def _template_differences(requested: dict, existing: dict, prefix: str = "") -> list[str]:
     differences = []
     for key in sorted(requested.keys() | existing.keys()):
@@ -172,6 +182,7 @@ def materialize(
         existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
+        check_instance_ports(existing, output)
         saved = json.loads((output / "template.json").read_text())
     source = template if template is not None else saved
     spec = copy.deepcopy(source if source is not None else default_template())

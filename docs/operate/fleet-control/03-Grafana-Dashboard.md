@@ -34,7 +34,7 @@ The **Narwhal Orchestrator** dashboard marks fleet control activity on its chart
 Prometheus reads these events from the control service's `GET /metrics`. To add the scrape:
 
 1. In the router shell, export the control token in `NARWHAL_CONTROL_TOKEN`.
-2. Export the control service's address as Prometheus reaches it. Prometheus uses host networking, so with the default port:
+2. Export the control service's address as Prometheus reaches it. With the default host and port:
 
     ```bash
     export NARWHAL_CONTROL_METRICS_URL=http://127.0.0.1:8020

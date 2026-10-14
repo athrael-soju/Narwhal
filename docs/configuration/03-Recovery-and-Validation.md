@@ -32,7 +32,7 @@ Compare the penalty with the time to first token (TTFT) target and the measured 
 
 At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class.
 
-[Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine) give the criteria for setting `recovery.failure_quarantine_s`.
+To choose a value for `recovery.failure_quarantine_s`, follow [Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine).
 
 An inconclusive inference probe:
 
@@ -45,7 +45,7 @@ A new router process restores each `inference_sources` suspect by the rules in [
 
 ### Decode drift evidence
 
-The drift tracker compares new decode times—or the longest pause between tokens if an engine stalls—to the engine's normal baseline. It ignores estimates remaining after decoding finishes.
+The drift tracker compares each engine's decode times, or the longest pause between tokens when the engine stalls, with its healthy baseline.
 
 A gap that crosses a prefill boundary pauses decode correction and drift scoring. The first pure decode observation after the pause starts a new scoring window with the previous healthy baseline and probation state.
 

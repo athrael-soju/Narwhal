@@ -38,9 +38,7 @@ The router reaches engines through two kinds of connection pool:
 | Data | One pool per engine | Token counting, prefill and decode | `serving.max_connections` open connections to each engine, and up to half that number kept alive | HTTP/1.1 on asyncio transports with the `httptools` response parser |
 | Control | One pool shared by all engines | Health probes and inference probes | `engine.control_connections` open connections across all engines, and up to half that number kept alive | HTTPX |
 
-Each engine has its own data pool, so a slow engine ties up its own connections and leaves every other engine's free. A leg that times out waiting for a connection in the router's pool leaves the engine's failure streaks unchanged.
-
-Both pools reuse a kept-alive connection for up to 4 s after its last response, within the 5 s idle timeout of vLLM and SGLang servers. The data pool also discards an idle connection that the engine has closed.
+A leg that times out waiting for a connection in the router's pool leaves the engine's failure streaks unchanged.
 
 ### Failure evidence
 
@@ -58,9 +56,9 @@ The router sorts each failed leg into a class and keeps a separate streak of con
 | Other HTTP 5xx response | `inference_status` | Run an inference probe under a placement hold |
 | vLLM prefill response without a readable KV handoff | `kv_handoff` | Run an inference probe under a placement hold |
 
-A 4xx response other than 408 or 429 counts as a successful answer, as [Clearing failure evidence](#clearing-failure-evidence) describes.
+A 4xx response other than 408 or 429 counts as a successful answer and [clears failure evidence](#clearing-failure-evidence).
 
-Whether a failure can take an engine out of placement depends on coverage. An engine is covered when the other live engines can still place every role it places. On vLLM, a pinned engine places its own role, so it is covered when another live engine holds that role or is unpinned, and an unpinned engine places both roles, so it is covered when prefill and decode each have another live engine that holds the role or is unpinned. On SGLang, only an engine that holds a role places it, so a pinned engine is covered when another live engine holds its role, and an unpinned engine when other live engines hold both roles. [Last-engine protection](#last-engine-protection) describes what changes for an uncovered engine.
+Whether a failure can take an engine out of placement depends on coverage. An engine is covered when the other live engines can still place every role it places. On vLLM, a pinned engine places its own role, so it is covered when another live engine holds that role or is unpinned, and an unpinned engine places both roles, so it is covered when prefill and decode each have another live engine that holds the role or is unpinned. On SGLang, only an engine that holds a role places it, so a pinned engine is covered when another live engine holds its role, and an unpinned engine when other live engines hold both roles. An uncovered engine has [last-engine protection](#last-engine-protection).
 
 A recovery probe clears evidence and lifts holds once the loaded profiles match the engine's live process generation. Under this profile-match rule, the router ejects an engine whose generation differs from its profiles or cannot be read.
 
@@ -68,7 +66,7 @@ A recovery probe clears evidence and lifts holds once the loaded profiles match 
 
 An inference probe sends one request through a prefill leg and a decode leg to retest the path that failed. Each `stream` failure on a decode leg records the leg's producer against the decode engine, and the probe retests every recorded path. A failed producer leg leaves the held engine untested, so the next producer runs the probe.
 
-On vLLM, the prefill leg of each path runs on the recorded producer while it is live, then on one other live producer, and last in a standalone probe that runs both legs on the held engine. An engine held without a recorded producer, such as one held for `inference_status` or `kv_handoff` evidence, takes the standalone probe. [Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the order in full.
+On vLLM, the [prefill leg of each path](../telemetry/04-Failures.md#inference-probe-producers) runs on the recorded producer while it is live, then on one other live producer, and last in a standalone probe that runs both legs on the held engine. An engine held without a recorded producer, such as one held for `inference_status` or `kv_handoff` evidence, takes the standalone probe.
 
 On SGLang, each engine serves only its live role, so the probe pairs the held engine with a live peer in the other role, and the two legs run together. A held prefill engine produces for each live decode engine in turn, moving to the next when a decode leg fails. A held decode engine takes the prefill leg from its recorded producer while it is live, and then from one other live prefill engine. A held decode engine without a recorded producer, such as one held for `inference_status` evidence, takes it from that other engine alone. When no peer in the other role is live, the probe is `inconclusive` with the reason `no_producer` or `no_consumer`.
 
@@ -108,9 +106,9 @@ A health 200 or a passing inference probe that meets the profile-match rule also
 
 ### Peer memory release
 
-Peer release applies to vLLM engines that share a host and exchange KV through CUDA IPC. Each engine maps the KV memory of its host peers, and a stopped engine's GPU memory stays allocated while a peer holds its mapping. SGLang engines need no release, because a consumer holds a producer's KV only for one rendezvous.
+Peer release applies to vLLM engines that share a host and exchange KV through CUDA IPC. Each engine maps the KV memory of its host peers, and a stopped engine's GPU memory stays allocated while a peer holds its mapping. SGLang engines need no release.
 
-On a consumer, the vLLM NIXL connector removes the NIXL agent of each producer idle for longer than `engine_ttl` each time it starts a handshake or sends a KV lease heartbeat. With the CUDA IPC cache off, UCX 1.22 or later in the engine image unmaps the producer's memory at that point. The engine launcher sets `engine_ttl` to 60 seconds for an engine with CUDA IPC peers when `runtime.environment` turns `UCX_CUDA_IPC_CACHE` off with `n`, `no` or `0`. The router's release rounds supply the transfers that run this check by sending each live KV consumer a transfer probe from another live producer.
+With the CUDA IPC cache off and UCX 1.22 or later in the engine image, a consumer unmaps the memory of each producer idle for longer than `engine_ttl` when it starts a handshake or sends a KV lease heartbeat. The engine launcher sets `engine_ttl` to 60 seconds for an engine with CUDA IPC peers when `runtime.environment` turns `UCX_CUDA_IPC_CACHE` off with `n`, `no` or `0`. The router's release rounds trigger this check by sending each live KV consumer a transfer probe from another live producer.
 
 `UCX_CUDA_IPC_CACHE` in `runtime.environment` chooses how CUDA IPC engines behave:
 
@@ -121,7 +119,7 @@ On a consumer, the vLLM NIXL connector removes the NIXL agent of each producer i
 
 #### Release rounds
 
-On a vLLM fleet under `recovery.engine_restart_policy` `individual`, the router runs release rounds for each engine out of placement, at 65, 125, 245, 485, 965, 1925 and 3845 seconds after a start point. The start point is the engine's ejection, or its entry into lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`, and each change between those states starts the schedule again. The first round falls just after the 60-second `engine_ttl`, and the last after vLLM's default `engine_ttl` of 3600 seconds.
+On a vLLM fleet under `recovery.engine_restart_policy` `individual`, the router runs release rounds for each engine out of placement, at 65, 125, 245, 485, 965, 1925 and 3845 seconds after a start point. The start point is the engine's ejection, or its entry into lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`, and each change between those states starts the schedule again.
 
 When a consumer's probe fails on the producer leg, cannot connect to the consumer, waits out the control pool, or raises an error, the router retries that consumer once, 5 seconds later, through the next producer. A consumer with zero other live producers gets a logged warning to recover with a whole-wave restart, and waits for the next round. `/narwhal/state` reports each engine's rounds in [`peer_release`](../http-api/05-Live-State.md#peer_release).
 
@@ -137,7 +135,7 @@ With `engine_contract` set and the `individual` restart policy, `narwhal-check` 
 
 On SGLang, a decode engine keeps the transfer endpoint it learned from each prefill engine until the decode engine itself switches roles, and a prefill engine opens a new endpoint every time it enters prefill. Once a producer has re-entered prefill, a decode engine that took handoffs from its earlier prefill period holds a stale endpoint, and handoffs between the two time out after 30 seconds.
 
-The router tracks staleness per pair. A decode engine becomes stale for a producer when it takes a handoff from an earlier prefill period of that producer, and starts out stale for every producer until the router first switches it. The router refreshes a stale decode engine by switching it to prefill and back:
+A decode engine becomes stale for a producer when it takes a handoff from an earlier prefill period of that producer, and starts out stale for every producer until the router first switches it. The router refreshes a stale decode engine by switching it to prefill and back:
 
 - At startup, after checking engine identities, the router refreshes each idle stale decode engine.
 - Each monitoring pass refreshes one idle stale decode engine. When a producer has no decode engine that is fresh for it, the pass holds the stale decode engine with the fewest decode requests out of new placements and refreshes it once its requests finish.
@@ -162,7 +160,7 @@ An admitted request that fails transiently before it shows any output retries on
 
 ## Durable control-plane state
 
-Each monitoring pass writes a state handoff that records engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router writes each handoff to a unique temporary file, syncs it to disk and renames it over the destination, so concurrent writers leave one complete document and a failed write leaves the previous handoff in place.
+Each monitoring pass writes a state handoff that records engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router replaces the handoff file atomically, so a failed write leaves the previous handoff in place.
 
 `narwhal-serve --resume` applies a saved handoff when its schema, engine set and engine restart policy match the configured fleet. With `engine_contract` configured, the handoff must also hold an accepted process identity for every engine it counts as available. Pinned engines take their configured roles, and saved ejections are probed for readmission at once. A saved inference suspect that another engine covers returns as an ejected engine due for a readmission probe. An engine whose readmission validation was running when the handoff was written resumes as `blocked`.
 

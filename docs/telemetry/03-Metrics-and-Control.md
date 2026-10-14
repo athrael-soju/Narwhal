@@ -6,7 +6,7 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 ## Prometheus metrics
 
-`/metrics` exposes these series. [`GET /narwhal/state`](../http-api/05-Live-State.md) returns the JSON state document; [Reading the dashboard](../observability/05-Dashboard.md) explains the Grafana panels.
+For the JSON state document, use [`GET /narwhal/state`](../http-api/05-Live-State.md). For the Grafana panels, follow [Reading the dashboard](../observability/05-Dashboard.md).
 
 A new router process starts each series at these values:
 
@@ -62,7 +62,7 @@ The four outcome counters export every documented reason other than `unclassifie
 
 ## Reading engine lifecycle gauges
 
-The lifecycle gauges mirror fields of each engine's record in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle).
+The lifecycle gauges report fields of each engine's record in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle).
 
 | Metric | Type | Labels | Value |
 | --- | --- | --- | --- |

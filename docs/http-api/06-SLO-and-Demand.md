@@ -18,9 +18,7 @@ description: SLO attainment per time bucket and demand accounting in the Narwhal
 | `pruned_buckets`  | Buckets aged out of retention                                           |
 | `pruned_outcomes` | Requests in pruned buckets                                              |
 
-Each bucket keeps three counts over completed, failed, expired, and predictively refused requests: TTFT met, TPOT met, and total.
-
-A query over a window counts the bucket at the window's start in full.
+`outcomes` and `pruned_outcomes` count completed, failed, expired, and predictively refused requests.
 
 ## Demand accounting
 
@@ -90,13 +88,8 @@ An overflow cohort:
 
 - keeps every request count
 - takes its price from its largest input length and requested output length
-- marks decode demand incomplete when its requested output length is zero
 - keeps the output estimates learned before the overflow until every overflow cohort leaves output history
 - contributes its full count when it crosses a window boundary
-
-### Decision snapshots
-
-A reactive decision snapshot contains profile coefficients, demand, phase pressure, output estimates, and resident work.
 
 ### Prefill recovery ratio
 

@@ -158,7 +158,7 @@ The launcher sets `--page-size 1`, `--attention-backend triton`, `--stream-inter
 
 Every engine launches as prefill with `--enable-pd-role-switch`, and the router switches its role at runtime through `POST /pd_role_switch`. While prefix caching is on, the launcher also adds `--disaggregation-decode-enable-radix-cache`.
 
-For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to every SGLang engine, unless the engine arguments already set `--mamba-radix-cache-strategy`. When your `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`, set it to `no_buffer` and add `--disable-overlap-schedule`. With the overlap scheduler on, SGLang uses `extra_buffer` for a model that supports it, and an engine switched to decode exits under sustained load.
+For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` to every SGLang engine, unless the engine arguments already set `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`. When your `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`, set it to `no_buffer` and add `--disable-overlap-schedule`. With the overlap scheduler on, SGLang uses `extra_buffer` for a model that supports it, and an engine switched to decode exits under sustained load.
 
 `--disaggregation-ib-device` names the InfiniBand devices an engine uses for KV transfer. Without it, SGLang detects the devices itself. Give each engine on a host its own device.
 

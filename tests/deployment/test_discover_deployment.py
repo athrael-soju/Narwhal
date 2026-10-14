@@ -232,6 +232,28 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(plan["engine"], "sglang")
                 self.assertIn("--tp-size", plan["args"])
 
+    def test_env_sets_prefix_caching_cache_events_and_tokenizer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            env.update(
+                NARWHAL_NODE_1_PREFIX_CACHING="false",
+                NARWHAL_NODE_2_KV_EVENTS="false",
+                NARWHAL_TOKENIZER="/tokenizer",
+            )
+            hosts = derive_hosts(env)
+            observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
+            _, launches, _, _ = build_records(hosts, env, observations, root)
+            one = launches["engines"]["engine-1"]["runtime"]
+            two = launches["engines"]["engine-2"]["runtime"]
+            self.assertEqual((one["prefix_caching"], one["tokenizer"]), (False, "/tokenizer"))
+            self.assertNotIn("kv_events", one)
+            self.assertEqual((two["kv_events"], two["tokenizer"]), (False, "/tokenizer"))
+            self.assertNotIn("prefix_caching", two)
+            env["NARWHAL_KV_EVENTS"] = "no"
+            with self.assertRaisesRegex(ValueError, "set KV_EVENTS to true or false"):
+                build_records(hosts, env, observations, root)
+
     def test_sglang_engines_need_the_mooncake_connector_and_graph_memory(self):
         env = sglang_environment(Path("/synthetic"))
         hosts = derive_hosts(env)
@@ -263,8 +285,13 @@ class DiscoveryTests(unittest.TestCase):
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--mamba-radix-cache-strategy", "no_buffer"])
         self.assertEqual(extra_args(), ["--mamba-radix-cache-strategy", "no_buffer"])
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
-        with self.assertRaisesRegex(ValueError, "unsupported .*: --disable-radix-cache$"):
+        with self.assertRaisesRegex(
+            ValueError, "sets --disable-radix-cache, which runtime.prefix_caching sets"
+        ):
             extra_args()
+        del env["NARWHAL_ENGINE_ARGS"]
+        env["NARWHAL_PREFIX_CACHING"] = "false"
+        self.assertEqual(extra_args(), [])
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
@@ -359,7 +386,9 @@ class DiscoveryTests(unittest.TestCase):
                 (["--enforce-eager"], 8192, 8),
             )
             env["NARWHAL_ENGINE_ARGS"] = '["--max-model-len", "8192"]'
-            with self.assertRaisesRegex(ValueError, "unsupported .*: --max-model-len$"):
+            with self.assertRaisesRegex(
+                ValueError, "sets --max-model-len, which runtime.context_length sets"
+            ):
                 build_records(hosts, env, observations, root)
             env["NARWHAL_ENGINE_ARGS"] = '["--enforce-eager"]'
             env["NARWHAL_MODEL_CONFIG_SHA256"] = "c" * 64

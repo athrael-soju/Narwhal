@@ -4,7 +4,7 @@ description: Every key in the fleet control service's private configuration, the
 
 # Configuration reference
 
-The fleet control service reads its private configuration from `config/fleet-control.local.json`, or from the file named by `--config` or `NARWHAL_CONTROL_CONFIG`. [Setting up the control service](01-Set-Up-the-Service.md) shows how to create it.
+The fleet control service reads its private configuration from `config/fleet-control.local.json`, or from the file named by `--config` or `NARWHAL_CONTROL_CONFIG`. To create it, follow [Setting up the control service](01-Set-Up-the-Service.md).
 
 The service validates the whole file at startup and reports every problem in one message. It rejects unknown keys at every level. Relative paths resolve against the directory where the service starts.
 
@@ -36,14 +36,14 @@ Each entry under `hooks` names one command:
 
 The service runs these hooks:
 
-| Hook             | Runs for                                 | Must                                                                                        |
-| ---------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `engine_pause`   | Engine pause                             | Pause the engine named by `NARWHAL_CONTROL_ENGINE`                                          |
-| `engine_resume`  | Engine resume, restoring the baseline    | Resume that engine                                                                          |
-| `engine_stop`    | Engine stop                              | Stop that engine                                                                            |
-| `engine_start`   | Engine start, restoring the baseline     | Start that engine                                                                           |
-| `router_restart` | Overlay, restoring the baseline          | Restart the router with the fleet configuration at `NARWHAL_CONTROL_FLEET`                  |
-| `cold_restart`   | Cold restart                             | Restart every engine and the router with the fleet configuration at `NARWHAL_CONTROL_FLEET` |
+| Hook             | Runs for                              | Must                                                                                        |
+| ---------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `engine_pause`   | Engine pause                          | Pause the engine named by `NARWHAL_CONTROL_ENGINE`                                          |
+| `engine_resume`  | Engine resume, restoring the baseline | Resume that engine                                                                          |
+| `engine_stop`    | Engine stop                           | Stop that engine                                                                            |
+| `engine_start`   | Engine start, restoring the baseline  | Start that engine                                                                           |
+| `router_restart` | Overlay, restoring the baseline       | Restart the router with the fleet configuration at `NARWHAL_CONTROL_FLEET`                  |
+| `cold_restart`   | Cold restart                          | Restart every engine and the router with the fleet configuration at `NARWHAL_CONTROL_FLEET` |
 
 ### Hook execution
 
@@ -65,7 +65,7 @@ Hooks run in the service's working directory, so relative paths in `argv` resolv
 
 ### Reference engine hook
 
-`tools/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches. It works with every engine backend that runs in a container. It refuses native launches. Use it for all four engine hooks. Pass the hook name without `engine_` as the action:
+`tools/fleet_control/engine_hook.py` controls the engine containers that `narwhal-engine` launches, for every engine backend that runs in a container, and refuses native launches. Use it for all four engine hooks, and pass the hook name without `engine_` as the action:
 
 ```json
 "engine_start": {
@@ -84,11 +84,11 @@ Hooks run in the service's working directory, so relative paths in `argv` resolv
 }
 ```
 
-`narwhal-engine start` writes the container ID to `container.id` in the launch directory. The hook reads that ID. It then runs `docker pause`, `docker unpause`, `docker stop` or `docker start` on the container. Keep each engine's launch directory in place while the engine runs.
+The hook reads the container ID that `narwhal-engine start` writes to `container.id` in the launch directory, then runs `docker pause`, `docker unpause`, `docker stop` or `docker start` on that container. Keep each engine's launch directory in place while the engine runs.
 
-After `docker start`, the hook polls the health route of the endpoint in `launch.json`. It polls every 2 seconds. The start succeeds when the route returns `200`. The start fails if the container stops. The start also fails if the route does not return `200` within `--health-timeout` seconds (600 by default).
+After `docker start`, the hook polls the health route of the endpoint in `launch.json` every 2 seconds. The start succeeds when the route returns `200`, and fails if the container stops or the route does not return `200` within `--health-timeout` seconds (600 by default).
 
-To run a command after the engine answers its health route, add `--` and the command after `start`. An example is an attestation sidecar restart. The hook runs the command with `NARWHAL_CONTROL_LAUNCH_DIR` set to the engine's launch directory. The start fails if the command exits non-zero. Set `timeout_s` on `engine_start` to more than `--health-timeout` plus the command's run time.
+To run a command after the engine answers its health route, such as an attestation sidecar restart, add `--` and the command after `start`. The hook runs the command with `NARWHAL_CONTROL_LAUNCH_DIR` set to the engine's launch directory. The start fails if the command exits non-zero. Set `timeout_s` on `engine_start` to more than `--health-timeout` plus the command's run time.
 
 The hook exits `2` before it runs Docker when it refuses the request, for example when the engine has no entry in the map or the launch is native. Any later failure exits `1`. The hook prints the reason to stderr.
 
@@ -137,7 +137,7 @@ Every kind accepts these keys:
 | Key              | Default           | Meaning                                                                                                                                                                         |
 | ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `label`          | the workload name | Text in the console's workload list, at most 60 characters                                                                                                                      |
-| `description`    | none              | Text in the console hint, at most 300 characters. The hint summarizes the workload's settings in its place                                                                      |
+| `description`    | none              | Text in the console hint, at most 300 characters. Without it, the hint summarizes the workload's settings                                                                       |
 | `ignore_eos`     | `false`           | When `true`, each request sets `ignore_eos`, and the engine generates the full requested output length                                                                          |
 | `cache_bust`     | none              | Adds a marker unique to each session at `system_prefix`, `system_suffix`, `first_turn_prefix` or `first_turn_suffix`. A prefix marker stops prefix-cache reuse between sessions |
 | `cancel_percent` | none              | Percentage of requests that the client cancels, above 0 and at most 100                                                                                                         |
@@ -178,7 +178,7 @@ The service checks these rules when it starts:
 - The `percent` values of a `mix` add up to 100.
 - `prefix_prompts` and `prefix_tokens` appear together.
 - A workload sets `system_prompt_tokens` or `prefix_prompts`, but not both.
-- With `load.endpoint_type` set to `completions`, the library holds no `multi_turn` or `public_dataset` workload and no workload that sets `system_prompt_tokens` or `cache_bust`. AIPerf sends those through chat messages.
+- With `load.endpoint_type` set to `completions`, the library holds no `multi_turn` or `public_dataset` workload and no workload that sets `system_prompt_tokens` or `cache_bust`.
 - When a workload sets `ignore_eos`, `load.extra_args` leaves out `--extra-inputs`.
 
 Each input and output length must fit the served model's context length.
@@ -187,31 +187,31 @@ AIPerf downloads the ShareGPT dataset from Hugging Face on the first `public_dat
 
 `aiperf synthesize agentic-code` writes a `mooncake_trace` file of coding-agent sessions. Use it as a `prefix_trace` workload with `block_size` 512.
 
-[Start a job](06-Load-Jobs.md#start-a-job) lists the job inputs each kind accepts.
+Set each job's inputs to suit its workload kind, as in [Start a job](06-Load-Jobs.md#start-a-job).
 
 ## Console
 
-| Key                        | Default          | Meaning                                                                                                                                          |
-| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Key                        | Default          | Meaning                                                                                                                                             |
+| -------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `console.grafana_url`      | none; required   | Grafana base URL as the operator's browser reaches it, or a path such as `/` for Grafana on the console's origin. No credentials, query or fragment |
-| `console.dashboard_uid`    | `narwhal-router` | Dashboard UID for embedded panels and dashboard links                                                                                         |
-| `console.panels`           | none             | Non-empty list of distinct panel IDs that the standalone console embeds, in display order                                                        |
-| `console.from`             | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`                                                   |
-| `console.refresh`          | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                                                               |
-| `console.embed_in_grafana` | `false`          | Whether pages from the `console.grafana_url` origin and the console's own origin may frame the console. See [Framing boundary](03-Grafana-Dashboard.md#framing-boundary)      |
-| `console.auto_connect`     | `false`          | Whether the console page carries the token and connects on load. See [Connecting automatically](02-Open-the-Console.md#connecting-automatically) |
-| `console.trusted_hosts`    | none             | Host names or IPv4 addresses, besides loopback, for which the console page carries the token. Requires `console.auto_connect` |
+| `console.dashboard_uid`    | `narwhal-router` | Dashboard UID for embedded panels and dashboard links                                                                                               |
+| `console.panels`           | none             | Non-empty list of distinct panel IDs that the standalone console embeds, in display order                                                           |
+| `console.from`             | `now-15m`        | Panel time range start, `now` or `now-<n><unit>` with unit `s`, `m`, `h`, `d`, `w`, `M` or `y`                                                      |
+| `console.refresh`          | `5s`             | Panel refresh interval, `<n><unit>` with unit `s`, `m`, `h` or `d`                                                                                  |
+| `console.embed_in_grafana` | `false`          | Whether pages from the `console.grafana_url` origin and the console's own origin may [frame the console](03-Grafana-Dashboard.md#framing-boundary)  |
+| `console.auto_connect`     | `false`          | Whether the console page carries the token and [connects on load](02-Open-the-Console.md#connecting-automatically)                                  |
+| `console.trusted_hosts`    | none             | Host names or IPv4 addresses, besides loopback, for which the console page carries the token. Requires `console.auto_connect`                       |
 
 `console.grafana_url` is Grafana's address as your workstation browser sees it, such as `http://127.0.0.1:13000`. When one proxy serves Grafana and the console, set it to `/`.
 
-The example configuration embeds the shipped dashboard's **Requests**, **Latency**, **Time to first token**, **Time per output token**, **Engine role history** and **Fleet events** panels. [Reading the dashboard](../../observability/05-Dashboard.md) describes each panel. If those panels show as empty frames, see [Charts in the standalone console are empty frames](08-Troubleshooting.md#charts-in-the-standalone-console-are-empty-frames).
+The example configuration embeds the **Requests**, **Latency**, **Time to first token**, **Time per output token**, **Engine role history** and **Fleet events** panels of the [shipped dashboard](../../observability/05-Dashboard.md). If those panels show as empty frames, follow [Charts in the standalone console are empty frames](08-Troubleshooting.md#charts-in-the-standalone-console-are-empty-frames).
 
 ## Environment variables
 
-| Variable                      | Read by                     | Meaning                                                                                                                      |
-| ----------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `NARWHAL_CONTROL_CONFIG`      | The service                 | Configuration file when `--config` is not given                                                                              |
-| `NARWHAL_FLEET`               | The service                 | Baseline fleet configuration file when `fleet` is unset                                                                      |
-| `NARWHAL_CONTROL_TOKEN`       | The service, `make observe` | Bearer token. The service reads the variable that `token_env` names; `make observe` always reads `NARWHAL_CONTROL_TOKEN`     |
-| `NARWHAL_CONTROL_CONSOLE_URL` | `make observe`              | Console address that the dashboard's **Fleet control** link opens, when it differs from `http://127.0.0.1:18020/console`     |
-| `NARWHAL_CONTROL_METRICS_URL` | `make observe`              | Control service address as Prometheus reaches it. See [Dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) |
+| Variable                      | Read by                     | Meaning                                                                                                                          |
+| ----------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `NARWHAL_CONTROL_CONFIG`      | The service                 | Configuration file when `--config` is not given                                                                                  |
+| `NARWHAL_FLEET`               | The service                 | Baseline fleet configuration file when `fleet` is unset                                                                          |
+| `NARWHAL_CONTROL_TOKEN`       | The service, `make observe` | Bearer token. The service reads the variable that `token_env` names; `make observe` always reads `NARWHAL_CONTROL_TOKEN`         |
+| `NARWHAL_CONTROL_CONSOLE_URL` | `make observe`              | Console address that the dashboard's **Fleet control** link opens, when it differs from `http://127.0.0.1:18020/console`         |
+| `NARWHAL_CONTROL_METRICS_URL` | `make observe`              | Control service address as Prometheus reaches it, for the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) |

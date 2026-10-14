@@ -40,15 +40,13 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | On vLLM, the KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
 | The original request deadline expires before response headers, at any stage, including a seat wait | `504` | `request_expired` | | |
 
-An engine fault before output starts returns HTTP `502` or `504` with the request phase as its error type. [Engine failure handling](03-Backend-and-Failures.md#engine-failure-handling) lists those responses and the terminal event of a stream that fails after output starts.
+An engine fault before output starts returns HTTP `502` or `504` with the [request phase](03-Backend-and-Failures.md#engine-failure-handling) as its error type. A streaming decode failure after output starts ends the HTTP `200` stream with a terminal error event of type `decode`.
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
-[Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) describes each wait's bound, the pricing of waiting requests, and the holds that end a wait.
-
 `/ready` reports the reason for each `503` refusal.
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) compares the client outcomes of each mode, queue setting and retry limit.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit. To choose a mode, queue setting and retry limit, follow [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md).
 
 ### Admission counters
 
@@ -122,10 +120,10 @@ On vLLM, every decode request includes:
 }
 ```
 
-On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true`, and the launcher sets `--stream-interval 1`. SGLang refuses `return_token_ids` on a streamed chat request, so a `/v1/chat/completions` decode request carries no token-ID field, and the router counts one token for each streamed chunk that carries text, reasoning content, or tool calls.
+On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true`, and the launcher sets `--stream-interval 1`. A `/v1/chat/completions` decode request on SGLang carries no token-ID field, and the router counts one token for each streamed chunk that carries text, reasoning content, or tool calls.
 
 When the decode request asks for token IDs, every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
 The router reports `token_accounting: token_ids` on vLLM and SGLang.
 
-Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`, because it streams every decode leg and SGLang refuses the field on a streamed chat request.
+Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`.

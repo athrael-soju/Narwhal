@@ -195,7 +195,7 @@
       "kv_events": false
     },
     "kv_events_endpoint": {
-      "error": "unsupported or incomplete runtime option: --kv-events-config"
+      "error": "runtime.extra_args sets --kv-events-config, which runtime.kv_events sets"
     },
     "kv_transfer_override": {
       "error": "unsupported or incomplete runtime option: --kv-transfer-config"
@@ -204,7 +204,7 @@
       "error": "unsupported runtime environment field: VLLM_API_KEY"
     },
     "mapped_flag": {
-      "error": "unsupported or incomplete runtime option: --max-model-len"
+      "error": "runtime.extra_args sets --max-model-len, which runtime.context_length sets"
     },
     "missing_nixl_pin": {
       "error": "runtime.expected_packages requires pinned vLLM and NIXL versions"

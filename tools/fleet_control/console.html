@@ -1352,7 +1352,8 @@ function restartPending(iid, slice) {
   if (!record || !record.restart_required || !record.old_process_start) return false;
   if (record.wave_id || slice.process_start !== record.old_process_start || !hookConfigured("engine_start")) return false;
   // The router reports a drained engine's drained process until readmission verifies the
-  // new one, so a Start after the drain in this session is the restart.
+  // new one, so a Start after the drain in this session is the restart. A drain from another
+  // session leaves the restart unknown, and the router decides at readmission.
   let drained = 0;
   let started = 0;
   for (const action of (state.record ? state.record.actions : [])) {
@@ -1360,7 +1361,7 @@ function restartPending(iid, slice) {
     if (action.action === "engine.drain") drained = action.seq;
     else if (action.action === "engine.start") started = action.seq;
   }
-  return started <= drained;
+  return drained > 0 && started < drained;
 }
 
 function primaryAction(slice, process) {

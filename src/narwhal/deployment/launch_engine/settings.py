@@ -65,7 +65,12 @@ def check_settings(runtime: dict, mapping: LaunchSettings) -> None:
             if type(value) is not bool:
                 raise ValueError(f"runtime.{name} must be true or false")
         elif name == "tokenizer":
-            if not isinstance(value, str) or not value.strip() or "\n" in value:
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or "\n" in value
+                or value.startswith("-")
+            ):
                 raise ValueError("runtime.tokenizer must name the tokenizer path")
         elif (
             type(value) is not int

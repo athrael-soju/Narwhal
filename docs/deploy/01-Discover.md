@@ -95,7 +95,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code` when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy`.
+Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code` when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`.
 
 Discovery writes the generated configuration at mode 0600:
 
@@ -162,6 +162,7 @@ Override the policy in `.env` before discovery:
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size                                                          |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
 | `NARWHAL_CONTEXT_LENGTH`, `NARWHAL_MAX_SEQUENCES`                                        | `runtime.context_length` and `runtime.max_sequences`                                                                          |
+| `NARWHAL_PREFIX_CACHING`, `NARWHAL_KV_EVENTS`, `NARWHAL_TOKENIZER`                       | `runtime.prefix_caching` and `runtime.kv_events`, each `true` or `false`, and `runtime.tokenizer`                             |
 | `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default `runtime.extra_args`                                                                     |
 | `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment                                     |
 | `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths |

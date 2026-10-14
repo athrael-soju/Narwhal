@@ -12,8 +12,8 @@ Configure and start the fleet control service on the router host.
 - The router shell: the router host's Narwhal checkout with `.venv` active, opened with `deploy_hosts.py shell`.
 - The monitoring stack, started with `make observe` on the router host.
 - The baseline fleet configuration file that the router is running.
-- A hook command for each action you plan to run. See [Hooks](09-Configuration-Reference.md#hooks).
-- For load jobs, AIPerf on the router host. [Ordered benchmark points](../../measure/05-Benchmark-Runner.md) names the AIPerf client version.
+- A [hook](09-Configuration-Reference.md#hooks) command for each action you plan to run.
+- For load jobs, AIPerf on the router host, at the version in [Ordered benchmark points](../../measure/05-Benchmark-Runner.md).
 
 ## Write the private configuration
 
@@ -23,7 +23,7 @@ In the router shell, copy the example configuration:
 cp config/fleet-control.example.json config/fleet-control.local.json
 ```
 
-Edit the copy for your deployment. Each hook, and the `load` and `console` sections, enables one feature. [Configuration reference](09-Configuration-Reference.md) lists every key.
+Edit the copy for your deployment with the keys in [Configuration reference](09-Configuration-Reference.md). Each hook, and the `load` and `console` sections, enables one feature.
 
 The service reads `config/fleet-control.local.json` by default. To use another file, pass `--config` or set `NARWHAL_CONTROL_CONFIG`.
 

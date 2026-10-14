@@ -27,7 +27,13 @@ from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
 
-from .template import _check_free_ports, _port_layout, _sha256, model_files
+from .template import (
+    _check_free_ports,
+    _port_layout,
+    _sha256,
+    check_instance_ports,
+    model_files,
+)
 
 
 class LifecycleDocumentError(ValueError):
@@ -116,6 +122,7 @@ def instance(root: Path) -> dict:
     value = read(root / "instance.json")
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
+    check_instance_ports(value, root)
     expected = Path(value["python_executable"])
     current = Path(sys.executable)
     if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):

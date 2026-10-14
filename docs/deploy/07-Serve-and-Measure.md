@@ -103,15 +103,13 @@ If a service listens on an address other than the router's `127.0.0.1`, pass one
 
 The trial requires the [capacity-trial prefix-caching setting](03-Validate-Engines.md#preparing-checking-and-starting-each-engine) on every engine.
 
-The [synthetic load trial](../measure/03-Load-Trial.md#running-the-synthetic-deployment-trial) sets the TTFT, TPOT, and attainment thresholds.
-
 Run the trial:
 
 1. Confirm that each engine's `checked.json` record shows `"prefix_caching": false`.
 2. [Freeze the deployment evidence](../measure/02-Targets-and-Freeze.md#freezing-the-deployment-under-test) under a new deployment identifier.
 3. Attach the passing preflight result to the deployment evidence.
 4. Retain the monitoring startup output and the router and engine scrape evidence.
-5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md) through `$NARWHAL_TRIAL_URL`.
+5. From the workstation, run the [synthetic load trial](../measure/03-Load-Trial.md#running-the-synthetic-deployment-trial) through `$NARWHAL_TRIAL_URL`, against its TTFT, TPOT, and attainment thresholds.
 6. Retain the workload definition, the request-level records, and the summaries.
 7. Capture the client CPU, memory, network, and scheduler behaviour.
 8. Confirm the drained, idle router state in `state-after.json`.

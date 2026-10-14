@@ -44,8 +44,6 @@ Run:
 make observe
 ```
 
-The command returns after Prometheus `3.14.0` and Grafana `13.2.1` pass the [readiness checks](#readiness-contract).
-
 ### Readiness contract
 
 `make observe` returns when every component passes its check:
@@ -109,7 +107,7 @@ The staged files and the renderer token have these modes:
 | Mounted files, including `prometheus/fleet-control-token` | `0644` |
 | `runs/observability/renderer-token`                       | `0600` |
 
-Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only. The `0700` mounts directory keeps other host accounts from reading the fleet control token.
+Compose bind-mounts the `prometheus`, `grafana-provisioning`, and `grafana-dashboards` subdirectories read-only.
 
 `make observe` writes the Grafana-to-renderer token to `runs/observability/renderer-token` on its first run and reuses that file on later runs.
 

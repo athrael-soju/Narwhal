@@ -25,6 +25,9 @@ ENGINE_FIELDS = (
     "UCX_TCP_PORT_RANGE",
     KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_"),
 )
+REPLACED_PORT = re.compile(
+    r"NARWHAL_(NODE_[1-9][0-9]*_)?(?:NIXL_SIDE_CHANNEL_PORT|SGLANG_BOOTSTRAP_PORT)"
+)
 ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
 
 
@@ -66,6 +69,11 @@ def select_values(
     elif role == "engine":
         if node is None or node < 1:
             raise ValueError("engine export requires a positive --node number")
+        for name in sorted(env):
+            replaced = REPLACED_PORT.fullmatch(name)
+            if replaced:
+                new = f"NARWHAL_{replaced[1] or ''}KV_SIDE_CHANNEL_PORT"
+                raise ValueError(f"rename {name} to {new}")
         if cache_capture(launcher(fleet.get("engine", {}).get("backend"))) is not None:
             values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"

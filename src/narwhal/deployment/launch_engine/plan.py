@@ -109,6 +109,21 @@ def discovered_settings(
     return dtype, context_length, args, environment, overrides
 
 
+def discovered_launch_settings(setting: Callable[[str, str], str]) -> dict:
+    """Return the optional runtime fields that .env sets."""
+    fields: dict = {}
+    for name in ("PREFIX_CACHING", "KV_EVENTS"):
+        raw = setting(name, "")
+        if raw:
+            if raw not in ("true", "false"):
+                raise ValueError(f"set {name} to true or false in .env")
+            fields[name.lower()] = raw == "true"
+    tokenizer = setting("TOKENIZER", "")
+    if tokenizer:
+        fields["tokenizer"] = tokenizer
+    return fields
+
+
 def ipc_cache_off(ipc_cache: str | None) -> bool:
     return ipc_cache is not None and (ipc_cache.lower() in ("n", "no") or ipc_cache == "0")
 

@@ -84,13 +84,17 @@ class NeutralSettingsTests(unittest.TestCase):
             for changes in ({}, {"context_length": 1024}):
                 with (
                     self.subTest(backend=name, changes=changes),
-                    self.assertRaisesRegex(ValueError, f"unsupported .*: {flag}$"),
+                    self.assertRaisesRegex(
+                        ValueError, f"extra_args sets {flag}, which runtime.context_length sets"
+                    ),
                 ):
                     self.built(name, changes, extra=[flag, "1024"])
             with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "requires prefix"):
                 self.built(name, {"prefix_caching": False, "kv_events": True})
             with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "max_sequences"):
                 self.built(name, {"max_sequences": 0})
+            with self.subTest(backend=name), self.assertRaisesRegex(ValueError, "tokenizer path"):
+                self.built(name, {"tokenizer": "--trust-remote-code"})
 
     def test_sglang_fixes_the_page_size_and_caps_sequences(self):
         with self.assertRaisesRegex(ValueError, "runtime.block_size must be 1"):
@@ -111,7 +115,17 @@ class NeutralSettingsTests(unittest.TestCase):
         self.assertEqual(values[KV_SIDE_CHANNEL_PORT_ENV], "5700")
         del base[KV_SIDE_CHANNEL_PORT_ENV]
         with self.assertRaisesRegex(ValueError, f"^{KV_SIDE_CHANNEL_PORT_ENV} is unset"):
-            select_values("engine", 1, fleet, {**base, "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5600"})
+            select_values("engine", 1, fleet, base)
+        for old, new in (
+            ("NARWHAL_NIXL_SIDE_CHANNEL_PORT", KV_SIDE_CHANNEL_PORT_ENV),
+            ("NARWHAL_NODE_2_SGLANG_BOOTSTRAP_PORT", "NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT"),
+        ):
+            env = {**base, KV_SIDE_CHANNEL_PORT_ENV: "5700", old: "5601"}
+            with (
+                self.subTest(old=old),
+                self.assertRaisesRegex(ValueError, f"^rename {old} to {new}$"),
+            ):
+                select_values("engine", 1, fleet, env)
 
 
 if __name__ == "__main__":

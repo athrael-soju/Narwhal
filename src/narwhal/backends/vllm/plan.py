@@ -88,8 +88,8 @@ def validate_runtime(runtime: dict) -> None:
     lease = runtime.get("kv_lease_s", KV_LEASE_S)
     if type(lease) is not int or lease < MIN_KV_LEASE_S:
         raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
-    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_settings(runtime, SETTINGS)
+    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_environment(
         runtime.get("environment", {}),
         MANAGED_ENV,

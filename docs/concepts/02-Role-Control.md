@@ -18,11 +18,11 @@ The demand estimate includes prompts longer than any in the profiled range, pric
 
 ### Prefill queue projections
 
-Narwhal projects when each prefill request will finish, serving requests in arrival order. The projection uses the measured engine profiles, the engines in the prefill role, the requests running on them, and the requests waiting for prefill.
+Narwhal uses the measured engine profiles to project when each prefill request will finish, serving requests in arrival order.
 
-When a request's projected TTFT exceeds `slo.ttft_s`, the role controller schedules a projected-TTFT recovery evaluation ahead of the next regular one, and triggers that arrive before it runs join the same evaluation. The evaluation takes the queued request with the highest projected TTFT and moves one decode engine to prefill when that move lowers the request's projected TTFT. Otherwise the split stays as it is.
+When a request's projected TTFT exceeds `slo.ttft_s`, the role controller schedules a projected-TTFT recovery evaluation ahead of the next regular one. The evaluation takes the queued request with the highest projected TTFT and moves one decode engine to prefill when that move lowers the request's projected TTFT.
 
-The trigger clears once every queued request is projected to finish within `slo.ttft_s` at the time of the evaluation. When projected TTFT still exceeds `slo.ttft_s` after a move, the role controller schedules another evaluation. `/narwhal/state` reports each recovery decision in the [projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields).
+When projected TTFT still exceeds `slo.ttft_s` after a move, the role controller schedules another evaluation. `/narwhal/state` reports each recovery decision in the [projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields).
 
 ### Expansion and consolidation
 
