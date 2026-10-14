@@ -199,9 +199,9 @@ At startup, the sidecar reads two identity values:
 - the engine version, from `/version` on vLLM or `/server_info` on SGLang
 - the engine process start time, from the `process_start_time_seconds` metric on vLLM, or on SGLang from the host start time of the process that `--engine-container` or `--engine-pid` names
 
-An SGLang sidecar also serves the process start time at `/v1/process`, where the router reads it.
+An SGLang sidecar also serves the process start time at `/v1/process`.
 
-When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
+When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route except `/v1/process` returns HTTP 503.
 
 Each sidecar response carries:
 

@@ -26,8 +26,6 @@ PY_LAUNCH
 
 Retain this output.
 
-The launch record's `sources` object names the records behind the allocation and device configuration.
-
 Read the physical accelerator identity and count:
 
 ```bash
@@ -156,10 +154,10 @@ The launcher builds one launch plan per engine with these properties:
 | Side-channel address and port | The role environment, for the vLLM NIXL side channel or the SGLang bootstrap server                                                                                                                                                         |
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                                                                                                                                         |
 | Prefix caching                | On by default, turned off through `runtime.prefix_caching`                                                                                                                                                                                  |
-| Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                                                                                                                                     |
+| Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](../measure/03-Load-Trial.md), set `runtime.prefix_caching` to `false` before preparing the launch plans. The [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings) list each backend's flag for it.
+For the [capacity trial](../measure/03-Load-Trial.md), set `runtime.prefix_caching` to `false` before preparing the launch plans.
 
 To turn prefix caching off after launch:
 
@@ -216,19 +214,19 @@ A passing check confirms, for both backends:
 
 For vLLM, the check also confirms:
 
-- the connector, resolved through `KVConnectorFactory`
-- the tokenizer and its custom-code metadata, loaded with the plan's `--trust-remote-code` setting
+- the connector
+- the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
 
-For SGLang, the check also parses the serving arguments with SGLang's own argument parser.
+For SGLang, the check also parses the serving arguments.
 
 The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 A failed check names the failing package, tokenizer, or identity check.
 
-The check reads the tokenizer from `runtime.tokenizer`, passed as `--tokenizer` on vLLM or `--tokenizer-path` on SGLang, or from the model directory by default. It checks a separate tokenizer's custom-code metadata, and the vLLM check also loads the tokenizer.
+The check uses the tokenizer at `runtime.tokenizer`, or the model directory when that field is unset.
 
-For a container engine, the check logs to `image-check.log`, and the check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
+For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
 When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
 
@@ -331,7 +329,7 @@ Before you reuse a failed deployment:
     PY_ENGINE
     ```
 
-For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list: SGLang publishes no process start over HTTP, and an SGLang engine serves a completion only with a peer engine for the other leg. [Attestation](05-Attest.md) reads the SGLang process start on the host, and [preflight](06-Profile-and-Preflight.md) sends paired completions.
+For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list.
 
 If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
 
@@ -350,7 +348,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-SGLang engines report their KV cache over HTTP, and `narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 

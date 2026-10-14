@@ -50,7 +50,7 @@ TRIAL_DIR=$(mktemp -d "$PWD/runs/load-trial-XXXXXXXX")
 
 `prepare` writes `seed-response.json` and `workload.json` under `workload/`. The workload uses the single served model from the router's `/v1/models`. Its seed request is one unscored 32-token completion from a fixed public seed prompt.
 
-The token pool holds the seed request's returned prompt token IDs when they contain two or more distinct IDs, otherwise its 32 generated output IDs. Request `n` draws 8,192 input IDs from the pool with `seed + n`. Preparation fails when the pool holds fewer than two distinct IDs.
+Preparation fails when neither the seed request's prompt token IDs nor its 32 output token IDs include two distinct IDs.
 
 Request parameters for both rates:
 

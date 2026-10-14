@@ -12,15 +12,15 @@ description: Measure the prefill and decode cost model of each engine with narwh
 | Refit | Recomputes the cold and warm time to first token (TTFT) fits from a sample sidecar and keeps the decode fits. | `--out` |
 | Merge | Combines profile stores of separately measured role mixes. | `--out` |
 
-Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink. The [measurement contract](../measure/01-Profile.md) describes the sweeps, the fits and the sidecar.
+Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink.
 
-A live sweep binds each fit to the engine process it measured. With `engine_contract` set in the fleet configuration, the binding is the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation), or its `attestation_digest` when the attestation carries no launch evidence. Without `engine_contract`, the binding is the engine version and process start time. vLLM reports both on `/version` and `/metrics`. An SGLang engine reports its version on `/server_info`, and the sweep reads its process start from the attestation sidecar's `/v1/process`.
+A live sweep binds each fit to the engine process it measured. With `engine_contract` set in the fleet configuration, the binding is the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation), or its `attestation_digest` when the attestation carries no launch evidence. Without `engine_contract`, the binding is the engine version and process start time.
 
 A live sweep measures engines on separate devices at the same time. Engines in one `shared_device.group`, and all engines under `--colocated`, take turns.
 
 ## SGLang pairs
 
-An SGLang prefill runs only together with a decode leg on another engine. On an SGLang fleet, the sweep therefore measures both roles of each engine and has a peer engine serve the other leg of each request. It needs `engine.connector` `mooncake`, at least two engines in the fleet and each engine's attestation sidecar, and it rejects `--colocated`. Before each engine's prefill, decode and warm prefill sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`. When the decode engine may hold a transfer endpoint that the producer no longer listens on, the sweep also switches the decode engine to prefill and back to clear it. The sample sidecar names each engine's peer in `peer`.
+On an SGLang fleet, the sweep measures both roles of each engine and has a peer engine serve the other leg of each request. It needs `engine.connector` `mooncake`, at least two engines in the fleet and each engine's attestation sidecar, and it rejects `--colocated`. Before each engine's prefill, decode and warm prefill sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`. The sample sidecar names each engine's peer in `peer`.
 
 The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time, and each engine's peer is the next selected engine.
 
@@ -37,7 +37,7 @@ These options select engines, choose the mode, and set the output files:
 | `--refit-samples PATH` | optional | Sample sidecar to refit. |
 | `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeated at least twice. |
 | `--out PATH` | optional | New profile store for `--refit-samples` and `--merge`, written with a matching sample sidecar. |
-| `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's sequence limit from `runtime.max_sequences`, applied to live decode cohorts. |
+| `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
 
@@ -81,8 +81,6 @@ Every mode validates these options:
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`.
 
-Each engine's [decode sweep](../measure/01-Profile.md#decode-sweep) warms each concurrency with one unmeasured cohort. A decode cohort whose first stream finishes before its last stream joins reruns once with more tokens per stream.
-
 The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When the engine exports no such counter, the warm cases that fit its context include fewer than five cases or fewer than two prefix or suffix lengths, a case reuses no cached prefix, or the warm fit fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 ## Shared-GPU neighbour traffic
@@ -105,7 +103,7 @@ narwhal-profile --fleet fleet.json --colocated \
   --neighbour-decode-output-tokens 32
 ```
 
-The neighbour traffic runs for one period of the slowest rate before measurement starts. The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`.
+The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`.
 
 ## Completion and exit codes
 

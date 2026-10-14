@@ -52,7 +52,7 @@ Options for first-token calibration:
 | --- | --- |
 | `reach` | Each engine answers `/health` with HTTP 200. Later gates skip an engine that fails here. |
 | `calibration` | The [first-token calibration](#the-calibration-gate) at `engine.first_token_calibration_path` matches the running engines. |
-| `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. An SGLang engine's identity takes its process start from the sidecar's [`/v1/process`](Attest.md#routes). |
+| `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. |
 | `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. |
 | `model` | Each engine lists the fleet's `model` in `/v1/models`. |
 | `pace` | Each engine's best time over two cold one-token completions of a long prompt stays within 1.5 times the fleet median, with at least three timed engines, and within 1.5 times its own profile's prefill time. |
@@ -62,17 +62,17 @@ Options for first-token calibration:
 
 Between `reach` and `calibration`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
 
-When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`, because a stalled transfer can stop a healthy peer's engine core.
+When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`.
 
-On SGLang, a prefill runs only beside a decode leg on another engine. Each timed `pace` request therefore runs its decode leg on a peer, and its time includes that leg. The peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and returns every engine to its starting role at the end, and a failed return prints `role restore failed` and exits with status 1.
+On SGLang, each timed `pace` request runs its decode leg on a peer, and its time includes that leg. The peer is the first other live engine, and `pace` and `consume` switch engines into the roles each request needs. Preflight returns every engine to its starting role at the end, and a failed return shows as a `FAIL` on `role restore`. Calibration switches engines the same way and returns every engine to its starting role at the end, and a failed return prints `role restore failed` and exits with status 1.
 
 ### KV transfer probes
 
-A KV probe sends the prompt `"benchmark " * 64` and asks for four output tokens with `min_tokens` and `ignore_eos`. Each attempt carries a fresh `cache_salt`, which both of its legs share, so it starts from a cold cache.
+A KV probe sends the prompt `"benchmark " * 64` and asks for four output tokens with `min_tokens` and `ignore_eos`. Each attempt carries a fresh `cache_salt`, so it starts from a cold cache.
 
-On vLLM, `produce` runs a prefill on each engine and checks that it returns handoff parameters. `consume` then moves KV from producer to consumer, across every ordered pair that role pins permit or, with `--ring`, across rotating pairs that give every consumer a producer. On SGLang, a prefill completes only together with its decode, so `produce` defers to `consume`, which checks each pair's whole transfer.
+On vLLM, `produce` runs a prefill on each engine and checks that it returns handoff parameters. `consume` then moves KV from producer to consumer, across every ordered pair that role pins permit or, with `--ring`, across rotating pairs that give every consumer a producer. On SGLang, `produce` defers to `consume`, which checks each pair's whole transfer.
 
-A probe passes when the consumer produces at least one token within `serving.request_timeout_s`. The first token must arrive within `engine.first_token_timeout_s`, or on SGLang within the smaller of that and 30 seconds, the bootstrap timeout the launcher sets. When the first token misses its deadline, `narwhal-check` fails the pair, reports the deadline, and leaves the transfer unconfirmed. Run [first-token calibration](#first-token-calibration) after a miss.
+A probe passes when the consumer produces at least one token within `serving.request_timeout_s`. The first token must arrive within `engine.first_token_timeout_s`, or on SGLang within the smaller of that and 30 seconds. When the first token misses its deadline, `narwhal-check` fails the pair, reports the deadline, and leaves the transfer unconfirmed. Run [first-token calibration](#first-token-calibration) after a miss.
 
 ## Recording and verifying KV evidence
 
@@ -83,7 +83,9 @@ narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.jso
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 ```
 
-With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when the consumer's transfer histogram grows in both count and sum: `vllm:nixl_xfer_time_seconds` on vLLM, or the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds` on SGLang. Each pair record names the histogram in `transfer_metric` and the growth in `transfer_count_delta` and `transfer_seconds`. It also holds the connector's handoff fields: `transfer_mode`, `remote_engine_id`, `remote_host` and `remote_port` on vLLM, or `bootstrap_host`, `bootstrap_port` and `bootstrap_room` on SGLang.
+With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when both the count and the sum of the decode engine's transfer histogram grow. On vLLM this histogram is `vllm:nixl_xfer_time_seconds`, and on SGLang it is the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds`.
+
+Each pair record holds the histogram name in `transfer_metric` and its growth in `transfer_count_delta` and `transfer_seconds`. It also holds the fields that told the decode engine where to fetch the cache: `transfer_mode`, `remote_engine_id`, `remote_host` and `remote_port` on vLLM, or `bootstrap_host`, `bootstrap_port` and `bootstrap_room` on SGLang.
 
 The run fails in any of these cases:
 
@@ -116,11 +118,11 @@ Calibration needs at least one directed pair that role pins permit and an engine
 A group is one directed pair at one input length, sampled `--samples` times. Sweep 1 runs each group alone, ordered by producer ID, then input length, then pair. Each later sweep runs the pairs in rounds, one lockstep step per round and input length:
 
 1. Calibration sizes each pair's prompt and sends every prefill in the round together.
-2. On vLLM, once every prefill has finished or failed, each consumer decodes from its producer's KV handoff. On SGLang, each consumer starts its decode leg once every prefill has been sent, and the prefill finishes together with it. The step ends when every decode has finished or failed.
+2. On vLLM, once every prefill has finished or failed, each consumer decodes from its producer's KV handoff. On SGLang, each consumer starts its decode leg once every prefill has been sent. The step ends when every decode has finished or failed.
 
-A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), or the engine itself without one. In a round, each device slot produces at most once and consumes at most once, so `n` engines on separate slots that permit every pair need `n - 1` rounds per input length. On SGLang, where engines switch roles, calibration splits the pairs into phases that keep each engine in one role, runs every sweep within one phase before the next, and gives each device slot one leg per round. Round numbers continue across phases.
+A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), or the engine itself without one. In a round, each device slot produces at most once and consumes at most once, so `n` engines on separate slots that permit every pair need `n - 1` rounds per input length. On SGLang, calibration splits the pairs into phases that keep each engine in one role, runs every sweep within one phase before the next, and gives each device slot one leg per round. Round numbers continue across phases.
 
-Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and because the decode leg starts beside its prefill, the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
+Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
 
 ### Calibration artifact
 
@@ -170,7 +172,7 @@ It then compares each running engine's [process generation](../Core-Concepts.md#
 | `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
 | `engine_contract` unset | Engine version and process start time |
 
-An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. Because `launch_digest` leaves out the process start, a restarted engine keeps its calibration only when its sidecar reports launch evidence.
+An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. A restarted engine keeps its calibration only when its sidecar reports launch evidence.
 
 | Status | Condition | Output |
 | --- | --- | --- |

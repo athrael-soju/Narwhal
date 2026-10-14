@@ -95,14 +95,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM. On an SGLang `mooncake` engine, it adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, unless `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy`.
-
-Discovery detects convolutional SSM transfer state from any of these fields in `text_config`, or in the root configuration otherwise:
-
-- `linear_attn_config.kda_layers` with `linear_attn_config.short_conv_kernel_size`
-- `mamba_d_conv` or `mamba_d_state`
-- `linear_conv_kernel_dim` with a `linear_attention` entry in `layer_types`
-- a `layer_types` entry containing `mamba` or `ssm`
+Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code` when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy`.
 
 Discovery writes the generated configuration at mode 0600:
 
@@ -177,9 +170,9 @@ Override the policy in `.env` before discovery:
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
-With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. Discovery writes `runtime.max_sequences` only when `NARWHAL_MAX_SEQUENCES` is set, from 1 to 256, and the launcher passes `--max-running-requests 256` when it is unset. The default SGLang `runtime.extra_args` is empty. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only.
+With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and requires the `sglang`, `torch` and `mooncake-transfer-engine` versions installed in the image, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only. For SGLang, `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`, from 1 to 256. Without it, the launcher uses 256.
 
-Discovery writes the maximum context to `runtime.context_length`, and on vLLM the maximum sequences to `runtime.max_sequences`. Both are [engine-neutral launch settings](../configuration/05-Engine-Launch.md#engine-neutral-launch-settings). Discovery writes `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`, and fails when that list sets a flag that one of those settings controls.
+Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`. It fails when `NARWHAL_ENGINE_ARGS` sets a flag that one of the [launch settings for every backend](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) controls.
 
 ## Access failure handling
 

@@ -16,7 +16,7 @@ python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n
 
 The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. It passes `--engine-container` or `--engine-pid` for SGLang, and passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
-At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. It then checks the identity on every request. The identity is the engine's version, from `/version` on vLLM or `/server_info` on SGLang, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on SGLang. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
+At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. The identity is the engine's version, from `/version` on vLLM or `/server_info` on SGLang, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on SGLang. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
 
 ## Options
 
@@ -48,7 +48,9 @@ The router and `narwhal-check` read an SGLang engine's process start from `/v1/p
 
 ## Residency
 
-The residency routes give the router a bounded index of the prefix blocks held on the engine's GPU, built from the engine's cache events. A vLLM engine publishes events for its KV blocks while prefix caching is on, and the sidecar indexes those blocks. An SGLang engine publishes events for its radix cache while prefix caching is on. On either backend, [`runtime.kv_events: false`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) turns events off with prefix caching on. Its launcher sets one-token pages, so the sidecar groups pages into blocks, each the shortest run of pages that holds 64 tokens, and reports a block resident while the block's last page is resident.
+The residency routes tell the router which prefix blocks are on the engine's GPU. The sidecar reads this from the cache events that the engine publishes while prefix caching is on. To turn the events off and keep prefix caching on, set [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`.
+
+An SGLang engine stores the cache in one-token pages, so the sidecar groups the pages into blocks of 64 tokens.
 
 ### Snapshots and changes
 
@@ -80,7 +82,7 @@ Residency becomes unknown, with an empty `groups` list and a `reason` that names
 - the index tracks more than 4,000,000 SGLang pages
 - replay or subscription fails
 
-The sidecar replays the engine's buffered history from sequence 0 when it starts, and when a live batch arrives before it has applied any batch. A gap in the live stream starts a replay from the first missing sequence. While a replay runs, snapshots report `"known": false` with the reason `replaying buffered history`.
+The sidecar replays the engine's buffered history from sequence 0 when it starts. While a replay runs, snapshots report `"known": false` with the reason `replaying buffered history`.
 
 vLLM and SGLang each keep their last 10k event batches for replay, so a sidecar that starts or restarts after its engine has published more than 10k batches reports residency unknown. Run the sidecar for the whole life of its engine process. After a loss, an engine restart makes residency known again, and so does a cache reset: `POST /reset_prefix_cache` on a vLLM engine in development mode (`VLLM_SERVER_DEV_MODE=1`), or `POST /flush_cache` on an idle SGLang engine.
 

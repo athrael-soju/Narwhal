@@ -25,9 +25,7 @@ Each run's score is its `qualified_rps_including_drain` and `attainment`. Refusa
 
 `L` is the input token count of every request in a workload. `B` is the residency block size, reported as `block_size` in each engine's `residency` record in `/narwhal/state`.
 
-For a prompt of `L = k*B + s` tokens with `0 < s < B`, an engine with boundary-state groups, such as Mamba state, keeps its boundary state at `k*B`.
-
-For a repeated-prefix workload on such an engine:
+For a repeated-prefix workload on an engine with boundary-state groups, such as Mamba state:
 
 - set `--input-tokens` to `k*B + s` with `0 < s < B`
 - set `--prefix-tokens` to at least `k*B`
@@ -47,7 +45,7 @@ Profile both arms with these [profiler options](../cli/Profile.md#prefill-and-de
 
 ## Preparing each arm
 
-The baseline arm sets [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm keeps the launcher default, and every sidecar serves the residency routes.
+The baseline arm sets [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`, and every sidecar returns HTTP 404 from the residency routes. The cache-aware arm leaves `runtime.kv_events` unset, and every sidecar serves the residency routes.
 
 For each arm:
 
@@ -89,8 +87,6 @@ Cold control:
 Replace each `<...>` value with the recorded choice.
 
 Give the second pass's repeated-prefix workload, `repeated-2`, a distinct `--seed`.
-
-Each repeated-prefix request prompt is one of the family prefixes followed by a suffix unique to its run and sequence. Each cold control request has a unique prefix.
 
 ## Setting the offered rates
 

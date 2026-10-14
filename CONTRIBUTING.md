@@ -190,7 +190,7 @@ Module responsibilities break down as follows:
 - `profiling/fitting.py` implements numerical fitting and cross-validation, `model.py` implements profile validation and capacity calculations, and `store.py` implements persistence and fleet queries.
 - `engines/stream.py` decodes server-sent events (SSE) and validates token identity for serving and profiling.
 - `engines/client.py` holds HTTP deadlines.
-- `engines/handoff.py` runs one request's prefill and decode legs in the order the connector declares, for serving, the engine client, the inference probe and profiling pairs. Shared code reads `KvHandoff.leg_order` and never checks a connector's class.
+- `engines/handoff.py` sends a request to its prefill and decode engines. On vLLM it sends to decode once prefill finishes, and on SGLang it sends to both at once.
 - `engines/validation.py` selects role-permitted KV pairs for preflight and lifecycle readmission.
 - `config/serialization.py` serializes the versioned fleet configuration for file output and CLI printing.
 - `observability/metrics/render.py` composes section renderers in a fixed order, with metric names, labels, histogram buckets, and conditional emission all part of the metrics contract.
@@ -235,13 +235,13 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
 | `deployment/launch_engine/runtime.py`                                        | Standard-library code for the engine image and serving hook              |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
-| `deployment/launch_engine/settings.py`                                       | Engine-neutral launch settings and serve-argument rendering              |
+| `deployment/launch_engine/settings.py`                                       | Runtime fields that become vLLM and SGLang launch flags                  |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
 | `deployment/launch_engine/check.py`                                          | Runtime check                                                            |
 | `deployment/launch_engine/captures.py`                                       | Model dimension, cache layout, cache registration and handshake captures |
 | `deployment/launch_engine/start.py`                                          | Container start and shared-GPU start                                     |
 | `deployment/launch_engine/cli.py`                                            | `narwhal-engine`                                                         |
-| `deployment/attestation_contract/evidence.py`                                | Checked plan, live engine binding and model dimensions                   |
+| `deployment/attestation_contract/evidence.py`                                | Matches the live engine to its checked plan, and reads model dimensions  |
 | `deployment/attestation_contract/capture.py`                                 | Live NIXL, model, transfer and HTTP captures                             |
 | `deployment/attestation_contract/document.py`                                | Engine attestation document assembly                                     |
 | `deployment/attestation_contract/sidecar.py`                                 | Attestation sidecar serving                                              |
