@@ -147,7 +147,8 @@ def create_app(
                 generation = await read_generation(cfg, spec, transport=lifecycle_transport)
             except (httpx.HTTPError, ValueError, KeyError) as exc:
                 generation_failures.append(
-                    f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission"
+                    f"{spec.iid} profile generation unreadable: {exc}; "
+                    "restart its attestation sidecar if it answers HTTP 503"
                 )
                 continue
             for profile in profiles:

@@ -56,6 +56,19 @@ class ProfileRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await readmit(self.router, 0), ["e0"])
         self.assertNotIn("e0", self.router.scheduler.ejected)
 
+    async def test_unreadable_generation_blocks_recovery_and_names_the_sidecar_fix(self):
+        self.router.scheduler.eject("e0", "liveness")
+        with patch(
+            "narwhal.runtime.lifecycle.identity.read_generation",
+            new=AsyncMock(side_effect=httpx.ConnectError("down")),
+        ):
+            self.assertEqual(await readmit(self.router, 0), [])
+        self.assertEqual(
+            self.router.lifecycle.events[-1]["error"],
+            "e0 profile generation unreadable: ConnectError; "
+            "restart its attestation sidecar if it answers HTTP 503",
+        )
+
     async def test_missing_profile_or_binding_cannot_recover(self):
         original = self.router.profiles.get("e0")
         for candidate, message in (

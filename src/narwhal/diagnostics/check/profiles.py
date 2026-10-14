@@ -82,7 +82,10 @@ async def gate_profile_generation(
         try:
             generation = await read_generation(cfg, spec, transport=transport)
         except (httpx.HTTPError, ValueError, KeyError) as exc:
-            rep.fail(f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission")
+            rep.fail(
+                f"{spec.iid} profile generation unreadable: {exc}; "
+                "restart its attestation sidecar if it answers HTTP 503"
+            )
             unsafe.add(spec.iid)
             continue
         problems = [

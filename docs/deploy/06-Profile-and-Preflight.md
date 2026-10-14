@@ -44,12 +44,32 @@ If the live context leaves fewer than three prefill lengths or two decode input 
 
 Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 
-Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a new profile. The role controller holds a role change whose projected decode point falls outside the measured profile range.
+Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 
 Set the service-level objective (SLO) targets before preflight:
 
 1. [Set `slo.ttft_s` and `slo.tpot_s`](../measure/02-Targets-and-Freeze.md#setting-production-slos) from the service requirement and the measured engine curves.
 2. Keep the time per output token (TPOT) target above the measured per-token floor.
+
+### Reusing or repeating profiles
+
+After a change to the fleet or its engines, run preflight. Re-profile only the engines the `profile` gate names, with the same sweep options, and merge the new store into the current `profiles.path` store:
+
+```bash
+.venv/bin/narwhal-profile \
+  --fleet runs/deployment/fleet.json \
+  --limits runs/deployment/profiling-limits.json \
+  --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
+  --decode-input-lens 512,4096,8192 \
+  --only <iid> --out runs/profiles-<iid>.json
+.venv/bin/narwhal-profile --fleet runs/deployment/fleet.json \
+  --merge runs/profiles.json --merge runs/profiles-<iid>.json \
+  --out runs/profiles-merged.json
+```
+
+The later store replaces the earlier store's row for each engine variant it holds. After you remove an engine from the fleet, merge the current store alone to write a store without that engine's rows.
+
+Set `profiles.path` to the merged store and run preflight. To load it into a running router, follow [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles).
 
 ## Calibrating the first-token deadline
 

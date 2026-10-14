@@ -35,8 +35,8 @@ These options select engines, choose the mode, and set the output files:
 | `--fleet PATH` | required | Fleet configuration file that defines engine membership for every mode. |
 | `--only IID` | every engine | Engine `iid` to include in a live sweep, repeatable. |
 | `--refit-samples PATH` | optional | Sample sidecar to refit. |
-| `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeated at least twice. |
-| `--out PATH` | optional | New profile store for `--refit-samples` and `--merge`, written with a matching sample sidecar. |
+| `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeatable. |
+| `--out PATH` | optional | New profile store, written with a matching sample sidecar. Required for `--refit-samples` and `--merge`. A live sweep writes here in place of `profiles.path`. |
 | `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
@@ -46,15 +46,15 @@ The mode options depend on each other:
 | Option | Requires | Mutually exclusive with |
 | --- | --- | --- |
 | `--refit-samples` | `--out`, and samples covering every fleet engine | `--only`, `--merge` |
-| `--merge` | `--out`, and at least two profile stores | `--only`, `--overwrite`, `--refit-samples` |
-| `--out` | `--refit-samples` or `--merge`, and a store path and sidecar path that do not exist yet | |
+| `--merge` | `--out` | `--only`, `--overwrite`, `--refit-samples` |
+| `--out` | A store path and sidecar path that do not exist yet | `--overwrite` |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
 
 With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 
 A refit needs each engine's saved generation evidence, and writes the raw samples and that evidence to its new sample sidecar.
 
-A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine, with each combination of engine, GPU group, role split and target role occurring once. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
+A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
 
 Run each mode with:
 

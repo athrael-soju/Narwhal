@@ -34,7 +34,7 @@ Record the [journal contract](../telemetry/01-Journal.md#diagnosing-a-request-fr
 
 A measurement run can reuse `profiles.json` and `profiles.samples.json` from [profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) while each engine's process generation stays the same.
 
-Before you select deployment SLOs, profile each engine whose process generation changed:
+Before you select deployment SLOs, [re-profile each engine whose process generation changed](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles):
 
 1. Retain a passing preflight for the fleet configuration under test.
 2. Reserve the production engine shape.
@@ -46,8 +46,11 @@ Before you select deployment SLOs, profile each engine whose process generation 
       --fleet config/fleet.production.json \
       --prefill-lens <comma-separated-input-lengths> \
       --decode-input-lens <comma-separated-input-lengths> \
-      --decode-concurrency <comma-separated-stream-counts>
+      --decode-concurrency <comma-separated-stream-counts> \
+      --only <iid> --out <fresh-profile-path>
     ```
+
+5. [Merge the new store into the current one](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles).
 
 ### Prefill sweep
 

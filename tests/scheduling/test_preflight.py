@@ -581,6 +581,28 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_profile_generation_gate_names_the_sidecar_fix(self):
+        _, _, transport = await self._calibrated_engines()
+        e3 = httpx.URL(self.cfg.engines[1].url).host
+
+        def sidecar_down(request):
+            if request.url.host == e3 and request.url.path == "/v1/attestation":
+                return httpx.Response(503)
+            return transport.handler(request)
+
+        report = Report()
+        store = ProfileStore(self.cfg.profiles_path)
+        with redirect_stdout(io.StringIO()):
+            unsafe = await profiles.gate_profile_generation(
+                self.cfg, store, {"e0", "e3"}, report, httpx.MockTransport(sidecar_down)
+            )
+        self.assertIn("e3", unsafe)
+        self.assertRegex(
+            report.failed[-1],
+            r"(?s)^e3 profile generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        )
+
     async def test_preflight_result_data_includes_first_token_calibration(self):
         client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
         with ExitStack() as stack:

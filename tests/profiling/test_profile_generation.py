@@ -195,6 +195,25 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
                 pass
         await app.state.router.engines.aclose()
 
+    async def test_router_start_names_the_sidecar_fix_for_an_unreadable_generation(self):
+        await self._serve_launch()
+        respond = self.respond
+
+        def sidecar_down(request):
+            if request.url.path == "/v1/attestation" and self.by_host[request.url.host] == "e3":
+                return httpx.Response(503)
+            return respond(request)
+
+        app = create_app(self.cfg, lifecycle_transport=httpx.MockTransport(sidecar_down))
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"(?s)^e3 profile generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        ):
+            async with app.router.lifespan_context(app):
+                pass
+        await app.state.router.engines.aclose()
+
     async def test_state_marks_an_engine_relaunched_inside_the_router_as_reused(self):
         await self._serve_launch()
         await self._calibrate()

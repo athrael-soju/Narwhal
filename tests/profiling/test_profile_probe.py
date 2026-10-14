@@ -41,6 +41,16 @@ VLLM_METRICS = load_backend("vllm").metrics
 DIALECT = load_backend("vllm").dialect
 
 
+def measured_store(path, rows):
+    store = ProfileStore(path, load=False)
+    for row in rows:
+        store.put(row)
+    path.with_suffix(".samples.json").write_text(
+        json.dumps({"engines": {row.iid: {"profile": asdict(row)} for row in rows}})
+    )
+    return path
+
+
 class MeasuredStream(httpx.AsyncByteStream):
     def __init__(self, frames):
         self.frames = frames
@@ -257,6 +267,78 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
             with self.assertRaisesRegex(ValueError, "lacks matching measurement evidence"):
                 merge_profiles(sources, root / "again.json", {"e0"})
+
+    async def test_merge_replaces_a_remeasured_engine_and_keeps_the_others(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fresh = replace(profile("e3"), ttft_c=profile("e3").ttft_c + 1.0)
+            base = measured_store(root / "base.json", [profile("e0"), profile("e3")])
+            update = measured_store(root / "e3.json", [fresh])
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(merge_profiles([base, update], root / "one.json", {"e0", "e3"}), 0)
+            self.assertIn(f"e3: {update} replaces the profile from {base}", output.getvalue())
+            merged = ProfileStore(root / "one.json")
+            self.assertEqual((merged.get("e0"), merged.get("e3")), (profile("e0"), fresh))
+            again = replace(profile("e0"), ttft_c=profile("e0").ttft_c + 2.0)
+            later = measured_store(root / "e0.json", [again])
+            with redirect_stdout(io.StringIO()):
+                merge_profiles([root / "one.json", later], root / "two.json", {"e0", "e3"})
+            merged = ProfileStore(root / "two.json")
+            self.assertEqual((merged.get("e0"), merged.get("e3")), (again, fresh))
+
+    async def test_merge_leaves_out_engines_outside_the_fleet(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            rows = [profile("e0"), profile("e3"), profile("e4")]
+            base = measured_store(root / "base.json", rows)
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(merge_profiles([base], root / "out.json", {"e0", "e3"}), 0)
+            self.assertIn("left out profiles for engines outside the fleet: e4", output.getvalue())
+            self.assertEqual(
+                sorted(row.iid for row in ProfileStore(root / "out.json").all_profiles()),
+                ["e0", "e3"],
+            )
+
+    async def test_merge_refuses_rows_without_their_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = measured_store(root / "base.json", [profile("e0"), profile("e3")])
+            update = measured_store(root / "e3.json", [profile("e3")])
+            update.with_suffix(".samples.json").write_text(json.dumps({"engines": {}}))
+            with self.assertRaisesRegex(ValueError, "profile e3 lacks matching measurement"):
+                merge_profiles([base, update], root / "out.json", {"e0", "e3"})
+            with redirect_stdout(io.StringIO()):
+                merge_profiles([base], root / "merged.json", {"e0", "e3"})
+            base.with_suffix(".samples.json").write_text(json.dumps({"engines": {}}))
+            with self.assertRaisesRegex(ValueError, "merged source sidecar .* changed"):
+                merge_profiles([root / "merged.json"], root / "again.json", {"e0", "e3"})
+
+    def test_cli_merges_one_store_and_writes_a_live_sweep_to_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cfg = fleet(root)
+            fleet_path = root / "fleet.json"
+            cfg.save(fleet_path)
+            base = measured_store(root / "base.json", [profile("e0"), profile("e3")])
+            with redirect_stdout(io.StringIO()):
+                code = profile_cli.main(
+                    [
+                        "--fleet",
+                        str(fleet_path),
+                        "--merge",
+                        str(base),
+                        "--out",
+                        str(root / "o.json"),
+                    ]
+                )
+            self.assertEqual(code, 0)
+            run = AsyncMock(return_value=0)
+            with patch.object(profile_cli, "run", new=run):
+                code = profile_cli.main(
+                    ["--fleet", str(fleet_path), "--only", "e3", "--out", str(root / "e3.json")]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(run.call_args.args[0].profiles_path, root / "e3.json")
 
     async def test_prompt_uses_the_engine_count_after_resizing(self):
         counts = iter((20, 9))

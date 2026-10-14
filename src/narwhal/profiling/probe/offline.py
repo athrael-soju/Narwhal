@@ -123,34 +123,56 @@ def _evidence_matches(saved: object, row: Profile) -> bool:
         return False
 
 
+def _measured_profiles(samples: Path) -> dict[str, list[Any]]:
+    """Return saved profile evidence per engine, following a merged sidecar to its sources."""
+    if not samples.is_file():
+        raise FileNotFoundError(f"missing source measurement sidecar: {samples}")
+    record = json.loads(samples.read_text())
+    if isinstance(record, dict) and isinstance(record.get("engines"), dict):
+        return {
+            iid: [evidence.get("profile")]
+            for iid, evidence in record["engines"].items()
+            if isinstance(evidence, dict)
+        }
+    if not isinstance(record, dict) or not isinstance(record.get("sources"), list):
+        raise ValueError(f"invalid source measurement sidecar: {samples}")
+    found: dict[str, list[Any]] = {}
+    for source in record["sources"]:
+        if not isinstance(source, dict) or not isinstance(source.get("samples"), str):
+            raise ValueError(f"invalid source measurement sidecar: {samples}")
+        path = Path(source["samples"])
+        if not path.is_file():
+            raise FileNotFoundError(f"{samples}: missing merged source sidecar {path}")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != source.get("samples_sha256"):
+            raise ValueError(f"{samples}: merged source sidecar {path} changed")
+        for iid, profiles in _measured_profiles(path).items():
+            found.setdefault(iid, []).extend(profiles)
+    return found
+
+
 def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str]) -> int:
-    """Combine separately measured role mixes, retaining source sidecars."""
+    """Combine measured profile stores; a later store's variant replaces an earlier one."""
     sidecar_path = output_path.with_suffix(".samples.json")
     for path in (output_path, sidecar_path):
         if path.exists() or path.is_symlink():
             raise FileExistsError(f"output exists: {path}; choose a fresh profile path")
     store = ProfileStore(output_path, load=False)
     records = []
-    profiles: list[Profile] = []
-    seen: set[tuple[str, str | None, int | None, int | None, str | None]] = set()
+    profiles: dict[tuple[str, str | None, int | None, int | None, str | None], Profile] = {}
+    origin: dict[tuple[str, str | None, int | None, int | None, str | None], Path] = {}
+    left_out: set[str] = set()
     for source in sources:
         source_store = ProfileStore(source)
         samples = source.with_suffix(".samples.json")
-        if not samples.is_file():
-            raise FileNotFoundError(f"missing source measurement sidecar: {samples}")
-        record = json.loads(samples.read_text())
-        if not isinstance(record, dict) or not isinstance(record.get("engines"), dict):
-            raise ValueError(f"invalid source measurement sidecar: {samples}")
+        evidence = _measured_profiles(samples)
         rows = source_store.all_profiles()
         if not rows:
             raise ValueError(f"empty source profiles: {source}")
         for row in rows:
             if row.iid not in engine_ids:
-                raise ValueError(f"{source}: profile {row.iid} is outside the fleet")
-            evidence = record["engines"].get(row.iid)
-            if not isinstance(evidence, dict) or not _evidence_matches(
-                evidence.get("profile"), row
-            ):
+                left_out.add(row.iid)
+                continue
+            if not any(_evidence_matches(saved, row) for saved in evidence.get(row.iid, [])):
                 raise ValueError(
                     f"{samples}: profile {row.iid} lacks matching measurement evidence"
                 )
@@ -161,10 +183,12 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
                 row.colocated_decode_engines,
                 row.colocated_target_role,
             )
-            if key in seen:
+            if origin.get(key) == source:
                 raise ValueError(f"duplicate measured profile variant: {key}")
-            seen.add(key)
-            profiles.append(row)
+            if key in origin:
+                print(f"{row.iid}: {source} replaces the profile from {origin[key]}")
+            profiles[key] = row
+            origin[key] = source
         records.append(
             {
                 "profiles": str(source),
@@ -173,11 +197,13 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
                 "samples_sha256": hashlib.sha256(samples.read_bytes()).hexdigest(),
             }
         )
-    missing = engine_ids - {row.iid for row in profiles}
+    missing = engine_ids - {row.iid for row in profiles.values()}
     if missing:
         raise ValueError(f"merged profiles miss fleet engines: {', '.join(sorted(missing))}")
-    for row in profiles:
+    for row in profiles.values():
         store.put(row)
     sidecar_path.write_text(json.dumps({"method_version": 3, "sources": records}, indent=2) + "\n")
-    print(f"merged {len(seen)} measured profiles to {output_path}")
+    if left_out:
+        print(f"left out profiles for engines outside the fleet: {', '.join(sorted(left_out))}")
+    print(f"merged {len(profiles)} measured profiles to {output_path}")
     return 0

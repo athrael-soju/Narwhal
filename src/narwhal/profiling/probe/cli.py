@@ -67,15 +67,17 @@ def _main(argv: list[str]) -> int:
         type=Path,
         action="append",
         default=[],
-        help="measured profile store with matching sidecar; repeat at least twice and supply "
-        "--out; combined stores must cover the fleet; exclusive with --refit-samples, "
-        "--only and --overwrite",
+        help="measured profile store with matching sidecar, repeatable; a later store replaces "
+        "an earlier store's profile for the same engine variant, and rows for engines outside "
+        "the fleet are left out; requires --out; combined stores must cover the fleet; "
+        "exclusive with --refit-samples, --only and --overwrite",
     )
     ap.add_argument(
         "--out",
         type=Path,
-        help="fresh profile path required for --refit-samples and --merge; "
-        "also writes PATH with suffix replaced by .samples.json",
+        help="fresh profile path, required for --refit-samples and --merge and optional for a "
+        "live sweep in place of profiles.path; also writes PATH with suffix replaced by "
+        ".samples.json",
     )
     ap.add_argument(
         "--limits",
@@ -190,6 +192,10 @@ def _main(argv: list[str]) -> int:
         if results.json_mode():
             raise
         return failure("narwhal-profile", f"load fleet {args.fleet}", exc, 2)
+    if args.out is not None and not args.merge and args.refit_samples is None:
+        if args.overwrite:
+            ap.error("--out takes a fresh path; drop --overwrite")
+        cfg.profiles_path = args.out
     if results.json_mode():
         results.protect_environment(cfg.engine_api_key_env)
         results.set_operation(
@@ -272,11 +278,9 @@ def _main(argv: list[str]) -> int:
         if args.merge:
             if args.refit_samples is not None or args.out is None or args.only or args.overwrite:
                 ap.error("--merge requires --out and cannot combine with refit, only, or overwrite")
-            if len(args.merge) < 2:
-                ap.error("--merge needs at least two measured profile stores")
             return merge_profiles(args.merge, args.out, {engine.iid for engine in cfg.engines})
-        if args.refit_samples is not None or args.out is not None:
-            if args.refit_samples is None or args.out is None or args.only:
+        if args.refit_samples is not None:
+            if args.out is None or args.only:
                 ap.error("--refit-samples requires --out and a complete fleet selection")
             return refit_saved_prefill(
                 args.refit_samples, args.out, {engine.iid for engine in cfg.engines}

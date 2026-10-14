@@ -43,7 +43,7 @@ Preflight, router startup, readmission, and automatic recovery require a fresh p
 
 If preflight, router startup, or recovery reports `profile has no generation evidence` for a row missing `generation_digest`:
 
-1. Write a fresh store with `narwhal-profile` against the current engine processes.
+1. [Re-profile the named engines](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) against the current engine processes.
 2. Keep the `.samples.json` sidecar.
 
 The [refit procedure](../measure/01-Profile.md#refitting-saved-profile-samples) requires a `generation_digest` in each saved profile and a `generation_evidence` object in its sample row. Samples missing either need a fresh sweep.

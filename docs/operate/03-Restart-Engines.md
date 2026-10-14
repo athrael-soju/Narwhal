@@ -334,8 +334,7 @@ For a warm standby router:
 
 ### Refresh profiles
 
-1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) with the recorded measurement recipe.
-2. With a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
+[Re-profile the replaced engines and merge their rows into the current store](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) with the recorded measurement recipe.
 
 ### Prepare the activation configuration
 
