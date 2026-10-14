@@ -31,9 +31,10 @@ Run an engine action to confirm the fix. Its marker appears on the Narwhal Orche
 
 The router readmits this engine only after its process restarts.
 
-1. Restart the engine with **Stop**, then **Start**. Without those hooks, restart it through its process manager, as in [Replacing the process](../03-Restart-Engines.md#replace-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
-2. Wait until **Readmit** is enabled.
-3. Select **Readmit**. The engine returns to `in service`.
+1. Select **Stop**, then **Start**. The console enables **Readmit** once **Start** succeeds.
+2. Select **Readmit**. The engine returns to `in service`.
+
+Without the stop and start hooks, restart the engine through its process manager, as in [Replacing the process](../03-Restart-Engines.md#replace-the-process). Under the `whole_wave` restart policy, restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave). Then select **Readmit**.
 
 ## Start fails and the engine stays ejected
 
@@ -41,7 +42,8 @@ The router readmits this engine only after its process restarts.
 
 | Error                                                        | Cause                                                                                   | Fix                                                                                                                                |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `<engine> did not return to service within <n>s`             | The engine process failed to come up, or it answers health checks too slowly            | Read the start hook's output in `hooks/<nnn>-engine_start.log` in the session directory, then the engine's startup log. See [An engine fails to start after a stop](#an-engine-fails-to-start-after-a-stop) |
+| `<engine> did not return to service within <n>s: the router still ejects <engine>` | The engine process did not start, or it answers health checks too slowly | Read the start hook's output in `hooks/<nnn>-engine_start.log` in the session directory. Then read the engine's startup log, and fix the cause as in [An engine fails to start after a stop](#an-engine-fails-to-start-after-a-stop) |
+| `<engine> did not return to service within <n>s: the router still quarantines <engine>` | Requests to the engine failed, and the router sends it no new requests | Check the engine's hold kind under `holds` in `/narwhal/state`. Wait for the hold to end. A `timed` hold ends after `recovery.failure_quarantine_s`, or earlier when the engine passes a health check or an [inference probe](../../telemetry/04-Failures.md#hold-kinds). An `inference` hold ends once an inference probe passes on every failed path. The engine then returns to service |
 | `<engine> needs fresh profiles before the router readmits it` | The restarted process no longer matches the engine's profiles                           | Profile the engine and restart the router with the new profiles, as in [Activating replacement profiles](../03-Restart-Engines.md#activating-replacement-profiles) |
 | `the router blocked readmission of <engine>`                  | The router's readmission validation failed. The error ends with the router's reason     | Fix the reason, then select **Readmit**                                                                                            |
 
@@ -49,6 +51,6 @@ The router readmits this engine only after its process restarts.
 
 **Start** fails, and the engine's startup log reports less free GPU memory than the engine requires. The start hook's output is in `hooks/<nnn>-engine_start.log` in the session directory.
 
-On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory, as described in [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release). Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
+On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory. Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
 
 To let **Start** succeed without a wave restart, set `UCX_CUDA_IPC_CACHE` to `n` in `runtime.environment` and use UCX 1.22 or later in the engine image. Peers then release a stopped engine's GPU memory. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.

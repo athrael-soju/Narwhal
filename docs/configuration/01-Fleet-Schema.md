@@ -154,16 +154,6 @@ The attestation generator derives each field from the deployed engine. Fields th
 
 On SGLang, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
 
-The loader and `narwhal-attest` accept these earlier names in the fleet file, the attestation document and its `sources`:
-
-| Earlier name             | Current name        |
-| ------------------------ | ------------------- |
-| `vllm_version`           | `engine_version`    |
-| `nixl_version`           | `transfer_version`  |
-| `nixl_connector_version` | `connector_version` |
-
-A contract that sets both names of one field fails to load. To upgrade, follow [Upgrading across the contract field rename](../operate/04-Upgrade-and-Validate.md#upgrading-across-the-contract-field-rename).
-
 Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
 Check the resolved `head_size` dimensions against the live engine. On vLLM, also check these values:
@@ -209,9 +199,9 @@ At startup, the sidecar reads two identity values:
 - the engine version, from `/version` on vLLM or `/server_info` on SGLang
 - the engine process start time, from the `process_start_time_seconds` metric on vLLM, or on SGLang from the host start time of the process that `--engine-container` or `--engine-pid` names
 
-An SGLang sidecar also serves the process start time at `/v1/process`, where the router reads it.
+An SGLang sidecar also serves the process start time at `/v1/process`.
 
-When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route returns HTTP 503.
+When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route except `/v1/process` returns HTTP 503.
 
 Each sidecar response carries:
 

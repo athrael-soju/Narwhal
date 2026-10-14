@@ -15,7 +15,7 @@ from unittest.mock import patch
 import h11
 import httpx
 
-from narwhal.backends import load
+from narwhal.backends import DEFAULT_BACKEND, load
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.engines.client import EngineClient
 from narwhal.engines.connector import RendezvousConnector
@@ -176,6 +176,7 @@ def serving_app(
     *,
     urls: tuple[str, str] = ("http://prefill", "http://decode"),
     tokenize: bool = False,
+    backend: str = DEFAULT_BACKEND,
 ) -> tuple[NarwhalRouter, httpx.AsyncClient]:
     """Serve a profiled stub prefill and decode pair over handler; register its cleanups."""
     directory = tempfile.TemporaryDirectory()
@@ -190,6 +191,7 @@ def serving_app(
         profiles_path=Path(directory.name) / "profiles.json",
         tokenize=tokenize,
         admission="open",
+        backend=backend,
     )
 
     def wired_router(*args, **kwargs):
@@ -242,11 +244,15 @@ class FakeRendezvous(RendezvousConnector):
     def rendezvous(self, producer: Mapping[str, Any]) -> dict[str, Any]:
         return {"room": next(self.rooms)}
 
-    def prefill_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**body, "leg": "prefill", **rendezvous}
+    def prefill_body(
+        self, body: dict[str, Any], rendezvous: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        return {**body, "leg": "prefill", **(rendezvous or {})}
 
-    def decode_body(self, body: dict[str, Any], rendezvous: dict[str, Any]) -> dict[str, Any]:
-        return {**body, "leg": "decode", **rendezvous}
+    def decode_body(
+        self, body: dict[str, Any], *, rendezvous: dict[str, Any] | None, **_: Any
+    ) -> dict[str, Any]:
+        return {**body, "leg": "decode", **(rendezvous or {}), "stream": True}
 
 
 class RendezvousLegs:

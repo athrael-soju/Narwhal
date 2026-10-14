@@ -50,7 +50,7 @@ The collector reads `warmup.json` and `summary.json` from the directory that hol
 2. Check the self-declared `identity` fields against the deployment and preflight records before accepting a GPU result.
 3. Keep the plan and everything under `runs/` private.
 
-The collector records SHA-256 digests of the fleet file and profiles before each point and reports changes to them during the point. It records SHA-256 digests of the retained client records, warmup, and summary files. It groups metrics samples by process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
+The collector records SHA-256 digests of the fleet file and profiles before each point, and of the retained client records, warmup, and summary files. It groups metrics samples by router process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
 
 ## Client records
 

@@ -32,14 +32,14 @@ Each outgoing directed edge from the cache group's roles carries the full handof
       --out "$FABRIC_RUN/budget.json"
     ```
 
-    On SGLang, the representative is a prefill engine. Its `sglang:kv_transfer_total_mb` metric records the bytes of each handoff, KV pages and per-request state together. Set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine in the group, then measure eight handoffs and calculate the budget from them:
+    On SGLang, the representative is a prefill engine. Set `PREFILL_IP` to this engine's fabric address and `DECODE_URL` to the base URL of another idle engine in the group, then measure eight handoffs and calculate the budget from them:
 
     ```bash
     export PREFILL_IP='<this engine fabric address>'
     export DECODE_URL='http://<decode engine address>:<decode engine port>'
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" measure-transfer \
       --prefill "http://$PREFILL_IP:$NARWHAL_ENGINE_PORT" --decode "$DECODE_URL" \
-      --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_SGLANG_BOOTSTRAP_PORT" \
+      --bootstrap-host "$PREFILL_IP" --bootstrap-port "$NARWHAL_KV_SIDE_CHANNEL_PORT" \
       --model "$NARWHAL_ENGINE_MODEL_NAME" --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
       --prompt-tokens 1024 --out-dir "$FABRIC_RUN/transfer"
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
@@ -108,16 +108,6 @@ Each outgoing directed edge from the cache group's roles carries the full handof
 
 5. Create a new `FABRIC_RUN` for each repeat comparison.
 
-On vLLM, page demand per layer and TP rank is `ceil(prompt_tokens / block_tokens) + extra_blocks`:
-
-| Attention type                                       | `extra_blocks`                                               |
-| ---------------------------------------------------- | ------------------------------------------------------------ |
-| Full attention and multi-head latent attention (MLA) | `0`                                                          |
-| Mamba                                                | `1 + num_speculative_blocks + num_prefill_checkpoint_blocks` |
-| Sliding-window and chunked local attention           | `1`                                                          |
-
-On vLLM, payload per handoff is page demand times padded page bytes, summed over every layer and TP rank in the resolved runtime layout. On SGLang, payload per handoff is each TP rank's mean `sglang:kv_transfer_total_mb` between the two snapshots, summed over the ranks.
-
 The required link rate, in decimal Gbit/s, is:
 
 ```text
@@ -125,6 +115,8 @@ The required link rate, in decimal Gbit/s, is:
 max(handoffs_per_second, burst_handoffs / transfer_budget_seconds) *
 headroom / 1e9
 ```
+
+`payload_bytes` is `payload_bytes_per_handoff` in `budget.json`.
 
 ## Binding each sample to a directed route
 

@@ -28,7 +28,7 @@ Install on both router hosts, with the same release identifier:
 - the first-token calibration artifact, when `engine.first_token_calibration_path` is set, readable from each router's working directory
 - the [deployment evidence set](../measure/02-Targets-and-Freeze.md#freezing-the-deployment-under-test)
 
-The first-token calibration artifact binds to each engine's [process generation](../Core-Concepts.md#terms). When an engine relaunch changes its process generation:
+The first-token calibration artifact records each engine's [process generation](../Core-Concepts.md#terms). When an engine relaunch changes its process generation:
 
 1. [Recalibrate](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
 2. Distribute the new artifact and fleet configuration.
@@ -54,7 +54,7 @@ Ingress must:
 - apply identity policy and rate limits
 - route each model to its router pair
 - forward streaming chunks as they arrive
-- enforce connect and idle timeouts derived from the service budget
+- enforce connect and idle timeouts set from the service budget
 
 Each engine leg receives:
 

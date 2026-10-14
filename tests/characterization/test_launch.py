@@ -13,9 +13,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from narwhal.backends.vllm import attestation as attestation_document
 from narwhal.backends.vllm import plan as vllm_plan
-from narwhal.backends.vllm.attestation import engine_document
+from narwhal.deployment.attestation_contract import evidence as attestation_evidence
+from narwhal.deployment.attestation_contract.document import engine_document
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import build, load, prepare
@@ -185,11 +185,10 @@ class LaunchPlanTests(unittest.TestCase):
             "kv_events_endpoint": lambda r, e: r["runtime"]["extra_args"].extend(
                 ["--kv-events-config", '{"endpoint": "tcp://*:5557"}']
             ),
-            "kv_events_disabled": lambda r, e: r["runtime"]["extra_args"].extend(
-                ["--kv-events-config", '{"enable_kv_cache_events": false}']
-            ),
-            "prefix_caching_off": lambda r, e: r["runtime"]["extra_args"].append(
-                "--no-enable-prefix-caching"
+            "kv_events_disabled": lambda r, e: r["runtime"].update(kv_events=False),
+            "prefix_caching_off": lambda r, e: r["runtime"].update(prefix_caching=False),
+            "mapped_flag": lambda r, e: r["runtime"]["extra_args"].extend(
+                ["--max-model-len", "4096"]
             ),
             "managed_env": lambda r, e: r["runtime"]["environment"].update(VLLM_API_KEY="x"),
             "foreign_env": lambda r, e: r["runtime"]["environment"].update(OTHER_FLAG="1"),
@@ -198,7 +197,7 @@ class LaunchPlanTests(unittest.TestCase):
             "registry_digest": lambda r, e: e.update(
                 NARWHAL_ENGINE_IMAGE="registry.example/engine@sha256:" + "a" * 64
             ),
-            "shared_ports": lambda r, e: e.update(NARWHAL_NIXL_SIDE_CHANNEL_PORT="8000"),
+            "shared_ports": lambda r, e: e.update(NARWHAL_KV_SIDE_CHANNEL_PORT="8000"),
         }
         prefixes = {
             f"{prefix}FIXTURE": None for prefix in (*vllm_plan.ENV_PREFIXES, "LD_", "OTHER_")
@@ -420,7 +419,7 @@ class AttestationContractTests(unittest.TestCase):
             (run / "metrics.txt").write_text("process_start_time_seconds 100\n")
             log = run / "startup.log"
             log.write_text("Using FLASH_ATTN attention backend.\n")
-            with patch.object(attestation_document, "live_container", return_value=CONTAINER_ID):
+            with patch.object(attestation_evidence, "live_container", return_value=CONTAINER_ID):
                 document = engine_document(run, log)
             document["sources"] = {
                 field: re.sub(r"sha256:[0-9a-f]{64}$", "sha256:<digest>", source)

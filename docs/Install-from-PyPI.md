@@ -35,7 +35,7 @@ For each deployment:
 
 ## Before serving requests
 
-[Deploying a fleet](Deploy.md) qualifies these production inputs:
+Qualify these production inputs by following [Deploying a fleet](Deploy.md):
 
 - separately provisioned vLLM engines with NIXL, or SGLang engines with Mooncake
 - engine attestation

@@ -24,7 +24,6 @@ class TokenizerCheckTests(unittest.TestCase):
                 "default_missing",
                 "explicit",
                 "explicit_missing",
-                "last_explicit",
                 "custom_code",
                 "trusted_custom_code",
                 "unused_custom_tokenizer",
@@ -63,9 +62,7 @@ class TokenizerCheckTests(unittest.TestCase):
                 if case == "image_local"
                 else "/model/" + tokenizer.name
             )
-            if case == "last_explicit":
-                args.extend(["--tokenizer", "/missing-first-tokenizer"])
-            args.extend(["--tokenizer", selected])
+            record["runtime"]["tokenizer"] = selected
         custom_metadata = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
         if case in {"custom_code", "trusted_custom_code"}:
             (tokenizer / "tokenizer_config.json").write_text(custom_metadata)

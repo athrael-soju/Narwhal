@@ -7,12 +7,20 @@ import re
 import stat
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .backend import EngineLauncher, launcher, plan_launcher
+from .backend import (
+    EngineLauncher,
+    ModelFormats,
+    cache_capture,
+    engine_backend,
+    launcher,
+    plan_launcher,
+)
 from .runtime import code_digest, digest, write_private
+from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
@@ -81,15 +89,16 @@ def option(args: list[str], name: str) -> str | None:
 
 
 def discovered_settings(
-    observed: dict, setting: Callable[[str, str], str], default_args: Callable[[int], list[str]]
-) -> tuple[str, list, dict, dict]:
+    observed: dict, setting: Callable[[str, str], str], default_args: list[str]
+) -> tuple[str, int, list, dict, dict]:
     dtype = setting("MODEL_DTYPE", observed.get("model_dtype") or "bfloat16")
     if dtype not in {"bfloat16", "float16"}:
         raise ValueError("set MODEL_DTYPE to bfloat16 or float16 in .env")
     max_len = min(
         int(observed.get("max_model_len") or MAX_DISCOVERED_CONTEXT), MAX_DISCOVERED_CONTEXT
     )
-    args = json.loads(setting("ENGINE_ARGS", json.dumps(default_args(max_len))))
+    context_length = int(setting("CONTEXT_LENGTH", str(max_len)))
+    args = json.loads(setting("ENGINE_ARGS", json.dumps(default_args)))
     if not isinstance(args, list):
         raise ValueError("ENGINE_ARGS must be a JSON array")
     environment = dict(observed["image_environment"])
@@ -97,7 +106,22 @@ def discovered_settings(
     if not isinstance(overrides, dict):
         raise ValueError("ENGINE_ENV must be a JSON object")
     environment.update(overrides)
-    return dtype, args, environment, overrides
+    return dtype, context_length, args, environment, overrides
+
+
+def discovered_launch_settings(setting: Callable[[str, str], str]) -> dict:
+    """Return the optional runtime fields that .env sets."""
+    fields: dict = {}
+    for name in ("PREFIX_CACHING", "KV_EVENTS"):
+        raw = setting(name, "")
+        if raw:
+            if raw not in ("true", "false"):
+                raise ValueError(f"set {name} to true or false in .env")
+            fields[name.lower()] = raw == "true"
+    tokenizer = setting("TOKENIZER", "")
+    if tokenizer:
+        fields["tokenizer"] = tokenizer
+    return fields
 
 
 def ipc_cache_off(ipc_cache: str | None) -> bool:
@@ -112,10 +136,20 @@ def releases_peers(ucx_version: str | None, ipc_cache: str | None) -> bool:
     return version >= UCX_PEER_RELEASE and ipc_cache_off(ipc_cache)
 
 
+def publishes_kv_events(engine: EngineLauncher, runtime: dict) -> bool:
+    return switch(runtime, engine.launch_settings, "prefix_caching") and switch(
+        runtime, engine.launch_settings, "kv_events"
+    )
+
+
+def side_channel_port(env: Mapping[str, str]) -> int:
+    return int(env[KV_SIDE_CHANNEL_PORT_ENV])
+
+
 def kv_events_policy(
-    engine: EngineLauncher, args: list[str], socket_dir: Path, engine_dir: str
+    engine: EngineLauncher, runtime: dict, socket_dir: Path, engine_dir: str
 ) -> dict | None:
-    if not engine.publishes_kv_events(args):
+    if not publishes_kv_events(engine, runtime):
         return None
     for name in KV_EVENTS_SOCKETS.values():
         if len(str(socket_dir / name).encode()) > MAX_SOCKET_PATH_BYTES:
@@ -172,6 +206,33 @@ def requires_remote_code(model_dir: Path, *, include_tokenizer: bool = True) -> 
     return False
 
 
+def conv_state_layers(model: dict) -> bool:
+    # State-space and short-convolution layers keep a convolutional state beside the KV cache.
+    # Discovery runs this function's source in the remote probe, so it stays self-contained.
+    text_model = model.get("text_config", model)
+    linear = text_model.get("linear_attn_config", {})
+    if (
+        isinstance(linear, dict)
+        and linear.get("kda_layers")
+        and linear.get("short_conv_kernel_size")
+    ):
+        return True
+    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
+        return True
+    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
+        "layer_types", []
+    ):
+        return True
+    return any(
+        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
+        for layer in text_model.get("layer_types", [])
+    )
+
+
+def model_conv_state_layers(model_dir: Path) -> bool:
+    return conv_state_layers(json.loads((model_dir / "config.json").read_text()))
+
+
 def check_shared_memory(engine: EngineLauncher, role: str, args: list[str], budget: float) -> None:
     value = engine.memory_fraction(args)
     if value is None:
@@ -221,7 +282,7 @@ def build(
     ):
         raise ValueError("NARWHAL_ENGINE_IMAGE must be an immutable image ID or registry digest")
     port = int(env["NARWHAL_ENGINE_PORT"])
-    side_port = int(env[engine.side_channel_port_env])
+    side_port = side_channel_port(env)
     attest_port = int(env["NARWHAL_ATTEST_PORT"])
     if (
         any(not 1 <= p <= 65535 for p in (port, side_port, attest_port))
@@ -274,14 +335,18 @@ def build(
         else "/model"
     )
     if backend == "native":
-        engine.check_model(runtime, model_ref)
+        if isinstance(engine, ModelFormats):
+            engine.check_model(runtime, model_ref)
+        elif Path(model_ref).is_file():
+            label = engine_backend(runtime.get("backend")).label
+            raise ValueError(f"{label} launches take a model directory, not a model file")
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
     socket_dir = KV_EVENTS_ROOT / f"narwhal-{os.geteuid()}" / name
     kv_events = kv_events_policy(
         engine,
-        runtime.get("extra_args", []),
+        runtime,
         socket_dir,
         KV_EVENTS_MOUNT if backend == "container" else str(socket_dir),
     )
@@ -384,16 +449,20 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     plan, values = build(record, env, output.resolve(), backend=backend)
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
-    hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
-    hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
-    if digest(hook_source) != hook_sha:
-        raise ValueError("cache capture hook differs from its delivered hash")
-    script = plan_launcher(plan).runtime_script
+    engine = plan_launcher(plan)
+    capture = cache_capture(engine) is not None
+    if capture:
+        hook_source = Path(env["NARWHAL_CACHE_CAPTURE_HOOK"])
+        hook_sha = env["NARWHAL_CACHE_CAPTURE_HOOK_SHA256"]
+        if digest(hook_source) != hook_sha:
+            raise ValueError("cache capture hook differs from its delivered hash")
+    script = engine.runtime_script
     output.mkdir(mode=0o700, parents=True)
     (output / "cache").mkdir(mode=0o700)
     (output / "hook").mkdir(mode=0o700)
     kv_events_directory(plan)
-    write_private(output / "hook/sitecustomize.py", hook_source.read_text())
+    if capture:
+        write_private(output / "hook/sitecustomize.py", hook_source.read_text())
     write_private(output / "hook/launch_engine.py", script.read_text())
     env_file = "container.env" if backend == "container" else "engine.env"
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
@@ -402,16 +471,19 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
         launch_sha256=digest(source),
         launcher_sha256=digest(script),
         launcher_code_sha256=code_digest(script),
-        cache_capture_sha256=hook_sha,
-        cache_capture_code_sha256=code_digest(hook_source),
-        model_config_sha256=env["NARWHAL_MODEL_CONFIG_SHA256"],
     )
+    if capture:
+        plan.update(
+            cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
+        )
+    plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
     if backend == "native" and Path(plan["model_path"]).is_file():
         plan["model_sha256"] = digest(Path(plan["model_path"]))
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
     for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):
-        (output / "hook" / name).chmod(0o644)
+        if (output / "hook" / name).exists():
+            (output / "hook" / name).chmod(0o644)
     (output / "hook").chmod(0o755)
     check_name = "image" if backend == "container" else "native runtime"
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")

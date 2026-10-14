@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 
-from ...backends import current_fields
 from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...config.model import CONTRACT_LAYOUT_FLAGS
@@ -42,7 +41,7 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
     count, seconds = totals
     if not math.isfinite(count) or not math.isfinite(seconds):
         raise ValueError(f"{iid} returned non-finite KV transfer metrics")
-    sources = current_fields("contract", payload["sources"])
+    sources = payload["sources"]
     return {
         "iid": iid,
         "engine_version": identity.version,

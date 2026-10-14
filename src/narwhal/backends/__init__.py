@@ -4,7 +4,7 @@ import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint, entry_points
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..deployment.launch_engine.backend import EngineLauncher
@@ -18,8 +18,6 @@ if TYPE_CHECKING:
 
 GROUP = "narwhal.backends"
 DEFAULT_BACKEND = "vllm"
-
-V = TypeVar("V")
 
 
 @dataclass(frozen=True)
@@ -35,18 +33,16 @@ class EngineBackend:
     metrics: EngineMetrics
     fabric: FabricLifecycle
     launcher: Callable[[], EngineLauncher] = field(repr=False)
-    role_switch: RoleSwitcher | None = None
+    role_switch: RoleSwitcher = field(repr=False)
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
-    # Earlier field names this backend wrote, by section ("contract", "engine", "dev_ports").
-    renamed_fields: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
-    def role_switcher(self, connector: str) -> RoleSwitcher | None:
+    def role_switcher(self, connector: str) -> RoleSwitcher:
+        from ..runtime.role_switch import FixedRoles
+
         switcher = self.role_switch
-        if switcher is None or (
-            switcher.connectors is not None and connector not in switcher.connectors
-        ):
-            return None
+        if switcher.connectors is not None and connector not in switcher.connectors:
+            return FixedRoles()
         return switcher
 
     def connector(self, name: str) -> KvHandoff:
@@ -78,16 +74,3 @@ def load(name: str) -> EngineBackend:
     if not isinstance(backend, EngineBackend) or backend.name != name:
         raise ValueError(f"entry point {name!r} does not build the {name!r} EngineBackend")
     return backend
-
-
-def renamed_fields(section: str) -> dict[str, str]:
-    return {
-        old: new
-        for name in names()
-        for old, new in load(name).renamed_fields.get(section, {}).items()
-    }
-
-
-def current_fields(section: str, raw: Mapping[str, V]) -> dict[str, V]:
-    renamed = renamed_fields(section)
-    return {renamed.get(key, key): value for key, value in raw.items()}

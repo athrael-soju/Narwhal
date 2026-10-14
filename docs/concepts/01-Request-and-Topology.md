@@ -19,11 +19,11 @@ The fleet's `engine_contract` lists the [compatibility fields](../configuration/
 
 ### KV transfer for vLLM engines
 
-A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh when three requirements hold. [Attestation capture](../deploy/05-Attest.md#capturing-the-attestation-inputs) reads the inputs from the live process. The attestation sidecar binds the process to its image, NIXL connector and runtime features, and [`narwhal-check`](../cli/Check.md) validates the attested process.
+A vLLM engine with the effective `kv_both` role transfers KV across the configured ring or mesh once [attestation capture](../deploy/05-Attest.md#capturing-the-attestation-inputs) has read its inputs from the live process and [`narwhal-check`](../cli/Check.md) has validated the attested process. The attestation sidecar binds the process to its image, NIXL connector and runtime features.
 
 ### KV transfer for SGLang engines
 
-An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. For each request, the router sends the prefill and decode legs together, both carrying the producer's bootstrap host and port from its attestation and a random bootstrap room that pairs the two legs. The decode leg waits at most 30 seconds for its first token.
+An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. Both legs of a request carry the producer's bootstrap host and port from its attestation, and the decode leg waits at most 30 seconds for its first token.
 
 ## Request execution
 
@@ -37,7 +37,7 @@ A completion request passes through these stages:
 6. Tokens stream to the client.
 7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.
 
-When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a bounded FIFO queue within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) gives each wait's bound and response.
+When every seat is occupied, `serving.queue_capacity` sets the outcome. With a positive capacity and space in the queue, the request waits in a [bounded FIFO queue](../configuration/02-Serving-and-Role-Control.md#queue-waits) within `serving.queue_timeout_s` and its original deadline. A full queue, or the default capacity of `0`, gives a retryable refusal.
 
 A [retry](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) reruns prefill and decode with a fresh KV handoff.
 

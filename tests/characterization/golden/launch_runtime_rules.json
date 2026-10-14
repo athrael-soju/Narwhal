@@ -195,13 +195,16 @@
       "kv_events": false
     },
     "kv_events_endpoint": {
-      "error": "runtime.extra_args --kv-events-config may only set {\"enable_kv_cache_events\": false}; the launcher selects event endpoints"
+      "error": "runtime.extra_args sets --kv-events-config, which runtime.kv_events sets"
     },
     "kv_transfer_override": {
       "error": "unsupported or incomplete runtime option: --kv-transfer-config"
     },
     "managed_env": {
       "error": "unsupported runtime environment field: VLLM_API_KEY"
+    },
+    "mapped_flag": {
+      "error": "runtime.extra_args sets --max-model-len, which runtime.context_length sets"
     },
     "missing_nixl_pin": {
       "error": "runtime.expected_packages requires pinned vLLM and NIXL versions"
@@ -305,11 +308,9 @@
     "flag_options": [
       "--async-scheduling",
       "--disable-hybrid-kv-cache-manager",
-      "--enable-prefix-caching",
       "--enforce-eager",
       "--language-model-only",
       "--no-disable-hybrid-kv-cache-manager",
-      "--no-enable-prefix-caching",
       "--trust-remote-code"
     ],
     "kv_events_mount": "/narwhal-kv-events",
@@ -334,13 +335,9 @@
       "--attention-backend",
       "--gpu-memory-utilization",
       "--hf-config-path",
-      "--kv-events-config",
       "--load-format",
-      "--max-model-len",
       "--max-num-batched-tokens",
-      "--max-num-seqs",
-      "--reasoning-parser",
-      "--tokenizer"
+      "--reasoning-parser"
     ]
   }
 }

@@ -11,9 +11,9 @@ import httpx
 
 from ...config import EngineSpec
 from ...engines.attestation import attested_launches
-from ...engines.client import prefill_leg
-from ...engines.connector import KvHandoff, RendezvousConnector
+from ...engines.connector import KvHandoff
 from ...engines.dialect import EngineDialect
+from ...engines.handoff import HandoffLegs
 from ...types import Role
 from ..tasks import cancel_tasks
 
@@ -34,7 +34,9 @@ def origin(url: str | httpx.URL) -> str:
 
 
 class _Joined(httpx.AsyncByteStream):
-    def __init__(self, inner: httpx.AsyncByteStream, peer: asyncio.Task[None], wait_s: float):
+    def __init__(
+        self, inner: httpx.AsyncByteStream, peer: asyncio.Task[None], wait_s: float | None
+    ):
         self.inner = inner
         self.peer = peer
         self.wait_s = wait_s
@@ -54,8 +56,10 @@ class _Joined(httpx.AsyncByteStream):
 
 
 class PairedTransport(httpx.AsyncBaseTransport):
+    """Send one leg of a concurrent handoff to one engine and its peer leg to the other."""
+
     def __init__(
-        self, inner: httpx.AsyncBaseTransport, kv: RendezvousConnector, dialect: EngineDialect
+        self, inner: httpx.AsyncBaseTransport, kv: KvHandoff, dialect: EngineDialect
     ) -> None:
         self.inner = inner
         self.kv = kv
@@ -71,13 +75,18 @@ class PairedTransport(httpx.AsyncBaseTransport):
         if pairing is None or request.method != "POST" or request.url.path not in COMPLETION_PATHS:
             return await self.inner.handle_async_request(request)
         body = json.loads(await request.aread())
-        rendezvous = self.kv.rendezvous(pairing.producer)
+        handoff = HandoffLegs(self.kv, pairing.producer)
+        url = str(request.url)
+        endpoint = request.url.path
         if pairing.role is Role.PREFILL:
-            own = self.kv.prefill_body(body, rendezvous)
-            peer = self.kv.decode_body(body, rendezvous)
+            own = self.kv.prefill_body(body, handoff.rendezvous)
+            peer = handoff.decode_body(body, url=url, endpoint=endpoint)
         else:
-            own = {**self.kv.decode_body(body, rendezvous), "stream": bool(body.get("stream"))}
-            peer = prefill_leg(body, self.kv, self.dialect, rendezvous)
+            own = {
+                **handoff.decode_body(body, url=url, endpoint=endpoint),
+                "stream": bool(body.get("stream")),
+            }
+            peer = handoff.prefill_body(body, self.dialect)
         task = asyncio.create_task(
             self._drain(_rebuilt(request, pairing.peer + request.url.raw_path.decode(), peer))
         )
@@ -88,7 +97,8 @@ class PairedTransport(httpx.AsyncBaseTransport):
         except BaseException:
             await cancel_tasks([task])
             raise
-        response.stream = _Joined(response.stream, task, self.kv.decode_wait_s)  # type: ignore[arg-type]
+        wait_s = handoff.first_token_bound(None)
+        response.stream = _Joined(response.stream, task, wait_s)  # type: ignore[arg-type]
         return response
 
     async def _drain(self, request: httpx.Request) -> None:
@@ -111,7 +121,7 @@ async def paired_transport(
     *,
     timeout_s: float,
 ) -> tuple[PairedTransport | None, dict[str, dict[str, Any]]]:
-    if not isinstance(kv, RendezvousConnector):
+    if not kv.concurrent:
         return None, {}
     pairing = PairedTransport(inner(), kv, dialect)
     return pairing, await attested_launches(specs, timeout_s=timeout_s)

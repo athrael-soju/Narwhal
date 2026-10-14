@@ -91,11 +91,7 @@ With zero eligible engines, the response is:
 }
 ```
 
-During a [whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave):
-
-- `/health` reports `maintenance`
-- `/ready` reports the lifecycle reason
-- completion requests return HTTP `503` with error code `standby`
+During a [whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave), completion requests return HTTP `503` with error code `standby`.
 
 ## `GET /metrics`
 

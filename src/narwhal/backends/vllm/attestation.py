@@ -9,9 +9,8 @@ from pathlib import Path
 
 import httpx
 
-from ...config import EngineContract
-from ...contracts import ATTESTATION, versioned
 from ...deployment.attestation_contract import document
+from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.attestation_contract.evidence import (
     checked_plan,
     live_binding,
@@ -19,6 +18,7 @@ from ...deployment.attestation_contract.evidence import (
     live_native,
     parse_tagged_capture,
     read_json,
+    read_shared_start,
     require_binding,
     require_prior_dimensions,
     write_private_json,
@@ -237,11 +237,11 @@ def capture_native_http(run: Path) -> None:
         metrics_response = client.get(plan["endpoint"].rstrip("/") + "/metrics")
         metrics_response.raise_for_status()
     version = version_response.json()
-    if version.get("version") != checked["vllm_api_version"]:
+    if version.get("version") != checked["engine_version"]:
         raise ValueError("native HTTP version differs from the checked runtime")
     if (
         parse_process_start(metrics_response.text)
-        != read_json(run / "shared-start.json")["process_start_time_seconds"]
+        != read_shared_start(run)["process_start_time_seconds"]
     ):
         raise ValueError("native HTTP process start differs from the launch record")
     write_private_json(run / "version.json", version)
@@ -290,29 +290,15 @@ def attention_backends(log: str) -> str:
     return ",".join(sorted(names))
 
 
-def engine_document(run: Path, startup_log: Path) -> dict:
-    plan, checked, plan_hash = checked_plan(run)
-    native = plan.get("backend") == "native"
-    identity = live_native(run, plan, checked) if native else live_container(run, checked)
-    original_dimensions = run / "model-dimensions.json"
-    live_dimensions = run / "model-dimensions.live.json"
-    dimension_source = live_dimensions if live_dimensions.exists() else original_dimensions
-    dimensions = read_json(dimension_source)
+def nixl_package(plan: dict) -> str | None:
+    packages = plan["expected_packages"]
+    return next((name for name in ("nixl", "nixl-rocm") if packages.get(name)), None)
+
+
+def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
+    run, plan, checked, plan_hash = context.run, context.plan, context.checked, context.plan_hash
+    native, identity = context.native, context.identity
     registration = read_json(run / "cache-registration.json")
-    require_binding(
-        dimensions,
-        "Model dimensions",
-        plan_sha256=plan_hash,
-        image=plan["image"],
-        model_config_sha256=plan["model_config_sha256"],
-        revision=plan["revision"],
-    )
-    if dimension_source == live_dimensions:
-        binding = live_binding(plan, checked, identity, model_revision=True)
-        require_binding(
-            dimensions, "Live model dimensions", launcher_sha256=plan["launcher_sha256"], **binding
-        )
-        require_prior_dimensions(run, plan, plan_hash, dimensions.get("contract"))
     require_binding(registration, "Cache registration", plan_sha256=plan_hash, image=plan["image"])
     cache = read_json(run / "cache-layout.json")
     require_binding(
@@ -340,20 +326,9 @@ def engine_document(run: Path, startup_log: Path) -> dict:
     )
     if handshake.get("connector_config") != plan["connector"]:
         raise ValueError("Handshake policy uses another connector configuration")
-    model_path = Path(plan["model_dir"]) / "config.json"
-    if digest(model_path) != plan["model_config_sha256"]:
-        raise ValueError("Model configuration changed after launch preparation")
-    architecture = dimensions.get("model_architecture")
-    if not isinstance(architecture, str) or not architecture.strip():
-        raise ValueError("Capture live model dimensions for the resolved architecture")
     version = read_json(run / "version.json").get("version")
-    if version != checked.get("vllm_api_version"):
-        raise ValueError("HTTP version differs from the checked runtime")
     process_start = parse_process_start((run / "metrics.txt").read_text())
-    if (
-        native
-        and process_start != read_json(run / "shared-start.json")["process_start_time_seconds"]
-    ):
+    if native and process_start != read_shared_start(run)["process_start_time_seconds"]:
         raise ValueError("HTTP process start differs from the native launch record")
     ranks = cache.get("ranks", [])
     tp = int(option(plan["args"], "--tensor-parallel-size"))
@@ -367,19 +342,12 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         or len({rank.get("kv_cache_layout") for rank in ranks}) != 1
     ):
         raise ValueError("Resolved cache registration differs from the live cache layout")
-    packages = plan["expected_packages"]
-    nixl_version = packages.get("nixl") or packages.get("nixl-rocm")
-    if not isinstance(nixl_version, str) or not nixl_version:
-        raise ValueError("Checked image lacks a pinned NIXL package")
+    if transfer["transfer_mode"] not in {"pull", "push"}:
+        raise ValueError("Resolved NIXL transfer mode must be pull or push")
     contract = {
-        "engine_version": version,
-        "image_digest": "" if native else checked["image_id"],
-        "transfer_version": nixl_version,
         "connector_version": nixl["nixl_connector_version"],
-        "model_architecture": architecture,
         "model_dtype": option(plan["args"], "--dtype"),
-        **dimensions["contract"],
-        "attention_backend": attention_backends(startup_log.read_text()),
+        "attention_backend": attention_backends(context.startup_log.read_text()),
         "kv_cache_dtype": option(plan["args"], "--kv-cache-dtype"),
         "cross_layers_blocks": registration["cross_layers_blocks"],
         "hybrid_kv_cache_manager": len(kinds[0]) > 1,
@@ -393,24 +361,11 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         ),
         "enforce_handshake_compat": handshake["enforce_handshake_compat"],
     }
-    if set(contract) != set(EngineContract().fields()):
-        raise ValueError("Derived contract fields differ from the attestation schema")
-    if contract["transfer_mode"] not in {"pull", "push"}:
-        raise ValueError("Resolved NIXL transfer mode must be pull or push")
-    declared = EngineContract(**contract)
-    if declared.missing():
-        raise ValueError("Derived engine contract is incomplete: " + ", ".join(declared.missing()))
-    evidence = {
+    sources = {
         "engine_version": run / "version.json",
-        "image_digest": run / "checked.json",
-        "transfer_version": run / "launch.json",
         "connector_version": run / "nixl-connector-version.json",
-        "model_architecture": dimension_source,
         "model_dtype": run / "launch.json",
-        "kv_heads": dimension_source,
-        "head_size": dimension_source,
-        "hidden_layers": dimension_source,
-        "attention_backend": startup_log,
+        "attention_backend": context.startup_log,
         "kv_cache_dtype": run / "launch.json",
         "cross_layers_blocks": run / "cache-registration.json",
         "hybrid_kv_cache_manager": run / "cache-layout.json",
@@ -420,27 +375,12 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "speculative_config": run / "launch.json",
         "enforce_handshake_compat": run / "handshake-policy.json",
     }
-    if native:
-        evidence.pop("image_digest")
-    sources = {field: f"{path.resolve()} sha256:{digest(path)}" for field, path in evidence.items()}
     launch = {
-        "args": launch_args(plan["args"]),
-        "image_id": "" if native else checked["image_id"],
-        "expected_packages": plan["expected_packages"],
-        "model_config_sha256": plan["model_config_sha256"],
-        "model_revision": plan.get("model_revision", ""),
-        "launch_sha256": plan.get("launch_sha256", ""),
-        "launcher_code_sha256": plan["launcher_code_sha256"],
-        "cache_capture_code_sha256": plan["cache_capture_code_sha256"],
         "ucx_version": checked.get("ucx_version") or "",
         "peer_release": checked.get("peer_release") is True,
     }
-    return versioned(ATTESTATION, {"contract": contract, "sources": sources, "launch": launch})
+    return AttestationEvidence(version, contract, sources, launch)
 
 
 # Flags whose values change per launch.
-_PER_LAUNCH_VALUES = frozenset(("--host", "--port", "--served-model-name", "--kv-events-config"))
-
-
-def launch_args(args: list[str]) -> list[str]:
-    return document.launch_args(args, _PER_LAUNCH_VALUES)
+LAUNCH_VARYING_FLAGS = frozenset(("--host", "--port", "--served-model-name", "--kv-events-config"))

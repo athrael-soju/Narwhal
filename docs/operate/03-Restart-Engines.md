@@ -128,7 +128,7 @@ Verify placement:
 
 ### Recover an unplanned ejection
 
-When an ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds, automatic recovery validates the engine. When every check passes and the profiles match the running process, the engine returns to placement automatically.
+When an ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds, the router's automatic recovery validates it. When every check passes and the profiles match the running process, the engine returns to placement.
 
 If the engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections:
 
@@ -252,7 +252,7 @@ PY
 curl -fsS -o /dev/null "$ROUTER_URL/ready"
 ```
 
-Check the recorded fabric directions against the configured role pins. On a vLLM fleet, two unpinned engines require transfers in both directions. One engine pinned to prefill and one pinned to decode require a prefill-to-decode transfer. On an SGLang fleet, each transfer runs from an engine in the prefill role to one in the decode role.
+Check each member's fabric checks against its role in the fabric checks table under [Request readmission](#request-readmission).
 
 If readmission fails:
 

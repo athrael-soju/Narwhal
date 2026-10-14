@@ -46,14 +46,5 @@ def backend() -> EngineBackend:
         fabric=VllmFabric(),
         launcher=_launcher,
         role_switch=RouterRoleSwitch(),
-        renamed_fields={
-            "contract": {
-                "vllm_version": "engine_version",
-                "nixl_version": "transfer_version",
-                "nixl_connector_version": "connector_version",
-            },
-            "engine": {"vllm_version": "version"},
-            "dev_ports": {"nixl_first": "side_channel_first"},
-        },
         icon=resources.files(__name__).joinpath("icon.png").read_bytes(),
     )

@@ -6,7 +6,7 @@ description: Reference for the OpenAI-compatible completion routes and the healt
 
 ## Interface map
 
-Each Narwhal interface uses one public namespace:
+The router serves each interface on these routes:
 
 | Interface | Route |
 | --- | --- |

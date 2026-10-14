@@ -8,7 +8,7 @@ description: Read live admission, scheduler and role controller state from GET /
 
 Returns the live router and scheduler state as a `narwhal.state` schema version `1` document.
 
-[Metrics and role controller state](../telemetry/03-Metrics-and-Control.md) defines Prometheus series. [Reading the dashboard](../observability/05-Dashboard.md) explains their Grafana panels.
+For the Prometheus series, use [Metrics and role controller state](../telemetry/03-Metrics-and-Control.md). For their Grafana panels, use [Reading the dashboard](../observability/05-Dashboard.md).
 
 ### Top-level fields
 
@@ -36,7 +36,7 @@ The state document carries these top-level fields:
 | `admission`               | Router and phase occupancy, queue state, limits, and admission mode                                           |
 | `outcome_reasons`         | `failed`, `refused`, `rejected`, and `expired` counts by [reason](../telemetry/01-Journal.md#outcome-reasons) |
 | `seats`                   | Each engine's prefill and decode seats and the inputs that set them                                           |
-| `handoff`                 | Each engine's attested KV lease and the handoff bound derived from it                                         |
+| `handoff`                 | Each engine's attested KV lease and the handoff bound computed from it                                        |
 | `serving`                 | Retained HTTP work, attempts, and retry state                                                                 |
 | `http_pools`              | Data and control connection pools, and the pool-wait timeout                                                  |
 | `pools`                   | Engines grouped by prefill or decode role                                                                     |
@@ -143,8 +143,6 @@ The remaining `breaker` fields count transitions since process start. Each is a 
 | `probes`       | `kind`, `outcome` | Verification probes, by [outcome](../telemetry/04-Failures.md#verification-probe-outcomes)   |
 | `readmissions` | `evidence`        | Returns of an ejected engine to placement, by recovery evidence                              |
 
-A new router process starts these counts at zero.
-
 ### `holds`
 
 `holds` splits the engines in `quarantined` by [hold kind](../telemetry/04-Failures.md#hold-kinds). An engine appears under one kind at a time.
@@ -165,7 +163,7 @@ A new router process starts these counts at zero.
 | `held_s`             | Seconds since the hold started                                                   |
 | `recorded_producers` | Producers whose KV transfers to this engine failed, empty when none was recorded |
 
-[Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the order in which the probe tries producers.
+The probe tries producers in the order given in [Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers).
 
 ### `peer_release`
 

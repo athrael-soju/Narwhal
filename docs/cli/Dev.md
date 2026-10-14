@@ -4,7 +4,7 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. [Narwhal dev](../Dev-Runtime.md) walks through host setup. A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
+`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. To set up the host, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
@@ -118,7 +118,8 @@ Each `up` writes a `run-*` directory in the instance. It holds:
 - the profiles
 - whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`
 - the request journal
- On vLLM, each launch directory also holds the engine's `cache-layout.json`.
+
+On vLLM, each launch directory also holds the engine's `cache-layout.json`.
 
 Each `verify` writes a `verify-*` directory in the run directory with the preflight log, the KV evidence in `kv.json`, the routed response in `completion.json`, and the router and engine metrics.
 
@@ -129,4 +130,4 @@ When `up` fails, it stops the processes it started and records the failure in `l
 3. Run `narwhal dev down` and confirm that it reports `stopped`.
 4. Run `narwhal dev up`.
 
-[Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery) lists the stages, their time budgets, and how to handle processes that survive `down`.
+To find a stage's time budget or handle processes that survive `down`, follow [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery).

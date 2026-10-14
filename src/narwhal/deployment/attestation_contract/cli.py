@@ -8,7 +8,7 @@ import httpx
 
 from ..launch_engine.backend import EngineLauncher, plan_launcher
 from .document import generate
-from .evidence import read_json
+from .evidence import capture_model_dimensions, read_json
 from .fleet import finalize_fleet
 from .sidecar import serve
 
@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             result = _launcher(args.run).capture_native(args.run)
             print(f"Captured native engine attestation in {result}")
         elif args.command == "capture-model-dimensions":
-            result = _launcher(args.run).capture_model_dimensions(args.run)
+            result = capture_model_dimensions(args.run)
             print(f"Captured live model dimensions in {result}")
         elif args.command == "generate":
             result = generate(args.run, args.startup_log)

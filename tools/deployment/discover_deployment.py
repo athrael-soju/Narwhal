@@ -16,15 +16,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from narwhal.backends.vllm.plan import ds_conv_state_layout_required
+from narwhal.deployment.engine_launch import load_launches
 from narwhal.deployment.launch_engine.backend import engine_backend
-from tools.deployment.engine_launch import load_launches
+from narwhal.deployment.launch_engine.plan import conv_state_layers
+from narwhal.types import RoleModel
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
 from tools.deployment.prepare_host_env import select_values, write_environment
 
 # The remote probe applies the launcher's own convolutional-state rule.
 PROBE = (
-    inspect.getsource(ds_conv_state_layout_required)
+    inspect.getsource(conv_state_layers)
     + r'''
 import hashlib, json, re, subprocess, sys
 from pathlib import Path
@@ -143,7 +144,6 @@ for entry in image.get("Config", {}).get("Env", []) or []:
         ):
             environment[name] = value
 text_model = model.get("text_config", model)
-requires_ds_conv_state_layout = ds_conv_state_layout_required(model)
 print(
     json.dumps(
         {
@@ -151,7 +151,7 @@ print(
             "image_id": image["Id"],
             "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
             "requires_trust_remote_code": requires_trust_remote_code,
-            "requires_ds_conv_state_layout": requires_ds_conv_state_layout,
+            "conv_state_layers": conv_state_layers(model),
             "model_dtype": text_model.get(
                 "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
             ),
@@ -278,7 +278,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
     backend.connector(connector)
     engine = backend.launcher()
-    pin = backend.role_switcher(connector) is None
+    pin = backend.role_switcher(connector).model is RoleModel.FIXED
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()
@@ -306,11 +306,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 raise ValueError(f"{role}: allocated GPUs must share one product")
             product = products.pop()
             shapes.add((product, len(selected), tp))
-            initial = "decode" if engines else "prefill"
             try:
-                runtime = engine.discovered_runtime(
-                    observed, partial(value, env, node), connector, initial
-                )
+                runtime = engine.discovered_runtime(observed, partial(value, env, node), connector)
             except ValueError as error:
                 raise ValueError(f"{role}: {error}") from None
             engine.validate_runtime(runtime)

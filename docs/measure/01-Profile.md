@@ -78,8 +78,6 @@ Otherwise `ttft_split` is `null`.
 
 A decode cell is one combination of decode input length and concurrency.
 
-Before the first cell, the profiler runs one unmeasured cohort at each concurrency value.
-
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency values, including one stream and the intended operating range.
 - Use a broader sweep for long-context deployments.
@@ -122,7 +120,7 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit, so the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs` without it.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit. Before then, the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs`.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
@@ -189,7 +187,7 @@ The profiler fits the TTFT curve to the per-length medians and rejects it when i
 
 ### Refitting saved profile samples
 
-When the sample sidecar holds saved samples and profile snapshots bound to a process generation for every engine, refit with `--refit-samples`. Otherwise, run a fresh sweep against the current engine processes.
+When the sample sidecar holds saved samples, profiles, and process-generation evidence for every engine, refit with `--refit-samples`. Otherwise, run a fresh sweep against the current engine processes.
 
 Refit from the saved sample sidecar:
 

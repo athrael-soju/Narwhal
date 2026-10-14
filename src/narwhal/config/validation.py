@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 from ..backends import load as load_backend
+from ..types import RoleModel
 from .model import CONTRACT_INT_FIELDS, checks_handshake
 
 if TYPE_CHECKING:
@@ -218,7 +219,7 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         except ValueError as exc:
             problems.append(str(exc))
         else:
-            if backend.role_switcher(config.connector) is None and not all(
+            if backend.role_switcher(config.connector).model is RoleModel.FIXED and not all(
                 spec.pin for spec in config.engines
             ):
                 problems.append(

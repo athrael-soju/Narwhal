@@ -4,7 +4,7 @@ description: Open the fleet control console from a workstation through the opera
 
 # Opening the console
 
-The console runs on the router host. Open it from a workstation through the operator tunnel, described in [Tunnelling router, Prometheus, and Grafana to the workstation](../../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
+The console runs on the router host. Open it from a workstation through the [operator tunnel](../../deploy/07-Serve-and-Measure.md#tunnelling-router-prometheus-and-grafana-to-the-workstation).
 
 The service must be running, as in [Setting up the control service](01-Set-Up-the-Service.md).
 

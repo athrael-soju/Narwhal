@@ -20,7 +20,7 @@
 
 ## What is Narwhal?
 
-Narwhal is an adaptive, disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, and without having to reload model weights. It can scale from a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) to [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
+Narwhal is a disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, without reloading model weights. It runs on a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) or across [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
 <table width="100%" align="center">
   <thead>
@@ -71,7 +71,7 @@ Narwhal is an adaptive, disaggregated inference framework that automatically hot
 
 ## How engines change roles
 
-The role controller scores the current role split and each adjacent split, one engine move away. It uses measured engine profiles, offered demand, and resident work, and moves one engine only when the worst projected SLO ratio improves and every role, lifecycle, and resident-work guard passes. New requests follow the revised split; resident requests finish on their assigned engines.
+The role controller scores the current role split and each adjacent split, one engine move away. It uses measured engine profiles, offered demand, and resident work, and moves one engine only when the worst projected SLO ratio improves and every role, lifecycle, and resident-work guard passes. New requests follow the revised split, and resident requests finish on their assigned engines.
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/concepts/02-Role-Control/"><img src="https://img.shields.io/badge/docs-Role%20control%20and%20capacity%20floors-0f766e" alt="Role control and capacity floors documentation"></a>
@@ -95,9 +95,7 @@ narwhal-serve --version
 narwhal --help
 ```
 
-The wheel installs these commands:
-
-`narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. See [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/) and the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/) for their options.
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. To verify the installation, follow [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/). For each command's options, use the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/).
 
 ## Trying it on one GPU
 
@@ -124,7 +122,7 @@ Run the deployment gates in [Deploying a fleet](https://athrael-soju.github.io/N
 
 ## Documentation
 
-The [MkDocs site](https://athrael-soju.github.io/Narwhal/) routes installation, deployment, operation, measurement, and reference tasks.
+The [documentation site](https://athrael-soju.github.io/Narwhal/) covers installation, deployment, operation, measurement, and reference tasks.
 
 ## Contributing
 
@@ -136,7 +134,7 @@ The [MkDocs site](https://athrael-soju.github.io/Narwhal/) routes installation, 
 
 ## Built on Arrow
 
-Narwhal's scheduling algorithms derive from Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture by Wu et al. (2025).
+Narwhal's scheduling algorithms are based on Arrow: Adaptive Scheduling Mechanisms for Disaggregated LLM Inference Architecture by Wu et al. (2025).
 
 <p align="center">
   <a href="https://arxiv.org/abs/2505.11916"><img src="https://img.shields.io/badge/paper-Arrow%20%C2%B7%20arXiv%202505.11916-0f766e" alt="Arrow paper on arXiv"></a>

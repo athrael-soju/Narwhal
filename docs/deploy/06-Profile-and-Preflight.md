@@ -26,7 +26,7 @@ Run these steps from the router shell.
 
 8. Compare each printed effective sweep with every checked serving plan.
 
-`deploy_hosts.py prepare` writes each engine's sequence limit to `profiling-limits.json`: `--max-num-seqs` on vLLM, and `--max-running-requests` on SGLang, 256 when unset.
+`deploy_hosts.py prepare` writes each engine's `runtime.max_sequences` to `profiling-limits.json`, or 256 for an SGLang engine without it.
 
 The effective sweep has these bounds:
 
@@ -38,7 +38,7 @@ The effective sweep has these bounds:
 
 Prefix caching can stay on during profiling.
 
-On an SGLang fleet, `narwhal-profile` pairs each engine with a peer and switches their roles to measure both legs of each engine. It requires the `mooncake` connector and at least two engines, and rejects `--colocated`.
+On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines, and rejects `--colocated`.
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
 
@@ -72,8 +72,6 @@ For an engine launch limit of 16,384 total tokens, run the calibration from the 
 ```
 
 The artifact records input tokens, prefill time, decode-to-first-token time, and failed or expired attempts.
-
-Calibration runs [concurrent rounds](../cli/Check.md#sampling-schedule) in which each device slot serves at most one calibration prefill or decode at a time.
 
 The command exits 0 with artifact status `complete` when the artifact holds at least 100 samples per role-permitted directed pair and input length, every attempt completed, and the process generations match. Otherwise it exits 1 with status `incomplete`.
 

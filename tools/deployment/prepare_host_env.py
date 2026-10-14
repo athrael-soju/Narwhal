@@ -10,7 +10,8 @@ import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
-from narwhal.deployment.launch_engine.backend import launcher
+from narwhal.deployment.launch_engine.backend import cache_capture, launcher
+from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 
 ENGINE_FIELDS = (
     "ENGINE_IMAGE",
@@ -22,13 +23,12 @@ ENGINE_FIELDS = (
     "ENGINE_PORT",
     "ATTEST_PORT",
     "UCX_TCP_PORT_RANGE",
+    KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_"),
+)
+REPLACED_PORT = re.compile(
+    r"NARWHAL_(NODE_[1-9][0-9]*_)?(?:NIXL_SIDE_CHANNEL_PORT|SGLANG_BOOTSTRAP_PORT)"
 )
 ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
-
-
-def engine_fields(fleet: dict) -> tuple[str, ...]:
-    side_channel = launcher(fleet.get("engine", {}).get("backend")).side_channel_port_env
-    return (*ENGINE_FIELDS, side_channel.removeprefix("NARWHAL_"))
 
 
 def select_values(
@@ -69,10 +69,16 @@ def select_values(
     elif role == "engine":
         if node is None or node < 1:
             raise ValueError("engine export requires a positive --node number")
-        values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
+        for name in sorted(env):
+            replaced = REPLACED_PORT.fullmatch(name)
+            if replaced:
+                new = f"NARWHAL_{replaced[1] or ''}KV_SIDE_CHANNEL_PORT"
+                raise ValueError(f"rename {name} to {new}")
+        if cache_capture(launcher(fleet.get("engine", {}).get("backend"))) is not None:
+            values["NARWHAL_CACHE_CAPTURE_HOOK"] = "runs/deployment-tools/cache_capture_hook.py"
         values["NARWHAL_FABRIC_BUDGET_TOOL"] = "runs/deployment-tools/fabric_budget.py"
         values["NARWHAL_ENGINE_LAUNCH_CONFIG"] = f"config/engine-launch.engine-{node}.json"
-        for field in engine_fields(fleet):
+        for field in ENGINE_FIELDS:
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
             include(name, override if override in env else name)

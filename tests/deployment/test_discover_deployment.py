@@ -10,8 +10,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.backends.vllm.plan import ds_conv_state_layout_required
-from narwhal.deployment.launch_engine.plan import build
+from narwhal.deployment.engine_launch import load_launches
+from narwhal.deployment.launch_engine.plan import build, conv_state_layers
 from tools.deployment.deploy_hosts import prepare
 from tools.deployment.discover_deployment import (
     PROBE,
@@ -21,7 +21,6 @@ from tools.deployment.discover_deployment import (
     fabric_address,
     service_url,
 )
-from tools.deployment.engine_launch import load_launches
 from tools.deployment.host_access import SSH, load_hosts
 from tools.deployment.prepare_host_env import select_values
 
@@ -68,12 +67,7 @@ def sglang_observation(address="10.0.0.1"):
 
 def sglang_environment(root):
     env = environment(root)
-    del env["NARWHAL_NIXL_SIDE_CHANNEL_PORT"]
-    env.update(
-        NARWHAL_ENGINE_BACKEND="sglang",
-        NARWHAL_SGLANG_BOOTSTRAP_PORT="5557",
-        NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB="4",
-    )
+    env.update(NARWHAL_ENGINE_BACKEND="sglang", NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB="4")
     return env
 
 
@@ -90,7 +84,7 @@ def environment(root):
         "NARWHAL_FABRIC_INTERFACE": "fabric0",
         "NARWHAL_ENGINE_PORT": "8000",
         "NARWHAL_ATTEST_PORT": "8010",
-        "NARWHAL_NIXL_SIDE_CHANNEL_PORT": "5557",
+        "NARWHAL_KV_SIDE_CHANNEL_PORT": "5557",
         "NARWHAL_UCX_TCP_PORT_RANGE": "20000-21000",
         "NARWHAL_DEPLOYMENT_REVISION": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -216,27 +210,49 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(serving["connector"], "mooncake")
             self.assertEqual(serving["decode_cuda_graph_memory_gb"], 4.0)
             self.assertNotIn("role", serving)
-            self.assertEqual(serving["extra_args"], ["--context-length", "16384"])
+            self.assertEqual(serving["extra_args"], [])
+            self.assertEqual(serving["context_length"], 16384)
             hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
             run = root / "prepared"
             prepare(hosts, env, run, ROOT)
             limits = json.loads((run / "node-1/profiling-limits.json").read_text())
             self.assertEqual(limits["engines"], {"n1": 256, "n2": 256})
-            self.assertEqual(
-                (run / "node-1/cache_capture_hook.py").read_bytes(),
-                (ROOT / "src/narwhal/backends/sglang/cache_capture_hook.py").read_bytes(),
-            )
+            # SGLang has no cache capture, so its engines receive no capture hook.
+            self.assertFalse((run / "node-1/cache_capture_hook.py").exists())
+            manifest = json.loads((run / "manifest.json").read_text())
+            self.assertNotIn("node-1/cache_capture_hook.py", manifest["hashes"])
             for node in (1, 2):
                 role = f"engine-{node}"
                 role_env = select_values("engine", node, fleet, env)
-                self.assertEqual(role_env["NARWHAL_SGLANG_BOOTSTRAP_PORT"], "5557")
-                self.assertNotIn("NARWHAL_NIXL_SIDE_CHANNEL_PORT", role_env)
+                self.assertEqual(role_env["NARWHAL_KV_SIDE_CHANNEL_PORT"], "5557")
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
                 )
                 plan, _ = build(records[role], role_env, root / role)
                 self.assertEqual(plan["engine"], "sglang")
                 self.assertIn("--tp-size", plan["args"])
+
+    def test_env_sets_prefix_caching_cache_events_and_tokenizer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            env.update(
+                NARWHAL_NODE_1_PREFIX_CACHING="false",
+                NARWHAL_NODE_2_KV_EVENTS="false",
+                NARWHAL_TOKENIZER="/tokenizer",
+            )
+            hosts = derive_hosts(env)
+            observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
+            _, launches, _, _ = build_records(hosts, env, observations, root)
+            one = launches["engines"]["engine-1"]["runtime"]
+            two = launches["engines"]["engine-2"]["runtime"]
+            self.assertEqual((one["prefix_caching"], one["tokenizer"]), (False, "/tokenizer"))
+            self.assertNotIn("kv_events", one)
+            self.assertEqual((two["kv_events"], two["tokenizer"]), (False, "/tokenizer"))
+            self.assertNotIn("prefix_caching", two)
+            env["NARWHAL_KV_EVENTS"] = "no"
+            with self.assertRaisesRegex(ValueError, "set KV_EVENTS to true or false"):
+                build_records(hosts, env, observations, root)
 
     def test_sglang_engines_need_the_mooncake_connector_and_graph_memory(self):
         env = sglang_environment(Path("/synthetic"))
@@ -256,7 +272,7 @@ class DiscoveryTests(unittest.TestCase):
         hosts = derive_hosts(env)
         observations = {f"engine-{i}": sglang_observation(f"10.0.0.{i}") for i in (1, 2)}
         for observed in observations.values():
-            observed["requires_ds_conv_state_layout"] = True
+            observed["conv_state_layers"] = True
 
         def extra_args() -> list[str]:
             _, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
@@ -264,16 +280,18 @@ class DiscoveryTests(unittest.TestCase):
 
         self.assertEqual(
             extra_args(),
-            [
-                "--context-length",
-                "16384",
-                "--mamba-radix-cache-strategy",
-                "no_buffer",
-                "--disable-overlap-schedule",
-            ],
+            ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
         )
+        env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--mamba-radix-cache-strategy", "no_buffer"])
+        self.assertEqual(extra_args(), ["--mamba-radix-cache-strategy", "no_buffer"])
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--disable-radix-cache"])
-        self.assertEqual(extra_args(), ["--disable-radix-cache"])
+        with self.assertRaisesRegex(
+            ValueError, "sets --disable-radix-cache, which runtime.prefix_caching sets"
+        ):
+            extra_args()
+        del env["NARWHAL_ENGINE_ARGS"]
+        env["NARWHAL_PREFIX_CACHING"] = "false"
+        self.assertEqual(extra_args(), [])
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
@@ -341,7 +359,9 @@ class DiscoveryTests(unittest.TestCase):
             env.update(
                 NARWHAL_GPU_IDS="2,3",
                 NARWHAL_TENSOR_PARALLEL_SIZE="2",
-                NARWHAL_ENGINE_ARGS='["--max-model-len", "8192"]',
+                NARWHAL_CONTEXT_LENGTH="8192",
+                NARWHAL_NODE_1_MAX_SEQUENCES="6",
+                NARWHAL_ENGINE_ARGS='["--enforce-eager"]',
                 NARWHAL_ENGINE_ENV='{"VLLM_ROCM_USE_AITER": "0"}',
             )
             hosts = derive_hosts(env)
@@ -356,13 +376,21 @@ class DiscoveryTests(unittest.TestCase):
             )
             self.assertEqual(one["runtime"]["environment"]["VLLM_ROCM_USE_AITER"], "0")
             self.assertEqual(
-                one["runtime"]["extra_args"],
-                ["--max-model-len", "8192", "--trust-remote-code"],
+                one["runtime"]["extra_args"], ["--enforce-eager", "--trust-remote-code"]
             )
+            self.assertEqual(one["runtime"]["context_length"], 8192)
+            self.assertEqual(one["runtime"]["max_sequences"], 6)
+            two = launches["engines"]["engine-2"]["runtime"]
             self.assertEqual(
-                launches["engines"]["engine-2"]["runtime"]["extra_args"],
-                ["--max-model-len", "8192"],
+                (two["extra_args"], two["context_length"], two["max_sequences"]),
+                (["--enforce-eager"], 8192, 8),
             )
+            env["NARWHAL_ENGINE_ARGS"] = '["--max-model-len", "8192"]'
+            with self.assertRaisesRegex(
+                ValueError, "sets --max-model-len, which runtime.context_length sets"
+            ):
+                build_records(hosts, env, observations, root)
+            env["NARWHAL_ENGINE_ARGS"] = '["--enforce-eager"]'
             env["NARWHAL_MODEL_CONFIG_SHA256"] = "c" * 64
             with self.assertRaisesRegex(ValueError, "hash differs"):
                 build_records(hosts, env, observations, root)
@@ -373,7 +401,7 @@ class DiscoveryTests(unittest.TestCase):
             env = environment(root)
             hosts = derive_hosts(env)
             observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
-            observations["engine-1"]["requires_ds_conv_state_layout"] = True
+            observations["engine-1"]["conv_state_layers"] = True
             _, launches, _, _ = build_records(hosts, env, observations, root)
             self.assertEqual(
                 launches["engines"]["engine-1"]["runtime"]["environment"][
@@ -429,7 +457,7 @@ class DiscoveryTests(unittest.TestCase):
         compile(PROBE, "remote discovery probe", "exec")
 
     def test_probe_applies_the_launcher_convolutional_state_rule(self):
-        rule = inspect.getsource(ds_conv_state_layout_required)
+        rule = inspect.getsource(conv_state_layers)
         self.assertTrue(PROBE.startswith(rule))
         namespace = {}
         exec(compile(rule, "remote discovery rule", "exec"), namespace)
@@ -439,8 +467,8 @@ class DiscoveryTests(unittest.TestCase):
                 "layer_types": ["linear_attention", "linear_attention", "full_attention"],
             }
         }
-        self.assertTrue(namespace["ds_conv_state_layout_required"](model))
-        self.assertFalse(namespace["ds_conv_state_layout_required"]({"layer_types": ["full"]}))
+        self.assertTrue(namespace["conv_state_layers"](model))
+        self.assertFalse(namespace["conv_state_layers"]({"layer_types": ["full"]}))
 
     def test_probe_maps_rocm_pci_ids_and_filters_image_environment(self):
         inputs = {
@@ -513,7 +541,7 @@ class DiscoveryTests(unittest.TestCase):
             exec(compile(PROBE, "remote discovery probe", "exec"), {})
         result = json.loads(output.getvalue())
         self.assertTrue(result["requires_trust_remote_code"])
-        self.assertTrue(result["requires_ds_conv_state_layout"])
+        self.assertTrue(result["conv_state_layers"])
         self.assertEqual(result["image_environment"], {"VLLM_ROCM_USE_AITER": "1"})
         self.assertEqual(
             [g["device"] for g in result["gpus"]],

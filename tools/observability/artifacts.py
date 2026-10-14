@@ -194,10 +194,11 @@ def render_dashboard(source: Mapping[str, Any]) -> dict[str, Any]:
     spec["elements"] = {
         name: element for name, element in spec["elements"].items() if name not in dropped
     }
-    layout = spec["layout"]["spec"]
-    layout["items"] = [
-        item for item in layout["items"] if item["spec"]["element"]["name"] not in dropped
-    ]
+    for row in spec["layout"]["spec"]["rows"]:
+        grid = row["spec"]["layout"]["spec"]
+        grid["items"] = [
+            item for item in grid["items"] if item["spec"]["element"]["name"] not in dropped
+        ]
     rendered = fill(dashboard)
     left = _placeholders(rendered)
     if left:

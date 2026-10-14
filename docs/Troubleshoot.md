@@ -27,26 +27,6 @@ On exit status `3`, inspect the source rows in the partial bundle's [manifest](D
 
 Add `--artifact PATH` to include ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run. Add `--include-request-content` to include journal and completion content.
 
-Manual capture for releases before 0.3.0:
-
-```bash
-umask 077
-mkdir -p runs/diagnostics
-incident_dir=$(mktemp -d runs/diagnostics/router.XXXXXX)
-
-for endpoint in health ready narwhal/state narwhal/lifecycle metrics; do
-  name=${endpoint##*/}
-  curl --connect-timeout 2 --max-time 5 -sS \
-    -o "$incident_dir/$name.body" -w '%{http_code}\n' \
-    "http://router:8000/$endpoint" > "$incident_dir/$name.status"
-done
-```
-
-Local artifacts:
-
-1. Filter them with site tooling per the [Content policy](Diagnostic-Bundles.md#content-policy).
-2. Place them beside these snapshots.
-
 Before stopping an engine, capture evidence per the [planned restart or unplanned-failure procedure](troubleshoot/01-Engine-Recovery.md).
 
 ## Router, admission, and lifecycle signals
@@ -131,7 +111,7 @@ Match the largest counts to a class:
 | `narwhal_expired_total{reason="handoff"}`                                                                   | `expired`          | HTTP 504 `handoff_expired`                         | [KV handoff expiries](#kv-handoff-expiries)                                                                                                             |
 | `narwhal_failed_total{reason="engine_overloaded"}`, `{reason="engine_timeout"}`, or `{reason="local_pool"}` | `failed`           | HTTP 502 or 504                                    | [Engine-side overload](#engine-side-overload)                                                                                                           |
 
-[Admission and refusal semantics](http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [Engine failure handling](http-api/03-Backend-and-Failures.md#engine-failure-handling) list the status, error type, and code of each response.
+To match a response's status, error type, and code to its cause, use [Admission and refusal semantics](http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [Engine failure handling](http-api/03-Backend-and-Failures.md#engine-failure-handling).
 
 ### Diagnose the class
 
@@ -153,7 +133,7 @@ Action: for loop lag, inspect CPU load on the router host and `rate(narwhal_even
 
 #### TTFT refusals
 
-Check: read `admission_price` on the refused journal rows. Its parts are `backlog_s`, `own_prefill_s`, `elapsed_s`, and `handoff_s`, and `price_s` is their sum. The [admission price](telemetry/01-Journal.md#admission-price) section defines each part.
+Check: read `admission_price` on the refused journal rows. Its [parts](telemetry/01-Journal.md#admission-price) are `backlog_s`, `own_prefill_s`, `elapsed_s`, and `handoff_s`, and `price_s` is their sum.
 
 | `cause`              | Cause                                                                                                                                                                                                                         | Action                                                                                                                                                                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -185,7 +165,7 @@ Raising `serving.queue_timeout_s` lengthens waits without adding seats.
 
 Check: `narwhal_waiting_decode` stays above `0`, and the expired rows' `queue_waits.decode` approaches the producer's `narwhal_handoff_bound_seconds`.
 
-Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the producer's KV lease can expire before a decode engine pulls the blocks, so the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so requests reach no handoff expiry.
+Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so this expiry occurs only on vLLM.
 
 Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, as in the default of `2`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
 
@@ -199,7 +179,7 @@ Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each j
 | `engine_timeout`    | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
 | `local_pool`        | A wait for a router data connection to the engine reached `engine.pool_timeout_s`.         |
 
-Cause: engines are receiving more traffic than they can handle before timing out. This happens when predictive checks are disabled (`open` admission mode) or when prefill and decode seats fill up faster than engines can process requests.
+Cause: engines receive more work than they finish before their timeouts. This happens in `open` admission mode, which skips the predictive checks, or when prefill and decode seats fill faster than engines finish requests.
 
 Action: reduce the offered rate, or add capacity. In `open` mode, compare a run in [`predictive` mode](configuration/02-Serving-and-Role-Control.md#global-admission).
 

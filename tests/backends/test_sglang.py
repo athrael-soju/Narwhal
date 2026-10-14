@@ -1,14 +1,12 @@
+import argparse
 import asyncio
-import contextlib
-import io
 import json
-import os
 import re
-import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -16,18 +14,22 @@ import msgpack
 from starlette.requests import Request as HTTPRequest
 
 from narwhal.backends import load
-from narwhal.backends.sglang import attestation, check, discovery, plan, runtime
+from narwhal.backends.sglang import attestation, discovery, plan, runtime
 from narwhal.backends.sglang.identity import SglangIdentity
 from narwhal.backends.sglang.role_switch import SglangRoleSwitch
+from narwhal.deployment.attestation_contract import evidence as attestation_evidence
+from narwhal.deployment.attestation_contract.document import engine_document
+from narwhal.deployment.attestation_contract.evidence import (
+    capture_model_dimensions,
+    model_contract,
+)
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.attestation import fetch_engine_identity
-from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
 from narwhal.profiling.probe.engine import engine_context_limit
-from narwhal.runtime.role_switch import restore_roles
 from narwhal.serving import app as app_module
 from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
@@ -63,21 +65,6 @@ def serve(record, *, tp=1, kv_events=None):
         port=8000,
         kv_events=kv_events,
     )
-
-
-def switching_engines(modes, posted):
-    def handle(request):
-        host = request.url.host
-        if request.method == "GET":
-            return httpx.Response(
-                200, json={"internal_states": [{"disaggregation_mode": modes[host]}]}
-            )
-        role = json.loads(request.content)["new_role"]
-        modes[host] = role
-        posted.append(f"{host} {role}")
-        return httpx.Response(200, json={"success": True, "message": "ok"})
-
-    return handle
 
 
 ARGS = ["--max-running-requests", "64"]
@@ -185,21 +172,9 @@ class ConnectorTests(unittest.TestCase):
         self.assertLess(rendezvous["bootstrap_room"], 2**63)
         self.assertNotEqual(kv.rendezvous(LAUNCH)["bootstrap_room"], rendezvous["bootstrap_room"])
         body = {"model": "m", "prompt": "p", "max_completion_tokens": 7}
-        decode = kv.decode_body(body, rendezvous)
+        decode = kv.decode_body(body, rendezvous=rendezvous)
         self.assertEqual((decode["max_tokens"], decode["stream"]), (7, True))
         self.assertNotIn("max_completion_tokens", decode)
-
-    def test_the_prefill_leg_generates_one_token(self):
-        client = EngineClient(kv=BACKEND.connector("mooncake"), dialect=BACKEND.dialect, model="m")
-        rendezvous = {"bootstrap_room": 1}
-        leg = client._prefill_leg(
-            {"model": "m", "prompt": "p", "max_completion_tokens": 9}, rendezvous
-        )
-        self.assertEqual((leg["max_tokens"], leg["bootstrap_room"]), (1, 1))
-        self.assertNotIn("max_completion_tokens", leg)
-        tagged, headers = client._tag(leg, {"x-request-id": "client"}, "rid-prefill")
-        self.assertEqual(tagged["rid"], "rid-prefill")
-        self.assertEqual(headers, {"x-request-id": "client"})
 
 
 class IdentityAndEventTests(unittest.TestCase):
@@ -293,13 +268,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             await BACKEND.role_switch.switch(client, "http://engine", role, LAUNCH)
         return posted
 
-    async def test_an_engine_in_the_role_needs_no_switch(self):
-        self.assertEqual(await self.switch("prefill", Role.PREFILL), [])
-
-    async def test_a_decode_switch_reserves_graph_memory(self):
-        posted = await self.switch("prefill", Role.DECODE)
-        self.assertEqual(posted, [{"new_role": "decode", "decode_cuda_graph_memory_gb": 4.0}])
-
     async def test_a_refused_switch_raises(self):
         with (
             patch("narwhal.backends.sglang.role_switch.IDLE_WAIT_S", 0.0),
@@ -324,49 +292,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
                 await BACKEND.role_switch.switch(client, "http://engine", Role.DECODE, LAUNCH)
         self.assertEqual(len(posted), 3)
-
-    async def test_a_decode_engine_switches_again_for_a_producer_it_has_stale(self):
-        modes = {"a": "decode", "b": "decode"}
-        posted = []
-        handle = switching_engines(modes, posted)
-        switcher = SglangRoleSwitch()
-        a, b = ("http://a", LAUNCH), ("http://b", LAUNCH)
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            # b's endpoints predate this switcher.
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["a prefill", "b prefill", "b decode"])
-            posted.clear()
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, [])
-            # a enters prefill again, so b still holds a's earlier endpoint.
-            await switcher.switch(client, a[0], Role.DECODE, LAUNCH)
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["a decode", "a prefill", "b prefill", "b decode"])
-            posted.clear()
-            # b switched since it last took a handoff from a's current generation.
-            await switcher.place(client, b, a)
-            await switcher.place(client, a, b)
-            self.assertEqual(posted, ["b prefill", "a decode", "a prefill", "b decode"])
-
-    async def test_restored_roles_leave_no_stale_endpoint(self):
-        modes = {"a": "decode", "b": "prefill", "c": "decode"}
-        posted = []
-        handle = switching_engines(modes, posted)
-        switcher = SglangRoleSwitch()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            self.assertIs(await switcher.role(client, "http://a"), Role.DECODE)
-            await restore_roles(
-                switcher,
-                client,
-                {
-                    "http://a": (Role.PREFILL, LAUNCH),
-                    "http://b": (Role.DECODE, LAUNCH),
-                    "http://c": (Role.DECODE, LAUNCH),
-                },
-            )
-        # b switched after a entered prefill; c may hold a's earlier endpoint.
-        self.assertEqual(posted, ["a prefill", "b decode", "c prefill", "c decode"])
-        self.assertEqual(modes, {"a": "prefill", "b": "decode", "c": "decode"})
 
     async def test_the_switcher_reads_the_engine_role_without_its_key(self):
         requests = []
@@ -403,10 +328,6 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((switcher._generations, switcher._received), ({}, {"http://engine": {}}))
 
-    def test_mooncake_is_the_only_connector_and_switches_roles(self):
-        self.assertEqual(list(BACKEND.connectors), ["mooncake"])
-        self.assertIsNotNone(BACKEND.role_switcher("mooncake"))
-
 
 class LaunchTests(unittest.TestCase):
     def test_runtime_requires_pins_for_its_transfer_backend(self):
@@ -421,13 +342,8 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(environment={"SGLANG_SECRET": "x"}), "SGLANG_SECRET"),
             (runtime_record(environment={"VLLM_FOO": "1"}), "VLLM_FOO"),
             (runtime_record(role="decode"), "runtime.role is set by the router"),
-            (runtime_record(extra_args=["--max-running-requests", "512"]), "from 1 to 256"),
-            (
-                runtime_record(
-                    extra_args=["--max-running-requests", "8", "--max-running-requests", "9"]
-                ),
-                "set once",
-            ),
+            (runtime_record(max_sequences=512), "from 1 to 256"),
+            (runtime_record(extra_args=["--max-running-requests", "8"]), "--max-running-requests"),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 plan.validate_runtime(record)
@@ -460,46 +376,18 @@ class LaunchTests(unittest.TestCase):
         self.assertIsNone(re.fullmatch(discovery.IMAGE_PACKAGES, "mooncake-transfer-engine-extra"))
 
     def test_a_switching_engine_without_the_radix_cache_needs_no_decode_radix_flag(self):
-        args, _ = serve(runtime_record(extra_args=["--disable-radix-cache"]))
+        args, _ = serve(runtime_record(prefix_caching=False))
         self.assertIn("--enable-pd-role-switch", args)
         self.assertNotIn("--disaggregation-decode-enable-radix-cache", args)
 
     def test_extra_args_cannot_configure_cache_events(self):
-        with self.assertRaisesRegex(ValueError, "unsupported or incomplete runtime option"):
+        with self.assertRaisesRegex(ValueError, "which runtime.kv_events sets"):
             plan.validate_runtime(
                 runtime_record(extra_args=["--kv-events-config", '{"publisher": "null"}'])
             )
 
-    def test_every_engine_launches_as_prefill_with_the_pins(self):
-        events = {"endpoint": "ipc:///e/events.sock", "replay_endpoint": "ipc:///e/replay.sock"}
-        args, transfer = serve(runtime_record(), tp=2, kv_events=events)
-        self.assertEqual(args[:3], ["-m", "launch_engine", "serve"])
-        for name, value in (
-            ("--disaggregation-mode", "prefill"),
-            ("--disaggregation-transfer-backend", "mooncake"),
-            ("--page-size", "1"),
-            ("--attention-backend", "triton"),
-            ("--max-running-requests", "256"),
-            ("--stream-interval", "1"),
-            ("--tp-size", "2"),
-        ):
-            self.assertEqual(option(args, name), value, name)
-        self.assertIn("--enable-pd-role-switch", args)
-        self.assertIn("--disaggregation-decode-enable-radix-cache", args)
-        self.assertEqual(json.loads(option(args, "--kv-events-config"))["publisher"], "zmq")
-        self.assertEqual(
-            transfer,
-            {
-                "transfer_backend": "mooncake",
-                "launch_role": "prefill",
-                "role_switch": True,
-                "decode_cuda_graph_memory_gb": 4.0,
-            },
-        )
-        self.assertNotIn(MODEL, attestation.launch_args(args))
-
     def test_a_launch_may_lower_the_request_cap(self):
-        record = runtime_record(extra_args=["--max-running-requests", "64"])
+        record = runtime_record(max_sequences=64)
         plan.validate_runtime(record)
         args, _ = serve(record)
         self.assertEqual(option(args, "--max-running-requests"), "64")
@@ -535,7 +423,7 @@ class LaunchTests(unittest.TestCase):
             },
         }
         self.assertEqual(
-            attestation.model_contract(config),
+            model_contract(config),
             {
                 "contract": {"kv_heads": 2, "head_size": 128, "hidden_layers": 4},
                 "model_architecture": "M",
@@ -549,7 +437,7 @@ class LaunchTests(unittest.TestCase):
         (run / "launch.json").write_text(json.dumps({"engine": "sglang"}))
         (run / "checked.json").write_text(json.dumps({"plan_sha256": "0" * 64}))
         with self.assertRaisesRegex(ValueError, "another serving plan"):
-            load("sglang").launcher().model_dimensions(run, {"engine": "sglang"})
+            capture_model_dimensions(run)
         self.assertFalse((run / "model-dimensions.json").exists())
 
 
@@ -557,168 +445,48 @@ IMAGE = "registry.example/sglang@sha256:" + "a" * 64
 PINS = {"sglang": "0.5.21", "mooncake-transfer-engine": "0.3.9"}
 
 
-class RuntimeCheckTests(unittest.TestCase):
-    def prepared(self, backend: str) -> tuple[Path, dict]:
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        root = Path(folder.name)
-        model = root / "model"
-        model.mkdir()
-        (model / "config.json").write_text("{}")
-        sockets = root / "events" / "engine"
-        launch = {
-            "backend": backend,
-            "expected_packages": PINS,
-            "args": ["-m", "launch_engine", "serve", "--model-path", str(model)],
-            "model_dir": str(model),
-            "kv_events": {
-                "socket_dir": str(sockets),
-                "endpoint": f"ipc://{sockets}/events.sock",
-                "replay_endpoint": f"ipc://{sockets}/replay.sock",
-            },
-        }
-        if backend == "native":
-            launch["python_executable"] = "/opt/sglang/bin/python"
-        else:
-            launch.update(image=IMAGE, common=["--network", "host"])
-        run = root / "launch"
-        run.mkdir()
-        (run / "launch.json").write_text(json.dumps(launch))
-        env = "engine.env" if backend == "native" else "container.env"
-        (run / env).write_text("SGLANG_HOST_IP=192.0.2.11\n")
-        return run, launch
+CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
 
-    def endpoints(self, launch):
-        return {key: launch["kv_events"][key] for key in ("endpoint", "replay_endpoint")}
 
-    def checked(
-        self, run, launch, *, version="0.5.21", events=None, returncode=0, digests=(IMAGE,)
-    ):
-        record = {
-            "sglang_version": version,
-            "prefix_caching": True,
-            "kv_events": events or self.endpoints(launch),
-        }
-        output = runtime.SETTINGS_TAG + json.dumps(record) + "\n"
-        self.calls = []
+def sglang_modules() -> dict[str, ModuleType]:
+    sglang = ModuleType("sglang")
+    sglang.__version__ = "0.5.21"  # type: ignore[attr-defined]
+    server_args = ModuleType("sglang.srt.server_args")
 
-        def stage(command, **kwargs):
-            self.calls.append((list(command), kwargs))
-            if command[:3] == ["docker", "image", "inspect"]:
-                inspection = [{"Id": "sha256:" + "b" * 64, "RepoDigests": list(digests)}]
-                return subprocess.CompletedProcess(command, 0, json.dumps(inspection), "")
-            return subprocess.CompletedProcess(command, returncode, output, "loading\nboom\n")
+    class ServerArgs:
+        @staticmethod
+        def add_cli_args(parser: argparse.ArgumentParser) -> None:
+            for name in (
+                "--model-path",
+                "--tokenizer-path",
+                "--kv-events-config",
+                "--disaggregation-bootstrap-port",
+            ):
+                parser.add_argument(name)
+            for flag in ("--trust-remote-code", "--disable-radix-cache"):
+                parser.add_argument(flag, action="store_true")
 
-        with (
-            patch("narwhal.deployment.stages.run", side_effect=stage),
-            contextlib.redirect_stdout(io.StringIO()) as printed,
-        ):
-            check.check(run, launch)
-        return printed.getvalue()
+    server_args.ServerArgs = ServerArgs  # type: ignore[attr-defined]
+    return {
+        "sglang": sglang,
+        "sglang.srt": ModuleType("sglang.srt"),
+        "sglang.srt.server_args": server_args,
+    }
 
-    def test_a_native_check_runs_the_hook_and_records_the_interpreter(self):
-        run, launch = self.prepared("native")
-        printed = self.checked(run, launch)
-        [(command, kwargs)] = self.calls
-        self.assertEqual(
-            command,
-            [
-                launch["python_executable"],
-                str(run / "hook/launch_engine.py"),
-                "_check",
-                json.dumps(PINS),
-                json.dumps(launch["args"][3:]),
-            ],
-        )
-        self.assertEqual(kwargs["env"], {**os.environ, "SGLANG_HOST_IP": "192.0.2.11"})
-        self.assertEqual(kwargs["stage"], "native-runtime-check")
-        self.assertEqual(kwargs["log"], run / "runtime-check.log")
-        attempt = json.loads((run / "runtime-check.log").read_text())
-        self.assertEqual(attempt["plan_sha256"], digest(run / "launch.json"))
-        # write_once compares bytes, so a re-check needs this exact serialization.
-        evidence = json.dumps(
-            {
-                "plan_sha256": digest(run / "launch.json"),
-                "sglang_version": "0.5.21",
-                "prefix_caching": True,
-                "kv_events": self.endpoints(launch),
-                "backend": "native",
-                "python_executable": launch["python_executable"],
-                "expected_packages": PINS,
-            }
-        )
-        self.assertEqual((run / "checked.json").read_text(), evidence)
-        sockets = launch["kv_events"]["socket_dir"]
-        self.assertEqual(
-            printed,
-            "Runtime identity, package pins and server arguments passed.\n"
-            f"The radix cache is on; cache events publish under {sockets}.\n",
-        )
-        self.checked(run, launch)
-        self.assertEqual((run / "checked.json").read_text(), evidence)
-        with self.assertRaisesRegex(ValueError, "^runtime identity changed; prepare a fresh"):
-            self.checked(run, launch, version="0.5.22")
 
-    def test_a_container_check_inspects_the_image_then_runs_the_hook(self):
-        run, launch = self.prepared("container")
-        self.checked(run, launch)
-        log = run / "image-check.log"
-        (inspect, inspected), (command, ran) = self.calls
-        self.assertEqual(inspect, ["docker", "image", "inspect", IMAGE])
-        self.assertEqual((inspected["stage"], inspected["log"]), ("docker-image", log))
-        owner = json.loads((run / "docker-owner.json").read_text())["label"]
-        self.assertEqual(command[:4], ["docker", "run", "--label", f"io.narwhal.launch={owner}"])
-        self.assertEqual(
-            command[6:],
-            [
-                "--rm",
-                "--network",
-                "host",
-                "--entrypoint",
-                "python3",
-                IMAGE,
-                "/narwhal-hooks/launch_engine.py",
-                "_check",
-                json.dumps(PINS),
-                json.dumps(launch["args"][3:]),
-            ],
-        )
-        self.assertEqual((ran["stage"], ran["log"]), ("docker-run", log))
-        self.assertNotIn("env", ran)
-        self.assertEqual(json.loads(log.read_text())["plan_sha256"], digest(run / "launch.json"))
-        self.assertEqual(
-            (run / "checked.json").read_text(),
-            json.dumps(
-                {
-                    "plan_sha256": digest(run / "launch.json"),
-                    "sglang_version": "0.5.21",
-                    "prefix_caching": True,
-                    "kv_events": self.endpoints(launch),
-                    "image_id": "sha256:" + "b" * 64,
-                }
-            ),
-        )
-
-    def test_a_check_stops_at_the_first_failed_step(self):
-        run, launch = self.prepared("container")
-        (Path(launch["model_dir"]) / "config.json").write_text('{"auto_map": {"x": "y"}}')
-        with self.assertRaisesRegex(ValueError, "^Model metadata requires --trust-remote-code"):
-            self.checked(run, launch)
-        self.assertEqual(self.calls, [])
-        (Path(launch["model_dir"]) / "config.json").write_text("{}")
-        with self.assertRaisesRegex(ValueError, "^local image identity differs from the launch"):
-            self.checked(run, launch, digests=())
-        self.assertEqual(
-            [command[:3] for command, _ in self.calls], [["docker", "image", "inspect"]]
-        )
-        run, launch = self.prepared("native")
-        failed = f"^native runtime check exited 1: boom; inspect {re.escape(str(run))}"
-        with self.assertRaisesRegex(ValueError, failed + "/runtime-check.log$"):
-            self.checked(run, launch, returncode=1)
-        moved = {**self.endpoints(launch), "endpoint": "tcp://*:5557"}
-        with self.assertRaisesRegex(ValueError, "^runtime cache-event endpoints differ"):
-            self.checked(run, launch, events=moved)
-        self.assertFalse((run / "checked.json").exists())
+class SglangProbeTests(unittest.TestCase):
+    def test_the_probe_checks_a_separate_tokenizer_for_shipped_code(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tokenizer = Path(folder)
+            (tokenizer / "tokenizer_config.json").write_text(CUSTOM_CODE)
+            args = ["--model-path", "/model", "--tokenizer-path", str(tokenizer)]
+            with patch.dict(sys.modules, sglang_modules()):
+                with self.assertRaisesRegex(ValueError, "^Tokenizer metadata requires"):
+                    runtime.settings({}, args)
+                trusted = runtime.settings({}, [*args, "--trust-remote-code"])
+                self.assertEqual(trusted["sglang_version"], "0.5.21")
+                (tokenizer / "tokenizer_config.json").write_text("{}")
+                self.assertTrue(runtime.settings({}, args)["prefix_caching"])
 
 
 IMAGE_ID = "sha256:" + "b" * 64
@@ -747,9 +515,13 @@ class EngineDocumentTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         run = Path(folder.name)
         native = backend == "native"
+        (run / "model").mkdir()
+        (run / "model/config.json").write_text("{}")
+        model_config = digest(run / "model/config.json")
         launch = {
             "engine": "sglang",
             "backend": backend,
+            "model_dir": str(run / "model"),
             "image": "" if native else IMAGE,
             "endpoint": "http://192.0.2.11:8000",
             "args": [
@@ -758,19 +530,19 @@ class EngineDocumentTests(unittest.TestCase):
             ],
             "connector": connector,
             "expected_packages": PINS,
-            "model_config_sha256": "1" * 64,
+            "model_config_sha256": model_config,
             "revision": "main",
             "model_revision": "2" * 40,
             "launch_sha256": "3" * 64,
             "launcher_sha256": "4" * 64,
             "launcher_code_sha256": "5" * 64,
         }
-        checked = {"sglang_version": "0.5.21", "image_id": IMAGE_ID}
+        checked = {"engine_version": "0.5.21", "image_id": IMAGE_ID}
         identity: dict = {"image_id": IMAGE_ID, "container_id": CONTAINER_ID}
         if native:
             launch["python_executable"] = "/opt/sglang/bin/python"
             checked = {
-                "sglang_version": "0.5.21",
+                "engine_version": "0.5.21",
                 "backend": "native",
                 "python_executable": launch["python_executable"],
                 "expected_packages": PINS,
@@ -785,7 +557,7 @@ class EngineDocumentTests(unittest.TestCase):
             "plan_sha256": plan_hash,
             "image": launch["image"],
             "revision": "main",
-            "model_config_sha256": "1" * 64,
+            "model_config_sha256": model_config,
         }
         (run / "model-dimensions.json").write_text(json.dumps(dimensions))
         server = {
@@ -806,71 +578,59 @@ class EngineDocumentTests(unittest.TestCase):
         (run / "startup.log").write_text("max_running_requests=64, context_len=32768\n")
         return run
 
-    def test_the_document_holds_the_contract_its_sources_and_the_launch(self):
-        switching = {
-            "transfer_backend": "mooncake",
-            "launch_role": "prefill",
-            "role_switch": True,
-            "decode_cuda_graph_memory_gb": 4.0,
-        }
+    def test_a_native_engine_with_fixed_roles_attests_without_an_image(self):
+        # The contract suite's attestation golden holds a container engine that switches roles.
         fixed = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
-        for backend, connector in (("container", switching), ("native", fixed)):
-            with self.subTest(backend=backend):
-                native = backend == "native"
-                run = self.evidence(backend, connector)
-                live, identity = (
-                    ("live_native", PROCESS) if native else ("live_container", CONTAINER_ID)
-                )
-                with patch.object(attestation, live, return_value=identity):
-                    document = attestation.engine_document(run, run / "startup.log")
-                image_id = "" if native else IMAGE_ID
-                expected = {
-                    "schema": "narwhal.attestation",
-                    "schema_version": 1,
-                    "contract": {
-                        "engine_version": "0.5.21",
-                        "image_digest": image_id,
-                        "transfer_version": "0.3.9",
-                        "connector_version": 0,
-                        "model_architecture": "M",
-                        "model_dtype": "bfloat16",
-                        "kv_heads": 2,
-                        "head_size": 128,
-                        "hidden_layers": 4,
-                        "attention_backend": "triton",
-                        "kv_cache_dtype": "auto",
-                        "cross_layers_blocks": None,
-                        "hybrid_kv_cache_manager": None,
-                        "connector": "mooncake",
-                        "kv_role": "",
-                        "transfer_mode": "",
-                        "speculative_config": "disabled",
-                        "enforce_handshake_compat": None,
-                    },
-                    "sources": {
-                        field: f"{(run / name).resolve()} sha256:{digest(run / name)}"
-                        for field, name in SOURCES.items()
-                        if not (native and field == "image_digest")
-                    },
-                    "launch": {
-                        "args": [
-                            *("-m", "launch_engine", "serve", "--model-path", "--port"),
-                            *("--page-size", "1", "--max-running-requests", "64"),
-                        ],
-                        "image_id": image_id,
-                        "expected_packages": PINS,
-                        "model_config_sha256": "1" * 64,
-                        "model_revision": "2" * 40,
-                        "launch_sha256": "3" * 64,
-                        "launcher_code_sha256": "5" * 64,
-                        "bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600},
-                        "role_switch": connector["role_switch"],
-                        **({} if native else {"decode_cuda_graph_memory_gb": 4.0}),
-                    },
-                }
-                self.assertEqual(document, expected)
-                # The document is written in this key order.
-                self.assertEqual(json.dumps(document), json.dumps(expected))
+        run = self.evidence("native", fixed)
+        with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
+            document = engine_document(run, run / "startup.log")
+        model_config = digest(run / "model/config.json")
+        expected = {
+            "schema": "narwhal.attestation",
+            "schema_version": 1,
+            "contract": {
+                "engine_version": "0.5.21",
+                "image_digest": "",
+                "transfer_version": "0.3.9",
+                "connector_version": 0,
+                "model_architecture": "M",
+                "model_dtype": "bfloat16",
+                "kv_heads": 2,
+                "head_size": 128,
+                "hidden_layers": 4,
+                "attention_backend": "triton",
+                "kv_cache_dtype": "auto",
+                "cross_layers_blocks": None,
+                "hybrid_kv_cache_manager": None,
+                "connector": "mooncake",
+                "kv_role": "",
+                "transfer_mode": "",
+                "speculative_config": "disabled",
+                "enforce_handshake_compat": None,
+            },
+            "sources": {
+                field: f"{(run / name).resolve()} sha256:{digest(run / name)}"
+                for field, name in SOURCES.items()
+                if field != "image_digest"
+            },
+            "launch": {
+                "args": [
+                    *("-m", "launch_engine", "serve", "--model-path", "--port"),
+                    *("--page-size", "1", "--max-running-requests", "64"),
+                ],
+                "image_id": "",
+                "expected_packages": PINS,
+                "model_config_sha256": model_config,
+                "model_revision": "2" * 40,
+                "launch_sha256": "3" * 64,
+                "launcher_code_sha256": "5" * 64,
+                "bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600},
+                "role_switch": False,
+            },
+        }
+        self.assertEqual(document, expected)
+        # The document is written in this key order.
+        self.assertEqual(json.dumps(document), json.dumps(expected))
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []
@@ -902,14 +662,14 @@ class EngineDocumentTests(unittest.TestCase):
                     else ("live_container", CONTAINER_ID, "container_start")
                 )
                 with (
-                    patch.object(attestation, live, return_value=identity),
+                    patch.object(attestation_evidence, live, return_value=identity),
                     patch.object(attestation, start, return_value=100.0) as started,
                     serving,
                 ):
                     path = attestation.capture_server(run)
                     with self.assertRaisesRegex(ValueError, "^Server evidence already exists"):
                         attestation.capture_server(run)
-                    attestation.engine_document(run, run / "startup.log")
+                    engine_document(run, run / "startup.log")
                     started.assert_called_once_with(PROCESS["pid"] if native else CONTAINER_ID)
                     [request] = requests
                     self.assertEqual(str(request.url), "http://192.0.2.11:8000/server_info")
@@ -932,7 +692,7 @@ class EngineDocumentTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, f"^Server evidence {field} differs from the checked serving"
                     ):
-                        attestation.engine_document(run, run / "startup.log")
+                        engine_document(run, run / "startup.log")
 
 
 class RouterRoleTests(unittest.IsolatedAsyncioTestCase):

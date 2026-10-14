@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import EngineBackend
 from narwhal.config import EngineSpec, FleetConfig
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
@@ -84,7 +85,9 @@ class RecordingClient(DescriptorHandoffs):
             self.flight["prefill"][slot] -= 1
         return SimpleNamespace(url=url)
 
-    async def decode(self, url, endpoint, body, headers, handoff, first_token_timeout_s=None):
+    async def decode(
+        self, url, endpoint, body, headers, handoff, first_token_timeout_s=None, rendezvous=None
+    ):
         slot = self._enter("decode", handoff.url, url, int(body["prompt"]))
         try:
             await asyncio.sleep(self.delay("decode", handoff.url, url))
@@ -339,10 +342,10 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             yield [parse_event(TOKEN)]
             yield [parse_event("data: [DONE]")]
 
-        switcher = SimpleNamespace(place=AsyncMock())
+        switcher = SimpleNamespace(engine_held=True, place=AsyncMock())
         roles = {spec.url: (Role.PREFILL, None) for spec in self.cfg.engines}
         with (
-            patch.object(calibration, "engine_side", return_value=switcher),
+            patch.object(EngineBackend, "role_switcher", return_value=switcher),
             patch.object(calibration, "attested_launches", new=AsyncMock(return_value={})),
             patch.object(calibration, "current_roles", new=AsyncMock(return_value=roles)),
             patch.object(calibration, "restore_roles", new=restore),

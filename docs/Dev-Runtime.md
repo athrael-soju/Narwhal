@@ -33,7 +33,7 @@ The two small templates start one prefill and one decode engine on an NVIDIA GPU
     ip -brief -4 address
     ```
 
-5. Record the name of an interface with exactly one IPv4 address for KV transfer (default `eth0`).
+5. Record the name of the interface for KV transfer, `eth0` by default. Pick one with exactly one IPv4 address that is not a bridge such as `docker0`. On a bridge, vLLM engines fail to start with `NIXL_ERR_BACKEND`.
 
 ## Installing the runtime and model
 
@@ -93,7 +93,7 @@ narwhal dev status
 2. Checks that the ports are free.
 3. Checks and starts the engines.
 4. Captures attestations and starts the attestation sidecars.
-5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split, where `narwhal-profile` pairs the engines and measures both roles of each one.
+5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split.
 6. Starts the router.
 
 `verify` runs these steps:
@@ -122,7 +122,7 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. Both engines launch as prefill, and the router sets each engine's role through SGLang's `/pd_role_switch` route. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
 1. Install Narwhal and the pinned packages in a fresh virtual environment:
 

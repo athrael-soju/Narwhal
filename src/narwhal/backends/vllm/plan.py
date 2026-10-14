@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from ...deployment.launch_engine.plan import (
     SECRET_WORDS,
@@ -10,18 +9,16 @@ from ...deployment.launch_engine.plan import (
     check_versions_and_dtype,
     option,
 )
+from ...deployment.launch_engine.settings import LaunchSettings, Setting, check_settings
+from ...deployment.launch_engine.settings import serve_args as render
 
 VALUE_OPTIONS = {
-    "--max-model-len",
     "--gpu-memory-utilization",
     "--max-num-batched-tokens",
-    "--max-num-seqs",
     "--reasoning-parser",
     "--attention-backend",
-    "--tokenizer",
     "--hf-config-path",
     "--load-format",
-    "--kv-events-config",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -30,8 +27,6 @@ FLAG_OPTIONS = {
     "--async-scheduling",
     "--no-disable-hybrid-kv-cache-manager",
     "--disable-hybrid-kv-cache-manager",
-    "--enable-prefix-caching",
-    "--no-enable-prefix-caching",
 }
 # NIXL engine_ttl for CUDA IPC peers with the UCX IPC cache off; the router's first peer
 # release round follows it.
@@ -62,6 +57,25 @@ ENV_PREFIXES = (
     "PYTORCH_",
     "SAFETENSORS_",
 )
+KV_EVENTS_OFF = ("--kv-events-config", json.dumps({"enable_kv_cache_events": False}))
+SETTINGS = LaunchSettings(
+    entrypoint=("-m", "vllm.entrypoints.openai.api_server"),
+    model_flag="--model",
+    tensor_parallel_flag="--tensor-parallel-size",
+    kv_events_flag="--kv-events-config",
+    remote_code_flag="--trust-remote-code",
+    kv_events_fields={"enable_kv_cache_events": True},
+    settings={
+        "block_size": Setting(flag="--block-size", required=True),
+        "context_length": Setting(flag="--max-model-len"),
+        "max_sequences": Setting(flag="--max-num-seqs"),
+        "tokenizer": Setting(flag="--tokenizer"),
+        "prefix_caching": Setting(
+            on=("--enable-prefix-caching",), off=("--no-enable-prefix-caching",), default=True
+        ),
+        "kv_events": Setting(off=KV_EVENTS_OFF, default=True),
+    },
+)
 
 
 def validate_runtime(runtime: dict) -> None:
@@ -74,6 +88,7 @@ def validate_runtime(runtime: dict) -> None:
     lease = runtime.get("kv_lease_s", KV_LEASE_S)
     if type(lease) is not int or lease < MIN_KV_LEASE_S:
         raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
+    check_settings(runtime, SETTINGS)
     check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_environment(
         runtime.get("environment", {}),
@@ -81,27 +96,6 @@ def validate_runtime(runtime: dict) -> None:
         ENV_PREFIXES,
         forbidden=(*SECRET_WORDS, "SKIP_COMPAT"),
     )
-
-
-def publishes_kv_events(args: list[str]) -> bool:
-    # Publication follows prefix caching unless --kv-events-config disables it.
-    if {"--enable-prefix-caching", "--no-enable-prefix-caching"} <= set(args):
-        raise ValueError("runtime.extra_args must select prefix caching at most once")
-    supplied = [args[i + 1] for i, arg in enumerate(args) if arg == "--kv-events-config"]
-    if len(supplied) > 1:
-        raise ValueError("runtime.extra_args must supply --kv-events-config at most once")
-    if supplied:
-        try:
-            value = json.loads(supplied[0])
-        except ValueError:
-            value = None
-        if value != {"enable_kv_cache_events": False}:
-            raise ValueError(
-                "runtime.extra_args --kv-events-config may only set "
-                '{"enable_kv_cache_events": false}; the launcher selects event endpoints'
-            )
-        return False
-    return "--no-enable-prefix-caching" not in args
 
 
 def serve_args(
@@ -126,71 +120,28 @@ def serve_args(
             **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
         },
     }
-    args = [
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        model,
-        "--served-model-name",
-        served_name,
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--tensor-parallel-size",
-        str(record["tensor_parallel_size"]),
-        "--dtype",
-        runtime["model_dtype"],
-        "--kv-cache-dtype",
-        runtime["kv_cache_dtype"],
-        "--block-size",
-        str(runtime["block_size"]),
-        *(
-            []
-            if kv_events is None
-            else [
-                "--kv-events-config",
-                json.dumps(
-                    {
-                        "enable_kv_cache_events": True,
-                        "publisher": "zmq",
-                        "endpoint": kv_events["endpoint"],
-                        "replay_endpoint": kv_events["replay_endpoint"],
-                    }
-                ),
-            ]
+    args = render(
+        record,
+        SETTINGS,
+        (
+            "common",
+            "block_size",
+            "context_length",
+            "max_sequences",
+            "tokenizer",
+            "prefix_caching",
+            "kv_events",
+            ("--kv-transfer-config", json.dumps(connector)),
+            "extra",
         ),
-        "--kv-transfer-config",
-        json.dumps(connector),
-        *runtime.get("extra_args", []),
-    ]
+        model=model,
+        served_name=served_name,
+        host=host,
+        port=port,
+        kv_events=kv_events,
+    )
     return args, connector
 
 
 def memory_fraction(args: list[str]) -> str | None:
     return option(args, "--gpu-memory-utilization")
-
-
-def requires_ds_conv_state_layout(model_dir: Path) -> bool:
-    return ds_conv_state_layout_required(json.loads((model_dir / "config.json").read_text()))
-
-
-def ds_conv_state_layout_required(model: dict) -> bool:
-    text_model = model.get("text_config", model)
-    linear = text_model.get("linear_attn_config", {})
-    if (
-        isinstance(linear, dict)
-        and linear.get("kda_layers")
-        and linear.get("short_conv_kernel_size")
-    ):
-        return True
-    if text_model.get("mamba_d_conv") or text_model.get("mamba_d_state"):
-        return True
-    if text_model.get("linear_conv_kernel_dim") and "linear_attention" in text_model.get(
-        "layer_types", []
-    ):
-        return True
-    return any(
-        isinstance(layer, str) and ("mamba" in layer.lower() or "ssm" in layer.lower())
-        for layer in text_model.get("layer_types", [])
-    )

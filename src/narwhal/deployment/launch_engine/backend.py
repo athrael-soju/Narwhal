@@ -9,31 +9,35 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from ...backends import EngineBackend
+    from ..attestation_contract.document import AttestationContext, AttestationEvidence
+    from .check import CheckContext, ProbeResult
+    from .settings import LaunchSettings
 
 
 class EngineLauncher(ABC):
     # Standalone module copied into each launch's hook as launch_engine.py.
     runtime_script: ClassVar[Path]
-    # Delivered as the hook's sitecustomize.py.
-    cache_hook: ClassVar[Path]
     side_channel: ClassVar[str]
-    side_channel_port_env: ClassVar[str]
     api_key_env: ClassVar[str]
-    args_field: ClassVar[str]
-    version_field: ClassVar[str]
-    checked_version_field: ClassVar[str]
     # Discovery pins the image distributions whose names fully match this pattern, and copies
     # image variables with these prefixes except the launcher-managed ones.
     image_packages: ClassVar[str]
     environment_prefixes: ClassVar[tuple[str, ...]]
     managed_environment: ClassVar[frozenset[str]]
+    launch_settings: ClassVar[LaunchSettings]
+    # Runtime check output: the pass summary, the cache line's name and the version label.
+    check_summary: ClassVar[str]
+    prefix_cache_name: ClassVar[str]
+    version_label: ClassVar[str]
+    # Flags whose values change per launch; the attested launch arguments omit their values.
+    launch_varying_flags: ClassVar[frozenset[str]]
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...
 
     @abstractmethod
     def discovered_runtime(
-        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+        self, observed: dict, setting: Callable[[str, str], str], connector: str
     ) -> dict: ...
 
     @abstractmethod
@@ -46,12 +50,6 @@ class EngineLauncher(ABC):
 
     @abstractmethod
     def side_channel_address(self, env: Mapping[str, str]) -> tuple[str, int]: ...
-
-    @abstractmethod
-    def check_model(self, runtime: dict, model: str) -> None: ...
-
-    @abstractmethod
-    def publishes_kv_events(self, extra_args: list[str]) -> bool: ...
 
     @abstractmethod
     def serve(
@@ -67,42 +65,27 @@ class EngineLauncher(ABC):
     ) -> tuple[list[str], dict]: ...
 
     @abstractmethod
-    def tensor_parallel_args(self, size: int) -> list[str]: ...
-
-    @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...
 
     @abstractmethod
-    def check(self, run: Path, plan: dict) -> None: ...
+    def runtime_probe(self, context: CheckContext) -> list[str]:
+        """Return the interpreter arguments of the in-image probe; raise for a failed input."""
 
     @abstractmethod
-    def measure_cache(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def capture_cache(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def model_dimensions(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def handshake_policy(self, run: Path, plan: dict) -> None: ...
-
-    @abstractmethod
-    def registration_layout(
-        self, run: Path, plan: dict, source: Path, from_runtime: bool
-    ) -> None: ...
+    def probe_result(self, context: CheckContext, output: str) -> ProbeResult: ...
 
     @abstractmethod
     def capture_connector(self, run: Path) -> Path: ...
 
     @abstractmethod
-    def capture_model_dimensions(self, run: Path) -> Path: ...
-
-    @abstractmethod
     def capture_native(self, run: Path) -> Path: ...
 
     @abstractmethod
-    def engine_document(self, run: Path, startup_log: Path) -> dict: ...
+    def transfer_package(self, plan: dict) -> str | None:
+        """Name the pinned package whose version the contract records as transfer_version."""
+
+    @abstractmethod
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence: ...
 
     @abstractmethod
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict: ...
@@ -112,6 +95,49 @@ class EngineLauncher(ABC):
 
     @abstractmethod
     def check_dev_files(self, runtime: dict) -> None: ...
+
+
+class CacheCapture(ABC):
+    """Optional launcher capability: the engine's KV cache layout, read through a hook."""
+
+    # Delivered as the launch hook's sitecustomize.py, pinned in the plan and enabled at start.
+    cache_hook: ClassVar[Path]
+
+    @abstractmethod
+    def measure_cache(self, run: Path, plan: dict) -> None: ...
+
+    @abstractmethod
+    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+    @abstractmethod
+    def registration_layout(
+        self, run: Path, plan: dict, source: Path, from_runtime: bool
+    ) -> None: ...
+
+    @abstractmethod
+    def handshake_policy(self, run: Path, plan: dict) -> None: ...
+
+
+class LiveModelDimensions(ABC):
+    """Optional capability; without it, dimensions come from the model configuration."""
+
+    @abstractmethod
+    def model_dimensions(self, run: Path, plan: dict) -> None:
+        """Write model-dimensions.json from the engine image."""
+
+    @abstractmethod
+    def capture_model_dimensions(self, run: Path) -> Path: ...
+
+
+class ModelFormats(ABC):
+    """Optional capability: a native launch may name a model file, not only a directory."""
+
+    @abstractmethod
+    def check_model(self, runtime: dict, model: str) -> None: ...
+
+
+def cache_capture(engine: EngineLauncher) -> CacheCapture | None:
+    return engine if isinstance(engine, CacheCapture) else None
 
 
 def run_import_check(script: str, label: str, *, traceback_fails: bool = False) -> None:

@@ -18,16 +18,13 @@ import json
 import os
 from pathlib import Path
 record = json.loads(Path(os.environ["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
-args = "sglang_args" if "sglang_args" in record else "vllm_args"
 for field in ("role", "accelerator", "gpu_ids", "tensor_parallel_size",
-              "accelerator_devices", "network_mode", "transfer", "environment", args):
+              "accelerator_devices", "network_mode", "transfer", "environment"):
     print(f"{field}: {json.dumps(record[field])}")
 PY_LAUNCH
 ```
 
 Retain this output.
-
-The launch record's `sources` object names the records behind the allocation and device configuration.
 
 Read the physical accelerator identity and count:
 
@@ -156,20 +153,20 @@ The launcher builds one launch plan per engine with these properties:
 | KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` transfer backend; every engine launches as prefill with `--enable-pd-role-switch` |
 | Side-channel address and port | The role environment, for the vLLM NIXL side channel or the SGLang bootstrap server                                                                                                                                                         |
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                                                                                                                                         |
-| Prefix caching                | On by default, turned off through `runtime.extra_args`                                                                                                                                                                                      |
-| Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching is on                                                                                                                                     |
+| Prefix caching                | On by default, turned off through `runtime.prefix_caching`                                                                                                                                                                                  |
+| Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](../measure/03-Load-Trial.md), add vLLM's `--no-enable-prefix-caching`, or SGLang's `--disable-radix-cache`, to `runtime.extra_args` before preparing the launch plans. Discovery writes `runtime.extra_args` from [`NARWHAL_ENGINE_ARGS`](01-Discover.md#confirming-the-launch-policy).
+For the [capacity trial](../measure/03-Load-Trial.md), set `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or set `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans.
 
-To add the flag after launch:
+To turn prefix caching off after launch:
 
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.
 3. Restart each engine.
 4. Repeat the work for an engine restart with a changed attested `launch_digest` from the [deployment sequence](../Deploy.md#deployment-sequence).
 
-For a separate tokenizer at `PATH`, add vLLM's `--tokenizer PATH` or SGLang's `--tokenizer-path PATH` to `runtime.extra_args` before preparing the launch plan.
+For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env` before discovery, or set `runtime.tokenizer` to `PATH` before preparing the launch plan.
 
 When the image, model, dtype, cache policy, TP allocation, or model arguments change:
 
@@ -217,19 +214,19 @@ A passing check confirms, for both backends:
 
 For vLLM, the check also confirms:
 
-- the connector, resolved through `KVConnectorFactory`
-- the tokenizer and its custom-code metadata, loaded with the plan's `--trust-remote-code` setting
+- the connector
+- the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
 
-For SGLang, the check also parses the serving arguments with SGLang's own argument parser.
+For SGLang, the check also parses the serving arguments.
 
 The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 A failed check names the failing package, tokenizer, or identity check.
 
-The vLLM check loads the final `--tokenizer` value in the serving arguments, or the model directory by default.
+The check uses the tokenizer at `runtime.tokenizer`, or the model directory when that field is unset.
 
-For a container engine, the check logs to `image-check.log`, and the vLLM check resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log`, and the vLLM check resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
+For a container engine, the check logs to `image-check.log` and resolves the tokenizer path in the image and its mounts, including `/model` for `NARWHAL_MODEL_DIR`. For a native engine, the check logs to `runtime-check.log` and resolves the tokenizer path on the host. Each check appends its attempt identifier, the launch-plan hash, and the subprocess output to the check log.
 
 When the launch-plan hash changes, prepare a fresh launch directory. When the launcher changes, prepare a new deployment package in [Install the approved revision](02-Install.md).
 
@@ -292,7 +289,7 @@ Before you reuse a failed deployment:
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
     sglang = plan.get("engine") == "sglang"
-    expected_version = checked["sglang_version" if sglang else "vllm_api_version"]
+    expected_version = checked["engine_version"]
     headers = {"Content-Type": "application/json"}
     if os.environ.get("NARWHAL_ENGINE_API_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["NARWHAL_ENGINE_API_KEY"]
@@ -332,7 +329,7 @@ Before you reuse a failed deployment:
     PY_ENGINE
     ```
 
-For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list: SGLang publishes no process start over HTTP, and an SGLang engine serves a completion only with a peer engine for the other leg. [Attestation](05-Attest.md) reads the SGLang process start on the host, and [preflight](06-Profile-and-Preflight.md) sends paired completions.
+For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list.
 
 If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
 
@@ -351,7 +348,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-SGLang engines report their KV cache over HTTP, and `narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 

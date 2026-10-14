@@ -42,8 +42,6 @@ These procedures recover a Narwhal dev instance after a failed stage, an interru
 
 ## Docker command reconciliation
 
-The engine deployment wrapper applies the stage budgets to Docker clients and native runtime checks.
-
 Each Docker create or run carries two labels. `io.narwhal.launch` holds the launch token from `docker-owner.json`, and `io.narwhal.operation` holds a unique operation token.
 
 A Docker client timeout or cancellation starts a reconciliation with the daemon. `NARWHAL_DOCKER_RECONCILE_SECONDS` sets the reconciliation budget, 30 seconds by default, and final cleanup takes up to 15 seconds at default settings.

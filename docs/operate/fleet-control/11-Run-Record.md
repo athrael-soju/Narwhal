@@ -88,7 +88,7 @@ A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, 
 
 ## Journal extracts
 
-Each load job and each session keeps a copy of the router journal rows written while it ran. Journal times are relative to the router process, so the service selects rows by file position:
+Each load job and each session keeps a copy of the [router journal](../../telemetry/01-Journal.md) rows written while it ran, selected by file position:
 
 1. When the run starts, the service records the journal's size.
 2. When the run ends, it copies the bytes appended after that offset.
@@ -113,5 +113,3 @@ The `journal` entry in a job document or a `session.end` result has:
 | `bytes`        | Bytes copied                                                                                                       |
 | `terminal`     | Count of finished requests by outcome, such as `completed` or `refused`                                            |
 | `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit |
-
-[Request journal](../../telemetry/01-Journal.md) describes the journal rows.

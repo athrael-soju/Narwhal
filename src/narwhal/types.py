@@ -42,6 +42,15 @@ class Role(StrEnum):
     DECODE = "decode"
 
 
+class RoleModel(StrEnum):
+    # Each engine serves the role its fleet pin names.
+    FIXED = "fixed"
+    # The router picks each leg's role; any engine serves either leg.
+    ROUTER = "router"
+    # The engine holds its role, and the router switches it.
+    ENGINE = "engine"
+
+
 @dataclass
 class Request:
     """Request state shared by the prefill and decode schedulers."""

@@ -17,12 +17,12 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
-from ..backends import DEFAULT_BACKEND, current_fields
+from ..backends import DEFAULT_BACKEND
 from ..backends import load as load_backend
 from ..backends import names as backend_names
 from ..cli_support import add_version_argument
 from ..config import EngineContract, EngineSpec, FleetConfig
-from ..config.model import CONTRACT_INT_FIELDS, CONTRACT_LAYOUT_FLAGS, current_contract_names
+from ..config.model import CONTRACT_INT_FIELDS, CONTRACT_LAYOUT_FLAGS
 from ..contracts import (
     ATTESTATION,
     ContractVersionError,
@@ -114,7 +114,6 @@ class AttestationDocument:
 def _read_contract(raw: Any) -> EngineContract:
     if not isinstance(raw, dict):
         raise ValueError("attestation contract must be an object")
-    raw = current_contract_names(raw)
     defaults = EngineContract().fields()
     unknown = sorted(set(raw) - set(defaults))
     if unknown:
@@ -171,7 +170,6 @@ def _read_sources(raw: Any, contract: EngineContract) -> dict[str, str]:
         isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in raw.items()
     ):
         raise ValueError("attestation sources must map field names to nonempty strings")
-    raw = current_fields("contract", raw)
     unknown_sources = sorted(set(raw) - set(contract.fields()))
     if unknown_sources:
         raise ValueError(f"sources name unknown contract field(s): {', '.join(unknown_sources)}")
@@ -371,7 +369,6 @@ def verify_attestation(
     if not isinstance(engine, dict):
         failures.append("engine identity is not an object")
         return failures
-    engine = current_fields("engine", engine)
     version = engine.get("version")
     if version != live.version:
         failures.append(f"engine version is {version!r}, the live engine reports {live.version!r}")

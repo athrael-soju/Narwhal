@@ -81,6 +81,7 @@ class FakeRouter:
         self.state_down = False
         self.state_body: Any = None
         self.events: list[dict[str, Any]] = []
+        self.quarantined: set[str] = set()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body: Any = json.loads(request.content) if request.content else None
@@ -151,7 +152,7 @@ class FakeRouter:
             "resident": {iid: {"prefill": 0, "decode": 0} for iid in self.roles},
             "ejected": sorted(iid for iid in self.roles if (self.stopped / iid).exists()),
             "draining": sorted(iid for iid, state in self.records.items() if state != "active"),
-            "quarantined": [],
+            "quarantined": sorted(self.quarantined),
             "probation": [],
             "pinned": [],
             "breaker": {
@@ -412,6 +413,40 @@ class ReturnToServiceTests(EngineCase):
         service = response.json()["result"]["service"]
         self.assertTrue(service["in_service"])
         self.assertGreater(service["waited_s"], 0)
+
+
+class ResumeTests(EngineCase):
+    router_timeout_s = 0.3
+
+    async def pause_e1(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/e1/pause")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.router.quarantined.add("e1")
+
+    async def test_resume_waits_until_the_router_ends_the_quarantine(self) -> None:
+        await self.pause_e1()
+
+        async def recover() -> None:
+            await asyncio.sleep(0.1)
+            self.router.quarantined.clear()
+
+        task = asyncio.create_task(recover())
+        response = await self.client.post("/api/engines/e1/resume")
+        await task
+        self.assertEqual(response.status_code, 200, response.text)
+        service = response.json()["result"]["service"]
+        self.assertTrue(service["in_service"])
+        self.assertGreater(service["waited_s"], 0)
+
+    async def test_resume_fails_while_the_router_quarantines_the_engine(self) -> None:
+        await self.pause_e1()
+        response = await self.client.post("/api/engines/e1/resume")
+        self.assertEqual(response.status_code, 504, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            "e1 did not return to service within 0.3s: the router still quarantines e1",
+        )
 
 
 class LifecycleActionTests(EngineCase):

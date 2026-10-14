@@ -14,17 +14,7 @@ If the helper changes, start a new preparation directory.
 
 ### Calculating the workload budget
 
-[Cache-equivalence grouping](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) groups engine roles by:
-
-- discovered image
-- model configuration
-- accelerator
-- tensor parallel (TP) size
-- GPU visibility variable
-- runtime inputs
-- transfer transport
-
-Engines with matching captured cache layouts share one budget from a representative engine.
+Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine.
 
 To compute the budget:
 
@@ -50,29 +40,29 @@ To compute the budget:
 
 `calculate` accepts these options:
 
-| Option                            | Default          | Description                                                                             |
-| --------------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `--model-config PATH`             | required         | Model configuration file, whose hash must match a runtime layout.                       |
-| `--launch-config PATH`            | required         | Engine launch record that supplies the TP size, whose hash must match a runtime layout. |
-| `--runtime-layout PATH`           | one cache source | Captured `cache-layout.json`.                                                           |
-| `--transfer-metrics BEFORE AFTER` | one cache source | SGLang prefill `/metrics` saved by `measure-transfer` before and after its handoffs.    |
-| `--prompt-tokens N`               | required         | Prompt length, in tokens.                                                               |
-| `--handoffs-per-s RATE`           | required         | Peak remote KV handoff rate, in handoffs per second.                                    |
-| `--burst N`                       | required         | Number of KV handoffs in a burst.                                                       |
-| `--transfer-budget-s SECONDS`     | required         | Time budget for transferring one burst.                                                 |
-| `--headroom FACTOR`               | required         | Multiplier of at least 1 applied to the required rate.                                  |
-| `--out PATH`                      | required         | Fresh private output path for the budget.                                               |
+| Option                            | Default          | Description                                                                                               |
+| --------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `--model-config PATH`             | required         | Model configuration file, whose hash must match a runtime layout.                                         |
+| `--launch-config PATH`            | required         | Engine launch record that supplies the tensor parallel (TP) size, whose hash must match a runtime layout. |
+| `--runtime-layout PATH`           | one cache source | Captured `cache-layout.json`.                                                                             |
+| `--transfer-metrics BEFORE AFTER` | one cache source | SGLang prefill `/metrics` saved by `measure-transfer` before and after its handoffs.                      |
+| `--prompt-tokens N`               | required         | Prompt length, in tokens.                                                                                 |
+| `--handoffs-per-s RATE`           | required         | Peak remote KV handoff rate, in handoffs per second.                                                      |
+| `--burst N`                       | required         | Number of KV handoffs in a burst.                                                                         |
+| `--transfer-budget-s SECONDS`     | required         | Time budget for transferring one burst.                                                                   |
+| `--headroom FACTOR`               | required         | Multiplier of at least 1 applied to the required rate.                                                    |
+| `--out PATH`                      | required         | Fresh private output path for the budget.                                                                 |
 
 Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--uniform-cache`, or `--bytes-per-token`.
 
-`measure-transfer` puts the decode engine in the decode role, switching it out and back first when it already serves decode, so that it takes the prefill engine's current transfer endpoint. It then sends handoffs whose prompts are random token IDs, each asking for one output token, and returns the decode engine to the role it found. `calculate --transfer-metrics` sums each TP rank's mean `sglang:kv_transfer_total_mb` between the two snapshots. `measure-transfer` accepts these options:
+`measure-transfer` puts the decode engine in the decode role, switching it out and back first when it already serves decode. It then sends handoffs and returns the decode engine to the role it found. `measure-transfer` accepts these options:
 
 | Option                  | Default                  | Description                                                                                                     |
 | ----------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `--prefill URL`         | required                 | Base URL of an idle engine serving the prefill role.                                                            |
 | `--decode URL`          | required                 | Base URL of another idle engine of the same cache group.                                                        |
 | `--bootstrap-host HOST` | required                 | Address of the prefill engine's bootstrap server.                                                               |
-| `--bootstrap-port PORT` | required                 | The prefill engine's `NARWHAL_SGLANG_BOOTSTRAP_PORT`.                                                           |
+| `--bootstrap-port PORT` | required                 | The prefill engine's `NARWHAL_KV_SIDE_CHANNEL_PORT`.                                                            |
 | `--model NAME`          | required                 | Served model name.                                                                                              |
 | `--launch-config PATH`  | required                 | Launch record whose `runtime.decode_cuda_graph_memory_gb` sizes the decode switch when the engine reports none. |
 | `--prompt-tokens N`     | required                 | Prompt length of each handoff, the same as the budget's `--prompt-tokens`.                                      |

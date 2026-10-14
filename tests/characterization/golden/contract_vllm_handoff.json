@@ -1,0 +1,199 @@
+{
+  "inference_probe": {
+    "control": [],
+    "decode": {
+      "body": {
+        "ignore_eos": true,
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0
+          ],
+          "remote_engine_id": "sim-stub-0",
+          "remote_host": "127.0.0.1",
+          "remote_port": 8000,
+          "remote_request_id": "fixture",
+          "tp_size": 1
+        },
+        "max_tokens": 1,
+        "min_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "paired_handoff": {
+    "control": [],
+    "decode": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0
+          ],
+          "remote_engine_id": "sim-stub-0",
+          "remote_host": "127.0.0.1",
+          "remote_port": 8000,
+          "remote_request_id": "fixture",
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "placement": [],
+  "serving_chat_stream": {
+    "control": [],
+    "decode": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0
+          ],
+          "remote_engine_id": "sim-stub-0",
+          "remote_host": "127.0.0.1",
+          "remote_port": 8000,
+          "remote_request_id": "<uuid>-a1-prefill",
+          "tp_size": 1
+        },
+        "max_completion_tokens": 4,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "return_token_ids": true,
+        "stream": true,
+        "stream_interval": 1
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    }
+  },
+  "serving_completions": {
+    "control": [],
+    "decode": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": false,
+          "do_remote_prefill": true,
+          "remote_block_ids": [
+            0
+          ],
+          "remote_engine_id": "sim-stub-0",
+          "remote_host": "127.0.0.1",
+          "remote_port": 8000,
+          "remote_request_id": "<uuid>-a1-prefill",
+          "tp_size": 1
+        },
+        "max_tokens": 4,
+        "model": "stub",
+        "prompt": "contract probe",
+        "return_token_ids": true,
+        "stream": true,
+        "stream_interval": 1
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "kv_transfer_params": {
+          "do_remote_decode": true
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  }
+}

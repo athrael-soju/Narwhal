@@ -6,7 +6,7 @@ description: Metrics for engine monitoring degradation and engine breaker state 
 
 ## Engine monitoring degradation
 
-The router runs a monitoring pass every `controller.monitor_interval_s` seconds. A pass runs a fixed sequence of stages, and a stage that raises an exception counts as a failure while the rest of the pass continues. After `controller.monitor_failure_limit` consecutive passes with a failed stage, the router admits no new requests until a pass completes with every stage successful.
+The router runs a monitoring pass every `controller.monitor_interval_s` seconds. A stage that raises an exception counts as a failure, and the rest of the pass continues. After `controller.monitor_failure_limit` consecutive passes with a failed stage, the router admits no new requests until a pass completes with every stage successful.
 
 These metrics track failed passes, monitoring-deadline delay and event-loop CPU time:
 
@@ -63,7 +63,7 @@ liveness
 
 `kind` values on `narwhal_engine_breaker_verifying`: `verify_health` or `verify_inference`.
 
-[Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) maps each class to the action the breaker takes at `recovery.eject_after` consecutive failures, and defines the profile-match rule.
+For the action the breaker takes on each class at `recovery.eject_after` consecutive failures, and for the profile-match rule, read [Failure evidence](../concepts/03-Failure-and-State.md#failure-evidence).
 
 ### Dropped connections
 
@@ -96,12 +96,12 @@ On vLLM, the probe of each path tries producers in this order:
 
 A vLLM engine held without a recorded producer, such as one held for `inference_status` evidence alone, verifies through the standalone probe.
 
-On SGLang, every engine serves only its current role, so the probe pairs the held engine with a live peer in the other role:
+On SGLang, the probe pairs the held engine with a live peer in the other role:
 
 - A held prefill engine runs the prefill leg for the live decode engines in turn, starting with the one that has the fewest resident decode requests and then by engine ID order. When no decode engine is live, or every one has failed its leg, the probe is `inconclusive` with the reason `no_consumer`.
 - A held decode engine tries its recorded producer while it is live, and then one other live prefill-role engine, chosen as on vLLM. A held decode engine without a recorded producer, such as one held for `inference_status` evidence alone, tries only that other engine. With no prefill-role engine live, the probe is `inconclusive` with the reason `no_producer`. When every producer it tried has failed its leg, the engine stays held until the next probe.
 
-A failed peer leg leaves the held engine untested, so the verifier records `producer_failed` or `consumer_failed` and moves to the next peer. A peer leg that waits out the router's control pool makes the probe `inconclusive`, and the verifier keeps the hold and tries again at the next probe.
+When a peer leg fails, the verifier records `producer_failed` or `consumer_failed` and moves to the next peer. A peer leg that waits out the router's control pool makes the probe `inconclusive`, and the verifier keeps the hold and tries again at the next probe.
 
 ### Verification probe outcomes
 

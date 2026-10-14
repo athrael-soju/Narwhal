@@ -6,10 +6,17 @@ description: Freeze the deployment inputs and discover the hosts of a Narwhal fl
 
 ## Loading the private environment
 
-1. In a fresh management checkout, copy `.env.example` to `.env`.
-2. Restrict `.env` to mode 0600.
-3. Fill every field.
-4. Load `.env` with shell tracing disabled:
+1. In a fresh management checkout, install Narwhal and activate its environment:
+
+    ```bash
+    make setup
+    . .venv/bin/activate
+    ```
+
+2. Copy `.env.example` to `.env`.
+3. Restrict `.env` to mode 0600.
+4. Fill every field.
+5. Load `.env` with shell tracing disabled:
 
     ```bash
     set +x
@@ -88,14 +95,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery derives two launch settings from the checkpoint. An `auto_map` entry in `config.json` or `tokenizer_config.json` sets `--trust-remote-code`. Convolutional SSM transfer state sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM. On an SGLang `mooncake` engine, it adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, unless `NARWHAL_ENGINE_ARGS` sets `--mamba-radix-cache-strategy` or `--disable-radix-cache`.
-
-Discovery detects convolutional SSM transfer state from any of these fields in `text_config`, or in the root configuration otherwise:
-
-- `linear_attn_config.kda_layers` with `linear_attn_config.short_conv_kernel_size`
-- `mamba_d_conv` or `mamba_d_state`
-- `linear_conv_kernel_dim` with a `linear_attention` entry in `layer_types`
-- a `layer_types` entry containing `mamba` or `ssm`
+Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code` when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`.
 
 Discovery writes the generated configuration at mode 0600:
 
@@ -161,7 +161,9 @@ Override the policy in `.env` before discovery:
 | `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`                                                    | GB of decode CUDA graph memory for each SGLang engine, required with the `mooncake` connector                                 |
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size                                                          |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
-| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default engine arguments, with one `--max-num-seqs` value on vLLM                                |
+| `NARWHAL_CONTEXT_LENGTH`, `NARWHAL_MAX_SEQUENCES`                                        | `runtime.context_length` and `runtime.max_sequences`                                                                          |
+| `NARWHAL_PREFIX_CACHING`, `NARWHAL_KV_EVENTS`, `NARWHAL_TOKENIZER`                       | `runtime.prefix_caching` and `runtime.kv_events`, each `true` or `false`, and `runtime.tokenizer`                             |
+| `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default `runtime.extra_args`                                                                     |
 | `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment                                     |
 | `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths |
 | `NARWHAL_TTFT_S`, `NARWHAL_TPOT_S`                                                       | Initial TTFT and TPOT limits, in seconds                                                                                      |
@@ -169,7 +171,9 @@ Override the policy in `.env` before discovery:
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
-With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and pins the image's installed `sglang`, `torch` and `mooncake-transfer-engine` versions, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The default SGLang arguments set `--context-length` to the maximum context, and the launcher sets `--max-running-requests` to 256 unless `NARWHAL_ENGINE_ARGS` sets a value from 1 to 256. The cache block, execution, maximum sequence and GPU memory settings apply to vLLM only.
+With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and requires the `sglang`, `torch` and `mooncake-transfer-engine` versions installed in the image, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only. For SGLang, `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`, from 1 to 256. Without it, the launcher uses 256.
+
+Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`. It fails when `NARWHAL_ENGINE_ARGS` sets a flag that one of the [launch settings for every backend](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) controls.
 
 ## Access failure handling
 

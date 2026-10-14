@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 from typing import Any
 
 from ...engines.dialect import EngineDialect
@@ -13,12 +12,6 @@ class SglangDialect(EngineDialect):
     cache_reset_path = "/flush_cache"
     # /tokenize reports the tokenizer's limit, not the --context-length the engine serves.
     context_limit_path = SERVER_INFO_PATH
-    prefill_incompatible = ("stream_options", "min_tokens", "n", "best_of", "max_completion_tokens")
-    # The launcher pins --stream-interval 1, so each streamed chunk carries one token.
-    token_ids = True
-    # SGLang's uvicorn server closes an idle connection after 5 s.
-    keepalive_expiry_s = 4.0
-    engine_output_fields = ("token_ids", "prompt_token_ids")
     # The stop token or string that ended the output.
     choice_fields = ("matched_stop",)
     # A client request ID or rendezvous would collide with the router's own.
@@ -35,6 +28,7 @@ class SglangDialect(EngineDialect):
         return {}, {"rid": rid}
 
     def token_id_fields(self) -> dict[str, Any]:
+        # The launcher pins --stream-interval 1, so each streamed chunk carries one token.
         return {"return_token_ids": True}
 
     def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
@@ -56,7 +50,3 @@ class SglangDialect(EngineDialect):
         if type(context) is not int or type(inputs) is not int or min(context, inputs) <= 0:
             return None
         return min(context, inputs)
-
-    def cold_probe_extras(self) -> dict[str, Any]:
-        # SGLang keys its radix cache by cache_salt, so a fresh salt shares no prefix.
-        return {"cache_salt": secrets.token_urlsafe(32)}

@@ -7,7 +7,8 @@ from urllib.parse import urlsplit
 
 from ...engines.attestation import AttestationDocument
 from ...engines.attestation import main as attest_main
-from ..launch_engine.backend import engine_backend, plan_launcher
+from ..launch_engine.backend import engine_backend
+from .document import engine_document
 from .evidence import checked_plan, live_container, live_native, read_json
 
 
@@ -35,7 +36,7 @@ def serve(run: Path) -> int:
     startup_log = run / (
         "startup-attestation.log" if plan.get("backend") == "native" else "startup.log"
     )
-    if read_json(destination) != plan_launcher(plan).engine_document(run, startup_log):
+    if read_json(destination) != engine_document(run, startup_log):
         raise ValueError("Attestation document differs from current serving evidence")
     expected = os.environ.get(f"NARWHAL_NODE_{node}_ATTESTATION_URL", "")
     url = urlsplit(expected)

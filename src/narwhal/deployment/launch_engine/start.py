@@ -12,19 +12,29 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 from .. import stages
-from .backend import plan_launcher
-from .check import require_checked
+from .backend import cache_capture, plan_launcher
+from .check import read_checked, require_checked
 from .docker import docker, run_runtime_script
 from .plan import container_options, env_file_name, load, read_env
 from .runtime import digest, write_private
 
 # Readiness budget for each engine of a shared start.
 READY_SECONDS = 180
+# Docker options that enable the cache capture hook in a serving container.
+CONTAINER_CAPTURE_ENV = (
+    "--env",
+    "NARWHAL_CAPTURE_CACHE=1",
+    "--env",
+    "NARWHAL_CACHE_PLAN=/narwhal-hooks/launch.json",
+    "--env",
+    "NARWHAL_CACHE_OUTPUT=/tmp/narwhal-cache-layout.json",
+)
 
 
 def _create_container(run: Path, plan: dict) -> str:
     require_checked(run, plan)
-    if digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]:
+    capture = cache_capture(plan_launcher(plan)) is not None
+    if capture and digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]:
         raise ValueError("cache capture hook changed; prepare a fresh launch plan")
     if digest(run / "hook/launch_engine.py") != plan["launcher_sha256"]:
         raise ValueError("cache capture launcher changed; prepare a fresh launch plan")
@@ -38,12 +48,7 @@ def _create_container(run: Path, plan: dict) -> str:
             "--name",
             plan["name"],
             *container_options(plan),
-            "--env",
-            "NARWHAL_CAPTURE_CACHE=1",
-            "--env",
-            "NARWHAL_CACHE_PLAN=/narwhal-hooks/launch.json",
-            "--env",
-            "NARWHAL_CACHE_OUTPUT=/tmp/narwhal-cache-layout.json",
+            *(CONTAINER_CAPTURE_ENV if capture else ()),
             "--entrypoint",
             "python3",
             plan["image"],
@@ -142,7 +147,7 @@ def validate_shared_runs(
         if backend == "container":
             require_checked(run, plan)
         else:
-            checked = json.loads((run / "checked.json").read_text())
+            checked = read_checked(run)
             if (
                 checked.get("backend") != "native"
                 or checked.get("plan_sha256") != digest(run / "launch.json")
@@ -271,7 +276,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     docker(["inspect", "--format", "{{json .Config.Cmd}}", cid], run, "launch.log")
                 )
                 image_id = docker(["inspect", "--format", "{{.Image}}", cid], run, "launch.log")
-                checked = json.loads((run / "checked.json").read_text())
+                checked = read_checked(run)
                 if (
                     not state.get("Running")
                     or type(state.get("Pid")) is not int
@@ -286,7 +291,7 @@ def start_shared(runs: list[Path], ready_seconds: int) -> None:
                     status="running",
                     process_id=state["Pid"],
                     image_id=image_id,
-                    **{plan_launcher(plan).args_field: command},
+                    engine_args=command,
                     gpu_after=after,
                     observed_delta_mib=after["used_mib"] - before["used_mib"],
                     aggregate_delta_mib=aggregate_delta,

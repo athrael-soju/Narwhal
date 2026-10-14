@@ -3,23 +3,23 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from ...deployment.launch_engine.plan import discovered_settings, option
-from .plan import CUDA_BUILD_SUFFIX, MAX_RUNNING_REQUESTS, TRANSFER_PACKAGES
+from ...deployment.launch_engine.plan import discovered_launch_settings, discovered_settings
+from ...deployment.launch_engine.settings import count
+from .plan import CUDA_BUILD_SUFFIX, MAX_RUNNING_REQUESTS, SETTINGS, TRANSFER_PACKAGES
 
 IMAGE_PACKAGES = "sglang|torch|" + "|".join(
     f"{re.escape(name)}(?:{CUDA_BUILD_SUFFIX})?" for name in TRANSFER_PACKAGES.values()
 )
 
 
-def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, role: str) -> dict:
-    dtype, args, environment, _ = discovered_settings(
-        observed, setting, lambda max_len: ["--context-length", str(max_len)]
-    )
+def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) -> dict:
+    dtype, context_length, args, environment, _ = discovered_settings(observed, setting, [])
+    fields = discovered_launch_settings(setting)
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
     if (
-        observed.get("requires_ds_conv_state_layout")
-        and "--disable-radix-cache" not in args
+        observed.get("conv_state_layers")
+        and fields.get("prefix_caching") is not False
         and "--mamba-radix-cache-strategy" not in args
     ):
         # A switched decode engine caches finished requests' SSM states. With the extra buffer a
@@ -34,7 +34,12 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, 
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
         "kv_cache_dtype": "auto",
+        "context_length": context_length,
+        **fields,
     }
+    sequences = setting("MAX_SEQUENCES", "")
+    if sequences:
+        record["max_sequences"] = int(sequences)
     memory = setting("DECODE_CUDA_GRAPH_MEMORY_GB", "")
     if not memory:
         raise ValueError(f"set DECODE_CUDA_GRAPH_MEMORY_GB in .env for {connector} engines")
@@ -42,6 +47,5 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str, 
     return {**record, "environment": environment, "extra_args": args}
 
 
-def sequence_limit(args: list[str]) -> int:
-    cap = option(args, "--max-running-requests")
-    return int(cap) if cap is not None and cap.isdigit() else MAX_RUNNING_REQUESTS
+def sequence_limit(runtime: dict) -> int:
+    return count(runtime, SETTINGS, "max_sequences") or MAX_RUNNING_REQUESTS

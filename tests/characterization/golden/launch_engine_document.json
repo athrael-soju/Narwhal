@@ -36,11 +36,11 @@
       "auto",
       "--block-size",
       "128",
+      "--max-model-len",
+      "4096",
       "--kv-events-config",
       "--kv-transfer-config",
       "{\"kv_connector\": \"NixlConnector\", \"kv_role\": \"kv_both\", \"kv_load_failure_policy\": \"fail\", \"kv_connector_extra_config\": {\"backends\": [\"UCX\"], \"enforce_handshake_compat\": true, \"kv_lease_duration\": 30}}",
-      "--max-model-len",
-      "4096",
       "--enforce-eager"
     ],
     "cache_capture_code_sha256": "<sha256>",

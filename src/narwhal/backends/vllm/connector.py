@@ -9,6 +9,12 @@ class NixlConnector(KvConnector):
     name = "nixl"
     contract_name = "NixlConnector"
     param_key = "kv_transfer_params"
+    diagnostics_fields: ClassVar[tuple[str, ...]] = (
+        "transfer_mode",
+        "remote_engine_id",
+        "remote_host",
+        "remote_port",
+    )
     renewal_divisor: ClassVar[int] = 6
 
     def handoff_bound(self, lease_s: int) -> float:

@@ -26,11 +26,11 @@ Until whole-wave readmission succeeds, the active router's `/health` reports `st
 
 ### Temporary holds
 
-[Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) sets hold behavior for an engine that alone serves one of its roles.
+Under [last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection), the router starts no timed quarantine or inference hold on an engine that alone serves one of its roles. When another engine's ejection or drain leaves a held engine alone in its role, the router ends that hold.
 
 ### Router control and replacement
 
-The HTTP status of `/ready` shows traffic eligibility, and load balancers route client traffic by it. `control_ready: true` in `/ready` shows a valid lease and healthy engine monitoring to the standby routers that copy the state handoff.
+The HTTP status of `/ready` shows traffic eligibility, and load balancers route client traffic by it. `control_ready: true` in `/ready` means the router holds a valid lease and its engine monitoring is healthy. A standby copies the state handoff from a primary that reports it, even while that primary's `/ready` returns HTTP 503.
 
 A replacement router:
 
@@ -40,9 +40,9 @@ A replacement router:
 
 ## Monitoring placement and control
 
-Prometheus and Grafana setup: [Setting up observability](../Observability.md).
+To set up Prometheus and Grafana, follow [Setting up observability](../Observability.md).
 
-[Router metric](../telemetry/03-Metrics-and-Control.md#metric-families) signals:
+Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families) to answer these questions:
 
 | Signal | Operational question |
 | --- | --- |
@@ -70,6 +70,6 @@ Prometheus and Grafana setup: [Setting up observability](../Observability.md).
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
-`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The three share rules divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
+`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. `NarwhalRejectedRising`, `NarwhalExpiredRising` and `NarwhalRetryDeniedRising` divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
 
 Request journals record per-request placement and timing. Metrics hold process-level summaries since the last counter reset.

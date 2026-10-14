@@ -1,11 +1,8 @@
-import asyncio
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-import httpx
 
 from narwhal.backends import EngineBackend, load, names
 from narwhal.config.loading import load as load_fleet
@@ -17,7 +14,6 @@ from narwhal.engines.kv_events import KvEventDecoder
 from narwhal.engines.metrics import EngineMetrics
 from narwhal.runtime.fabric import FabricLifecycle
 from narwhal.runtime.role_switch import RoleSwitcher
-from narwhal.types import Role
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/maintenance"))
@@ -41,8 +37,7 @@ class RegistryTests(unittest.TestCase):
                 self.assertIsInstance(backend.metrics, EngineMetrics)
                 self.assertIsInstance(backend.fabric, FabricLifecycle)
                 self.assertIsInstance(backend.launcher(), EngineLauncher)
-                if backend.role_switch is not None:
-                    self.assertIsInstance(backend.role_switch, RoleSwitcher)
+                self.assertIsInstance(backend.role_switch, RoleSwitcher)
 
     def test_unknown_backend_and_connector_are_refused(self):
         with self.assertRaisesRegex(ValueError, "unknown engine backend 'nope'.*vllm"):
@@ -86,18 +81,6 @@ class VllmBackendTests(unittest.TestCase):
         )
         self.assertEqual(self.backend.metrics.transfer_totals(text), (5.0, 1.5))
         self.assertIsNone(self.backend.metrics.transfer_totals("other 1\n"))
-
-    def test_role_change_needs_no_engine_request(self):
-
-        def refuse(request):
-            raise AssertionError(request.url)
-
-        async def switch():
-            async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
-                await self.backend.role_switch.switch(client, "http://stub-0", Role.DECODE)
-
-        asyncio.run(switch())
-        self.assertFalse(self.backend.role_switch.requires_idle)
 
 
 class BoundaryTests(unittest.TestCase):

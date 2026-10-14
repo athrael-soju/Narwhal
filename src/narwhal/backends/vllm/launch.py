@@ -3,36 +3,44 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
+from ...deployment.launch_engine.backend import (
+    CacheCapture,
+    EngineLauncher,
+    LiveModelDimensions,
+    ModelFormats,
+)
+from ...deployment.launch_engine.check import CheckContext, ProbeResult
 from . import attestation, captures, dev, discovery
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import LAUNCHER
 
 
-class VllmLauncher(EngineLauncher):
+class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelFormats):
     runtime_script = LAUNCHER
     cache_hook = Path(__file__).with_name("cache_capture_hook.py")
     side_channel = "NIXL"
-    side_channel_port_env = "NARWHAL_NIXL_SIDE_CHANNEL_PORT"
     api_key_env = "VLLM_API_KEY"
-    args_field = "vllm_args"
-    version_field = "vllm_version"
-    checked_version_field = "vllm_api_version"
     image_packages = discovery.IMAGE_PACKAGES
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
+    launch_settings = policy.SETTINGS
+    check_summary = "Runtime identity, package pins, connector import and tokenizer passed."
+    prefix_cache_name = "Prefix caching"
+    launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
+    version_label = "API"
 
     def validate_runtime(self, runtime: dict) -> None:
         policy.validate_runtime(runtime)
 
     def discovered_runtime(
-        self, observed: dict, setting: Callable[[str, str], str], connector: str, role: str
+        self, observed: dict, setting: Callable[[str, str], str], connector: str
     ) -> dict:
         return discovery.runtime(observed, setting)
 
     def sequence_limit(self, runtime: dict) -> int:
-        return discovery.sequence_limit(runtime.get("extra_args", []))
+        return discovery.sequence_limit(runtime)
 
     def engine_env(
         self, host: str, side_channel_port: int, api_key: str, bind_host: str | None = None
@@ -50,9 +58,6 @@ class VllmLauncher(EngineLauncher):
     def check_model(self, runtime: dict, model: str) -> None:
         if model.endswith(".gguf") and not runtime["expected_packages"].get("vllm-gguf-plugin"):
             raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
-
-    def publishes_kv_events(self, extra_args: list[str]) -> bool:
-        return policy.publishes_kv_events(extra_args)
 
     def serve(
         self,
@@ -75,14 +80,14 @@ class VllmLauncher(EngineLauncher):
             evict_peers=evict_peers,
         )
 
-    def tensor_parallel_args(self, size: int) -> list[str]:
-        return ["--tensor-parallel-size", str(size)]
-
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)
 
-    def check(self, run: Path, plan: dict) -> None:
-        runtime_check.check(run, plan)
+    def runtime_probe(self, context: CheckContext) -> list[str]:
+        return runtime_check.probe(context)
+
+    def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
+        return runtime_check.result(context, output)
 
     def measure_cache(self, run: Path, plan: dict) -> None:
         captures.measure_cache(run, plan)
@@ -108,8 +113,11 @@ class VllmLauncher(EngineLauncher):
     def capture_native(self, run: Path) -> Path:
         return attestation.capture_native(run)
 
-    def engine_document(self, run: Path, startup_log: Path) -> dict:
-        return attestation.engine_document(run, startup_log)
+    def transfer_package(self, plan: dict) -> str | None:
+        return attestation.nixl_package(plan)
+
+    def attestation_evidence(self, context: AttestationContext) -> AttestationEvidence:
+        return attestation.attestation_evidence(context)
 
     def dev_runtime(self, template: dict, model_dir: Path, memory_fraction: float) -> dict:
         return dev.runtime(template, model_dir, memory_fraction)

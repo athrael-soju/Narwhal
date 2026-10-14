@@ -25,7 +25,7 @@ Before raising `serving.max_connections`, measure the in-flight load the fleet s
 
 The in-flight limit is [`narwhal-serve --max-concurrent`](06-Fabric-and-Operations.md#cli-precedence) when set, otherwise `serving.max_connections`. At most that many requests hold an admission seat at once. With `serving.queue_capacity` above 0, up to that many more requests wait for a seat.
 
-The router counts a completion request against the limit from its arrival, before it reads the body, until its response ends. When the requests it counts reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429, error type `server_overloaded_error` and message `router in-flight limit reached`. It sends the 429 before parsing the body and counts the request as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers) with rejection reason `inflight_limit`.
+The router counts a completion request against the limit from its arrival, before it reads the body, until its response ends. When the requests it counts reach the in-flight limit plus `serving.queue_capacity`, the router answers each new request with HTTP 429, error type `server_overloaded_error` and message `router in-flight limit reached`. The router counts the request as an [unsized offer](../http-api/06-SLO-and-Demand.md#unsized-offers) with rejection reason `inflight_limit`.
 
 `/metrics` reports the admission seats in use as `narwhal_admission_inflight`, the limit as `narwhal_admission_inflight_limit`, and the counted requests as `narwhal_http_retained` against `narwhal_http_retained_limit`.
 
@@ -51,8 +51,6 @@ Each request holds one slot. The pool's slot count is the sum of each live decod
 | Request resident in decode                 |                                     | From now until its projected last token                                            |
 | Request waiting for a decode slot          | Now                                 | From the earliest free slot until its projected last token                         |
 | Request in prefill, or the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token |
-
-The check assigns free slots to requests in the order they reach decode.
 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
@@ -89,7 +87,7 @@ The check projects generation at these token intervals:
 | Request resident in decode | Its decode engine's interval       |
 | Every other request        | Fleet mean of the engine intervals |
 
-An engine's interval is its profiled token interval times the [decode correction](#load-definitions). The profiled interval assumes a full batch at the current mean context, within the decode KV token bound.
+An engine's interval is its profiled token interval times the [decode correction](#load-definitions).
 
 The check admits the request when all three of these pass:
 
@@ -101,7 +99,7 @@ The check admits the request when all three of these pass:
 
 #### Retry pricing
 
-In `predictive` mode, only an original request's first attempt is priced against the TTFT check. An attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
+In `predictive` mode, an attempt after the first skips the TTFT check and runs the decode admission check, where the slot-wait check uses the retry's predicted prefill completion in place of its projected TTFT. A retry that fails the decode admission check receives HTTP 429 with that check's cause. Its journal attempt entry carries `retry_reason` `not_dispatched`.
 
 ### Waiting, engine seats, and retries
 
@@ -127,13 +125,13 @@ With `serving.queue_capacity` above `0`, a request can wait at three stages. Eac
 | Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left | HTTP `504`, error type `expired`         |
 | Decode seat    | Every engine that can take the decode leg has its decode seats full                    | The producer's [KV handoff bound](#kv-handoff-bound)                                                                  | HTTP `504`, error type `handoff_expired` |
 
-The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. The router sets each wait's timer at its bound, and the timer fires when the router's event loop runs it. Under event-loop lag, reported as `narwhal_router_loop_lag_seconds`, a wait can run past its bound by about the lag, and a seat that frees in that time still serves the request. The [router saturation](#router-saturation) check rejects new requests once the lag reaches a quarter of `slo.ttft_s`. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request, as the retry rules below describe.
+The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. Under event-loop lag, reported as `narwhal_router_loop_lag_seconds`, a wait can run past its bound by about the lag, and a seat that frees in that time still serves the request. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request.
 
 A request with no queue budget left still takes a free prefill seat, but it does not wait for one.
 
-Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat. An arriving request therefore meets a full queue only while requests hold every seat.
+Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat.
 
-In `predictive` mode, the router prices an original request's first attempt when it starts an admission-seat or prefill-seat wait. It prices the request again each time the wait wakes. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. The price grows with the time waited, so the router also prices the request when that growth alone would exceed the TTFT budget. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+In `predictive` mode, the router prices an original request's first attempt throughout an admission-seat or prefill-seat wait. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
 
 The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
 
@@ -156,11 +154,11 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`.                              |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the vLLM `--max-num-seqs` or SGLang `--max-running-requests` value in the launch arguments of the engine's verified [attestation](05-Engine-Launch.md). The router reads it when it verifies the engine's identity at startup, takeover, and readmission. A vLLM engine launched without `--max-num-seqs` takes its decode seats from the profile alone. The SGLang launcher always passes `--max-running-requests`, `256` unless `runtime.extra_args` sets it.
+The attested sequence limit is the engine's `runtime.max_sequences`, read from the launch arguments in its verified [attestation](05-Engine-Launch.md): `--max-num-seqs` on vLLM or `--max-running-requests` on SGLang. The router reads it when it verifies the engine's identity at startup, takeover, and readmission. Without `runtime.max_sequences`, a vLLM engine takes its decode seats from the profile alone, and an SGLang engine has a limit of 256.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
-The decode admission check counts each engine's decode seats as its slots. With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats, and an engine queues prefill legs above its seats.
+With `serving.queue_capacity` above `0`, a request waits for an engine with a free seat in its phase. With the queue off, the router places a prefill leg without checking seats, and an engine queues prefill legs above its seats.
 
 With the queue off, the router places a decode leg on an engine with a free decode seat. When every decode engine is full, the router places the leg on the engine whose seat the profiles project to free first.
 
@@ -168,7 +166,7 @@ With the queue off, the router places a decode leg on an engine with a free deco
 
 #### KV handoff bound
 
-After prefill, a vLLM producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes. Once the decode engine accepts the request, it renews the producer's lease with heartbeats sent at most every `kv_lease_duration // 6` seconds.
+After prefill, a vLLM producer engine holds the request's KV blocks for its NIXL lease, `kv_lease_duration`. The lease starts when prefill completes.
 
 The router reads each producer's lease from the `--kv-transfer-config` launch argument in the engine's verified [attestation](01-Fleet-Schema.md#attestation). It derives the producer's handoff bound:
 
@@ -182,7 +180,7 @@ The router counts handoff age from the moment it receives the producer's prefill
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
 
-An SGLang producer holds the request's KV only for its rendezvous with the decode leg, so SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
+SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 
@@ -233,7 +231,7 @@ Placement selects the lowest-cost engine that passes the role, availability, exc
 
 When every candidate violates its projected SLO, placement selects the lowest-cost candidate as an unserved placement.
 
-A decode leg avoids its producer, the engine that ran its prefill. On its producer, the decode leg reuses that engine's local prefix cache and never pulls the KV handoff. The producer then holds the handoff's KV blocks until its lease expires. Placement puts the decode leg on the producer only when no other engine in the decode pool can take it. The rule applies when a role change moves a producer into the decode pool, including while its requests wait for a decode seat.
+A decode leg avoids its producer, the engine that ran its prefill. Placement puts the decode leg on the producer only when no other engine in the decode pool can take it. The rule applies when a role change moves a producer into the decode pool, including while its requests wait for a decode seat.
 
 A live role change:
 
@@ -244,8 +242,6 @@ A live role change:
 ### Prefix-cache pricing
 
 For a request sized from exact token IDs, the router records the leading prompt blocks each engine has cached, from that engine's [residency view](../http-api/05-Live-State.md#residency).
-
-Each prefill placement rechecks those blocks against the engine's current view.
 
 When an engine holds a cached prefix, the router prices prefill on that engine with its [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix).
 

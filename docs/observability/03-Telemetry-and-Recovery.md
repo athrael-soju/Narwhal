@@ -44,9 +44,7 @@ Verify each fix with a `make observe` rerun that passes the [readiness contract]
 
 ### Inspecting Compose services
 
-Every Compose command for `tools/observability/compose.yml` requires `NARWHAL_RENDERER_TOKEN`.
-
-`make observe` stores the token in `runs/observability/renderer-token`.
+Every Compose command for `tools/observability/compose.yml` requires `NARWHAL_RENDERER_TOKEN`, which `make observe` stores in `runs/observability/renderer-token`.
 
 Load the token in the deployed checkout on the router host, then query the services:
 

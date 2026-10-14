@@ -1,0 +1,115 @@
+{
+  "container": {
+    "calls": [
+      {
+        "command": [
+          "docker",
+          "image",
+          "inspect",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "log": "<root>/container/launch/image-check.log",
+        "stage": "docker-image"
+      },
+      {
+        "command": [
+          "docker",
+          "run",
+          "--label",
+          "io.narwhal.launch=<hex>",
+          "--label",
+          "io.narwhal.operation=<hex>",
+          "--rm",
+          "--network",
+          "host",
+          "--ipc",
+          "host",
+          "--ulimit",
+          "memlock=-1:-1",
+          "--env-file",
+          "<root>/container/launch/container.env",
+          "--mount",
+          "type=bind,src=<root>/container/model,dst=/model,readonly",
+          "--mount",
+          "type=bind,src=<root>/container/launch/cache,dst=/root/.cache",
+          "--mount",
+          "type=bind,src=<root>/container/launch/hook,dst=/narwhal-hooks,readonly",
+          "--mount",
+          "type=bind,src=<kv-events-root>/<name>,dst=/narwhal-kv-events",
+          "--device",
+          "/dev/nvidiactl",
+          "--device",
+          "/dev/nvidia0",
+          "--device",
+          "/dev/nvidia1",
+          "--gpus",
+          "all",
+          "--entrypoint",
+          "python3",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "/narwhal-hooks/launch_engine.py",
+          "_check",
+          "{\"sglang\": \"0.5.21\", \"mooncake-transfer-engine\": \"0.3.9\"}",
+          "[\"--model-path\", \"/model\", \"--served-model-name\", \"synthetic\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\", \"--tp-size\", \"2\", \"--dtype\", \"bfloat16\", \"--kv-cache-dtype\", \"auto\", \"--page-size\", \"1\", \"--attention-backend\", \"triton\", \"--max-running-requests\", \"256\", \"--stream-interval\", \"1\", \"--enable-metrics\", \"--enable-cache-report\", \"--disaggregation-mode\", \"prefill\", \"--disaggregation-transfer-backend\", \"mooncake\", \"--enable-pd-role-switch\", \"--disaggregation-decode-enable-radix-cache\", \"--context-length\", \"4096\", \"--kv-events-config\", \"{\\\"publisher\\\": \\\"zmq\\\", \\\"endpoint\\\": \\\"ipc:///narwhal-kv-events/events.sock\\\", \\\"replay_endpoint\\\": \\\"ipc:///narwhal-kv-events/replay.sock\\\"}\"]"
+        ],
+        "log": "<root>/container/launch/image-check.log",
+        "stage": "docker-run"
+      }
+    ],
+    "checked": {
+      "engine_version": "0.5.21",
+      "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": {
+        "endpoint": "ipc:///narwhal-kv-events/events.sock",
+        "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock"
+      },
+      "plan_sha256": "<sha256>",
+      "prefix_caching": true
+    },
+    "printed": "Runtime identity, package pins and server arguments passed.\nThe radix cache is on; cache events publish under <kv-events-root>/<name>.\n"
+  },
+  "native": {
+    "calls": [
+      {
+        "command": [
+          "<python>",
+          "<root>/native/launch/hook/launch_engine.py",
+          "_check",
+          "{\"sglang\": \"0.5.21\", \"mooncake-transfer-engine\": \"0.3.9\"}",
+          "[\"--model-path\", \"<root>/native/model\", \"--served-model-name\", \"synthetic\", \"--host\", \"192.0.2.11\", \"--port\", \"8000\", \"--tp-size\", \"1\", \"--dtype\", \"bfloat16\", \"--kv-cache-dtype\", \"auto\", \"--page-size\", \"1\", \"--attention-backend\", \"triton\", \"--max-running-requests\", \"256\", \"--stream-interval\", \"1\", \"--enable-metrics\", \"--enable-cache-report\", \"--disaggregation-mode\", \"prefill\", \"--disaggregation-transfer-backend\", \"mooncake\", \"--enable-pd-role-switch\", \"--disaggregation-decode-enable-radix-cache\", \"--context-length\", \"4096\", \"--kv-events-config\", \"{\\\"publisher\\\": \\\"zmq\\\", \\\"endpoint\\\": \\\"ipc://<kv-events-root>/<name>/events.sock\\\", \\\"replay_endpoint\\\": \\\"ipc://<kv-events-root>/<name>/replay.sock\\\"}\", \"--mem-fraction-static\", \"0.4\"]"
+        ],
+        "env": {
+          "CUDA_VISIBLE_DEVICES": "0",
+          "NARWHAL_SGLANG_API_KEY": "engine-only-secret",
+          "NARWHAL_SGLANG_BOOTSTRAP_HOST": "192.0.2.11",
+          "NARWHAL_SGLANG_BOOTSTRAP_PORT": "5600",
+          "PYTHONPATH": "<root>/native/launch/hook",
+          "SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT": "30",
+          "SGLANG_FIXTURE_FLAG": "1",
+          "SGLANG_HOST_IP": "192.0.2.11",
+          "UCX_NET_DEVICES": "fabric0",
+          "UCX_TCP_PORT_RANGE": "39000-39999",
+          "UCX_TLS": "tcp,sm,self,cuda"
+        },
+        "log": "<root>/native/launch/runtime-check.log",
+        "stage": "native-runtime-check"
+      }
+    ],
+    "checked": {
+      "backend": "native",
+      "engine_version": "0.5.21",
+      "expected_packages": {
+        "mooncake-transfer-engine": "0.3.9",
+        "sglang": "0.5.21"
+      },
+      "kv_events": {
+        "endpoint": "ipc://<kv-events-root>/<name>/events.sock",
+        "replay_endpoint": "ipc://<kv-events-root>/<name>/replay.sock"
+      },
+      "plan_sha256": "<sha256>",
+      "prefix_caching": true,
+      "python_executable": "<python>"
+    },
+    "printed": "Runtime identity, package pins and server arguments passed.\nThe radix cache is on; cache events publish under <kv-events-root>/<name>.\n"
+  }
+}

@@ -4,7 +4,6 @@ import asyncio
 import json
 import math
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -12,7 +11,8 @@ import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..engines.client import EngineError, first_output_timeout
-from ..engines.connector import HandoffExpired, PrefillResult, RendezvousConnector
+from ..engines.connector import HandoffExpired, PrefillResult
+from ..engines.handoff import HandoffLegs, PrefillLeg
 from ..engines.stream import (
     SseEvent,
     rewrite_sse,
@@ -58,10 +58,8 @@ T = TypeVar("T")
 class PreparedAttempt:
     prefill: Instance
     decode: Instance
-    kv: PrefillResult | None
+    handoff: HandoffLegs
     expires_at: float | None = None
-    rendezvous: dict[str, Any] | None = None
-    prefill_task: asyncio.Task[None] | None = None
 
 
 def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse | None:
@@ -322,65 +320,41 @@ async def _prepare_once(
         state.reserve(prefill)
 
     prefill = await _place(state, prefill=True, claim=admit_prefill)
-    if isinstance(router.engines.kv, RendezvousConnector):
-        return await _prepare_rendezvous(state, router.engines.kv, prefill, endpoint, body, headers)
+    handoff = HandoffLegs(router.engines.kv, router.launches.get(prefill.iid, {}))
+
+    def prefill_leg(request_id: str) -> PrefillLeg:
+        def leg(rendezvous: dict[str, Any] | None) -> Awaitable[PrefillResult | None]:
+            return _run_prefill(
+                state,
+                prefill,
+                lambda: router.engines.run_prefill(
+                    prefill.url, endpoint, body, headers, rendezvous, request_id=request_id
+                ),
+            )
+
+        return leg
+
+    if handoff.kv.concurrent:
+        # The decode leg must be listening before the prefill leg pushes its KV.
+        decode = await _place(state, prefill=False, claim=state.reserve)
+        state.begin_attempt()
+        state.prefill_iid, state.decode_iid = prefill.iid, decode.iid
+        router.note_handoff(prefill.iid, decode.iid)
+        request_id = state.leg_id("prefill")
+        state.phase = "decode"
+        await handoff.start(prefill_leg(request_id))
+        return PreparedAttempt(prefill, decode, handoff)
     state.phase = "prefill"
     state.begin_attempt()
     state.prefill_iid = prefill.iid
-    kv = await _run_prefill(
-        state,
-        prefill,
-        lambda: router.engines.prefill(
-            prefill.url, endpoint, body, headers, request_id=state.leg_id("prefill")
-        ),
-    )
+    await handoff.start(prefill_leg(state.leg_id("prefill")))
     # The producer's lease starts when prefill completes.
     bound = handoff_bound(router, prefill.iid)
     expires_at = None if bound is None or state.prefilled_at is None else state.prefilled_at + bound
     decode = await _place(state, prefill=False, claim=state.reserve, handoff_deadline=expires_at)
     state.decode_iid = decode.iid
     state.phase = "decode"
-    return PreparedAttempt(prefill, decode, kv, expires_at)
-
-
-async def _prepare_rendezvous(
-    state: RequestLifecycle,
-    kv: RendezvousConnector,
-    prefill: Instance,
-    endpoint: str,
-    body: dict[str, Any],
-    headers: dict[str, str],
-) -> PreparedAttempt:
-    router = state.router
-    # The decode leg must be listening before the prefill leg pushes its KV.
-    decode = await _place(state, prefill=False, claim=state.reserve)
-    state.begin_attempt()
-    state.prefill_iid, state.decode_iid = prefill.iid, decode.iid
-    router.note_handoff(prefill.iid, decode.iid)
-    rendezvous = kv.rendezvous(router.launches.get(prefill.iid, {}))
-    request_id = state.leg_id("prefill")
-    state.phase = "decode"
-    task = asyncio.create_task(
-        _run_prefill(
-            state,
-            prefill,
-            lambda: router.engines.rendezvous_prefill(
-                prefill.url, endpoint, body, headers, rendezvous, request_id=request_id
-            ),
-        )
-    )
-    return PreparedAttempt(prefill, decode, None, rendezvous=rendezvous, prefill_task=task)
-
-
-async def _settle_prefill(prepared: PreparedAttempt, *, cancel: bool) -> BaseException | None:
-    task = prepared.prefill_task
-    if task is None:
-        return None
-    if cancel and not task.done():
-        task.cancel()
-    with suppress(Exception, asyncio.CancelledError):
-        await task
-    return None if task.cancelled() else task.exception()
+    return PreparedAttempt(prefill, decode, handoff, expires_at)
 
 
 async def prepare_attempt(
@@ -556,19 +530,16 @@ async def _decode_attempt(
     strip = () if body.get("return_token_ids") else dialect.engine_output_fields
     streams_ids = dialect.token_ids and dialect.streams_token_ids(endpoint)
     engine_body = {**body, **dialect.token_id_fields()} if streams_ids else body
-    first_token_timeout_s = router.cfg.first_token_timeout_s
-    kv = router.engines.kv
-    if prepared.rendezvous is not None and isinstance(kv, RendezvousConnector):
-        first_token_timeout_s = kv.first_token_bound(first_token_timeout_s)
+    handoff = prepared.handoff
     upstream = router.engines.decode(
         prepared.decode.url,
         endpoint,
         engine_body,
         headers,
-        prepared.kv,
-        first_token_timeout_s=first_token_timeout_s,
+        handoff.result,
+        first_token_timeout_s=handoff.first_token_bound(router.cfg.first_token_timeout_s),
         request_id=state.leg_id("decode"),
-        rendezvous=prepared.rendezvous,
+        rendezvous=handoff.rendezvous,
     )
     metadata: list[str] = []
     held: list[SseEvent] = []
@@ -637,11 +608,11 @@ async def _decode_attempt(
                 raise
             if frames:
                 yield RelayBatch("".join(frames), events)
-        await _settle_prefill(prepared, cancel=False)
+        await handoff.settle(cancel=False)
         router.scheduler.record_answer(prepared.decode.iid, "decode")
     except Exception as exc:
         # A decode leg without its prefill fails for the prefill's reason.
-        cause = await _settle_prefill(prepared, cancel=True)
+        cause = await handoff.settle(cancel=True)
         if isinstance(cause, Exception):
             state.phase = "prefill"
             raise cause from exc
@@ -652,7 +623,7 @@ async def _decode_attempt(
             await upstream.aclose()
         finally:
             state.record_upstream_time("decode", began)
-            await _settle_prefill(prepared, cancel=True)
+            await handoff.settle(cancel=True)
 
 
 async def run_decode(

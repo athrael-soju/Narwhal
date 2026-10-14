@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "08140f2c74850ff49ae44c18fcd6b0bc19703b7e0f7f8a33310e8418eebbe3a7"
+RENDERED_SHA256 = "a8738edb80fddf180c2ccd31165ef251a0db8bc75beec02e6d996a6f2c1e13a1"
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
@@ -103,7 +103,9 @@ class BackendDashboardTests(unittest.TestCase):
         )
         self.assertNotIn(dropped, rendered["spec"]["elements"])
         placed = {
-            item["spec"]["element"]["name"] for item in rendered["spec"]["layout"]["spec"]["items"]
+            item["spec"]["element"]["name"]
+            for row in rendered["spec"]["layout"]["spec"]["rows"]
+            for item in row["spec"]["layout"]["spec"]["items"]
         }
         self.assertEqual(placed, set(rendered["spec"]["elements"]))
         self.assertNotIn("<<", json.dumps(rendered))
