@@ -9,6 +9,7 @@ include config/fleet.example.json config/hosts.example.json config/fleet-control
 include tools/fleet_control/console.html
 recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
+recursive-include docs/assets *.html *.js
 recursive-include overrides *.html *.py
 recursive-include deploy *.cfg
 recursive-include tools *.py *.json *.yml *.md

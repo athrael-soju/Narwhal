@@ -17,6 +17,8 @@ from narwhal.deployment.launch_engine import docker as launch_docker
 
 
 class StageTests(unittest.TestCase):
+    stage_budget = "10"
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -24,7 +26,7 @@ class StageTests(unittest.TestCase):
         self.environment = patch.dict(
             os.environ,
             {
-                "NARWHAL_STAGE_TIMEOUT_SECONDS": "0.3",
+                "NARWHAL_STAGE_TIMEOUT_SECONDS": self.stage_budget,
                 "NARWHAL_STAGE_CLEANUP_GRACE_SECONDS": "0.1",
                 "NARWHAL_STAGE_KILL_GRACE_SECONDS": "0.5",
             },
@@ -68,7 +70,10 @@ class StageTests(unittest.TestCase):
             "time.sleep(30)"
         )
         started = time.monotonic()
-        with self.assertRaises(stages.StageTimeout) as caught:
+        with (
+            patch.dict(os.environ, {"NARWHAL_STAGE_TIMEOUT_SECONDS": "0.3"}),
+            self.assertRaises(stages.StageTimeout) as caught,
+        ):
             stages.run(
                 [sys.executable, "-c", script, worker], stage="startup", log=self.root / "up.log"
             )
@@ -290,6 +295,7 @@ else:
 
 
 class DockerStageTests(unittest.TestCase):
+    stage_budget = "0.3"
     setUp = StageTests.setUp
 
     def fake_docker(self, **extra):
