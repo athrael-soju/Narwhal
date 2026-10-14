@@ -589,6 +589,54 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(calls, [64] * 4 + [64] * 4)
 
+    async def test_decode_sweep_retries_until_the_cohort_overlaps(self):
+        calls: list[int] = []
+
+        async def lagged(client, url, model, prompt, input_len, state, observed, dialect, tokens):
+            calls.append(tokens)
+            state.setdefault("first_at", 0.0)
+            if tokens < 500:
+                state["last_join_at"] = 10.0
+                state.setdefault("left_at", 5.0)
+                return
+            observed.extend((4.0, float(input_len), 0.01) for _ in range(2))
+
+        evidence: list[dict[str, object]] = []
+        with (
+            patch.object(decode_probe, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(decode_probe, "_one_decode_stream", side_effect=lagged),
+        ):
+            await probe_decode(
+                None,
+                "http://e",
+                "stub",
+                DIALECT,
+                concurrency=(4,),
+                input_lens=(100,),
+                tokens=64,
+                evidence=evidence,
+                max_model_len=4096,
+            )
+        self.assertEqual(calls, [64] * 4 + [64] * 4 + [192] * 4 + [576] * 4)
+        self.assertEqual([row["tokens"] for row in evidence], [576])
+        calls.clear()
+        with (
+            patch.object(decode_probe, "make_prompt", AsyncMock(return_value=("p", 100))),
+            patch.object(decode_probe, "_one_decode_stream", side_effect=lagged),
+            self.assertRaisesRegex(RuntimeError, "insufficient complete-cohort.*tokens=192"),
+        ):
+            await probe_decode(
+                None,
+                "http://e",
+                "stub",
+                DIALECT,
+                concurrency=(4,),
+                input_lens=(100,),
+                tokens=64,
+                max_model_len=400,
+            )
+        self.assertEqual(calls, [64] * 4 + [64] * 4 + [192] * 4)
+
     async def test_decode_sweep_uses_total_service_time_when_tokens_burst(self):
 
         async def burst(client, url, model, prompt, input_len, state, observed, tokens, dialect):

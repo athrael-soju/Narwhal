@@ -14,6 +14,9 @@ from ..tasks import cancel_tasks
 from .engine import make_prompt
 from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 
+# Each retry sizes the cohort's tokens from the previous attempt's join lag.
+DECODE_RETRIES = 3
+
 
 async def _one_decode_stream(
     client: httpx.AsyncClient,
@@ -201,14 +204,17 @@ async def probe_decode(
                 observed, state = await _decode_cohort(
                     client, url, model, prompt, input_len, c, used, dialect
                 )
-                if len(observed) < 2 * c:
-                    limit = max_model_len - input_len if max_model_len is not None else None
-                    retry = _overlapping_tokens(state, tokens, limit)
-                    if retry is not None:
-                        used = retry
-                        observed, state = await _decode_cohort(
-                            client, url, model, prompt, input_len, c, used, dialect
-                        )
+                limit = max_model_len - input_len if max_model_len is not None else None
+                for _ in range(DECODE_RETRIES):
+                    if len(observed) >= 2 * c:
+                        break
+                    retry = _overlapping_tokens(state, used, limit)
+                    if retry is None:
+                        break
+                    used = retry
+                    observed, state = await _decode_cohort(
+                        client, url, model, prompt, input_len, c, used, dialect
+                    )
                 if len(observed) < 2 * c:
                     raise RuntimeError(
                         f"decode probe has insufficient complete-cohort intervals: "
