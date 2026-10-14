@@ -56,8 +56,7 @@ With `NAME` set, the field takes the value of `NAME`. With `NAME` unset or blank
 
 A partial reference, default syntax such as `${NAME:-x}`, and a resolved value that contains `${` are errors. `$NAME`, and `${...}` in any other field, stay literal text.
 
-`FleetConfig.save()` writes the resolved URLs. Save to a Git-ignored fleet path.
-
+`FleetConfig.save()` writes the resolved URLs.
 
 ## Minimal fleet definition
 
@@ -107,7 +106,6 @@ A `shared_device` group places two to eight engines on one GPU.
 | `shared_device.gpu_memory_utilization` | This engine's fraction of device memory, above 0 and at most 1.                     |
 
 The group's `gpu_memory_utilization` values sum to at most its `device_allowance`.
-
 
 ## Engine shape and compatibility contract
 

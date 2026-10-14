@@ -75,11 +75,9 @@ Use cold-swap for traffic shifts longer than this sequence.
 
 ### Adaptive hot-swap
 
-Dual-capability engines form logical prefill and decode pools, and their weights stay loaded.
+Dual-capability engines form logical prefill and decode pools. Hot-swap changes an eligible engine's scheduler role in place, while its weights stay loaded.
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
-
-Hot-swap changes the scheduler role of an eligible dual-capability engine in place.
 
 [Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 

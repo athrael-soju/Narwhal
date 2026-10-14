@@ -91,9 +91,7 @@ For an engine launch limit of 16,384 total tokens, run the calibration from the 
   --calibration-out runs/deployment/first-token-calibration.json
 ```
 
-The artifact records input tokens, prefill time, decode-to-first-token time, and failed or expired attempts.
-
-The command exits 0 with artifact status `complete` when the artifact holds at least 100 samples per role-permitted directed pair and input length, every attempt completed, and the process generations match. Otherwise it exits 1 with status `incomplete`.
+The command exits 0 when the artifact is [`complete`](../cli/Check.md#calibration-artifact) and every engine returns to its starting role. Otherwise it exits 1.
 
 `serving.request_timeout_s` bounds each attempt's prompt sizing, prefill, and decode completion. Each attempt records one of these statuses:
 
@@ -123,8 +121,6 @@ Diagnose the failed transfers and observation expiries before using the candidat
 
 The deadline, the measured prefill, and the router overhead must fit the client time to first token (TTFT) requirement.
 
-If an engine relaunched with the same process generation, preflight and router startup label the engine `reused`.
-
 ### Reusing or repeating the calibration
 
 After a change to the fleet or its engines, run preflight. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
@@ -132,7 +128,7 @@ After a change to the fleet or its engines, run preflight. When the `calibration
 - the fabric route or host behind an unchanged engine URL
 - the longest admitted input, beyond the longest calibrated input
 
-The artifact stays valid when you remove or pin an engine. It stays valid across an engine restart only when the engine's attestation sidecar reports launch evidence, as in [the `calibration` gate](../cli/Check.md#the-calibration-gate).
+The artifact stays valid when you remove or pin an engine. It stays valid across an engine restart only when the engine's attestation sidecar reports [launch evidence](../cli/Check.md#the-calibration-gate).
 
 To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`:
 
@@ -220,7 +216,7 @@ When three or more engines probe successfully, the gate compares each engine aga
 
 In the consume gate, a transfer across a role-permitted engine pair passes when:
 
-- Decode produces its first generated token within `engine.first_token_timeout_s`. On SGLang, the deadline is at most 30 seconds, the bootstrap timeout that the launcher sets for the prefill leg.
+- Decode produces its first generated token within `engine.first_token_timeout_s`. On SGLang, the deadline is at most 30 seconds.
 - Decode finishes a valid stream with output.
 - Prefill and decode complete within `serving.request_timeout_s`.
 

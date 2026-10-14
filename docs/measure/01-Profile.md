@@ -145,10 +145,9 @@ If the warm sweep fails with `a cold control reused a cached prefix; reserve the
 Roll out the warm fit:
 
 1. Record a held-out error threshold in the private execution record.
-2. Set `profiles.path` in a copy of the private fleet file to a separate path.
-3. Profile one engine with `--only <iid>` against the fleet copy.
-4. Compare its held-out error with the recorded threshold.
-5. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.
+2. Profile one engine with `--only <iid> --out <fresh-profile-path>`.
+3. Compare its held-out error with the recorded threshold.
+4. When the held-out error is at or below the recorded threshold, profile every engine with `--overwrite` against the private fleet file.
 
 ## Retaining profile samples and fits
 
@@ -173,8 +172,6 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 - the attestation response or process identity per fit
 
 If the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and the fit error. If a later engine fails, the sidecar keeps the data from the engines that completed.
-
-With `--overwrite`, `narwhal-profile` writes a new output pair for the selected engines.
 
 ### KV capacity source
 

@@ -104,7 +104,7 @@ The run fails in any of these cases:
 - A pair has fewer passing records than the saved repeat count, or lacks token and transfer evidence.
 - An engine's process changed during the saved run or differs from it now.
 
-An engine restart or a configuration change therefore calls for new evidence.
+After an engine restart or a configuration change, record new evidence.
 
 ## First-token calibration
 

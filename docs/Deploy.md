@@ -79,6 +79,7 @@ Record each gate's result before the next gate.
     Start the service and validate capacity through the private path.
 
 </div>
+
 ### Rerunning after a change
 
 | Change | Repeat |

@@ -8,9 +8,9 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 | Mode | Operation | Output |
 | --- | --- | --- |
-| Live sweep | Measures the live engines. | The fleet's `profiles.path` |
+| Live sweep | Measures the live engines. | The fleet's `profiles.path`, or `--out` |
 | Refit | Recomputes the cold and warm time to first token (TTFT) fits from a sample sidecar and keeps the decode fits. | `--out` |
-| Merge | Combines profile stores of separately measured role mixes. | `--out` |
+| Merge | Combines profile stores. | `--out` |
 
 Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink.
 
@@ -81,7 +81,7 @@ Every mode validates these options:
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`.
 
-The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When the engine exports no such counter, the warm cases that fit its context include fewer than five cases or fewer than two prefix or suffix lengths, a case reuses no cached prefix, or the warm fit fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
+The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 ## Shared-GPU neighbour traffic
 
@@ -107,7 +107,7 @@ The sample sidecar records each neighbour's role, completion count, achieved rat
 
 ## Completion and exit codes
 
-On success, each mode prints one line and exits with code `0`:
+On success, each mode ends with this line and exits with code `0`:
 
 | Mode | Success output |
 | --- | --- |

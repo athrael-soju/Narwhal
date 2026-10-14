@@ -41,14 +41,12 @@ The [attested launch digest](../configuration/01-Fleet-Schema.md#attestation) co
 
 Preflight, router startup, readmission, and automatic recovery require a fresh profile when an engine's stored profile has missing generation evidence or a digest that differs from the engine's live generation. The error names the engine.
 
-If preflight, router startup, or recovery reports `profile has no generation evidence` for a row missing `generation_digest`:
+If preflight, router startup, or recovery reports `profile has no generation evidence`:
 
 1. [Re-profile the named engines](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) against the current engine processes.
 2. Keep the `.samples.json` sidecar.
 
 The [refit procedure](../measure/01-Profile.md#refitting-saved-profile-samples) requires a `generation_digest` in each saved profile and a `generation_evidence` object in its sample row. Samples missing either need a fresh sweep.
-
-Preflight checks the measured decode bounds and fit errors.
 
 On a fleet with `engine_contract`, load a fresh profile store by [activating it with router resume](../operate/03-Restart-Engines.md#activating-replacement-profiles). On other fleets, restart the router.
 
@@ -58,10 +56,7 @@ A malformed profile stops the operation with an error that names the file, engin
 profiles.json: profile n4: tpot_slope must be nonnegative
 ```
 
-Before preflight or router startup:
-
-1. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
-2. Confirm that the profile store holds the same set of `iid` values as the configured fleet.
+The profile store must hold the same set of `iid` values as the configured fleet. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
 
 ### Profile fields
 
@@ -92,14 +87,7 @@ Each profile row has these fields:
 | `colocated_prefill_engines`, `colocated_decode_engines` | integer | Positive engine counts of the measured role mix, at least two engines in total, required with `colocated_group`. |
 | `colocated_prefill_rps`, `colocated_decode_rps` | number | Nonnegative measured neighbour load in requests per second, required with `colocated_group`. |
 
-Profile loading handles invalid input as follows:
-
-| Input | Result |
-| --- | --- |
-| `true`, `"96"`, or `1.5` in an integer field | Profile loading aborts. |
-| `NaN` or `Infinity` | Profile loading aborts at JSON decoding. |
-| A field outside the profile fields table | Profile loading aborts. |
-| A partial set of `cached_` fields | Profile loading aborts. |
+Profile loading aborts on `true`, `"96"` or `1.5` in an integer field, on `NaN` or `Infinity`, on a field outside the profile fields table, and on a partial set of `cached_` fields.
 
 The router prices a request with a cached prefix from the `cached_` fields, following the [prefix-cache pricing rules](../configuration/02-Serving-and-Role-Control.md#prefix-cache-pricing).
 
