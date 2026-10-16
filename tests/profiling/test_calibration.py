@@ -944,6 +944,31 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    def test_reuses_a_version_1_base_at_its_capture_time(self):
+        self._four_engines()
+        generations = {spec.iid: "g" for spec in self.cfg.engines}
+        base = calibration_document(self.cfg, generations, dict.fromkeys(generations, 100.0))
+        groups, _ = self._canonical((8,), 100)
+        kept = calibration.reusable_groups(self.cfg, base, groups, (8,), 100, generations)
+        self.assertEqual(set(kept), set(groups))
+        self.assertTrue(all(at == base["captured_at_unix"] for _, at in kept.values()))
+
+    def test_does_not_reuse_engines_the_base_marks_changed_or_unread(self):
+        self._four_engines()
+        generations = {spec.iid: "g" for spec in self.cfg.engines}
+        groups, _ = self._canonical((8,), 100)
+        for field, value in (
+            ("changed_generations", ["e1"]),
+            ("generation_errors", ["e1: ConnectError: down"]),
+        ):
+            with self.subTest(field):
+                base = calibration_document(
+                    self.cfg, generations, dict.fromkeys(generations, 100.0)
+                )
+                base[field] = value
+                kept = calibration.reusable_groups(self.cfg, base, groups, (8,), 100, generations)
+                self.assertEqual(set(kept), {group for group in groups if "e1" not in group[:2]})
+
     async def test_refuses_a_base_from_a_different_run(self):
         self._four_engines()
         _, base, path = await self._base(RecordingClient())

@@ -14,6 +14,7 @@ import httpx
 
 from narwhal.backends import EngineBackend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
+from narwhal.config.model import SharedDeviceAllocation
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
 from narwhal.diagnostics.check.engines import (
@@ -1120,6 +1121,34 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.failed), 2)
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
+
+    def test_profile_gate_names_an_unmeasured_gpu_group_split(self):
+        allocation = SharedDeviceAllocation("gpu", "GPU-0", 0.4, 0.3)
+        self.cfg.engines = [replace(spec, shared_device=allocation) for spec in self.cfg.engines]
+        store = ProfileStore(self.cfg.profiles_path, load=False)
+        for spec in self.cfg.engines:
+            store.put(
+                replace(
+                    profile(spec.iid),
+                    colocated_group="gpu",
+                    colocated_target_role=spec.role.value,
+                    colocated_prefill_engines=2,
+                    colocated_decode_engines=2,
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+            )
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            gate_profile(self.cfg, report)
+        self.assertEqual(
+            report.failed,
+            [
+                f"{spec.iid} has no profile for its GPU group split of 1 prefill and 1 decode "
+                "engines; profile that split with narwhal-profile --colocated"
+                for spec in self.cfg.engines
+            ],
+        )
 
     async def test_stale_candidate_role_profile_fails_generation_gate(self):
         live_digest = "sha256:" + "a" * 64
