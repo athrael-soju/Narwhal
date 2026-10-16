@@ -234,7 +234,7 @@ vLLM serves `POST /reset_prefix_cache` only on an engine started with `VLLM_SERV
 
 2. Prepare and start the engine from the updated launch record.
 3. [Profile the engine](../measure/01-Profile.md#reusing-or-creating-an-idle-fleet-latency-profile) for its new [`launch_digest`](01-Fleet-Schema.md#attestation).
-4. If the fleet configures a first-token calibration artifact, [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+4. If the fleet configures a first-token calibration artifact, [recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration).
 
 While the router is idle, reset the engine's prefix cache, with `<engine-url>` replaced by the engine's URL:
 
