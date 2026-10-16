@@ -387,6 +387,8 @@ Prepare a release by checking the latest PyPI version and comparing the target v
 
 After the release PR merges, the release workflow publishes the reviewed wheel and source archive to GitHub and PyPI.
 
+The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each version's page on PyPI shows its own release notes at the top of the changelog.
+
 ## Documentation publishing
 
 Edit the Markdown under `docs/` through a pull request, adding each public page to `nav` in `mkdocs.yml`. The docs workflow builds every pull request in strict mode and publishes `main` to GitHub Pages, with `make docs-build` producing the same site under `site/`.
