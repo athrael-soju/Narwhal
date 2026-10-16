@@ -14,6 +14,7 @@ import httpx
 
 from narwhal.backends import EngineBackend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
+from narwhal.config.model import SharedDeviceAllocation
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import evidence, preflight, profiles, transfer
 from narwhal.diagnostics.check.engines import (
@@ -545,6 +546,64 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_calibration_gate_accepts_evidence_for_a_pinned_engine(self):
+        _, _, transport = await self._calibrated_engines()
+        self.cfg.engines[1].pin = True
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            await engine_gates.gate_calibration(self.cfg, report, transport)
+        self.assertEqual((report.failed, report.calibration["status"]), ([], "measured"))
+
+    async def test_calibration_gate_names_the_fix_for_a_failed_sidecar_or_timeout(self):
+        _, _, transport = await self._calibrated_engines()
+        e3 = httpx.URL(self.cfg.engines[1].url).host
+
+        def sidecar_down(request):
+            if request.url.host == e3 and request.url.path == "/v1/attestation":
+                return httpx.Response(503)
+            return transport.handler(request)
+
+        report = Report()
+        await engine_gates.gate_calibration(self.cfg, report, httpx.MockTransport(sidecar_down))
+        self.assertEqual(len(report.failed), 1)
+        self.assertRegex(
+            report.failed[0],
+            r"(?s)^e3 process generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        )
+        self.cfg.first_token_timeout_s = 0.5
+        report = Report()
+        await engine_gates.gate_calibration(self.cfg, report, transport)
+        self.assertEqual(
+            report.failed,
+            [
+                "engine.first_token_timeout_s 0.5s is not above measured calibration candidate "
+                "0.8s; raise engine.first_token_timeout_s"
+            ],
+        )
+
+    async def test_profile_generation_gate_names_the_sidecar_fix(self):
+        _, _, transport = await self._calibrated_engines()
+        e3 = httpx.URL(self.cfg.engines[1].url).host
+
+        def sidecar_down(request):
+            if request.url.host == e3 and request.url.path == "/v1/attestation":
+                return httpx.Response(503)
+            return transport.handler(request)
+
+        report = Report()
+        store = ProfileStore(self.cfg.profiles_path)
+        with redirect_stdout(io.StringIO()):
+            unsafe = await profiles.gate_profile_generation(
+                self.cfg, store, {"e0", "e3"}, report, httpx.MockTransport(sidecar_down)
+            )
+        self.assertIn("e3", unsafe)
+        self.assertRegex(
+            report.failed[-1],
+            r"(?s)^e3 profile generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        )
+
     async def test_preflight_result_data_includes_first_token_calibration(self):
         client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
         with ExitStack() as stack:
@@ -1062,6 +1121,34 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.failed), 2)
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
+
+    def test_profile_gate_names_an_unmeasured_gpu_group_split(self):
+        allocation = SharedDeviceAllocation("gpu", "GPU-0", 0.4, 0.3)
+        self.cfg.engines = [replace(spec, shared_device=allocation) for spec in self.cfg.engines]
+        store = ProfileStore(self.cfg.profiles_path, load=False)
+        for spec in self.cfg.engines:
+            store.put(
+                replace(
+                    profile(spec.iid),
+                    colocated_group="gpu",
+                    colocated_target_role=spec.role.value,
+                    colocated_prefill_engines=2,
+                    colocated_decode_engines=2,
+                    colocated_prefill_rps=1.0,
+                    colocated_decode_rps=1.0,
+                )
+            )
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            gate_profile(self.cfg, report)
+        self.assertEqual(
+            report.failed,
+            [
+                f"{spec.iid} has no profile for its GPU group split of 1 prefill and 1 decode "
+                "engines; profile that split with narwhal-profile --colocated"
+                for spec in self.cfg.engines
+            ],
+        )
 
     async def test_stale_candidate_role_profile_fails_generation_gate(self):
         live_digest = "sha256:" + "a" * 64

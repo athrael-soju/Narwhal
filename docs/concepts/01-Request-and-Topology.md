@@ -53,7 +53,7 @@ Every engine does both prefill and decode, with local KV. Long prefills share a 
 
 ### Static disaggregation
 
-A fixed prefill pool and a fixed decode pool serve requests. An operator changes pool membership by hand.
+A fixed prefill pool and a fixed decode pool serve requests. An operator changes pool membership by hand. To configure it, set each engine's `role` and set [`pin`](../configuration/01-Fleet-Schema.md#minimal-fleet-definition) to `true` on every engine.
 
 ![Two fixed prefill engines and two fixed decode engines.](../assets/architectures/static.svg)
 
@@ -75,11 +75,9 @@ Use cold-swap for traffic shifts longer than this sequence.
 
 ### Adaptive hot-swap
 
-Dual-capability engines form logical prefill and decode pools, and their weights stay loaded.
+Dual-capability engines form logical prefill and decode pools. Hot-swap changes an eligible engine's scheduler role in place, while its weights stay loaded.
 
 ![One engine changing role while its weights remain resident.](../assets/architectures/hotswap.svg)
-
-Hot-swap changes the scheduler role of an eligible dual-capability engine in place.
 
 [Role-change guards](02-Role-Control.md#guards-on-role-changes) limit role changes:
 

@@ -79,6 +79,7 @@ Record each gate's result before the next gate.
     Start the service and validate capacity through the private path.
 
 </div>
+
 ### Rerunning after a change
 
 | Change | Repeat |
@@ -86,10 +87,10 @@ Record each gate's result before the next gate.
 | Offered rate or request count within the profiled range | Drain the router and run the next trial point with the existing profiles, fabric samples, and preflight. |
 | SLO or first-token deadline | Run `narwhal-check` with the revised limits against saved profiles and live handoffs, then load the edited fleet. |
 | Router restart with unchanged fleet configuration | Restart the router. |
-| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). |
-| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, profile the new process generation, recalibrate the first-token deadline, then run full preflight. |
+| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration). |
+| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, [profile the new process generation](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles), [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), then run full preflight. |
 | Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM or from measured handoffs on SGLang. |
-| Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, recalibrate the first-token deadline, and exercise the live KV paths in preflight. |
+| Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), and exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index
 

@@ -144,15 +144,21 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
     if document.get("contract_fingerprint") != contract:
         problems.append("first-token calibration engine contract differs from the fleet")
     expected = {spec.iid: spec.url for spec in cfg.engines}
-    if document.get("engine_urls") != expected:
-        problems.append("first-token calibration engine addresses differ from the fleet")
+    urls = document.get("engine_urls")
+    recorded = urls if isinstance(urls, dict) else {}
+    if missing := [iid for iid in expected if iid not in recorded]:
+        problems.append(f"first-token calibration has no samples for {', '.join(missing)}")
+    if moved := [iid for iid, url in expected.items() if iid in recorded and recorded[iid] != url]:
+        problems.append(
+            f"first-token calibration engine addresses differ from the fleet for {', '.join(moved)}"
+        )
     captured = document.get("captured_at_unix")
     if not _finite(captured) or captured <= 0:
         problems.append("first-token calibration has no valid capture time")
     starts = document.get("process_starts")
     if (
         not isinstance(starts, dict)
-        or starts.keys() != expected.keys()
+        or starts.keys() != (recorded.keys() if isinstance(urls, dict) else expected.keys())
         or not all(_finite(start) and start > 0 for start in starts.values())
     ):
         problems.append(
@@ -200,8 +206,6 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
     attempted = Counter(_group_key(row) for row in attempts)
     if None in attempted:
         problems.append("first-token calibration has malformed raw attempts")
-    if set(attempted) - {None} != expected_groups:
-        problems.append("first-token calibration raw attempts do not cover the expected groups")
     timings: dict[tuple[str, str, int], list[float]] = {}
     attempt_indices: dict[tuple[str, str, int], set[int]] = {}
     for attempt in attempts:
@@ -257,7 +261,13 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
             group_candidates.append(value)
         else:
             problems.append(f"first-token calibration group {key} has no candidate deadline")
-    if actual_groups != expected_groups or len(groups) != len(expected_groups):
+    if set(attempted) - {None} != actual_groups:
+        problems.append("first-token calibration raw attempts do not match its groups")
+    if len(groups) != len(actual_groups):
+        problems.append("first-token calibration repeats a group")
+    if any(src not in recorded or dst not in recorded for src, dst, _ in actual_groups):
+        problems.append("first-token calibration has a group for an unrecorded engine")
+    if not expected_groups <= actual_groups:
         problems.append(
             "first-token calibration does not cover every directed pair and input length"
         )
@@ -267,7 +277,7 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
     elif cfg.first_token_timeout_s <= candidate:
         problems.append(
             f"engine.first_token_timeout_s {cfg.first_token_timeout_s:g}s is not above "
-            f"measured calibration candidate {candidate:g}s"
+            f"measured calibration candidate {candidate:g}s; raise engine.first_token_timeout_s"
         )
     if group_candidates and candidate != max(group_candidates):
         problems.append("first-token calibration candidate differs from its measured groups")
@@ -345,7 +355,10 @@ async def verify_calibration(
         try:
             current = await read_generation(cfg, spec, transport=transport)
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
-            problems.append(f"{spec.iid} calibration generation unreadable: {exc}")
+            problems.append(
+                f"{spec.iid} process generation unreadable: {exc}; "
+                "restart its attestation sidecar if it answers HTTP 503"
+            )
             continue
         if saved.get(spec.iid) != current.digest:
             problems.append(f"{spec.iid} process differs from first-token calibration")
@@ -539,6 +552,68 @@ class _Lockstep:
             attempt.fail(exc, deadline)
 
 
+Group = tuple[str, str, int]
+
+
+def _completed(row: Any, key: Group) -> bool:
+    return (
+        _group_key(row) == key
+        and row.get("status") == "completed"
+        and _finite(row.get("first_token_seconds"))
+        and row["first_token_seconds"] >= 0
+        and type(row.get("actual_input_tokens")) is int
+    )
+
+
+def reusable_groups(
+    cfg: FleetConfig,
+    base: dict[str, Any],
+    groups: list[Group],
+    input_tokens: tuple[int, ...],
+    samples_per_group: int,
+    generations: Mapping[str, str],
+) -> dict[Group, tuple[list[dict[str, Any]], float]]:
+    """Return the groups of `base` that the run keeps, with their attempts and capture time."""
+    if base.get("schema") != SCHEMA or base.get("schema_version") != 1:
+        raise ValueError("calibration base has an unknown schema or version")
+    contract = cfg.engine_contract.fingerprint() if cfg.engine_contract else None
+    for name, value in (
+        ("model", cfg.model),
+        ("contract_fingerprint", contract),
+        ("input_tokens", list(input_tokens)),
+        ("samples_per_group", samples_per_group),
+    ):
+        if base.get(name) != value:
+            raise ValueError(f"calibration base {name} differs from this run")
+    urls = base.get("engine_urls") or {}
+    saved = base.get("generations") or {}
+    errors = base.get("generation_errors") or []
+    stale = set(base.get("changed_generations") or []) | {
+        spec.iid
+        for spec in cfg.engines
+        if urls.get(spec.iid) != spec.url
+        or saved.get(spec.iid) != generations[spec.iid]
+        or any(str(error).startswith(f"{spec.iid}: ") for error in errors)
+    }
+    captured = base.get("captured_at_unix")
+    summaries = {_group_key(row): row for row in base.get("groups") or []}
+    attempts = [row for row in base.get("attempts") or [] if isinstance(row, dict)]
+    kept: dict[Group, tuple[list[dict[str, Any]], float]] = {}
+    for key in groups:
+        if key[0] in stale or key[1] in stale:
+            continue
+        rows = sorted(
+            (row for row in attempts if _completed(row, key)),
+            key=lambda row: row.get("attempt", 0),
+        )
+        if [row.get("attempt") for row in rows] != list(range(1, samples_per_group + 1)):
+            continue
+        at = (summaries.get(key) or {}).get("captured_at_unix", captured)
+        if _finite(at) and at > 0:
+            kept[key] = (rows, at)
+    return kept
+
+
 async def calibrate(
     cfg: FleetConfig,
     *,
@@ -546,6 +621,7 @@ async def calibrate(
     samples_per_group: int,
     observation_timeout_s: float,
     out: Path,
+    base: Path | None = None,
 ) -> int:
     if not input_tokens or any(value < 1 for value in input_tokens):
         raise ValueError("--input-tokens requires positive token counts")
@@ -560,18 +636,16 @@ async def calibrate(
         )
     if out.exists():
         raise ValueError(f"calibration output already exists: {out}")
+    base_document = None if base is None else json.loads(base.read_text())
+    if base_document is not None and not isinstance(base_document, dict):
+        raise ValueError("calibration base must be a JSON object")
     pairs = validation_pairs(cfg.engines, mesh=True)
     if not pairs:
         raise ValueError("first-token calibration requires a role-permitted engine pair")
     backend = load_backend(cfg.backend)
     switcher = backend.role_switcher(cfg.connector)
     slots = {spec.iid: device_key(spec) for spec in cfg.engines}
-    phases = (
-        [(pairs, calibration_rounds(pairs, slots))]
-        if not switcher.engine_held
-        else [(phase, exclusive_rounds(phase, slots)) for phase in role_phases(pairs)]
-    )
-    groups = [
+    groups: list[Group] = [
         (src, dst, target)
         for source in sorted({src for src, _ in pairs})
         for target in input_tokens
@@ -591,61 +665,91 @@ async def calibrate(
     process_starts = {
         iid: generation.process_start_time_seconds for iid, generation in started.items()
     }
+    reused = (
+        {}
+        if base_document is None
+        else reusable_groups(
+            cfg, base_document, groups, input_tokens, samples_per_group, generations
+        )
+    )
+    needed = {key for key in groups if key not in reused}
+    batches: dict[tuple[Pair, ...], list[int]] = {}
+    for target in input_tokens:
+        if batch := tuple(pair for pair in pairs if (*pair, target) in needed):
+            batches.setdefault(batch, []).append(target)
+    schedule = [
+        (
+            targets,
+            [(list(batch), calibration_rounds(list(batch), slots))]
+            if not switcher.engine_held
+            else [(phase, exclusive_rounds(phase, slots)) for phase in role_phases(list(batch))],
+        )
+        for batch, targets in batches.items()
+    ]
+    if base is not None:
+        print(f"calibration base: {base}; reused groups: {len(reused)} of {len(groups)}")
+    measured: dict[tuple[str, str, int, int], dict[str, Any]] = {}
     client = EngineClient(**client_options(cfg))
     roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
     restore_error: str | None = None
     try:
-        async with httpx.AsyncClient(
-            timeout=observation_timeout_s, headers=cfg.engine_headers()
-        ) as sizing:
-            context_limits: dict[str, int] = {}
-            for iid in sorted({iid for pair in pairs for iid in pair}):
-                spec = by_id[iid]
-                async with asyncio.timeout(observation_timeout_s):
-                    context_limit = await engine_context_limit(
-                        sizing, spec.url, cfg.model, dialect, observation_timeout_s
-                    )
-                for target in input_tokens:
-                    if target + 1 > context_limit:
-                        raise ValueError(
-                            f"{iid}: requested {target} input tokens plus one output token "
-                            f"exceed live context limit {context_limit}"
+        if needed:
+            async with httpx.AsyncClient(
+                timeout=observation_timeout_s, headers=cfg.engine_headers()
+            ) as sizing:
+                context_limits: dict[str, int] = {}
+                for iid in sorted({iid for src, dst, _ in needed for iid in (src, dst)}):
+                    spec = by_id[iid]
+                    async with asyncio.timeout(observation_timeout_s):
+                        context_limit = await engine_context_limit(
+                            sizing, spec.url, cfg.model, dialect, observation_timeout_s
                         )
-                context_limits[iid] = context_limit
-            launches = (
-                await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
-                if switcher.engine_held or client.kv.concurrent
-                else {}
-            )
-            if switcher.engine_held:
-                roles = await current_roles(
-                    switcher, sizing, {spec.url: launches.get(spec.iid) for spec in cfg.engines}
-                )
-            lockstep = _Lockstep(
-                cfg,
-                client,
-                sizing,
-                dialect,
-                observation_timeout_s,
-                context_limits,
-                launches,
-                switcher,
-            )
-            print(
-                f"calibration groups: {len(groups)}; concurrent rounds per input length: "
-                f"{sum(len(rounds) for _, rounds in phases)}; sweep 1 runs each group alone"
-            )
-            first = 1
-            for phase, rounds in phases:
-                members_of = set(phase)
-                for src, dst, target in groups:
-                    if (src, dst) in members_of:
-                        await lockstep.step([(src, dst)], target, 1, None)
-                for index in range(2, samples_per_group + 1):
                     for target in input_tokens:
-                        for number, members in enumerate(rounds, first):
-                            await lockstep.step(members, target, index, number)
-                first += len(rounds)
+                        if target + 1 > context_limit:
+                            raise ValueError(
+                                f"{iid}: requested {target} input tokens plus one output token "
+                                f"exceed live context limit {context_limit}"
+                            )
+                    context_limits[iid] = context_limit
+                launches = (
+                    await attested_launches(cfg.engines, timeout_s=observation_timeout_s)
+                    if switcher.engine_held or client.kv.concurrent
+                    else {}
+                )
+                if switcher.engine_held:
+                    roles = await current_roles(
+                        switcher, sizing, {spec.url: launches.get(spec.iid) for spec in cfg.engines}
+                    )
+                lockstep = _Lockstep(
+                    cfg,
+                    client,
+                    sizing,
+                    dialect,
+                    observation_timeout_s,
+                    context_limits,
+                    launches,
+                    switcher,
+                )
+                rounds_per_length = max(
+                    sum(len(rounds) for _, rounds in phases) for _, phases in schedule
+                )
+                print(
+                    f"calibration groups: {len(needed)}; concurrent rounds per input length: "
+                    f"{rounds_per_length}; sweep 1 runs each group alone"
+                )
+                first = 1
+                for targets, phases in schedule:
+                    for phase, rounds in phases:
+                        members_of = set(phase)
+                        for src, dst, target in groups:
+                            if (src, dst) in members_of and target in targets:
+                                await lockstep.step([(src, dst)], target, 1, None)
+                        for index in range(2, samples_per_group + 1):
+                            for target in targets:
+                                for number, members in enumerate(rounds, first):
+                                    await lockstep.step(members, target, index, number)
+                        first += len(rounds)
+                measured = lockstep.rows
     finally:
         try:
             if switcher.engine_held and roles:
@@ -658,12 +762,15 @@ async def calibrate(
             print(f"role restore failed: {restore_error}")
         finally:
             await client.aclose()
+    captured_at = time.time()
     rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     for src, dst, target in groups:
-        group_rows = [
-            lockstep.rows[(src, dst, target, index)] for index in range(1, samples_per_group + 1)
-        ]
+        kept = reused.get((src, dst, target))
+        group_rows, group_captured = kept or (
+            [measured[(src, dst, target, index)] for index in range(1, samples_per_group + 1)],
+            captured_at,
+        )
         completed = [row for row in group_rows if row["status"] == "completed"]
         timings = [row["first_token_seconds"] for row in completed]
         actual_lengths = [row["actual_input_tokens"] for row in completed]
@@ -676,6 +783,7 @@ async def calibrate(
             "actual_input_tokens_max": max(actual_lengths) if actual_lengths else None,
             "completed": len(timings),
             "failed": failures,
+            "captured_at_unix": group_captured,
         }
         if timings:
             p99, maximum, candidate = candidate_deadline(timings)
@@ -689,6 +797,7 @@ async def calibrate(
         print(
             f"{src} -> {dst}, target {target} tokens: "
             f"{len(timings)}/{samples_per_group} completed, {failures} failed"
+            + (", reused" if kept else "")
         )
     changed: list[str] = []
     generation_errors: list[str] = []
@@ -713,8 +822,9 @@ async def calibrate(
     document = {
         "schema": SCHEMA,
         "schema_version": 1,
-        "captured_at_unix": time.time(),
+        "captured_at_unix": captured_at,
         "duration_s": duration_s,
+        "calibration_base": None if base is None else str(base),
         "status": "complete" if complete else "incomplete",
         "model": cfg.model,
         "contract_fingerprint": cfg.engine_contract.fingerprint() if cfg.engine_contract else None,

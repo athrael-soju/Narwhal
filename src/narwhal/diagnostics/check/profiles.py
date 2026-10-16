@@ -36,7 +36,20 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     for spec in cfg.engines:
         p = store.get(spec.iid)
         if p is None:
-            rep.fail(f"{spec.iid} has no profile; run narwhal-profile --fleet <config>")
+            if spec.shared_device is not None and store.profiles_for_engine(spec.iid):
+                group = [
+                    peer.role
+                    for peer in cfg.engines
+                    if peer.shared_device is not None
+                    and peer.shared_device.group == spec.shared_device.group
+                ]
+                rep.fail(
+                    f"{spec.iid} has no profile for its GPU group split of "
+                    f"{group.count(Role.PREFILL)} prefill and {group.count(Role.DECODE)} decode "
+                    "engines; profile that split with narwhal-profile --colocated"
+                )
+            else:
+                rep.fail(f"{spec.iid} has no profile; run narwhal-profile --fleet <config>")
             continue
         problems = decode_evidence_problems(
             p,
@@ -82,7 +95,10 @@ async def gate_profile_generation(
         try:
             generation = await read_generation(cfg, spec, transport=transport)
         except (httpx.HTTPError, ValueError, KeyError) as exc:
-            rep.fail(f"{spec.iid} profile generation unreadable: {exc}; reprofile before admission")
+            rep.fail(
+                f"{spec.iid} profile generation unreadable: {exc}; "
+                "restart its attestation sidecar if it answers HTTP 503"
+            )
             unsafe.add(spec.iid)
             continue
         problems = [

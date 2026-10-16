@@ -8,9 +8,9 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 | Mode | Operation | Output |
 | --- | --- | --- |
-| Live sweep | Measures the live engines. | The fleet's `profiles.path` |
+| Live sweep | Measures the live engines. | The fleet's `profiles.path`, or `--out` |
 | Refit | Recomputes the cold and warm time to first token (TTFT) fits from a sample sidecar and keeps the decode fits. | `--out` |
-| Merge | Combines profile stores of separately measured role mixes. | `--out` |
+| Merge | Combines profile stores. | `--out` |
 
 Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink.
 
@@ -35,8 +35,8 @@ These options select engines, choose the mode, and set the output files:
 | `--fleet PATH` | required | Fleet configuration file that defines engine membership for every mode. |
 | `--only IID` | every engine | Engine `iid` to include in a live sweep, repeatable. |
 | `--refit-samples PATH` | optional | Sample sidecar to refit. |
-| `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeated at least twice. |
-| `--out PATH` | optional | New profile store for `--refit-samples` and `--merge`, written with a matching sample sidecar. |
+| `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeatable. |
+| `--out PATH` | optional | New profile store, written with a matching sample sidecar. Required for `--refit-samples` and `--merge`. A live sweep writes here in place of `profiles.path`. |
 | `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
@@ -46,15 +46,15 @@ The mode options depend on each other:
 | Option | Requires | Mutually exclusive with |
 | --- | --- | --- |
 | `--refit-samples` | `--out`, and samples covering every fleet engine | `--only`, `--merge` |
-| `--merge` | `--out`, and at least two profile stores | `--only`, `--overwrite`, `--refit-samples` |
-| `--out` | `--refit-samples` or `--merge`, and a store path and sidecar path that do not exist yet | |
+| `--merge` | `--out` | `--only`, `--overwrite`, `--refit-samples` |
+| `--out` | A store path and sidecar path that do not exist yet | `--overwrite` |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
 
 With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 
 A refit needs each engine's saved generation evidence, and writes the raw samples and that evidence to its new sample sidecar.
 
-A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine, with each combination of engine, GPU group, role split and target role occurring once. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
+A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
 
 Run each mode with:
 
@@ -81,7 +81,7 @@ Every mode validates these options:
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`.
 
-The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When the engine exports no such counter, the warm cases that fit its context include fewer than five cases or fewer than two prefix or suffix lengths, a case reuses no cached prefix, or the warm fit fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
+The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 ## Shared-GPU neighbour traffic
 
@@ -107,7 +107,7 @@ The sample sidecar records each neighbour's role, completion count, achieved rat
 
 ## Completion and exit codes
 
-On success, each mode prints one line and exits with code `0`:
+On success, each mode ends with this line and exits with code `0`:
 
 | Mode | Success output |
 | --- | --- |

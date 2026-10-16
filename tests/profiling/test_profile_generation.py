@@ -172,6 +172,48 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
                 pass
         await app.state.router.engines.aclose()
 
+    async def test_router_starts_with_evidence_for_a_pinned_engine(self):
+        await self._serve_launch()
+        await self._calibrate()
+        self.cfg.engines[1].pin = True
+        app = create_app(self.cfg, lifecycle_transport=self.transport)
+        async with app.router.lifespan_context(app):
+            state = app.state.router.state()
+        self.assertEqual(state["first_token_calibration"]["status"], "measured")
+
+    async def test_router_start_names_the_timeout_fix(self):
+        await self._serve_launch()
+        await self._calibrate()
+        self.cfg.first_token_timeout_s = 0.5
+        app = create_app(self.cfg, lifecycle_transport=self.transport)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"^engine\.first_token_timeout_s 0\.5s is not above measured calibration candidate "
+            r"0\.8s; raise engine\.first_token_timeout_s$",
+        ):
+            async with app.router.lifespan_context(app):
+                pass
+        await app.state.router.engines.aclose()
+
+    async def test_router_start_names_the_sidecar_fix_for_an_unreadable_generation(self):
+        await self._serve_launch()
+        respond = self.respond
+
+        def sidecar_down(request):
+            if request.url.path == "/v1/attestation" and self.by_host[request.url.host] == "e3":
+                return httpx.Response(503)
+            return respond(request)
+
+        app = create_app(self.cfg, lifecycle_transport=httpx.MockTransport(sidecar_down))
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"(?s)^e3 profile generation unreadable: .*; "
+            r"restart its attestation sidecar if it answers HTTP 503$",
+        ):
+            async with app.router.lifespan_context(app):
+                pass
+        await app.state.router.engines.aclose()
+
     async def test_state_marks_an_engine_relaunched_inside_the_router_as_reused(self):
         await self._serve_launch()
         await self._calibrate()

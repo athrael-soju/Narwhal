@@ -26,6 +26,7 @@
         "target_input_tokens": 32
       }
     ],
+    "calibration_base": null,
     "candidate_deadline_s": "<seconds>",
     "captured_at_unix": "<seconds>",
     "changed_generations": [],
@@ -46,6 +47,7 @@
         "actual_input_tokens_max": 32,
         "actual_input_tokens_min": 32,
         "candidate_deadline_s": "<seconds>",
+        "captured_at_unix": "<seconds>",
         "completed": 1,
         "consumer": "e3",
         "failed": 0,
@@ -58,6 +60,7 @@
         "actual_input_tokens_max": 32,
         "actual_input_tokens_min": 32,
         "candidate_deadline_s": "<seconds>",
+        "captured_at_unix": "<seconds>",
         "completed": 1,
         "consumer": "e0",
         "failed": 0,

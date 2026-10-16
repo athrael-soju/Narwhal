@@ -147,7 +147,10 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             )
             problems = profile_generation_problems(router.profiles, iid, generation.digest)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            problems = [f"{iid} profile generation unreadable: {type(exc).__name__}"]
+            problems = [
+                f"{iid} profile generation unreadable: {type(exc).__name__}; "
+                "restart its attestation sidecar if it answers HTTP 503"
+            ]
         if (
             not controls_fleet(router)
             or router.lifecycle_blocked

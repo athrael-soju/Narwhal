@@ -214,7 +214,7 @@ print("wave ready to stop:", state["wave"]["id"])
 PY
 ```
 
-Issue the first supervisor stop command when the check passes.
+Stop the engines through their process manager when the check passes.
 
 ### Restart the fleet
 
@@ -299,7 +299,7 @@ for iid, engine in state["engines"].items():
 PY
 ```
 
-In the response, `engines.<id>.old_process_start` holds the process start recorded by this drain, and `process_starts` holds the previously accepted identities.
+In the response, `engines.<id>.old_process_start` holds the process start recorded by this drain.
 
 When the drain records every identity, it returns HTTP 200 with each member's `old_process_start`. Verify `wave.ready_to_stop` and follow [Restarting the fleet](#restart-the-fleet).
 
@@ -334,8 +334,7 @@ For a warm standby router:
 
 ### Refresh profiles
 
-1. [Profile the replaced engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) with the recorded measurement recipe.
-2. With a `narwhal-profile --only` subset reprofile, [merge its output](../cli/Profile.md#selection-refitting-and-output) with the retained profiles and sample evidence of the unchanged engines.
+[Re-profile the replaced engines and merge their rows into the current store](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) with the recorded measurement recipe.
 
 ### Prepare the activation configuration
 
@@ -366,14 +365,7 @@ with (run / "fleet-activation.json").open("x") as output:
 PY
 ```
 
-The activation fleet file follows these resume rules:
-
-| Item | Resume rule |
-| --- | --- |
-| `engines` in the fleet file | Unchanged |
-| `profiles.path` | `FRESH_PROFILES` |
-| `recovery.state_path` | `$RUN_DIR/resume-state.json` |
-| State handoff `schema_version` | `1` |
+The activation fleet file keeps `engines` unchanged and sets `profiles.path` to `FRESH_PROFILES` and `recovery.state_path` to `$RUN_DIR/resume-state.json`. Resume reads a state handoff with `schema_version` 1.
 
 ### Run full preflight
 
@@ -385,7 +377,7 @@ narwhal-check --fleet "$ACTIVATION_FLEET" > "$RUN_DIR/activation-preflight.log" 
 
 If the log reports `process differs from first-token calibration`:
 
-1. [Recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline).
+1. [Recalibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration).
 2. Set `engine.first_token_calibration_path` in `$FLEET` and `$ACTIVATION_FLEET` to the new artifact.
 3. Run full preflight again.
 
