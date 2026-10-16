@@ -70,7 +70,8 @@ def _main(argv: list[str]) -> int:
     ap.add_argument(
         "--calibration-base",
         type=Path,
-        help="prior calibration artifact; measure only the groups it lacks or did not complete",
+        help="prior calibration artifact; measure its missing and incomplete groups "
+        "and reuse the rest",
     )
     ap.add_argument(
         "--repeats",
