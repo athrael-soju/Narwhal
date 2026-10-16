@@ -8,7 +8,8 @@ build-backend = "setuptools.build_meta"
 name = "narwhal-inference"
 version = "0.7.0"
 description = "Adaptive hot-swap disaggregation for LLM inference"
-readme = "README.md"
+# PyPI shows README.md followed by CHANGELOG.md, newest release first.
+dynamic = ["readme"]
 authors = [{ name = "Athrael Soju" }]
 keywords = [
   "llm", "inference", "llm-inference", "llm-serving", "disaggregation",
@@ -76,6 +77,11 @@ vllm = "narwhal.backends.vllm:backend"
 Documentation = "https://athrael-soju.github.io/Narwhal/"
 Repository = "https://github.com/athrael-soju/Narwhal"
 Issues = "https://github.com/athrael-soju/Narwhal/issues"
+Changelog = "https://github.com/athrael-soju/Narwhal/blob/main/CHANGELOG.md"
+"Release notes" = "https://github.com/athrael-soju/Narwhal/releases"
+
+[tool.setuptools.dynamic]
+readme = { file = ["README.md", "CHANGELOG.md"], content-type = "text/markdown" }
 
 [tool.setuptools.package-data]
 narwhal = ["py.typed", "fleet.example.json"]
