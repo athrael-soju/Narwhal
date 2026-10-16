@@ -67,10 +67,10 @@ def _main(argv: list[str]) -> int:
         type=Path,
         action="append",
         default=[],
-        help="measured profile store with matching sidecar, repeatable; a later store replaces "
-        "an earlier store's profile for the same engine variant, and rows for engines outside "
-        "the fleet are left out; requires --out; combined stores must cover the fleet; "
-        "exclusive with --refit-samples, --only and --overwrite",
+        help="measured profile store with a matching sidecar; repeatable. Later stores replace "
+        "earlier profiles for the same engine variant. Rows for engines outside the fleet are "
+        "dropped. Requires --out and full fleet coverage; cannot be combined with "
+        "--refit-samples, --only, or --overwrite",
     )
     ap.add_argument(
         "--out",
