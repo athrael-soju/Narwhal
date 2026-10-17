@@ -2,12 +2,13 @@ name: contributor-triage
 
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [labeled]
 
 permissions: {}
 
 jobs:
   triage:
+    if: github.event.label.name == 'run-triage'
     permissions:
       contents: read
       pull-requests: write
@@ -22,6 +23,8 @@ jobs:
 
           min-account-age: 30
           max-daily-forks: 7
+
+          exempt-author-association: ""
 
           max-changed-files: 0
           max-changed-lines: 0
