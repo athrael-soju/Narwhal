@@ -35,6 +35,7 @@ DASHBOARD_PALETTE = {
     "state serious": "#E0752D",
     "state severe": "#A11D1D",
     "state pending": "#9E4AA4",
+    "state probing": "#9C6B4E",
     "neutral": "#8E9196",
     "offered": "#5794F2",
     "cancelled": "#FFEE52",
@@ -555,6 +556,15 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(source, state)
         # An aggregated engine holds both roles and serves both phases.
         self.assertIn("unless on(iid) (count by(iid) (count by(iid, role) (", state)
+        # Probing needs engine-side running requests across the window and no routed work on
+        # the engine from any router in the same window.
+        self.assertIn("label_replace(3 * clamp_max(min_over_time(((sum by(iid) (", state)
+        self.assertIn(
+            "[15s:5s]), 1) unless on(iid) (max_over_time((sum by(iid) (narwhal_resident_requests"
+            '{job="narwhal-router",iid=~"$iid"} and on(job,instance) '
+            '(up{job="narwhal-router"} == 1)))[15s:5s]) > 0), "s", "probing", "", "")',
+            state,
+        )
         overrides = {
             override["matcher"]["options"]: override["properties"]
             for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
@@ -572,6 +582,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Serving",
                 "Switching",
                 "Backlogged",
+                "Probing",
                 "Probation",
                 "Verifying",
                 "Quarantined",

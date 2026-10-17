@@ -64,6 +64,7 @@ The engine table and **Engine role history** colour engine states:
 | Maroon       | `#A11D1D` | Blocked                                                |
 | Magenta      | `#9E4AA4` | Switching and Validating                               |
 | Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
+| Brown        | `#9C6B4E` | Probing                                                |
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
 
@@ -219,6 +220,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Serving     | Normal operation                                                                                                   | In service     |
 | Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
 | Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting` or `sglang:num_queue_reqs`                      | In service     |
+| Probing     | The engine reports running requests at each 5-second step for 15 seconds while no router reports work on it        | In service     |
 | Probation   | Placement ranks the engine lower after latency drift                                                               | In service     |
 | Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
 | Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |
@@ -228,5 +230,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Blocked     | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |
 | Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
 | Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
+
+First-token calibration, profiling and preflight send requests to engines directly, so the engines they use read Probing.
 
 [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md)
