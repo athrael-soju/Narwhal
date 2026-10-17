@@ -2,13 +2,14 @@ name: contributor-triage
 
 on:
   pull_request_target:
-    types: [labeled]
+    types: [opened, reopened]
 
 permissions: {}
 
 jobs:
   triage:
-    if: github.event.label.name == 'run-triage'
+    environment:
+      name: contributor-triage
     permissions:
       contents: read
       pull-requests: write
