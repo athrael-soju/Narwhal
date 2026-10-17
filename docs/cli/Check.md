@@ -21,6 +21,7 @@ General options:
 | `--version` | | Print the installed version. |
 | `--print-example-config` | off | Print the packaged, annotated config and exit. |
 | `--print-contract-versions` | off | Print the versioned JSON interface registry and exit. |
+| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | While preflight or calibration runs, serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics`. Without a value, the command serves no metrics. |
 
 Every mode needs `--fleet`. When both print options are set, `--print-example-config` wins.
 

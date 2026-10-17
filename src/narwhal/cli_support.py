@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 from importlib import metadata
+
+from .observability.tools import METRICS_URL_ENV, listen_address
 
 
 def add_version_argument(parser: argparse.ArgumentParser) -> None:
@@ -18,3 +21,22 @@ def add_version_argument(parser: argparse.ArgumentParser) -> None:
         version=f"narwhal-inference {version}",
         help="print this environment's Narwhal distribution version and exit",
     )
+
+
+def add_tool_metrics_argument(parser: argparse.ArgumentParser) -> None:
+    """Add `--metrics-url`, where an operation that sends requests to engines serves metrics."""
+    parser.add_argument(
+        "--metrics-url",
+        default=os.environ.get(METRICS_URL_ENV) or None,
+        help="serve the operation, its engines and its progress at this http://host:port "
+        f"/metrics while the operation runs (default: ${METRICS_URL_ENV}, else no endpoint)",
+    )
+
+
+def check_tool_metrics_argument(parser: argparse.ArgumentParser, url: str | None) -> None:
+    """Exit with a usage error when `url` is not an http://host:port origin."""
+    if url:
+        try:
+            listen_address(url)
+        except ValueError as exc:
+            parser.error(str(exc))

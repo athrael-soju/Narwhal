@@ -90,6 +90,10 @@ Validate changed queries against traffic, idle engines, failed scrapes, router r
 
 The `fleet-control` job in `tools/observability/prometheus.yml` scrapes the fleet control service's `/metrics` with the token in `/etc/prometheus/fleet-control-token`. `make observe` writes the target and token from `NARWHAL_CONTROL_METRICS_URL` and `NARWHAL_CONTROL_TOKEN`. Without `NARWHAL_CONTROL_METRICS_URL`, the job has no target. See [Dashboard annotations](../../docs/operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
 
+## Tool scrape job
+
+The `narwhal-tools` job in `tools/observability/prometheus.yml` scrapes the `/metrics` that `narwhal-check` and `narwhal-profile` serve while an operation sends requests to engines. `make observe` writes the target from `NARWHAL_TOOL_METRICS_URL`. Without it, the job has no target. The engine table's Calibrating, Profiling and Preflight states read `narwhal_tool_engine_in_use`. The target is down between operations, and the target-down alerts select only the `engines` and `narwhal-router` jobs.
+
 ## Alert rules
 
 Alert rules in `tools/observability/prometheus-alerts.yml`:

@@ -35,6 +35,9 @@ CONTROL_METRICS_URL_ENV = "NARWHAL_CONTROL_METRICS_URL"
 CONTROL_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 CONTROL_TARGETS = "prometheus/targets/fleet-control.json"
 CONTROL_TOKEN_FILE = "prometheus/fleet-control-token"
+# narwhal-check and narwhal-profile read the same variable for their listener.
+TOOL_METRICS_URL_ENV = "NARWHAL_TOOL_METRICS_URL"
+TOOL_TARGETS = "prometheus/targets/tools.json"
 CONTROL_ANNOTATIONS = (
     {
         "name": "Fleet control actions",
@@ -107,6 +110,17 @@ def control_target(env: Mapping[str, str]) -> ControlTarget | None:
             f"{CONTROL_METRICS_URL_ENV} requires the control bearer token in {CONTROL_TOKEN_ENV}"
         )
     return ControlTarget(authority, token)
+
+
+def tool_target(env: Mapping[str, str]) -> str | None:
+    """Return the tool metrics origin named by `TOOL_METRICS_URL_ENV`, or None when it is unset."""
+    url = env.get(TOOL_METRICS_URL_ENV, "")
+    if not url:
+        return None
+    try:
+        return metrics_authority(url)
+    except ValueError as exc:
+        raise ValueError(f"{TOOL_METRICS_URL_ENV}: {exc}") from None
 
 
 def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -232,6 +246,7 @@ def stage_artifacts(
     contract: TargetContract,
     console: str = DEFAULT_CONSOLE_URL,
     control: ControlTarget | None = None,
+    tools: str | None = None,
     root: Path = MOUNTS,
     source: Path = BASE,
 ) -> None:
@@ -258,4 +273,6 @@ def stage_artifacts(
     _write(root / CONTROL_TARGETS, (json.dumps(targets, indent=2) + "\n").encode())
     # Prometheus reads this token.
     _write(root / CONTROL_TOKEN_FILE, ("" if control is None else control.token).encode())
+    tool_targets = [] if tools is None else [{"targets": [tools]}]
+    _write(root / TOOL_TARGETS, (json.dumps(tool_targets, indent=2) + "\n").encode())
     write_contract(contract, root / "prometheus" / "targets")

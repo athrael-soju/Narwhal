@@ -43,6 +43,7 @@ Set these variables in the process environment, or in the workstation `.env` tha
 | `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, opened by the dashboard's **Fleet control** link                                                 | `http://127.0.0.1:18020/console` |
 | `NARWHAL_CONTROL_METRICS_URL`       | Fleet control service address for Prometheus to scrape. Needs `NARWHAL_CONTROL_TOKEN`. When unset, Prometheus skips the service |                                  |
 | `NARWHAL_CONTROL_TOKEN`             | Fleet control bearer token                                                                                                      |                                  |
+| `NARWHAL_TOOL_METRICS_URL`          | Address `narwhal-check` and `narwhal-profile` serve tool metrics on, and `make observe` scrapes. When unset, they serve none    |                                  |
 
 An engine `url` or `attestation_url` expands from the environment when the entire JSON string is a single `${NAME}` reference:
 

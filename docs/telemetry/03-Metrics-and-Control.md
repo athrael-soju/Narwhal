@@ -43,6 +43,19 @@ The router exports these series on `/metrics`, grouped by area:
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
+### Tool metrics
+
+With `--metrics-url`, `narwhal-check` serves these gauges on `/metrics` during preflight and first-token calibration, and `narwhal-profile` serves them during a live sweep. Each series carries an `operation` label of `preflight`, `calibration` or `profiling`.
+
+| Series | Value |
+| --- | --- |
+| `narwhal_tool_operation` | `1` while the operation runs |
+| `narwhal_tool_engine_in_use` | `1` for each engine the operation sends requests to, labelled with the engine's `iid` |
+| `narwhal_tool_steps_completed` | Steps completed |
+| `narwhal_tool_steps_total` | Steps planned: one per gate for preflight, one per measurement round for calibration, and one per engine for profiling |
+
+A sweep that profiles lanes in separate processes counts each engine when its lane process records its profile.
+
 ## Reading outcome reasons
 
 These series split request outcomes and failed attempts by their [journal reason](01-Journal.md#outcome-reasons):

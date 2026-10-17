@@ -11,8 +11,13 @@ import httpx
 
 from ... import command_results as results
 from ...cli_errors import failure
-from ...cli_support import add_version_argument
+from ...cli_support import (
+    add_tool_metrics_argument,
+    add_version_argument,
+    check_tool_metrics_argument,
+)
 from ...config import FleetConfig
+from ...observability.tools import ToolActivity, serve_tool_metrics
 from ..fitting import cached_fit_possible
 from .fleet import run
 from .neighbours import ColocatedWorkload
@@ -48,6 +53,7 @@ def _main(argv: list[str]) -> int:
         "a .samples.json sidecar; sweep and neighbour options apply to live measurement.",
     )
     add_version_argument(ap)
+    add_tool_metrics_argument(ap)
     results.add_format(ap)
     ap.add_argument("--fleet", required=True, help="fleet config JSON")
     ap.add_argument(
@@ -186,6 +192,7 @@ def _main(argv: list[str]) -> int:
         ap.error("--observation-timeout-s must be finite and positive")
     if args.observation_timeout_s is not None and (args.merge or args.refit_samples):
         ap.error("--observation-timeout-s applies only to live profiling")
+    check_tool_metrics_argument(ap, args.metrics_url)
     try:
         cfg = FleetConfig.load(args.fleet)
     except (OSError, ValueError) as exc:
@@ -285,17 +292,20 @@ def _main(argv: list[str]) -> int:
             return refit_saved_prefill(
                 args.refit_samples, args.out, {engine.iid for engine in cfg.engines}
             )
-        return asyncio.run(
-            run(
-                cfg,
-                set(args.only) or None,
-                sweep,
-                overwrite=args.overwrite,
-                limits_path=args.limits,
-                colocated_workload=colocated_workload,
-                observation_timeout_s=args.observation_timeout_s,
+        activity = ToolActivity("profiling")
+        with serve_tool_metrics(activity, args.metrics_url):
+            return asyncio.run(
+                run(
+                    cfg,
+                    set(args.only) or None,
+                    sweep,
+                    overwrite=args.overwrite,
+                    limits_path=args.limits,
+                    colocated_workload=colocated_workload,
+                    observation_timeout_s=args.observation_timeout_s,
+                    activity=activity,
+                )
             )
-        )
     except (OSError, ValueError) as exc:
         if results.json_mode():
             raise

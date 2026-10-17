@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import random
+import re
 import tempfile
 import unittest
 from collections import Counter
@@ -22,6 +23,7 @@ from narwhal.diagnostics.check import cli as check_cli
 from narwhal.engines.client import FIRST_OUTPUT_DETAIL, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import validation_pairs
+from narwhal.observability.tools import ToolActivity
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe.fleet import device_key
@@ -418,6 +420,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         name="recorded.json",
         base=None,
         digests=(),
+        activity=None,
     ):
         output = Path(self.folder.name) / name
         client.slots = {spec.url: device_key(spec) for spec in self.cfg.engines}
@@ -452,6 +455,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 observation_timeout_s=observation_timeout_s,
                 out=output,
                 base=base,
+                activity=activity,
             )
         return code, json.loads(output.read_text())
 
@@ -532,6 +536,27 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         for row in document["attempts"]:
             pair = (row["producer"], row["consumer"])
             self.assertEqual(row["round"], None if row["attempt"] == 1 else number[pair])
+
+    async def test_activity_reports_every_measured_engine_and_each_step(self):
+        self._four_engines()
+        activity = ToolActivity("calibration")
+        _, document = await self._run_recorded(
+            RecordingClient(), samples=3, input_tokens=(8, 16), activity=activity
+        )
+        # Sweep 1 steps each group alone; each later step runs one round at one length.
+        steps = {
+            (row["producer"], row["consumer"], row["target_input_tokens"])
+            if row["round"] is None
+            else (row["attempt"], row["target_input_tokens"], row["round"])
+            for row in document["attempts"]
+        }
+        text = activity.render()
+        for iid in (spec.iid for spec in self.cfg.engines):
+            self.assertIn(
+                f'narwhal_tool_engine_in_use{{operation="calibration",iid="{iid}"}} 1', text
+            )
+        self.assertIn(f'narwhal_tool_steps_total{{operation="calibration"}} {len(steps)}', text)
+        self.assertIn(f'narwhal_tool_steps_completed{{operation="calibration"}} {len(steps)}', text)
 
     async def test_steps_never_overlap_prefill_and_decode(self):
         self._four_engines()
@@ -877,11 +902,16 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         code, base, path = await self._base(RecordingClient(fail=fail))
         self.assertEqual((code, base["status"]), (1, "incomplete"))
         client = RecordingClient()
+        activity = ToolActivity("calibration")
         code, document = await self._run_recorded(
-            client, samples=100, name="remeasured.json", base=path
+            client, samples=100, name="remeasured.json", base=path, activity=activity
         )
         self.assertEqual((code, document["status"]), (0, "complete"))
         self.assertEqual(self._decoded(client), {("e0", "e1", 8)})
+        engines = re.findall(
+            r'narwhal_tool_engine_in_use\{operation="calibration",iid="(\w+)"\}', activity.render()
+        )
+        self.assertEqual(engines, ["e0", "e1"])
         self.assertEqual(document["calibration_base"], str(path))
         kept = [
             row for row in base["attempts"] if (row["producer"], row["consumer"]) != ("e0", "e1")

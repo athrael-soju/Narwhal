@@ -40,6 +40,7 @@ These options select engines, choose the mode, and set the output files:
 | `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
+| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | While a live sweep runs, serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics`. Without a value, the command serves no metrics. |
 
 The mode options depend on each other:
 

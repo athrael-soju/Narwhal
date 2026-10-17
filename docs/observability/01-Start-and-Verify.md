@@ -36,6 +36,16 @@ export NARWHAL_CONTROL_TOKEN=<control-token>
 
 Replace `<control-token>` with the service's bearer token. The address needs an explicit port. If the address is set without the token, `make observe` stops with an error.
 
+### Scraping Narwhal tools
+
+To show which operation keeps an engine busy in the [engine table](05-Dashboard.md#engine-states), Prometheus scrapes `narwhal-check` and `narwhal-profile` while they run. Set the address they serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) on, in the shell that runs `make observe` and in each shell that runs the tools:
+
+```bash
+export NARWHAL_TOOL_METRICS_URL=http://127.0.0.1:18030
+```
+
+The address needs an explicit port, and Prometheus must reach it. Run one tool at a time: a second tool that finds the port taken runs without serving metrics. The `narwhal-tools` target is down between runs, and no alert fires for it.
+
 ## Starting Prometheus and Grafana
 
 Run:
@@ -80,7 +90,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
 
 The response has one series for the router and one for each configured engine. A value of `1` marks a successful scrape, and `0` marks a failed scrape.
 
-If you set `NARWHAL_CONTROL_METRICS_URL`, check `up{job="fleet-control"}` the same way.
+If you set `NARWHAL_CONTROL_METRICS_URL`, check `up{job="fleet-control"}` the same way. If you set `NARWHAL_TOOL_METRICS_URL`, `up{job="narwhal-tools"}` is `1` while a tool runs an operation.
 
 Prometheus `/targets` shows the discovery state and scrape errors for each endpoint.
 
@@ -97,6 +107,7 @@ Prometheus `/targets` shows the discovery state and scrape errors for each endpo
 | `tools/observability/grafana-narwhal.json` and `NARWHAL_CONTROL_CONSOLE_URL`                  | `grafana-dashboards/narwhal.json`                                                 |
 | `NARWHAL_CONTROL_METRICS_URL`                                                                 | `prometheus/targets/fleet-control.json`, empty if unset                           |
 | `NARWHAL_CONTROL_TOKEN`                                                                       | `prometheus/fleet-control-token`, empty if `NARWHAL_CONTROL_METRICS_URL` is unset |
+| `NARWHAL_TOOL_METRICS_URL`                                                                    | `prometheus/targets/tools.json`, empty if unset                                   |
 
 The staged files and the renderer token have these modes:
 

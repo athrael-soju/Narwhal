@@ -12,9 +12,14 @@ from pathlib import Path
 import httpx
 
 from ... import command_results as results
-from ...cli_support import add_version_argument
+from ...cli_support import (
+    add_tool_metrics_argument,
+    add_version_argument,
+    check_tool_metrics_argument,
+)
 from ...config import FleetConfig
 from ...contracts import manifest
+from ...observability.tools import ToolActivity, serve_tool_metrics
 from ...profiling.calibration import calibrate
 from .evidence import verify_directed_kv_evidence
 from .preflight import run
@@ -100,6 +105,7 @@ def _main(argv: list[str]) -> int:
         "--ring, --no-kv and --repeats apply to new probes "
         "(default: run preflight)",
     )
+    add_tool_metrics_argument(ap)
     ap.add_argument(
         "--print-example-config",
         action="store_true",
@@ -128,6 +134,7 @@ def _main(argv: list[str]) -> int:
 
     if args.fleet is None:
         ap.error("give --fleet")
+    check_tool_metrics_argument(ap, args.metrics_url)
     if args.calibrate_first_token:
         if args.input_tokens is None or args.observation_timeout_s is None:
             ap.error("calibration requires --input-tokens and --observation-timeout-s")
@@ -171,16 +178,19 @@ def _main(argv: list[str]) -> int:
             results.set_operation("calibrate-first-token")
             results.add_artifact("first_token_calibration", calibration_out)
             lengths = tuple(int(part) for part in input_tokens.split(","))
-            return asyncio.run(
-                calibrate(
-                    cfg,
-                    input_tokens=lengths,
-                    samples_per_group=args.samples,
-                    observation_timeout_s=observation_timeout_s,
-                    out=calibration_out,
-                    base=args.calibration_base,
+            activity = ToolActivity("calibration")
+            with serve_tool_metrics(activity, args.metrics_url):
+                return asyncio.run(
+                    calibrate(
+                        cfg,
+                        input_tokens=lengths,
+                        samples_per_group=args.samples,
+                        observation_timeout_s=observation_timeout_s,
+                        out=calibration_out,
+                        base=args.calibration_base,
+                        activity=activity,
+                    )
                 )
-            )
         if args.verify_evidence is not None:
             results.set_operation("verify-evidence")
             results.add_artifact("directed_kv_evidence", args.verify_evidence)
@@ -195,16 +205,19 @@ def _main(argv: list[str]) -> int:
                 return 1
             print("directed KV evidence matches the current fleet, profiles, and processes")
             return 0
-        return asyncio.run(
-            run(
-                cfg,
-                not args.ring,
-                args.no_kv,
-                args.repeats,
-                evidence_out=args.evidence_out,
-                fleet_path=Path(args.fleet),
+        activity = ToolActivity("preflight")
+        with serve_tool_metrics(activity, args.metrics_url):
+            return asyncio.run(
+                run(
+                    cfg,
+                    not args.ring,
+                    args.no_kv,
+                    args.repeats,
+                    evidence_out=args.evidence_out,
+                    fleet_path=Path(args.fleet),
+                    activity=activity,
+                )
             )
-        )
     except ValueError as exc:
         if results.json_mode():
             raise
