@@ -1131,28 +1131,32 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         first = self.cfg.engines[0].iid
         measured = asdict(profile(first))
         other = asdict(profile(first, tpot_slope=1))
-        expected = [
-            f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
-            "re-run narwhal-profile with --limits"
-        ]
-        for document, warned in (
-            ({"engines": {first: {"max_num_seqs": 64, "profile": measured}}}, True),
-            ({"engines": {first: {"max_num_seqs": 16, "profile": measured}}}, False),
-            ({"engines": {first: {"profile": measured}}}, False),
+        below = f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
+        rerun = below + "re-run narwhal-profile with --limits"
+        kv_bound = (
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; profile shorter "
+            "--decode-input-lens or lower the engine's sequence limit"
+        )
+        skipped = [{"input_tokens": 8192, "concurrency": 64}]
+        for document, expected in (
+            ({"engines": {first: {"max_num_seqs": 64, "profile": measured}}}, [rerun]),
+            ({"engines": {first: {"max_num_seqs": 16, "profile": measured}}}, []),
+            ({"engines": {first: {"profile": measured}}}, []),
             # Evidence for another measurement of the engine says nothing about this row.
-            ({"engines": {first: {"max_num_seqs": 64, "profile": other}}}, False),
-            # The sweep skipped the limit's cohorts because the KV cache cannot hold them.
+            ({"engines": {first: {"max_num_seqs": 64, "profile": other}}}, []),
+            # Decode seats stop at the profiled maximum whatever stopped the sweep, so a sweep
+            # bound by the KV cache warns too, with the remedy for that cause.
             (
                 {
                     "engines": {
                         first: {
                             "max_num_seqs": 64,
                             "profile": measured,
-                            "decode_skipped": [{"input_tokens": 512, "concurrency": 64}],
+                            "decode_skipped": skipped,
                         }
                     }
                 },
-                False,
+                [kv_bound],
             ),
         ):
             with self.subTest(document=document):
@@ -1161,7 +1165,41 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 with redirect_stdout(io.StringIO()):
                     gate_profile(self.cfg, report)
                 self.assertEqual(report.failed, [])
-                self.assertEqual(report.warnings, expected if warned else [])
+                self.assertEqual(report.warnings, expected)
+
+    def test_profile_gate_names_the_kv_cache_of_a_default_limit_engine(self):
+        """A 256-sequence engine whose KV cache holds 88 streams warns with the KV remedy."""
+        first = self.cfg.engines[0].iid
+        row = profile(first, decode_max_requests=88, kv_capacity_tokens=967_728)
+        store = ProfileStore(self.cfg.profiles_path)
+        store.put(row)
+        for spec in self.cfg.engines[1:]:
+            store.put(profile(spec.iid))
+        skipped = [{"input_tokens": 8192, "concurrency": 256}]
+        self.cfg.profiles_path.with_suffix(".samples.json").write_text(
+            json.dumps(
+                {
+                    "engines": {
+                        first: {
+                            "max_num_seqs": 256,
+                            "profile": asdict(row),
+                            "decode_skipped": skipped,
+                        }
+                    }
+                }
+            )
+        )
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            gate_profile(self.cfg, report)
+        self.assertEqual(
+            report.warnings,
+            [
+                f"{first} profile measures decode up to 88 requests and its limits file allows "
+                "256; its sweep skipped cohorts that exceed its 967728 KV tokens; profile shorter "
+                "--decode-input-lens or lower the engine's sequence limit"
+            ],
+        )
 
     def test_profile_gate_reads_the_limit_of_the_merged_source_that_measured_the_row(self):
         store = ProfileStore(self.cfg.profiles_path)
@@ -1193,32 +1231,66 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(report.warnings), 1 if warned else 0)
 
     async def test_profile_generation_gate_warns_below_the_attested_sequence_limit(self):
-        row = profile("e0")
+        digest = "sha256:" + "0" * 64
+        row = profile("e0", generation_digest=digest)
         store = ProfileStore(self.cfg.profiles_path, load=False)
         store.put(row)
         samples = self.cfg.profiles_path.with_suffix(".samples.json")
         attestation = {"launch": {"args": ["--max-num-seqs", "64"]}}
-        expected = [
-            "e0 profile measures decode up to 16 requests and its attested launch allows 64; "
-            "re-run narwhal-profile with --limits"
-        ]
-        for document, warned in (
+        below = "e0 profile measures decode up to 16 requests and its attested launch allows 64; "
+        rerun = below + "re-run narwhal-profile with --limits"
+        kv_bound = (
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; profile shorter "
+            "--decode-input-lens or lower the engine's sequence limit"
+        )
+        unknown = (
+            below + "re-run narwhal-profile with --limits, or with shorter --decode-input-lens "
+            "if its KV cache holds fewer streams"
+        )
+        skipped = [{"input_tokens": 8192, "concurrency": 64}]
+        other = asdict(replace(row, tpot_slope=1))
+        for document, expected in (
             # Profiled without --limits: the sidecar records no limit.
-            ({"engines": {"e0": {"profile": asdict(row)}}}, True),
-            # The limits file already set the bound, and the profile gate reports it.
-            ({"engines": {"e0": {"max_num_seqs": 64, "profile": asdict(row)}}}, False),
+            ({"engines": {"e0": {"profile": asdict(row)}}}, [rerun]),
+            # Profiled without --limits, and the KV cache bounded the sweep.
+            ({"engines": {"e0": {"profile": asdict(row), "decode_skipped": skipped}}}, [kv_bound]),
+            # No evidence measured this row, so the cause is unknown.
+            ({"engines": {"e0": {"profile": other}}}, [unknown]),
+            # The limits file already set this bound, and the profile gate reports it.
+            ({"engines": {"e0": {"max_num_seqs": 64, "profile": asdict(row)}}}, []),
+            # A limits file below the attested limit leaves the router's bound uncompared.
+            ({"engines": {"e0": {"max_num_seqs": 32, "profile": asdict(row)}}}, [rerun]),
         ):
             with self.subTest(document=document):
                 samples.write_text(json.dumps(document))
                 with patch.object(
                     profiles,
                     "read_generation",
-                    new=AsyncMock(return_value=GenerationEvidence("g", attestation, 100.0)),
+                    new=AsyncMock(return_value=GenerationEvidence(digest, attestation, 100.0)),
                 ):
                     report = Report()
                     with redirect_stdout(io.StringIO()):
                         await profiles.gate_profile_generation(self.cfg, store, {"e0"}, report)
-                self.assertEqual(report.warnings, expected if warned else [])
+                self.assertEqual(report.failed, [])
+                self.assertEqual(report.warnings, expected)
+        samples.write_text(json.dumps({"engines": {"e0": {"profile": asdict(row)}}}))
+        for live, cfg, failed in (
+            # An engine that fails the generation check gets a new profile, not this warning.
+            ("other", self.cfg, True),
+            # Without an engine contract the router seats engines without an attested limit.
+            (digest, replace(self.cfg, engine_contract=None), False),
+        ):
+            with self.subTest(live=live, contract=cfg.engine_contract is not None):
+                with patch.object(
+                    profiles,
+                    "read_generation",
+                    new=AsyncMock(return_value=GenerationEvidence(live, attestation, 100.0)),
+                ):
+                    report = Report()
+                    with redirect_stdout(io.StringIO()):
+                        await profiles.gate_profile_generation(cfg, store, {"e0"}, report)
+                self.assertEqual(bool(report.failed), failed)
+                self.assertEqual(report.warnings, [])
 
     def test_profile_gate_names_an_unmeasured_gpu_group_split(self):
         allocation = SharedDeviceAllocation("gpu", "GPU-0", 0.4, 0.3)

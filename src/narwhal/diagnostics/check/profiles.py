@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -60,24 +61,51 @@ def _measured_evidence(samples: Path, seen: set[Path] | None = None) -> dict[str
     return found
 
 
-def _recorded_limit(entries: list[dict], row: Profile) -> tuple[int | None, bool]:
-    """Return the sequence limit recorded with the evidence for `row`, and whether its decode
-    sweep skipped cohorts that exceed its KV cache.
+@dataclass(frozen=True)
+class _Recorded:
+    """The sequence limit a profile's evidence records, and whether its sweep skipped cohorts
+    that exceed the engine's KV cache.
     """
+
+    limit: int | None
+    kv_bound: bool
+
+
+def _recorded(entries: list[dict], row: Profile) -> _Recorded | None:
+    """Return what the evidence that measured `row` records, or None when none matches it."""
     for evidence in entries:
         if evidence_matches(evidence["profile"], row):
             value = evidence.get("max_num_seqs")
             limit = value if isinstance(value, int) and not isinstance(value, bool) else None
-            return limit, bool(evidence.get("decode_skipped"))
-    return None, False
+            return _Recorded(limit, bool(evidence.get("decode_skipped")))
+    return None
 
 
-def _below_limit(iid: str, measured: int | None, limit: int, source: str) -> str | None:
+def _below_limit(
+    iid: str, row: Profile, limit: int, source: str, kv_bound: bool | None
+) -> str | None:
+    """Describe a profile whose decode coverage stops below `limit`, with the fix that applies.
+
+    `kv_bound` is None when no evidence says why the sweep stopped.
+    """
+    measured = row.decode_max_requests
     if measured is None or measured >= limit:
         return None
+    if kv_bound:
+        remedy = (
+            f"its sweep skipped cohorts that exceed its {row.kv_capacity_tokens} KV tokens; "
+            "profile shorter --decode-input-lens or lower the engine's sequence limit"
+        )
+    elif kv_bound is None:
+        remedy = (
+            "re-run narwhal-profile with --limits, or with shorter --decode-input-lens if its "
+            "KV cache holds fewer streams"
+        )
+    else:
+        remedy = "re-run narwhal-profile with --limits"
     return (
         f"{iid} profile measures decode up to {measured} requests and its {source} allows "
-        f"{limit}; re-run narwhal-profile with --limits"
+        f"{limit}; {remedy}"
     )
 
 
@@ -113,12 +141,16 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             rep.fail(problem)
         if problems:
             continue
-        limit, skipped = _recorded_limit(evidence.get(spec.iid, []), p)
-        # A sweep that skipped cohorts for KV measured what the engine's KV holds.
+        recorded = _recorded(evidence.get(spec.iid, []), p)
+        # Decode seats stop at the profiled maximum, whatever stopped the sweep.
         if (
-            limit is not None
-            and not skipped
-            and (warning := _below_limit(spec.iid, p.decode_max_requests, limit, "limits file"))
+            recorded is not None
+            and recorded.limit is not None
+            and (
+                warning := _below_limit(
+                    spec.iid, p, recorded.limit, "limits file", recorded.kv_bound
+                )
+            )
         ):
             rep.warn(warning)
         quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
@@ -179,15 +211,18 @@ async def gate_profile_generation(
         if not problems:
             rep.ok(f"{spec.iid} profile generation {generation.digest}")
         row = store.get(spec.iid)
-        if cfg.engine_contract is None or row is None:
-            continue
-        # A profile measured without --limits records no limit; the attestation still has one.
-        if _recorded_limit(evidence.get(spec.iid, []), row) != (None, False):
+        # The router seats a contract fleet's engines up to the attested limit.
+        if cfg.engine_contract is None or row is None or spec.iid in unsafe:
             continue
         attested = identity.sequence_limit(generation.document)
-        if attested is not None and (
-            warning := _below_limit(spec.iid, row.decode_max_requests, attested, "attested launch")
-        ):
+        if attested is None:
+            continue
+        recorded = _recorded(evidence.get(spec.iid, []), row)
+        # The profile gate already compared the profile with a recorded limit this high.
+        if recorded is not None and recorded.limit is not None and recorded.limit >= attested:
+            continue
+        kv_bound = None if recorded is None else recorded.kv_bound
+        if warning := _below_limit(spec.iid, row, attested, "attested launch", kv_bound):
             rep.warn(warning)
     return unsafe
 
