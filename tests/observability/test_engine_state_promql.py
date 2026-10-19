@@ -7,7 +7,9 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
+from unittest import mock
 
 from tools.observability import artifacts
 
@@ -54,15 +56,32 @@ def _local_promtool() -> str | None:
     return local if found and found[1] == MAJOR else None
 
 
+# Where promtool runs, as the first case found it.
+FOUND: dict[str, str | None] = {}
+
+
+def _source() -> str | None:
+    """Return "docker" when the pinned image is present, else a matching promtool on PATH.
+
+    The first case decides for the whole run, so a hung Docker daemon costs one timeout.
+    """
+    if "promtool" not in FOUND:
+        FOUND["promtool"] = "docker" if _docker_image() else _local_promtool()
+    return FOUND["promtool"]
+
+
 def promtool(folder: Path) -> list[str] | None:
     """Return the promtool command for files in `folder`, or None when none is available."""
     # The pinned image runs promtool when it is already present; the test never pulls it.
     # The container runs as this user so it can read the private test folder.
-    if _docker_image():
+    source = _source()
+    if source == "docker":
         return [
             "docker",
             "run",
             "--rm",
+            "--name",
+            f"narwhal-promtool-{uuid.uuid4().hex[:12]}",
             "--network",
             "none",
             "--user",
@@ -73,8 +92,7 @@ def promtool(folder: Path) -> list[str] | None:
             "promtool",
             IMAGE,
         ]
-    local = _local_promtool()
-    return [local] if local is not None else None
+    return [source] if source is not None else None
 
 
 def state_query() -> str:
@@ -195,10 +213,15 @@ def seconds(*spans: tuple[float, float]) -> set[int]:
 
 
 class EngineStateQueryTests(unittest.TestCase):
+    # Set when Docker fails to run promtool in time, so the remaining cases skip at once.
+    docker_stalled = False
+
     def check(
         self, inputs: list[tuple[str, Samples]], expected: dict[float, int], step: float = 1.0
     ) -> None:
         """Evaluate the State query at each expected time, with `step`-second input samples."""
+        if EngineStateQueryTests.docker_stalled:
+            self.skipTest(f"Docker did not run promtool from {IMAGE} within 120 seconds")
         interval = f"{round(step * 1000)}ms"
         with tempfile.TemporaryDirectory() as folder:
             command = promtool(Path(folder))
@@ -241,6 +264,7 @@ class EngineStateQueryTests(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 if command[0] != "docker":
                     raise
+                EngineStateQueryTests.docker_stalled = True
                 self.skipTest(f"Docker did not run promtool from {IMAGE} within 120 seconds")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -375,6 +399,53 @@ class EngineStateQueryTests(unittest.TestCase):
         expected = dict.fromkeys(range(31, 53, 4), SERVING)
         expected.update(dict.fromkeys(range(53, 120, 6), PROBING))
         self.check(inputs, expected)
+
+
+class PromtoolAvailabilityTests(unittest.TestCase):
+    """A hung Docker daemon costs the State cases one timeout, not one per case."""
+
+    CASES = ("test_a_steady_routed_stream_reads_serving", "test_probing_outranks_backlogged")
+
+    def setUp(self):
+        for patch in (
+            mock.patch.dict(FOUND, clear=True),
+            mock.patch.object(EngineStateQueryTests, "docker_stalled", False),
+            mock.patch.object(shutil, "which", side_effect={"docker": "/usr/bin/docker"}.get),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def run_cases(self, run) -> tuple[unittest.TestResult, list[list[str]]]:
+        """Run two State cases with `run` in place of `subprocess.run`, and return the result
+        and the commands they ran."""
+        result = unittest.TestResult()
+        with mock.patch.object(subprocess, "run", side_effect=run) as patched:
+            for name in self.CASES:
+                EngineStateQueryTests(name).run(result)
+        return result, [call.args[0] for call in patched.call_args_list]
+
+    def test_an_image_check_that_times_out_skips_every_case(self):
+        result, commands = self.run_cases(subprocess.TimeoutExpired("docker", 30))
+        self.assertEqual(
+            [reason for _, reason in result.skipped],
+            [f"the {IMAGE} image and a promtool {MAJOR}.x are unavailable"] * 2,
+        )
+        self.assertEqual(commands, [["docker", "image", "inspect", IMAGE]])
+
+    def test_a_promtool_run_that_times_out_skips_the_remaining_cases(self):
+        def run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+            if command[1] == "run":
+                raise subprocess.TimeoutExpired(command, 120)
+            return subprocess.CompletedProcess(command, 0)
+
+        result, commands = self.run_cases(run)
+        self.assertEqual(
+            [reason for _, reason in result.skipped],
+            [f"Docker did not run promtool from {IMAGE} within 120 seconds"] * 2,
+        )
+        self.assertEqual(
+            [command[:2] for command in commands], [["docker", "image"], ["docker", "run"]]
+        )
 
 
 if __name__ == "__main__":
