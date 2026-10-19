@@ -43,6 +43,8 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
+Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine applies the fraction to nearly the whole GPU. A fraction that fits on native Ubuntu can then overcommit the GPU. For SGLang under WSL2, lower `--gpu-memory-utilization` until every engine starts.
+
 `--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
 `init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB in the small templates). During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
@@ -124,7 +126,21 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
-1. Install Narwhal and the pinned packages in a fresh virtual environment:
+1. Install the libraries that Mooncake's native module links, `libibverbs.so.1`, `libmlx5.so.1` and `libnuma.so.1`:
+
+    ```bash
+    sudo apt-get install -y libibverbs1 ibverbs-providers libnuma1
+    ```
+
+2. On a GPU where SGLang compiles its kernels when an engine starts, SGLang needs a CUDA 13 toolkit with `bin/nvcc` and `lib64/libcudart.so`. The CUDA packages that pip installs do not provide that layout. Install the toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2, and export its root in the shell that runs the lifecycle commands:
+
+    ```bash
+    export CUDA_HOME=/usr/local/cuda  # replace with the CUDA 13 toolkit root
+    "$CUDA_HOME/bin/nvcc" --version
+    ls "$CUDA_HOME/lib64/libcudart.so"
+    ```
+
+3. Install Narwhal and the pinned packages in a fresh virtual environment:
 
     ```bash
     python3.12 -m venv .venv-sglang
@@ -134,13 +150,13 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
       'torch==2.13.0' 'transformers==5.12.1'
     ```
 
-2. Download the checkpoint into the Hugging Face cache:
+4. Download the checkpoint into the Hugging Face cache:
 
     ```bash
     hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17
     ```
 
-3. Export the template and start an instance from it:
+5. Export the template and start an instance from it:
 
     ```bash
     mkdir -p runs
