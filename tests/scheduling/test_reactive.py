@@ -711,17 +711,18 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertTrue(math.isfinite(candidate.tpot_ratio))
                 self.assertGreater(candidate.decode_slo_capacity_tokens or 0.0, 0.0)
 
-    def test_a_move_toward_prefill_prices_the_residents_it_keeps(self) -> None:
-        # Moving to three decode engines keeps four engines' residents. Residents past a
-        # sequence limit the profile measures wait for a seat. Without an attested limit, or
-        # with a profile below it, residents past the profile stay uncovered.
+    def test_a_move_toward_prefill_checks_every_resident_against_the_profile(self) -> None:
+        # Moving to three decode engines keeps four engines' residents. Residents past the
+        # profile leave the move uncovered, whether or not they are past the engine's seats.
         for profiled, residents, limit, covered in (
             (48, 48, None, True),
+            (48, 48, 48, True),
             (48, 49, None, False),
             (64, 65, None, False),
             (48, 49, 64, False),
-            (48, 49, 48, True),
-            (64, 65, 64, True),
+            (48, 49, 48, False),
+            (64, 65, 64, False),
+            (64, 81, 64, False),
         ):
             with self.subTest(profiled=profiled, residents=residents, limit=limit):
                 candidate = self._overload_snapshot(profiled, residents, limit).score(3)
@@ -741,14 +742,17 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertTrue(decision["decode_profile_covered"])
                 self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
 
-    def test_every_split_prices_residents_past_the_seats_as_waiting(self) -> None:
+    def test_the_current_split_and_a_move_toward_decode_price_waiting_residents(self) -> None:
         # 81 residents of 100 tokens on each of four engines that run and measured 64
-        # sequences. Every split runs 64 per engine with their share of the KV tokens, and
-        # stretches the token interval by the residents per seat: 81/64 at four and three
-        # decode engines, 64.8/64 at five.
+        # sequences. The current split and the move toward decode run 64 per engine with their
+        # share of the KV tokens, and stretch the token interval by the residents per seat:
+        # 81/64 at four decode engines, 64.8/64 at five. The move toward prefill keeps the 81
+        # residents past the profile and stays uncovered.
         snapshot = self._overload_snapshot(64, 81, 64, decode_load=0.1)
         current, toward_decode, toward_prefill = (snapshot.score(p) for p in (2, 1, 3))
-        for score, raw in ((current, 81.0), (toward_decode, 64.8), (toward_prefill, 81.0)):
+        self.assertFalse(toward_prefill.decode_profile_covered)
+        self.assertEqual(toward_prefill.tpot_ratio, float("inf"))
+        for score, raw in ((current, 81.0), (toward_decode, 64.8)):
             with self.subTest(prefill=score.prefill):
                 self.assertEqual(score.decode_requests_per_engine, raw)
                 self.assertEqual(score.decode_priced_requests_per_engine, 64.0)
@@ -790,10 +794,11 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(decision["objective_delta"], fleet.controller.movement_margin)
         self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 5)
 
-    def test_a_move_toward_decode_that_overloads_prefill_stays_held(self) -> None:
+    def test_residents_past_the_seats_under_prefill_overload_hold_both_moves(self) -> None:
         # Residents past every decode engine's seats do not make the move toward decode an
         # unbounded improvement: with prefill overloaded, removing a prefill engine doubles the
-        # projected TTFT, and the prefill pool keeps its two engines.
+        # projected TTFT. The move toward prefill keeps residents past the profile, so its
+        # coverage check holds it. The fleet stays at two prefill and four decode engines.
         for prefill, decode in ((6.0, 0.4), (6.0, 1.2), (12.0, 6.0)):
             for residents in (70, 81):
                 with self.subTest(prefill=prefill, decode=decode, residents=residents):
@@ -811,9 +816,13 @@ class MixedPressureTests(unittest.TestCase):
                     self.assertTrue(toward_decode.decode_profile_covered)
                     self.assertAlmostEqual(toward_decode.ttft_ratio, 2 * current.ttft_ratio)
                     self.assertGreater(toward_decode.objective, current.objective)
+                    self.assertFalse(snapshot.score(3).decode_profile_covered)
                     for _ in range(6):
-                        fleet.step()
-                        self.assertGreaterEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
+                        self.assertIsNone(fleet.step())
+                        self.assertEqual(fleet.scheduler.roles._last_decision["result"], "held")
+                        self.assertEqual(len(fleet.monitor.pool(Role.PREFILL)), 2)
+                        self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
+                    self.assertEqual(fleet.scheduler.roles.flips, [])
 
     def test_decode_engines_inside_their_seats_keep_the_coverage_guard(self) -> None:
         # The decode engines hold 50 of their 100 measured requests. A prefill engine measured

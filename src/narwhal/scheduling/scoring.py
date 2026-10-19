@@ -186,7 +186,9 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
-        # Every split prices each engine's batch with the residents past its seats waiting.
+        # Every split prices each engine's batch with the residents past its seats waiting. A move
+        # toward prefill keeps every resident on its engine, so its coverage check counts them all.
+        toward_prefill = include_resident and prefill > self.current_prefill
         limits = dict(self.sequence_limits)
         batches = [
             seated_batch(p, active_requests, active_tokens, limits.get(p.iid)) for p in profiles
@@ -237,11 +239,13 @@ class SplitSnapshot:
                 for length in self.offered_outputs
             )
             and all(
-                p.covers_decode(batch[0], batch[1])
+                p.covers_decode(active_requests, active_tokens)
+                if toward_prefill
+                else p.covers_decode(batch[0], batch[1])
                 for p, batch in zip(profiles, batches, strict=True)
             )
         )
-        if include_resident and prefill > self.current_prefill:
+        if toward_prefill:
             covered = covered and self.resident_profile_covered
         if not covered:
             tpot_ratio = float("inf")
@@ -468,11 +472,7 @@ class SplitScorer:
                 resident_covered = (
                     resident_covered
                     and profile is not None
-                    and profile.covers_decode(
-                        *seated_batch(
-                            profile, len(inst.decode), inst.decode_tokens(), limits.get(inst.iid)
-                        )[:2]
-                    )
+                    and profile.covers_decode(len(inst.decode), inst.decode_tokens())
                 )
         queued_prefill = 0.0
         if prefill_profiles:
