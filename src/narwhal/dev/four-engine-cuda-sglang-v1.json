@@ -198,9 +198,9 @@
         "name": "prefill-steady",
         "input_tokens": 3840,
         "output_tokens": 1,
-        "seed": 1730,
+        "seed": 101730,
         "target": {
-          "prefill_engines": 0.9
+          "prefill_engines": 0.22
         },
         "duration_s": 35.0,
         "max_inflight": 8,
@@ -210,7 +210,7 @@
         "name": "prefill-burst",
         "input_tokens": 3840,
         "output_tokens": 1,
-        "seed": 1730,
+        "seed": 201730,
         "target": {
           "prefill_backlog_s": 3.0
         },

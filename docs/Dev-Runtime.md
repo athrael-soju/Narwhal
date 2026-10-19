@@ -200,21 +200,36 @@ The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and tw
     narwhal dev down --instance runs/dev-sglang4
     ```
 
-The replay has the split sequence, pass conditions, records and exit codes of the [reference role cycle](dev/RTX-5090-Reference.md#replaying-all-three-role-splits). Each phase of this template sets its load in engine-equivalents of the instance's profiles instead of a fixed request rate, so the phases raise the same role-control load on any GPU. Before the first phase, the replay reads the run's `profiles.json` and prices each phase's requests by the mean prefill time at its input length and by the mean decode requests per second that one engine serves within the TPOT budget. From those prices it sets each phase's request rate, request count and in-flight cap, and saves them in `phases.json` and in the phase's entry in `summary.json`.
+The replay has the split sequence, pass conditions, records and exit codes of the [reference role cycle](dev/RTX-5090-Reference.md#replaying-all-three-role-splits). Each phase of this template sets its load in engine-equivalents instead of a fixed request rate. Before the first phase, the replay reads the run's `profiles.json` and takes, for each phase, the profiles that the role controller prices at the split where the phase starts: each engine's profile measured at that split in its role there. It prices the phase's requests by the mean prefill time at their input length and by the mean decode requests per second that one engine serves within the TPOT budget, and from those prices sets the phase's request rate, request count and in-flight cap.
 
-| Phase | Input / output tokens | Target | Duration |
-| --- | :---: | --- | :---: |
-| Decode | 256 / 128 | Decode demand of 1.8 engines | 48 s |
-| Prefill steady | 3,840 / 1 | Prefill demand of 0.9 engines | 35 s |
-| Prefill burst | 3,840 / 1 | 3 seconds of prefill work, offered at 100 requests/s and all in flight at once | |
+| Phase | Starts at | Input / output tokens | Target | Duration |
+| --- | :---: | :---: | --- | :---: |
+| Decode | 2P:2D | 256 / 128 | Decode demand of 1.8 engines | 48 s |
+| Prefill steady | 1P:3D | 3,840 / 1 | Prefill demand of 0.22 engines | 35 s |
+| Prefill burst | 2P:2D | 3,840 / 1 | 3 seconds of prefill work, offered at 100 requests/s and all in flight at once | |
 
-The role controller measures a pool's load as its demand divided by its engine count times `controller.reactive.utilization`, 0.8 in this template. The steady targets put the destination pool's load above `controller.thresholds.expand`, 1.0, before the move and below it after:
+The role controller measures a pool's load as its demand divided by its engine count times `controller.reactive.utilization`, 0.8 in this template, and takes the larger pool load as its objective. It moves one engine when the move lowers the objective by at least `controller.reactive.movement_margin`, 0.05, and leaves the pool that gives up the engine at or below `controller.thresholds.shrink`, 0.5. A move into a pool whose load is at or above `controller.thresholds.expand`, 1.0, needs one confirming step instead of three. The controller holds while demand stays below `controller.reactive.demand_floor`, 0.2 engines.
 
-- Decode: 1.8 / (2 × 0.8) = 1.125 at two decode engines and 1.8 / (3 × 0.8) = 0.75 at three. Each of two decode engines runs at 0.9 of its capacity within the TPOT budget, so streams meet the budget before the move.
-- Prefill steady: 0.9 / (1 × 0.8) = 1.125 at one prefill engine and 0.9 / (2 × 0.8) = 0.56 at two. One prefill engine runs at 0.9 of its capacity, so prompts do not queue before the move.
-- Prefill burst: 3 seconds of prefill work on two prefill engines takes 1.5 seconds, above the 1-second TTFT budget.
+- Decode: 1.8 engines of decode demand load two decode engines to 1.8 / (2 × 0.8) = 1.125 and three to 0.75, so the move to 1P:3D lowers the objective by 0.375.
+- Prefill steady: when every split prices prompts alike and prefill load sets the objective, a steady prefill demand P lowers the objective by P / (2 × 0.8) on the move from 1P:3D to 2P:2D and by P / (6 × 0.8) on a further move to 3P:1D. The controller moves to 2P:2D when P is at least 2 × 0.8 × 0.05 = 0.08 and holds there while P stays below 6 × 0.8 × 0.05 = 0.24. The phase's prefill and decode demand together must also reach the demand floor. The target of 0.22 meets all three bounds.
+- Prefill burst: 3 seconds of prefill work queues 1.5 seconds on each of two prefill engines, above the 1-second TTFT budget.
 
-Both steady targets exceed `controller.reactive.demand_floor`, 0.2, and the replay stops with an error when a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window.
+The replay computes each steady phase's target range from the profiles at its starting split, the split it moves to and the split beyond, and stops with an error when the target falls outside that range. It also stops with an error when:
+
+- the Decode or Prefill steady phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window
+- the burst, capped at the router's in-flight limit of `serving.max_connections` plus `serving.queue_capacity` requests, would queue no more than the TTFT budget on each prefill engine
+- two phases would repeat a prompt: a phase's requests and its warm-up request take their prompts from consecutive seeds starting at the phase's `seed`
+
+The replay saves the sized phases in `phases.json`. Each phase there, and its entry in `summary.json`, holds a `sizing` object:
+
+| Field | Value |
+| --- | --- |
+| `split` | Prefill and decode engine counts where the phase starts |
+| `prefill_s` | Mean prefill seconds of one request at that split |
+| `decode_rps` | Mean decode requests per second that one engine serves within the TPOT budget, for a steady phase |
+| `prefill_engines`, `decode_engines` | Offered demand in engine-equivalents, for a steady phase |
+| `target_band` | Lowest and highest target at which the controller makes the phase's move and holds, for a steady phase |
+| `prefill_backlog_s` | Prefill seconds the burst queues |
 
 ## Inspecting and stopping the instance
 

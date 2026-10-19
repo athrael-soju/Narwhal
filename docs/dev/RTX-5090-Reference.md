@@ -114,7 +114,7 @@ The replay passes when:
 
 The replay writes its records to a `cycle-*` directory beneath the instance. `--out DIR` writes them to `DIR`, a fresh directory.
 
-`summary.json` holds the observed splits, per-phase latency, and the acceptance result. Its `grafana_range` holds timestamps for the dashboard's `from` and `to` URL parameters. The other record files hold the template, effective fleet, source hashes, request rows, and router state.
+`summary.json` holds the acceptance result, the observed and expected splits, the controller's role moves, and for each phase its request outcomes, TTFT and TPOT percentiles, SLO attainment, and pass result. Its `grafana_range` holds timestamps for the dashboard's `from` and `to` URL parameters. `phases.json` holds the phases as offered, with each phase's request count, request rate, and in-flight cap. The other record files hold the template, effective fleet, source hashes, request rows, and router state.
 
 Exit codes:
 

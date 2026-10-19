@@ -95,7 +95,7 @@ To serve another model or runtime, write a [custom template](../Dev-Runtime.md#t
 
 ## Role-split replay
 
-The RTX 5090 reference template's `role_cycle` holds three seeded workloads that drive the four-engine fleet's controller from 2P:2D to 1P:3D, back to 2P:2D, to 3P:1D and back to 2P:2D. The four-engine SGLang template's `role_cycle` drives the same sequence, with each workload's load [set from the instance's profiles](../Dev-Runtime.md#four-sglang-engines-and-the-role-cycle). To [replay them](../dev/RTX-5090-Reference.md#replaying-all-three-role-splits), run this from a checkout against an instance that reports `ready`:
+The RTX 5090 reference template's `role_cycle` holds three seeded workloads that drive the four-engine fleet's controller from 2P:2D to 1P:3D, back to 2P:2D, to 3P:1D and back to 2P:2D. The four-engine SGLang template's `role_cycle` expects the same sequence, with each workload's load [set from the instance's profiles](../Dev-Runtime.md#four-sglang-engines-and-the-role-cycle). To [replay them](../dev/RTX-5090-Reference.md#replaying-all-three-role-splits), run this from a checkout against an instance that reports `ready`:
 
 ```bash
 python -m tools.measurement.dev_cycle --instance runs/dev

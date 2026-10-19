@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import math
 import platform
@@ -19,10 +20,11 @@ from narwhal.config.serialization import document
 from narwhal.dev import lifecycle
 from narwhal.profiling.store import ProfileStore
 from narwhal.provenance import stamp
+from narwhal.types import Role
 from tools.measurement import load_trial as trial
 
-# A phase target sets its load in engine-equivalents of the fleet's profiles, so the
-# same recipe raises the same controller load on any GPU.
+# A phase target sets its load in engine-equivalents of the profiles the controller prices at
+# the split where the phase starts, so the same recipe raises the same controller load on any GPU.
 TARGETS = ("decode_engines", "prefill_engines", "prefill_backlog_s")
 
 
@@ -54,51 +56,92 @@ def check_target(phase):
             raise ValueError(f"phase {phase['name']} target requires a positive {key}")
 
 
-def sized(phase, profiles, template):
-    """Return the phase with its rate, request count and in-flight cap set from its target."""
+def split_profiles(store, roles, split):
+    """Return the profiles the controller prices at a split, one per engine.
+
+    The engines take the measured role assignment nearest their configured `roles`.
+    """
+    prefill, decode = split
+    iids = list(roles)
+    pools = sorted(
+        itertools.combinations(iids, prefill),
+        key=lambda pool: sum((iid in pool) != (roles[iid] is Role.PREFILL) for iid in iids),
+    )
+    for pool in pools:
+        assigned = {iid: Role.PREFILL if iid in pool else Role.DECODE for iid in iids}
+        rows = store.profiles_for_split(iids, prefill, decode, assigned)
+        if rows:
+            return rows
+    raise ValueError(f"the run's profiles price no {prefill}P:{decode}D split")
+
+
+def prices(phase, rows, slo):
+    """Return a phase request's mean prefill seconds and per-engine decode requests/s."""
+    input_tokens, output_tokens = phase["input_tokens"], phase["output_tokens"]
+    prefill_s = sum(p.prefill_time(input_tokens) for p in rows) / len(rows)
+    if not prefill_s > 0:
+        raise ValueError(f"phase {phase['name']}: the profiles predict no prefill time")
+    # Decode capacity per engine at the TPOT budget, priced at the mid-stream context.
+    decode_rps = sum(
+        p.decode_rps(slo["tpot_s"], input_tokens + output_tokens / 2, output_tokens) for p in rows
+    ) / len(rows)
+    return prefill_s, decode_rps
+
+
+def sized(phase, split, rows, template, limit):
+    """Return the phase with its rate, request count and in-flight cap set from its target.
+
+    `rows` are the profiles the controller prices at `split`, where the phase starts, and
+    `limit` is the router's in-flight limit.
+    """
     target = phase.get("target")
     if target is None:
         return phase
-    if not profiles:
-        raise ValueError(f"phase {phase['name']} target requires the run's profiles")
     slo = template["slo"]
     reactive = template["controller"]["reactive"]
-    input_tokens, output_tokens = phase["input_tokens"], phase["output_tokens"]
-    prefill_s = sum(p.prefill_time(input_tokens) for p in profiles) / len(profiles)
-    # Decode capacity per engine at the TPOT budget, priced at the mid-stream context.
-    decode_rps = sum(
-        p.decode_rps(slo["tpot_s"], input_tokens + output_tokens / 2, output_tokens)
-        for p in profiles
-    ) / len(profiles)
+    prefill_s, decode_rps = prices(phase, rows, slo)
     kind, value = next(iter(target.items()))
     if kind == "prefill_backlog_s":
         # The whole backlog arrives at once, so every request is in flight together.
-        requests = math.ceil(value / prefill_s)
-        rate, inflight = phase["rate_rps"], requests
-    else:
-        if kind == "decode_engines":
-            if decode_rps <= 0:
-                raise ValueError(f"phase {phase['name']}: the profiles price no decode capacity")
-            rate = value * decode_rps
-        else:
-            rate = value / prefill_s
-        requests = math.ceil(rate * phase["duration_s"])
-        # The cap stays above the rate times the slowest latency the SLO allows.
-        inflight = max(
-            phase["max_inflight"],
-            math.ceil(rate * (slo["ttft_s"] + output_tokens * slo["tpot_s"])),
-        )
-        if rate * reactive["window_s"] < reactive["min_arrivals"]:
+        requests = min(math.ceil(value / prefill_s), limit)
+        backlog_s = requests * prefill_s
+        if backlog_s / split[0] <= slo["ttft_s"]:
             raise ValueError(
-                f"phase {phase['name']} offers {rate:.3g} requests/s, fewer than "
-                f"{reactive['min_arrivals']} per {reactive['window_s']:g} s demand window"
+                f"phase {phase['name']} queues {backlog_s / split[0]:.3g} s of prefill work on "
+                f"each of {split[0]} prefill engines, within the {slo['ttft_s']:g} s TTFT budget"
             )
+        return {
+            **phase,
+            "requests": requests,
+            "max_inflight": requests,
+            "sizing": {
+                "split": list(split),
+                "prefill_s": prefill_s,
+                "prefill_backlog_s": backlog_s,
+            },
+        }
+    if kind == "decode_engines":
+        if not decode_rps > 0:
+            raise ValueError(f"phase {phase['name']}: the profiles price no decode capacity")
+        rate = value * decode_rps
+    else:
+        rate = value / prefill_s
+    if rate * reactive["window_s"] < reactive["min_arrivals"]:
+        raise ValueError(
+            f"phase {phase['name']} offers {rate:.3g} requests/s, fewer than "
+            f"{reactive['min_arrivals']} per {reactive['window_s']:g} s demand window"
+        )
     return {
         **phase,
         "rate_rps": rate,
-        "requests": requests,
-        "max_inflight": inflight,
+        "requests": math.ceil(rate * phase["duration_s"]),
+        # The cap stays above the rate times the slowest latency the SLO allows.
+        "max_inflight": max(
+            phase["max_inflight"],
+            math.ceil(rate * (slo["ttft_s"] + phase["output_tokens"] * slo["tpot_s"])),
+        ),
         "sizing": {
+            "split": list(split),
             "prefill_s": prefill_s,
             "decode_rps": decode_rps,
             "prefill_engines": rate * prefill_s,
@@ -107,12 +150,94 @@ def sized(phase, profiles, template):
     }
 
 
-def sized_recipe(template, profiles_path):
+def target_band(phase, start, end, rows_at, template):
+    """Return the target range that moves the controller from `start` to `end` and holds it.
+
+    A pool's load is its demand over its engine count times `utilization`, and the objective is
+    the larger pool load. The controller moves one engine when the move lowers the objective by
+    at least `movement_margin` and leaves the pool that gives up the engine at or below
+    `shrink`, and it holds while demand stays below `demand_floor`. Demand scales with the
+    request rate, so each rule bounds the target. `rows_at` returns a split's profiles.
+    """
+    controller = template["controller"]
+    reactive, shrink = controller["reactive"], controller["thresholds"]["shrink"]
+    utilization, margin = reactive["utilization"], reactive["movement_margin"]
+    step = end[0] - start[0]
+    if abs(step) != 1 or sum(start) != sum(end):
+        raise ValueError(f"phase {phase['name']} target requires a one-engine move")
+
+    def loads(split):
+        # Prefill and decode pool loads per request/s.
+        prefill_s, decode_rps = prices(phase, rows_at(split), template["slo"])
+        if not decode_rps > 0:
+            raise ValueError(
+                f"phase {phase['name']}: the profiles price no decode capacity at "
+                f"{split[0]}P:{split[1]}D"
+            )
+        return prefill_s / (split[0] * utilization), 1 / (decode_rps * split[1] * utilization)
+
+    gain = max(loads(start)) - max(loads(end))
+    if not gain > 0:
+        raise ValueError(
+            f"phase {phase['name']} load does not favour {end[0]}P:{end[1]}D over "
+            f"{start[0]}P:{start[1]}D"
+        )
+    prefill_s, decode_rps = prices(phase, rows_at(start), template["slo"])
+    low = max(margin / gain, reactive["demand_floor"] / (prefill_s + 1 / decode_rps))
+    # The prefill pool gives up an engine on a move to decode, the decode pool on a move to
+    # prefill.
+    high = shrink / loads(end)[0 if step < 0 else 1]
+    beyond = (end[0] + step, end[1] - step)
+    floors = (max(1, controller["min_prefill"]), max(1, controller["min_decode"]))
+    if beyond[0] >= floors[0] and beyond[1] >= floors[1]:
+        further = max(loads(end)) - max(loads(beyond))
+        if further > 0:
+            high = min(high, margin / further)
+    unit = prefill_s if "prefill_engines" in phase["target"] else 1 / decode_rps
+    return low * unit, high * unit
+
+
+def sized_recipe(template, effective):
+    """Size each target phase from the profiles the controller prices at its starting split."""
     recipe = template["role_cycle"]
     if not any("target" in phase for phase in recipe["phases"]):
         return recipe
-    profiles = ProfileStore(Path(profiles_path)).all_profiles()
-    return {**recipe, "phases": [sized(phase, profiles, template) for phase in recipe["phases"]]}
+    splits = [tuple(split) for split in recipe["expected_splits"]]
+    if len(splits) <= len(recipe["phases"]):
+        raise ValueError("role cycle requires an expected split after each phase")
+    store = ProfileStore(Path(effective["profiles"]["path"]))
+    roles = {engine["iid"]: Role(engine["role"]) for engine in effective["engines"]}
+    priced = {}
+
+    def rows_at(split):
+        if split not in priced:
+            priced[split] = split_profiles(store, roles, split)
+        return priced[split]
+
+    limit = effective["serving"]["max_connections"] + effective["serving"]["queue_capacity"]
+    phases = []
+    for index, phase in enumerate(recipe["phases"]):
+        if "target" in phase:
+            start, end = splits[index], splits[index + 1]
+            phase = sized(phase, start, rows_at(start), template, limit)
+            if "prefill_backlog_s" not in phase["target"]:
+                low, high = target_band(phase, start, end, rows_at, template)
+                value = next(iter(phase["target"].values()))
+                if not low <= value < high:
+                    raise ValueError(
+                        f"phase {phase['name']} target {value:g} lies outside {low:.3g} to "
+                        f"{high:.3g}, where its load moves the controller from "
+                        f"{start[0]}P:{start[1]}D to {end[0]}P:{end[1]}D and holds it there"
+                    )
+                phase["sizing"]["target_band"] = [low, high]
+        phases.append(phase)
+    # Request i's prompt draws from seed + i and the warm-up's from seed + requests, so
+    # overlapping ranges repeat cached prompts.
+    ranges = sorted((p["seed"], p["seed"] + p["requests"] + 1, p["name"]) for p in phases)
+    for (_, last, first), (seed, _, second) in itertools.pairwise(ranges):
+        if seed < last:
+            raise ValueError(f"phases {first} and {second} repeat prompts from overlapping seeds")
+    return {**recipe, "phases": phases}
 
 
 def check_config(path, template):
@@ -269,7 +394,7 @@ def main(argv=None):
             raise ValueError("run dev up and dev verify before replay")
         run = Path(status["run"])
         effective = check_config(run / "fleet.json", template)
-        recipe = sized_recipe(template, effective["profiles"]["path"])
+        recipe = sized_recipe(template, effective)
         out.mkdir(mode=0o700, parents=True, exist_ok=False)
         for name, value in (
             ("template", template),
