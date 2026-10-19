@@ -22,6 +22,7 @@ from narwhal.engines.attestation import (
     build_app,
 )
 from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
+from narwhal.observability.tools import ToolActivity
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.probe import fleet as fleet_probe
@@ -191,6 +192,7 @@ class SglangPreflightTests(PairedEngines):
         self.cfg.profiles_path = self.cfg.profiles_path.with_name("paired.json")
         launches = AsyncMock(return_value={"e0": LAUNCH, "e3": LAUNCH})
         generation = GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
+        activity = ToolActivity("profiling")
 
         async def measured(client, iid, url, model, dialect, sweep, *args, roles, **kwargs):
             for role in (Role.PREFILL, Role.DECODE):
@@ -206,8 +208,15 @@ class SglangPreflightTests(PairedEngines):
             patch.object(fleet_probe, "profile_instance", side_effect=measured),
             redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(await fleet_probe.run(self.cfg, None), 0)
+            self.assertEqual(await fleet_probe.run(self.cfg, None, activity=activity), 0)
         launches.assert_awaited_once_with(self.cfg.engines, timeout_s=self.cfg.health_timeout_s)
+        text = activity.render()
+        for iid in ("e0", "e3"):
+            self.assertIn(
+                f'narwhal_tool_engine_in_use{{operation="profiling",iid="{iid}"}} 1', text
+            )
+        self.assertIn('narwhal_tool_steps_completed{operation="profiling"} 2', text)
+        self.assertIn('narwhal_tool_steps_total{operation="profiling"} 2', text)
         saved = json.loads(self.cfg.profiles_path.with_suffix(".samples.json").read_text())
         peers = {iid: row["peer"] for iid, row in saved["engines"].items()}
         self.assertEqual(peers, {"e0": "e3", "e3": "e0"})

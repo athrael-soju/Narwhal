@@ -316,7 +316,12 @@ def create_app(
     async def metrics() -> Response:
         return Response(
             content=render(
-                router.state(), router.ttft, router.tpot, router.seat, router.queue_wait
+                router.state(),
+                router.ttft,
+                router.tpot,
+                router.seat,
+                router.queue_wait,
+                router.monitor.requests_sent,
             ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )

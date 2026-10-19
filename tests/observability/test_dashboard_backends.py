@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "a8738edb80fddf180c2ccd31165ef251a0db8bc75beec02e6d996a6f2c1e13a1"
+RENDERED_SHA256 = "c07ef6de079097460fbf31daa36ea185bdaeda5b5fc429684ac19cc887529ec9"
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:

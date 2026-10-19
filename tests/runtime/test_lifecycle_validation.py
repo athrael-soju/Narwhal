@@ -261,6 +261,26 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.records["e0"].state, "active")
         self.assertNotIn("e0", self.router.scheduler.draining)
 
+    async def test_readmission_counts_its_generation_check_and_fabric_pairs(self):
+        """The engines table reads every readmission request as router work, not as Probing."""
+        calls = []
+        count = self.router.monitor.sent
+
+        def sent(*iids):
+            calls.append(iids)
+            count(*iids)
+
+        with patch.object(self.router.monitor, "sent", side_effect=sent):
+            outcome = await self.validate()
+        self.assertTrue(outcome.passed, outcome.failures)
+        generation = [iid for iid, route in self.requests if route == "/v1/completions"]
+        self.assertEqual(generation, ["e0"])
+        # The generation check counts on its engine; each fabric pair counts on both ends.
+        self.assertEqual(calls.count(("e0",)), 1)
+        pairs = [call for call in calls if len(call) == 2]
+        self.assertEqual(len(pairs), self.router.engines.prefill.await_count)
+        self.assertEqual(len(calls), 1 + len(pairs))
+
     async def test_stale_missing_and_unbound_loaded_profiles_reject_readmission(self):
         original = self.router.profiles.get("e0")
         for value, detail in (

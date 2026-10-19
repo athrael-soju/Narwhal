@@ -110,6 +110,23 @@ class HttpHarness(unittest.IsolatedAsyncioTestCase):
 class HttpAccountingTests(HttpHarness):
     """Admission, retries, body limits and original-request accounting."""
 
+    async def test_metrics_count_the_requests_sent_to_each_engine(self):
+        client = self.client()
+        text = (await client.get("/metrics")).text
+        self.assertIn("# TYPE narwhal_engine_requests_total counter", text)
+        for spec in self.cfg.engines:
+            self.assertIn(f'narwhal_engine_requests_total{{iid="{spec.iid}"}} 0', text)
+        self.assertEqual((await self.post(client)).status_code, 200)
+        text = (await client.get("/metrics")).text
+        counts = {
+            line.split('"')[1]: int(line.split()[-1])
+            for line in text.splitlines()
+            if line.startswith("narwhal_engine_requests_total{")
+        }
+        # One prefill leg and one decode leg.
+        self.assertEqual(sum(counts.values()), 2)
+        self.assertEqual(counts, self.router.monitor.requests_sent)
+
     async def test_token_id_prompt_carries_cache_evidence_to_demand_and_journal(self):
         client = self.client()
         scheduler = self.router.scheduler

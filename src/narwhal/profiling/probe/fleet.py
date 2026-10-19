@@ -9,7 +9,7 @@ import multiprocessing
 import sys
 import tempfile
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, MutableSequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -21,6 +21,7 @@ from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import EngineDialect
+from ...observability.tools import ToolActivity
 from ...provenance import stamp
 from ...runtime.role_switch import RoleSwitcher
 from ...types import Role
@@ -129,6 +130,7 @@ def _lane_worker(
     limits_path: Path | None,
     observation_timeout_s: float | None,
     phases: Any,
+    done: MutableSequence[str],
 ) -> int:
     return asyncio.run(
         run(
@@ -140,6 +142,7 @@ def _lane_worker(
             observation_timeout_s=observation_timeout_s,
             split_lanes=False,
             phases=phases,
+            done=done,
         )
     )
 
@@ -163,6 +166,7 @@ async def _run_lanes_apart(
     overwrite: bool,
     limits_path: Path | None,
     observation_timeout_s: float | None,
+    activity: ToolActivity,
 ) -> int:
     # One event loop cannot stream every lane's decode cohort and dispatch its paired legs on
     # time, so each lane measures in its own process.
@@ -183,35 +187,43 @@ async def _run_lanes_apart(
             phases = (
                 manager.Barrier(len(lanes)) if len({len(lane) for lane in lanes}) == 1 else None
             )
-            futures = [
-                loop.run_in_executor(
-                    pool,
-                    _lane_worker,
-                    lane_cfg,
-                    {spec.iid for spec in lane},
-                    sweep,
-                    limits_path,
-                    observation_timeout_s,
-                    phases,
-                )
-                for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
-            ]
-            outcomes: list[BaseException | int] = []
-            stand_ins: list[asyncio.Future[None]] = []
-            for finished in asyncio.as_completed(futures):
-                try:
-                    outcomes.append(await finished)
-                except Exception as error:
-                    outcomes.append(error)
-                if phases is None:
-                    continue
-                if outcomes[-1] != 0 or len(outcomes) == len(futures):
-                    # The first failure stops the lanes waiting for it at a phase switch, and
-                    # the last lane to finish stops the stand-ins.
-                    phases.abort()
-                else:
-                    stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
-            await asyncio.gather(*stand_ins)
+            done = manager.list()
+            total = sum(len(lane) for lane in lanes)
+            activity.plan(total, lambda: len(done))
+            try:
+                futures = [
+                    loop.run_in_executor(
+                        pool,
+                        _lane_worker,
+                        lane_cfg,
+                        {spec.iid for spec in lane},
+                        sweep,
+                        limits_path,
+                        observation_timeout_s,
+                        phases,
+                        done,
+                    )
+                    for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
+                ]
+                outcomes: list[BaseException | int] = []
+                stand_ins: list[asyncio.Future[None]] = []
+                for finished in asyncio.as_completed(futures):
+                    try:
+                        outcomes.append(await finished)
+                    except Exception as error:
+                        outcomes.append(error)
+                    if phases is None:
+                        continue
+                    if outcomes[-1] != 0 or len(outcomes) == len(futures):
+                        # The first failure stops the lanes waiting for it at a phase switch, and
+                        # the last lane to finish stops the stand-ins.
+                        phases.abort()
+                    else:
+                        stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
+                await asyncio.gather(*stand_ins)
+            finally:
+                # The manager stops with this block, so the count stays with the activity.
+                activity.freeze()
         profiles: list[Profile] = []
         for lane_cfg in lane_cfgs:
             lane_evidence = lane_cfg.profiles_path.with_suffix(".samples.json")
@@ -250,7 +262,10 @@ async def run(
     observation_timeout_s: float | None = None,
     split_lanes: bool = True,
     phases: Any = None,
+    activity: ToolActivity | None = None,
+    done: MutableSequence[str] | None = None,
 ) -> int:
+    activity = activity or ToolActivity("profiling")
     if observation_timeout_s is not None and (
         not math.isfinite(observation_timeout_s) or observation_timeout_s <= 0
     ):
@@ -310,6 +325,17 @@ async def run(
     }
     # A paired engine borrows a peer from its lane for its other leg.
     lanes = _profile_lanes(targets, colocated=colocated_workload is not None, paired=paired)
+    used = {spec.iid for spec in targets}
+    if colocated_workload is not None:
+        groups = {spec.shared_device.group for spec in targets if spec.shared_device is not None}
+        used.update(
+            peer.iid
+            for peer in cfg.engines
+            if peer.shared_device is not None and peer.shared_device.group in groups
+        )
+    elif paired:
+        used.update(_lane_peer(spec, lane, cfg.engines).iid for lane in lanes for spec in lane)
+    activity.use(used)
     if paired and split_lanes and len(lanes) > 1:
         return await _run_lanes_apart(
             cfg,
@@ -322,7 +348,11 @@ async def run(
             overwrite=overwrite,
             limits_path=limits_path,
             observation_timeout_s=observation_timeout_s,
+            activity=activity,
         )
+    if done is None:
+        done = []
+        activity.plan(len(targets), lambda: len(done))
     connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     pairing, launches = await paired_transport(
@@ -487,6 +517,7 @@ async def run(
                 raise
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence
+            done.append(spec.iid)
             # Completed engines' observations survive a later engine's failure.
             evidence_path.parent.mkdir(parents=True, exist_ok=True)
             first = len(evidence_rows) == 1

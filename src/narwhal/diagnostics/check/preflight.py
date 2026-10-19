@@ -12,6 +12,7 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...engines.attestation import attested_launches
 from ...engines.client import EngineClient, client_options
+from ...observability.tools import ToolActivity
 from ...runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ...types import Role
 from .engines import (
@@ -51,7 +52,9 @@ async def run(
     report: Report | None = None,
     evidence_out: Path | None = None,
     fleet_path: Path | None = None,
+    activity: ToolActivity | None = None,
 ) -> int:
+    activity = activity or ToolActivity("preflight")
     if evidence_out is not None:
         if not mesh or skip_kv or cfg.engine_contract is None or fleet_path is None:
             raise ValueError(
@@ -72,41 +75,60 @@ async def run(
     # The gates switch engines to place each pair; a running router keeps the roles it set.
     switcher = load_backend(cfg.backend).role_switcher(cfg.connector)
     roles: dict[str, tuple[Role, Mapping[str, Any] | None]] = {}
+    # Reach, calibration, contract, profile, generation, model, pace, tokenize, produce,
+    # consume and SLO, then the evidence check when evidence is written.
+    activity.plan(11 + (evidence_out is not None))
+    activity.use(spec.iid for spec in cfg.engines)
     try:
         live = await gate_reach(cfg, client, rep)
+        activity.use(live)
+        activity.advance()
         if switcher.engine_held:
             roles = await _live_roles(cfg, live, switcher)
         if restart_risk := await colocated_restart_risk(cfg):
             rep.warn(restart_risk)
         await gate_calibration(cfg, rep)
+        activity.advance()
         incompatible = await gate_contract(cfg, live, rep)
+        activity.advance()
         store = gate_profile(cfg, rep)
+        activity.advance()
         stale = await gate_profile_generation(cfg, store, live, rep)
+        activity.advance()
         incompatible.update(stale)
         incompatible.update(await gate_model(cfg, live, rep))
+        activity.advance()
         pace_store = store if not stale else None
         slow = await gate_pace(cfg, live, rep, pace_store)
+        activity.advance()
         await gate_tokenize(cfg, live, client, rep)
+        activity.advance()
         if skip_kv:
             rep.skip("produce and consume: skipped by --no-kv")
+            activity.advance(2)
         elif slow or incompatible:
             # A stalled transfer can terminate a healthy peer's engine core.
             blocked = slow | incompatible
             names = ", ".join(sorted(blocked))
             rep.skip(f"produce and consume: pre-transfer gate failed on {names}")
+            activity.advance(2)
         else:
             handoffs = await gate_produce(cfg, live, client, rep)
+            activity.advance()
             if evidence_out is None:
                 await gate_consume(cfg, live, handoffs, client, rep, mesh, repeats)
             else:
                 await gate_consume(
                     cfg, live, handoffs, client, rep, mesh, repeats, evidence=rep.pairs
                 )
+            activity.advance()
         gate_slo(cfg, store, rep)
+        activity.advance()
         if evidence_out is not None:
             await check_directed_evidence(
                 cfg, store, rep, repeats, fleet_path, fleet_hash, profile_hash
             )
+            activity.advance()
     finally:
         try:
             if switcher.engine_held and roles:
