@@ -605,7 +605,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_preflight_result_data_includes_first_token_calibration(self):
-        client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
+        client = SimpleNamespace(
+            healthy=AsyncMock(return_value=True), aclose=AsyncMock(), dialect=VllmDialect()
+        )
         with ExitStack() as stack:
             stack.enter_context(patch.object(preflight, "EngineClient", return_value=client))
             stack.enter_context(

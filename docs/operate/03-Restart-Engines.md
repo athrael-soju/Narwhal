@@ -83,13 +83,13 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
 Readmission runs these checks in order, each named by its `checks` entry:
 
 1. The engine and each required peer pass four checks:
-    - `health`: `/health` returns HTTP 200.
+    - `health`: the engine's health route, `/health` on vLLM and `/ready` on SGLang, returns HTTP 200.
     - `attestation <fingerprint>`: attestation matches the live process and the `engine_contract`.
     - `profile generation`: every loaded profile variant is bound to the engine's live process generation.
     - `model`: `/v1/models` lists the configured model.
 2. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 3 tests generation.
 3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router pairs the replacement engine with the first live engine in the other role. With the `mooncake` connector, the router switches the replacement engine to its router role before the handoff.
-4. The replacement engine passes `final health`: its `/health` returns HTTP 200.
+4. The replacement engine passes `final health`: its health route returns HTTP 200.
 5. The identities, attestation, and profile bindings of all participants match step 1.
 
 When every check passes, readmission returns HTTP 200 with `accepts_new: true`, and the engine `state` becomes `active`. A failed check returns HTTP 409, and fenced router control during validation returns HTTP 503. Both leave the engine `blocked`.
@@ -128,7 +128,7 @@ Verify placement:
 
 ### Recover an unplanned ejection
 
-When an ejected engine's `/health` returns HTTP 200 and its attestation sidecar responds, the router's automatic recovery validates it. When every check passes and the profiles match the running process, the engine returns to placement.
+When an ejected engine's health route returns HTTP 200 and its attestation sidecar responds, the router's automatic recovery validates it. When every check passes and the profiles match the running process, the engine returns to placement.
 
 If the engine stays ejected with lifecycle state `active` while its attestation sidecar refuses connections:
 
@@ -483,7 +483,7 @@ Complete the activation:
 
 ## Detect process replacement
 
-When `recovery.liveness_every` is above `0`, a liveness sweep probes each engine's `/health` every `recovery.liveness_every * controller.monitor_interval_s` seconds. `recovery.liveness_every` defaults to `10` and must be above `0` under `whole_wave`.
+When `recovery.liveness_every` is above `0`, a liveness sweep probes each engine's health route every `recovery.liveness_every * controller.monitor_interval_s` seconds. `recovery.liveness_every` defaults to `10` and must be above `0` under `whole_wave`.
 
 An engine that answers the sweep leaves placement for recovery when one of these checks fails:
 

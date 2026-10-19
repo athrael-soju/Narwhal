@@ -51,7 +51,7 @@ Options for first-token calibration:
 
 | Gate | Checks |
 | --- | --- |
-| `reach` | Each engine answers `/health` with HTTP 200. Later gates skip an engine that fails here. |
+| `reach` | Each engine answers its health route, `/health` on vLLM and `/ready` on SGLang, with HTTP 200. Later gates skip an engine that fails here. |
 | `calibration` | The [first-token calibration](#the-calibration-gate) at `engine.first_token_calibration_path` matches the running engines. |
 | `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. |
 | `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. |

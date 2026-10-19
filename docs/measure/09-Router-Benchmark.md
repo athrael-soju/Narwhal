@@ -40,6 +40,7 @@ With `--backend sglang`, each engine answers `GET /health`, `GET /metrics`, `POS
 
 | Route | Response |
 | --- | --- |
+| `GET /ready` | HTTP 200 with an empty body |
 | `GET /server_info` | `version` `simulated`, and the engine's role in `internal_states[0].disaggregation_mode` |
 | `POST /pd_role_switch` | Sets the engine's role to the body's `new_role`, `prefill` or `decode` |
 | `GET /flush_cache`, `POST /flush_cache` | HTTP 200 with the body `Cache flushed.` |

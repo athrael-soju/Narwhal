@@ -8,6 +8,7 @@ from contextlib import redirect_stderr
 
 import h11
 
+from narwhal.backends import load
 from narwhal.backends.vllm import NixlConnector
 from narwhal.backends.vllm.identity import parse_process_start
 from narwhal.engines.stream import event_choices, event_object, token_ids
@@ -261,6 +262,10 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(reply.status, status)
                     if status == 400:
                         self.assertEqual(json.loads(reply.body), refusal)
+
+    async def test_an_sglang_engine_answers_the_router_health_route(self):
+        reply = await call(engine(backend="sglang"), "GET", load("sglang").dialect.health_path)
+        self.assertEqual((reply.status, reply.body), (200, b""))
 
     async def test_unknown_routes_return_not_found(self):
         target = engine()

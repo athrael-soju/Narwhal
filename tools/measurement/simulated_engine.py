@@ -207,6 +207,8 @@ class VllmWire:
 
 class SglangWire:
     def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+        if (method, path) == ("GET", "/ready"):
+            return Reply(200)
         if (method, path) == ("GET", "/server_info"):
             state = {"disaggregation_mode": engine.role, "decode_cuda_graph_memory_gb": 0.0}
             return Reply(

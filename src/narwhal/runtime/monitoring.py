@@ -229,7 +229,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
                 continue
             router.scheduler.record_answer(iid, "health")
             back.append(iid)
-            log.info("readmitted %s: /health answered", iid)
+            log.info("readmitted %s: %s answered", iid, router.engines.dialect.health_path)
             continue
         async with router.lifecycle.lock:
             if not router.lifecycle.start_recovery_validation(engines, wave=recovery_wave):
@@ -308,8 +308,9 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
         misses[iid] = misses.get(iid, 0) + 1
         if misses[iid] < router.cfg.liveness_misses:
             log.info(
-                "liveness %s: /health silent (%d of %d)",
+                "liveness %s: %s silent (%d of %d)",
                 iid,
+                router.engines.dialect.health_path,
                 misses[iid],
                 router.cfg.liveness_misses,
             )
@@ -318,8 +319,9 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
             misses.pop(iid, None)
             gone.append(iid)
             log.warning(
-                "ejected %s: /health silent on %d consecutive sweeps, no traffic needed",
+                "ejected %s: %s silent on %d consecutive sweeps, no traffic needed",
                 iid,
+                router.engines.dialect.health_path,
                 router.cfg.liveness_misses,
             )
     gone.extend(
@@ -385,11 +387,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         release_peers(router)
     with router.monitoring.stage("transfer_refresh"):
         refresh_consumers(router)
-    if router.cfg.liveness_every and router.scheduler.sweep_due(
-        interval * router.cfg.liveness_every
-    ):
-        with router.monitoring.stage("liveness"):
-            await sweep_liveness(router)
     with router.monitoring.stage("telemetry"):
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
@@ -423,6 +420,18 @@ async def residency_loop(router: NarwhalRouter) -> None:
             continue
         with router.monitoring.stage("residency"):
             await router.residency.refresh(router.residency_client)
+
+
+async def liveness_loop(router: NarwhalRouter) -> None:
+    """Sweep engine liveness apart from the monitor pass, so a slow answer never delays it."""
+    interval = router.cfg.monitor_interval_s
+    while True:
+        await asyncio.sleep(interval)
+        if router.standby or router.lifecycle_blocked or not router.cfg.liveness_every:
+            continue
+        if router.scheduler.sweep_due(interval * router.cfg.liveness_every):
+            with router.monitoring.stage("liveness"):
+                await sweep_liveness(router)
 
 
 async def monitor_loop(router: NarwhalRouter) -> None:

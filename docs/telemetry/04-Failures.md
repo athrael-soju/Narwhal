@@ -33,7 +33,7 @@ Each `stage` value names the work that failed:
 | `rollover` | Publishing the current monitoring interval's measurements and opening the next interval |
 | `readmission` | Repeat inference probes, readmission of due ejected engines, and on vLLM [peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) |
 | `transfer_refresh` | On SGLang with engine-side role switching, [transfer state refresh](../concepts/03-Failure-and-State.md#transfer-state-refresh) |
-| `liveness` | The `/health` sweep, every `recovery.liveness_every` monitor intervals |
+| `liveness` | The sweep of each engine's health route, `/health` on vLLM and `/ready` on SGLang, every `recovery.liveness_every` monitor intervals in its own loop |
 | `residency` | Refresh of each engine's residency view from its attestation sidecar, every monitor interval in its own loop |
 | `handoff` | Writing the state handoff |
 | `telemetry` | Prefill floor-state refresh and the loop log line |
@@ -77,7 +77,7 @@ A hold keeps a covered engine out of new placement. `/narwhal/state` lists every
 
 | Kind | Starts when | Ends when |
 | --- | --- | --- |
-| `timed` | A request leg fails and `recovery.failure_quarantine_s` is above `0`. A local pool wait and an engine 4xx response other than 408 or 429 start no hold. | The deadline passes, or earlier when a `/health` answer or a passing inference probe meets the profile-match rule. |
+| `timed` | A request leg fails and `recovery.failure_quarantine_s` is above `0`. A local pool wait and an engine 4xx response other than 408 or 429 start no hold. | The deadline passes, or earlier when a health-route answer or a passing inference probe meets the profile-match rule. |
 | `inference` | A `stream`, `inference_status`, or `kv_handoff` streak reaches `recovery.eject_after`. | An inference probe passes every recorded path and the profile-match rule holds. The hold has no deadline. |
 
 An inference hold replaces a running timed quarantine on the same engine. A hold of either kind also ends when the engine is ejected or drained, when lifecycle readmission validates it, or when another engine's ejection or drain leaves it uncovered. An uncovered engine whose streak calls for an inference probe stays in placement while the probe runs.
@@ -109,9 +109,9 @@ When a peer leg fails, the verifier records `producer_failed` or `consumer_faile
 
 | `outcome` | `kind` | Meaning |
 | --- | --- | --- |
-| `passed` | both | `/health` answered, or both legs of one inference path passed. A health pass, or the pass of the last recorded path, clears the probed failure evidence when the profile-match rule holds. A profile mismatch ejects the engine with cause `profile_generation`. |
-| `failed` | both | `/health` returned an error or timed out, or a leg on the probed engine failed. A covered engine is ejected with cause `health_probe` or `inference_probe`. An uncovered engine stays in placement, and a failed inference probe also ends its hold with cause `uncovered`. |
-| `inconclusive` | both | A probe leg waited out the router's control pool, a `/health` timeout fired more than 1.5 times `engine.health_timeout_s` after its connection started, or on SGLang the probe had no peer to run with. The hold and streaks stay unchanged. |
+| `passed` | both | The health route answered, or both legs of one inference path passed. A health pass, or the pass of the last recorded path, clears the probed failure evidence when the profile-match rule holds. A profile mismatch ejects the engine with cause `profile_generation`. |
+| `failed` | both | The health route returned an error or timed out, or a leg on the probed engine failed. A covered engine is ejected with cause `health_probe` or `inference_probe`. An uncovered engine stays in placement, and a failed inference probe also ends its hold with cause `uncovered`. |
+| `inconclusive` | both | A probe leg waited out the router's control pool, a health-route timeout fired more than 1.5 times `engine.health_timeout_s` after its connection started, or on SGLang the probe had no peer to run with. The hold and streaks stay unchanged. |
 | `producer_failed` | `verify_inference` | The producer's prefill leg failed. The next producer runs the probe. |
 | `consumer_failed` | `verify_inference` | On SGLang, a decode engine's leg failed after the held prefill engine's leg passed. The next decode engine runs the probe. |
 | `unavailable` | `verify_inference` | The fleet configuration names no model to probe with. The hold stays. |
@@ -132,7 +132,7 @@ Ejection `cause` values:
 | `cause` | Evidence |
 | --- | --- |
 | `connection` | The `connection` streak reached `recovery.eject_after`. |
-| `liveness` | `/health` failed on `recovery.liveness_misses` consecutive liveness sweeps. |
+| `liveness` | The health route failed on `recovery.liveness_misses` consecutive liveness sweeps. |
 | `health_probe` | A health verification probe failed on a covered engine. |
 | `inference_probe` | An inference verification probe failed on a covered engine. |
 | `drift` | Decode drift stayed outside the engine's band on a covered engine. |
@@ -146,7 +146,7 @@ Hold-end `cause` values:
 | --- | --- |
 | `expired` | The timed quarantine deadline passed. |
 | `superseded` | An inference hold replaced the timed quarantine. |
-| `health` | A `/health` answer met the profile-match rule. Inference holds ignore it. |
+| `health` | A health-route answer met the profile-match rule. Inference holds ignore it. |
 | `verification` | An inference probe passed every recorded path and met the profile-match rule. |
 | `lifecycle` | Lifecycle readmission validated the engine. |
 | `ejected` | The engine was ejected. |

@@ -26,6 +26,7 @@ from narwhal.deployment.attestation_contract.evidence import (
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.engines.attestation import fetch_engine_identity
+from narwhal.engines.client import EngineClient
 from narwhal.engines.kv_events import StoredBlocks
 from narwhal.engines.stream import SseEvent, sse_token_bearing, sse_token_count
 from narwhal.observability.journal import RunJournal
@@ -138,6 +139,31 @@ class ContextLimitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             load("sglang").dialect.context_limit({**payload, "context_length": 0}, "m")
         )
+
+
+class HealthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_checks_read_readiness_without_generating_a_token(self):
+        paths = []
+
+        async def answer(request):
+            paths.append(request.url.path)
+            if request.url.path == "/health":
+                # SGLang's /health generates a token and answers after at least a second.
+                await asyncio.sleep(1.0)
+            return httpx.Response(200)
+
+        backend = load("sglang")
+        client = EngineClient(
+            kv=backend.connector("mooncake"),
+            dialect=backend.dialect,
+            health_timeout_s=0.5,
+            transport=httpx.MockTransport(answer),
+        )
+        try:
+            self.assertTrue(await client.healthy("http://e"))
+        finally:
+            await client.aclose()
+        self.assertEqual(paths, ["/ready"])
 
 
 class ReassemblyTests(unittest.TestCase):

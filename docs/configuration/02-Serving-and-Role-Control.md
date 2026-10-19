@@ -380,9 +380,9 @@ An inconclusive probe has this effect for each caller:
 | ---------------------- | --------------------------------------- |
 | Breaker verification   | Engine keeps its current health verdict |
 | Liveness probe         | Engine keeps its current health verdict |
-| Preflight reach        | Failed `/health` check                  |
+| Preflight reach        | Failed health-route check               |
 | Readmission probe      | Engine stays ejected                    |
-| Readmission validation | Failed `/health` check                  |
+| Readmission validation | Failed health-route check               |
 
 
 ## Role control

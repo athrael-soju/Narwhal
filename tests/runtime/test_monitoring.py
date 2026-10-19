@@ -243,15 +243,12 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             ("rollover", self.router.monitor, "roll_interval"),
             ("readmission", monitoring, "readmit"),
             ("transfer_refresh", monitoring, "refresh_consumers"),
-            ("liveness", monitoring, "sweep_liveness"),
             ("telemetry", self.router.scheduler, "pool_load"),
             ("handoff", monitoring.handoff_state, "write"),
         ):
-            self.router.cfg.liveness_every = 1
             with (
                 self.subTest(stage=stage),
                 patch.object(owner, name, side_effect=RuntimeError("injected failure")),
-                patch.object(self.router.scheduler, "sweep_due", return_value=True),
                 patch.object(self.router.engines, "healthy", new=AsyncMock(return_value=True)),
                 patch.object(self.router.dispatcher, "notify") as notify,
                 self.assertLogs("narwhal.monitoring_loop", level="ERROR"),
@@ -260,9 +257,52 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(self.router.monitoring.stages[stage].failures, 1)
             self.assertTrue(self.router.monitoring.degraded)
             notify.assert_called_once()
-            self.router.cfg.liveness_every = 0
             await monitor_once(self.router)
             self.assertEqual(self.router.monitoring.degraded, "")
+
+    async def test_a_slow_liveness_answer_leaves_monitor_passes_on_time(self):
+        """The liveness loop owns the sweep, so a pass never waits on an engine's answer."""
+        self.router.cfg.monitor_interval_s = 0.02
+        self.router.cfg.liveness_every = 1
+        answered = asyncio.Event()
+
+        async def silent(url):
+            await answered.wait()
+            return True
+
+        with patch.object(self.router.engines, "healthy", new=silent):
+            sweep = asyncio.create_task(monitoring.liveness_loop(self.router))
+            await asyncio.sleep(0.05)
+            await asyncio.wait_for(monitor_once(self.router), timeout=1.0)
+            answered.set()
+            await asyncio.sleep(0.05)
+            sweep.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweep
+        self.assertEqual(self.router.monitoring.stages["liveness"].failures, 0)
+
+    async def test_liveness_loop_records_a_failed_sweep_and_waits_out_standby(self):
+        """A sweep failure counts toward the next pass, and a standby router sweeps nothing."""
+        self.router.cfg.monitor_interval_s = 0.02
+        self.router.cfg.liveness_every = 1
+        with (
+            patch.object(
+                monitoring, "sweep_liveness", side_effect=RuntimeError("injected failure")
+            ) as sweep,
+            self.assertLogs("narwhal.monitoring_loop", level="ERROR"),
+        ):
+            self.router.standby = True
+            task = asyncio.create_task(monitoring.liveness_loop(self.router))
+            await asyncio.sleep(0.1)
+            sweep.assert_not_called()
+            self.router.standby = False
+            await asyncio.sleep(0.1)
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self.assertGreaterEqual(self.router.monitoring.stages["liveness"].failures, 1)
+        self.router.monitoring.finish_pass(1)
+        self.assertEqual(self.router.monitoring.degraded, "RuntimeError:liveness")
 
     async def test_liveness_ejects_after_consecutive_failures_and_skips_held_engines(self):
         """A health miss reaches ejection at the configured count and clears that counter."""

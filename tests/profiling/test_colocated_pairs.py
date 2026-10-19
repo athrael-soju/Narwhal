@@ -76,7 +76,7 @@ class SglangGroup:
                 return httpx.Response(200, json={"success": True})
             self.flush_timeouts.append(request.url.params.get("timeout"))
             return httpx.Response(200)
-        if path == "/health":
+        if path == SglangDialect.health_path:
             return httpx.Response(200)
         body = json.loads(request.content)
         role = self.roles[host]

@@ -119,7 +119,7 @@ On success, each mode ends with this line and exits with code `0`:
 
 A live sweep writes the profile store and sample sidecar after each engine completes, so a failure keeps the profiles of engines that finished. The sidecar also records the failing engine's error. In text mode, the profiler stops with exit code `1` when:
 
-- an engine's `/health` returns a status other than 200
+- an engine's health route, `/health` on vLLM and `/ready` on SGLang, returns a status other than 200
 - a probe, including the context-limit probe, fails or returns an incomplete response
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis

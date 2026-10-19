@@ -27,7 +27,7 @@ from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
 from ..runtime.lifecycle.readmission import validate_readmission
 from ..runtime.lifecycle.records import LifecycleError, ValidationOutcome
-from ..runtime.monitoring import monitor_loop, residency_loop
+from ..runtime.monitoring import liveness_loop, monitor_loop, residency_loop
 from ..runtime.standby import (
     MAX_HANDOFF_AGE_S,
     PROBE_INTERVAL_S,
@@ -206,6 +206,7 @@ def create_app(
         loop = asyncio.create_task(monitor_loop(router))
         lag = asyncio.create_task(measure_loop_lag(router))
         follow = asyncio.create_task(residency_loop(router))
+        liveness = asyncio.create_task(liveness_loop(router))
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
@@ -224,12 +225,15 @@ def create_app(
             loop.cancel()
             lag.cancel()
             follow.cancel()
+            liveness.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
             with contextlib.suppress(asyncio.CancelledError):
                 await lag
             with contextlib.suppress(asyncio.CancelledError):
                 await follow
+            with contextlib.suppress(asyncio.CancelledError):
+                await liveness
             if watch is not None:
                 watch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

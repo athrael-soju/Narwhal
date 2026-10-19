@@ -80,12 +80,13 @@ async def colocated_restart_risk(
 async def gate_reach(cfg: FleetConfig, client: EngineClient, rep: Report) -> set[str]:
     print("reach")
     live: set[str] = set()
+    path = client.dialect.health_path
     for spec in cfg.engines:
         if await client.healthy(spec.url):
-            rep.ok(f"{spec.iid} /health")
+            rep.ok(f"{spec.iid} {path}")
             live.add(spec.iid)
         else:
-            rep.fail(f"{spec.iid} /health did not answer 200")
+            rep.fail(f"{spec.iid} {path} did not answer 200")
     return live
 
 
