@@ -4,12 +4,13 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. To set up the host, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
+`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. To set up the host, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. The package installs four templates:
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM | 1 prefill, 1 decode | GGUF file |
 | [`small-cuda-sglang-v1.json`](../Dev-Runtime.md#running-sglang-engines) | SGLang with Mooncake | 1 prefill, 1 decode | Checkpoint directory |
+| [`four-engine-cuda-sglang-v1.json`](../Dev-Runtime.md#four-sglang-engines-and-the-role-cycle) | SGLang with Mooncake | 2 prefill, 2 decode | Checkpoint directory |
 | [`reference-v1.json`](../dev/RTX-5090-Reference.md), for an RTX 5090 | vLLM | 2 prefill, 2 decode | GGUF file |
 
 ## Lifecycle
@@ -42,7 +43,7 @@ narwhal dev down
 | `degraded` | `problems` lists a failed condition, a surviving process, or a failed `verify`. |
 | `stopped` | The last generation stopped and none of its processes survive, or `up` has never run. |
 
-`up` requires an instance that has never started or whose last generation stopped, through `down` or the rollback of a failed `up`. When the template's `profile` sets neighbour traffic, as the vLLM templates do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the SGLang template, `up` profiles only the opening split, where the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
+`up` requires an instance that has never started or whose last generation stopped, through `down` or the rollback of a failed `up`. When the template's `profile` sets neighbour traffic, as the vLLM templates and the four-engine SGLang template do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the small SGLang template, `up` profiles only the opening split, where the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
 
 Running `init` on an existing instance changes nothing. When the settings you supply match the saved instance, `init` reports `reused`. When a setting conflicts, `init` exits with code `2` and lists the conflicting options. To change a setting, run `init` with a new `--instance` directory.
 
@@ -94,7 +95,7 @@ To serve another model or runtime, write a [custom template](../Dev-Runtime.md#t
 
 ## Role-split replay
 
-The RTX 5090 reference template's `role_cycle` holds three seeded workloads that drive the four-engine fleet's controller from 2P:2D to 1P:3D, back to 2P:2D, to 3P:1D and back to 2P:2D. To [replay them](../dev/RTX-5090-Reference.md#replaying-all-three-role-splits), run this from a checkout against an instance that reports `ready`:
+The RTX 5090 reference template's `role_cycle` holds three seeded workloads that drive the four-engine fleet's controller from 2P:2D to 1P:3D, back to 2P:2D, to 3P:1D and back to 2P:2D. The four-engine SGLang template's `role_cycle` drives the same sequence, with each workload's load [set from the instance's profiles](../Dev-Runtime.md#four-sglang-engines-and-the-role-cycle). To [replay them](../dev/RTX-5090-Reference.md#replaying-all-three-role-splits), run this from a checkout against an instance that reports `ready`:
 
 ```bash
 python -m tools.measurement.dev_cycle --instance runs/dev

@@ -186,6 +186,40 @@ class DevTests(unittest.TestCase):
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
 
+    def test_four_engine_sglang_template_profiles_every_split_under_neighbour_load(self):
+        spec = template._read_template("four-engine-cuda-sglang-v1.json")
+        (self.model / "model.safetensors").write_bytes(b"weights")
+        spec["model"].update(
+            files_sha256={
+                "config.json": hashlib.sha256(b"{}").hexdigest(),
+                "model.safetensors": hashlib.sha256(b"weights").hexdigest(),
+            },
+            tokenizer_sha256={},
+        )
+        self.initialize_with(
+            spec,
+            gpu_name="NVIDIA Test GPU",
+            memory={"total_mib": 32768, "used_mib": 0},
+            model_path=self.model,
+            dev=sglang_dev,
+        )
+        fleet = lifecycle.read(self.root / "fleet.json")
+        self.assertEqual(
+            [engine["role"] for engine in fleet["engines"]],
+            ["prefill", "prefill", "decode", "decode"],
+        )
+        self.assertEqual(FleetConfig.load(self.root / "fleet.json").backend, "sglang")
+        run = self.root / "run-profiles"
+        run.mkdir()
+        with patch.object(lifecycle, "_run") as command:
+            lifecycle._profiles(run, fleet, spec)
+        stages = [call.args[3] for call in command.call_args_list]
+        self.assertEqual(stages, ["profile-1p3d", "profile-2p2d", "profile-3p1d", "profile-merge"])
+        for call in command.call_args_list[:3]:
+            args = call.args[2]
+            self.assertIn("--colocated", args)
+            self.assertIn("--neighbour-prefill-rps", args)
+
     def test_sglang_template_rejects_a_changed_checkpoint(self):
         spec = self.sglang_spec()
         (self.model / "model.safetensors").write_bytes(b"other weights")

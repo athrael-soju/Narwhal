@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import platform
 import sys
 import time
@@ -16,8 +17,13 @@ import httpx
 from narwhal.config import FleetConfig
 from narwhal.config.serialization import document
 from narwhal.dev import lifecycle
+from narwhal.profiling.store import ProfileStore
 from narwhal.provenance import stamp
 from tools.measurement import load_trial as trial
+
+# A phase target sets its load in engine-equivalents of the fleet's profiles, so the
+# same recipe raises the same controller load on any GPU.
+TARGETS = ("decode_engines", "prefill_engines", "prefill_backlog_s")
 
 
 def plan(root):
@@ -29,7 +35,84 @@ def plan(root):
     for phase in recipe["phases"]:
         if not phase["name"] or any(c not in "abcdefghijklmnopqrstuvwxyz-" for c in phase["name"]):
             raise ValueError("phase names require lowercase letters and hyphens")
+        check_target(phase)
     return instance, template
+
+
+def check_target(phase):
+    target = phase.get("target")
+    if target is None:
+        return
+    if not isinstance(target, dict) or len(target) != 1 or next(iter(target)) not in TARGETS:
+        raise ValueError(f"phase {phase['name']} target names one of {', '.join(TARGETS)}")
+    value = next(iter(target.values()))
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        raise ValueError(f"phase {phase['name']} target requires a positive number")
+    required = ("rate_rps",) if "prefill_backlog_s" in target else ("duration_s", "max_inflight")
+    for key in required:
+        if not phase.get(key, 0) > 0:
+            raise ValueError(f"phase {phase['name']} target requires a positive {key}")
+
+
+def sized(phase, profiles, template):
+    """Return the phase with its rate, request count and in-flight cap set from its target."""
+    target = phase.get("target")
+    if target is None:
+        return phase
+    if not profiles:
+        raise ValueError(f"phase {phase['name']} target requires the run's profiles")
+    slo = template["slo"]
+    reactive = template["controller"]["reactive"]
+    input_tokens, output_tokens = phase["input_tokens"], phase["output_tokens"]
+    prefill_s = sum(p.prefill_time(input_tokens) for p in profiles) / len(profiles)
+    # Decode capacity per engine at the TPOT budget, priced at the mid-stream context.
+    decode_rps = sum(
+        p.decode_rps(slo["tpot_s"], input_tokens + output_tokens / 2, output_tokens)
+        for p in profiles
+    ) / len(profiles)
+    kind, value = next(iter(target.items()))
+    if kind == "prefill_backlog_s":
+        # The whole backlog arrives at once, so every request is in flight together.
+        requests = math.ceil(value / prefill_s)
+        rate, inflight = phase["rate_rps"], requests
+    else:
+        if kind == "decode_engines":
+            if decode_rps <= 0:
+                raise ValueError(f"phase {phase['name']}: the profiles price no decode capacity")
+            rate = value * decode_rps
+        else:
+            rate = value / prefill_s
+        requests = math.ceil(rate * phase["duration_s"])
+        # The cap stays above the rate times the slowest latency the SLO allows.
+        inflight = max(
+            phase["max_inflight"],
+            math.ceil(rate * (slo["ttft_s"] + output_tokens * slo["tpot_s"])),
+        )
+        if rate * reactive["window_s"] < reactive["min_arrivals"]:
+            raise ValueError(
+                f"phase {phase['name']} offers {rate:.3g} requests/s, fewer than "
+                f"{reactive['min_arrivals']} per {reactive['window_s']:g} s demand window"
+            )
+    return {
+        **phase,
+        "rate_rps": rate,
+        "requests": requests,
+        "max_inflight": inflight,
+        "sizing": {
+            "prefill_s": prefill_s,
+            "decode_rps": decode_rps,
+            "prefill_engines": rate * prefill_s,
+            "decode_engines": rate / decode_rps if decode_rps > 0 else None,
+        },
+    }
+
+
+def sized_recipe(template, profiles_path):
+    recipe = template["role_cycle"]
+    if not any("target" in phase for phase in recipe["phases"]):
+        return recipe
+    profiles = ProfileStore(Path(profiles_path)).all_profiles()
+    return {**recipe, "phases": [sized(phase, profiles, template) for phase in recipe["phases"]]}
 
 
 def check_config(path, template):
@@ -93,6 +176,7 @@ def phase_report(directory, phase):
     return {
         "name": phase["name"],
         **report,
+        **({"sizing": phase["sizing"]} if "sizing" in phase else {}),
         "require_slo": phase["require_slo"],
         "phase_pass": valid and (report["candidate_pass"] or not phase["require_slo"]),
     }
@@ -185,9 +269,16 @@ def main(argv=None):
             raise ValueError("run dev up and dev verify before replay")
         run = Path(status["run"])
         effective = check_config(run / "fleet.json", template)
+        recipe = sized_recipe(template, effective["profiles"]["path"])
         out.mkdir(mode=0o700, parents=True, exist_ok=False)
-        for name, value in (("template", template), ("fleet", effective), ("instance", instance)):
+        for name, value in (
+            ("template", template),
+            ("fleet", effective),
+            ("instance", instance),
+            ("phases", recipe["phases"]),
+        ):
             trial.private_json(out / f"{name}.json", value)
+        template = {**template, "role_cycle": recipe}
         trial.private_json(
             out / "manifest.json",
             {

@@ -6,15 +6,16 @@ description: Narwhal dev runs several vLLM or SGLang engines with prefill and de
 
 Narwhal dev runs two to eight independent vLLM or SGLang engines and a router on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
-A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three:
+A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs four:
 
 | Template | Backend and KV transfer | Model | Engines |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 2 |
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
+| `four-engine-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 4 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The [four-engine SGLang template](#four-sglang-engines-and-the-role-cycle) starts two prefill and two decode engines on a GPU whose free VRAM is at least 80% of its total plus 2,048 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -37,7 +38,7 @@ The two small templates start one prefill and one decode engine on an NVIDIA GPU
 
 ## Installing the runtime and model
 
-For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md). For the SGLang template, follow [Running SGLang engines](#running-sglang-engines).
+For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformers, GGUF loader, model, and tokenizer with the [CUDA runtime and model steps](dev/CUDA-Runtime.md). For the SGLang templates, follow [Running SGLang engines](#running-sglang-engines).
 
 ## Template and GPU allocation
 
@@ -95,7 +96,7 @@ narwhal dev status
 2. Checks that the ports are free.
 3. Checks and starts the engines.
 4. Captures attestations and starts the attestation sidecars.
-5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split.
+5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates and the four-engine SGLang template, profiles every role split under that load. A template without them, such as the small SGLang template, profiles only the opening split.
 6. Starts the router.
 
 `verify` runs these steps:
@@ -172,6 +173,48 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     ```
 
     Under WSL2, when an engine fails to start, lower each engine's memory fraction as [Template and GPU allocation](#template-and-gpu-allocation) describes.
+
+## Four SGLang engines and the role cycle
+
+The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and two decode SGLang engines with the checkpoint and packages of `small-cuda-sglang-v1.json`, each engine with a memory fraction of 0.15 and a context limit of 4,096 tokens. Its profile sets neighbour load, so `narwhal dev up` profiles every engine at 1P:3D, 2P:2D and 3P:1D under [shared-GPU neighbour traffic](cli/Profile.md#shared-gpu-neighbour-traffic).
+
+1. Complete steps 1 to 4 of [Running SGLang engines](#running-sglang-engines).
+2. Export the template and start an instance from it:
+
+    ```bash
+    mkdir -p runs
+    python - <<'PYTHON' > runs/four-engine-sglang-template.json
+    from importlib.resources import files
+    print(files('narwhal.dev').joinpath('four-engine-cuda-sglang-v1.json').read_text())
+    PYTHON
+    narwhal dev init --template runs/four-engine-sglang-template.json \
+      --instance runs/dev-sglang4 --interface "$interface"
+    narwhal dev up --instance runs/dev-sglang4
+    narwhal dev verify --instance runs/dev-sglang4
+    ```
+
+3. From the Narwhal checkout, replay the role cycle and stop the instance:
+
+    ```bash
+    python -m tools.measurement.dev_cycle --instance runs/dev-sglang4
+    narwhal dev down --instance runs/dev-sglang4
+    ```
+
+The replay has the split sequence, pass conditions, records and exit codes of the [reference role cycle](dev/RTX-5090-Reference.md#replaying-all-three-role-splits). Each phase of this template sets its load in engine-equivalents of the instance's profiles instead of a fixed request rate, so the phases raise the same role-control load on any GPU. Before the first phase, the replay reads the run's `profiles.json` and prices each phase's requests by the mean prefill time at its input length and by the mean decode requests per second that one engine serves within the TPOT budget. From those prices it sets each phase's request rate, request count and in-flight cap, and saves them in `phases.json` and in the phase's entry in `summary.json`.
+
+| Phase | Input / output tokens | Target | Duration |
+| --- | :---: | --- | :---: |
+| Decode | 256 / 128 | Decode demand of 1.8 engines | 48 s |
+| Prefill steady | 3,840 / 1 | Prefill demand of 0.9 engines | 35 s |
+| Prefill burst | 3,840 / 1 | 3 seconds of prefill work, offered at 100 requests/s and all in flight at once | |
+
+The role controller measures a pool's load as its demand divided by its engine count times `controller.reactive.utilization`, 0.8 in this template. The steady targets put the destination pool's load above `controller.thresholds.expand`, 1.0, before the move and below it after:
+
+- Decode: 1.8 / (2 × 0.8) = 1.125 at two decode engines and 1.8 / (3 × 0.8) = 0.75 at three. Each of two decode engines runs at 0.9 of its capacity within the TPOT budget, so streams meet the budget before the move.
+- Prefill steady: 0.9 / (1 × 0.8) = 1.125 at one prefill engine and 0.9 / (2 × 0.8) = 0.56 at two. One prefill engine runs at 0.9 of its capacity, so prompts do not queue before the move.
+- Prefill burst: 3 seconds of prefill work on two prefill engines takes 1.5 seconds, above the 1-second TTFT budget.
+
+Both steady targets exceed `controller.reactive.demand_floor`, 0.2, and the replay stops with an error when a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window.
 
 ## Inspecting and stopping the instance
 

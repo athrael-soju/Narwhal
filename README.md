@@ -109,7 +109,7 @@ narwhal dev status
 narwhal dev down
 ```
 
-The default template starts two vLLM engines and the SGLang template starts two SGLang engines, each on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The RTX 5090 reference template starts four vLLM engines on an RTX 5090.
+The default template starts two vLLM engines and the small SGLang template starts two SGLang engines, each on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The four-engine SGLang template starts four SGLang engines on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 2,048 MiB. The RTX 5090 reference template starts four vLLM engines on an RTX 5090.
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Installed%20template-0f766e" alt="Installed template documentation"></a>
