@@ -391,6 +391,23 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertEqual(narrowed.score(2).decode_profile_covered, covered)
         self.assertIsNotNone(fleet.confirm())
 
+    def test_a_busy_switch_donor_still_prices_the_split_it_was_measured_in(self) -> None:
+        fleet = self.fleet
+        self._colocated_candidate()
+        fleet.scheduler.switch_requires_idle = True
+        # Only e1 was measured as the second prefill engine, and it still holds a decode leg.
+        fleet.monitor.instances["e1"].decode["busy"] = Request("busy", 100, phase=Phase.DECODE)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.0, 0.0, 0, 0),
+            utilization=0.8,
+            observed_load=(0.0, 0.0),
+        )
+        self.assertEqual(len(dict(snapshot.profile_options)[2]), len(fleet.monitor.instances))
+        self.assertTrue(snapshot.score(2).decode_profile_covered)
+        # Pricing holds no engine; only a move does.
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
         fleet = self.fleet
         fleet.pressure[Role.PREFILL] = 0.9

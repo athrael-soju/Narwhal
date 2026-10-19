@@ -137,7 +137,12 @@ class RoleChanges:
         candidate: Instance | None = None,
         bypass_dwell: bool = False,
         hold: bool = False,
+        busy: bool = False,
     ) -> tuple[Instance | None, str]:
+        """Return the engine a move to `target` takes, or None and the reason.
+
+        With `busy`, it also returns an engine that must go idle before an engine-side switch.
+        """
         source = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         pool = [
             inst
@@ -176,6 +181,8 @@ class RoleChanges:
                 donor = held[0] if held else min(pool, key=self.flip_cost)
                 if hold:
                     self.scheduler.hold_for_switch(donor.iid)
+                if busy:
+                    return donor, ""
                 return None, (
                     f"holding {donor.iid} out of new placements until it is idle "
                     "for an engine-side role switch"

@@ -449,7 +449,8 @@ class SplitScorer:
             else:
                 if prefill != current_prefill:
                     target = Role.PREFILL if prefill > current_prefill else Role.DECODE
-                    donor, _ = self.scheduler.roles.planned_donor(target)
+                    # A busy donor still sets the measured role mix that the move would run.
+                    donor, _ = self.scheduler.roles.planned_donor(target, busy=True)
                     if donor is not None:
                         roles[donor.iid] = target
                 rows = self.scheduler.profiles.profiles_for_split(
