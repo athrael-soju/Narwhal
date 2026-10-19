@@ -382,12 +382,12 @@ When demand history is incomplete or fleet health changes before scoring, `contr
 
 These decisions add fields to `control.last_decision`:
 
-| Decision                        | Added fields                                                                                                                                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scored                          | Decode capacity fields `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `pending_decode_requests`, and `pending_decode_tokens` |
-| Scored                          | Demand span fields `demand_horizon_s`, `steady_horizon_s`, `steady_prefill_work`, `steady_decode_work`, and `steady_demand_s`                                                                      |
-| Scored during an open departure | `departure_age_s` and `departure_reverses`                                                                                                                                                         |
-| Decode-to-prefill               | `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix                                                              |
+| Decision                        | Added fields                                                                                                                                                                                                                                                               |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scored                          | Decode capacity fields `decode_tokens_per_engine`, `decode_slo_capacity_tokens`, `decode_kv_capacity_tokens`, `decode_requests_per_engine`, `decode_priced_requests_per_engine`, `decode_priced_tokens_per_engine`, `pending_decode_requests`, and `pending_decode_tokens` |
+| Scored                          | Demand span fields `demand_horizon_s`, `steady_horizon_s`, `steady_prefill_work`, `steady_decode_work`, and `steady_demand_s`                                                                                                                                              |
+| Scored during an open departure | `departure_age_s` and `departure_reverses`                                                                                                                                                                                                                                 |
+| Decode-to-prefill               | `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix                                                                                                                                      |
 
 `eligibility_rule` takes the first value that applies, in table order:
 

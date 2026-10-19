@@ -35,6 +35,9 @@ class SplitScore:
     pending_decode_tokens: float = 0.0
     decode_profile_covered: bool = True
     decode_correction: float = 1.0
+    # The per-engine decode batch the profile checks priced, after seat clamping.
+    decode_priced_requests_per_engine: float = 0.0
+    decode_priced_tokens_per_engine: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,10 @@ class SplitSnapshot:
     offered_outputs: tuple[int, ...] = ()
     # Decode-slot wait over the remaining TTFT budget, by decode engine count.
     decode_wait_ratios: tuple[tuple[int, float], ...] = ()
+    # The largest measured decode request and KV token maxima among the current decode
+    # engines' profiles, or None when an engine is unmeasured or unbounded on that axis.
+    decode_seat_requests: int | None = None
+    decode_seat_tokens: int | None = None
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -159,17 +166,31 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
-        # A move toward decode cannot raise an engine's resident decode batch: residents stay on
-        # their engines and the new decode engine adds seats. Residents past a profile's measured
-        # maximum already exceed the engine's decode seats at the current split, so the move
-        # prices each engine's batch at that maximum.
-        seated = include_resident and prefill < self.current_prefill
-
-        def batch(profile: Profile) -> tuple[float, float]:
-            limit = profile.decode_max_requests
-            if seated and limit is not None and active_requests > limit:
-                return float(limit), active_tokens * limit / active_requests
-            return active_requests, active_tokens
+        # When the current split's per-engine decode work is past every current decode engine's
+        # measured maximum, the engines already run full batches and the extra residents wait.
+        # The current split and a move toward decode then price each engine's batch at that
+        # maximum, scaling requests and KV tokens by one share, so both sides of the comparison
+        # use the same batch. A move toward prefill keeps the unclamped batch.
+        share = 1.0
+        if include_resident and prefill <= self.current_prefill:
+            current_engines = max(self.current_decode, self.active_decode_instances)
+            if current_engines > 0:
+                for seats, current, active in (
+                    (
+                        self.decode_seat_requests,
+                        self.resident_decode_requests / current_engines,
+                        active_requests,
+                    ),
+                    (
+                        self.decode_seat_tokens,
+                        self.resident_decode_tokens / current_engines,
+                        active_tokens,
+                    ),
+                ):
+                    if seats is not None and current > seats and active > seats:
+                        share = min(share, seats / active)
+        batch_requests = active_requests * share
+        batch_tokens = active_tokens * share
 
         correction = self.decode_correction
         pending_covered = bool(profiles)
@@ -188,7 +209,7 @@ class SplitSnapshot:
                 ):
                     pending_covered = False
         capacity = (
-            sum(p.max_tokens(self.tpot_slo / correction, batch(p)[0]) for p in profiles)
+            sum(p.max_tokens(self.tpot_slo / correction, batch_requests) for p in profiles)
             / len(profiles)
             if profiles
             else None
@@ -212,7 +233,7 @@ class SplitSnapshot:
                 for profile in profiles
                 for length in self.offered_outputs
             )
-            and all(p.covers_decode(*batch(p)) for p in profiles)
+            and all(p.covers_decode(batch_requests, batch_tokens) for p in profiles)
         )
         if include_resident and prefill > self.current_prefill:
             covered = covered and self.resident_profile_covered
@@ -230,7 +251,7 @@ class SplitSnapshot:
             )
             if profiles:
                 interval = (
-                    sum(p.token_interval(math.ceil(batch(p)[1]), batch(p)[0]) for p in profiles)
+                    sum(p.token_interval(math.ceil(batch_tokens), batch_requests) for p in profiles)
                     / len(profiles)
                     * correction
                 )
@@ -259,6 +280,8 @@ class SplitSnapshot:
             pending_decode_tokens=self.pending_decode_tokens,
             decode_profile_covered=covered,
             decode_correction=correction,
+            decode_priced_requests_per_engine=batch_requests,
+            decode_priced_tokens_per_engine=batch_tokens,
         )
 
 
@@ -430,6 +453,17 @@ class SplitScorer:
                     and profile is not None
                     and (profile.covers_decode(len(inst.decode), inst.decode_tokens()))
                 )
+        decode_rows = [
+            self.scheduler.profiles.get(inst.iid) for inst in instances if inst.role is Role.DECODE
+        ]
+        seat_requests = seat_tokens = None
+        if decode_rows and all(row is not None for row in decode_rows):
+            requests_max = [row.decode_max_requests for row in decode_rows if row is not None]
+            tokens_max = [row.decode_max_kv_tokens for row in decode_rows if row is not None]
+            if all(value is not None for value in requests_max):
+                seat_requests = max(value for value in requests_max if value is not None)
+            if all(value is not None for value in tokens_max):
+                seat_tokens = max(value for value in tokens_max if value is not None)
         queued_prefill = 0.0
         if prefill_profiles:
             queued_prefill = sum(
@@ -514,6 +548,8 @@ class SplitScorer:
                 self.demand._decode_correction() if correction is None else correction
             ),
             resident_profile_covered=resident_covered,
+            decode_seat_requests=seat_requests,
+            decode_seat_tokens=seat_tokens,
             queued_prefill_s=queued_prefill,
             active_decode_instances=sum(bool(inst.decode) for inst in instances),
             profile_options=profile_options,
@@ -565,6 +601,14 @@ def decision_details(
         "decode_request_limit": candidate.decode_request_limit,
         "decode_requests_per_engine": rounded(
             candidate.decode_requests_per_engine,
+            3,
+        ),
+        "decode_priced_requests_per_engine": rounded(
+            candidate.decode_priced_requests_per_engine,
+            3,
+        ),
+        "decode_priced_tokens_per_engine": rounded(
+            candidate.decode_priced_tokens_per_engine,
             3,
         ),
         "pending_decode_requests": candidate.pending_decode_requests,

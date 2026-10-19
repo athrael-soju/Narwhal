@@ -459,7 +459,7 @@ A decode-to-prefill move requires:
 - the new split and resident decode batches inside the profile's decode domain
 - KV capacity for the resident work
 
-A prefill-to-decode move cannot raise an engine's resident decode batch, so it prices each decode engine's batch at no more than the profile's `decode_max_requests`. Residents beyond that count already exceed the engine's decode seats at the current split.
+The role controller averages resident decode requests and KV tokens over the decode engines. When the current split's average is above the largest `decode_max_requests`, or the largest `decode_max_kv_tokens`, among the current decode engines' profiles, the engines carry more decode work than any of their profiles measured, and the extra residents wait for a seat. The current split and a prefill-to-decode move then price each engine's batch at that maximum, scaling requests and KV tokens by the same share. The profile coverage check, the SLO token capacity and the TPOT estimate use the scaled batch, and the decision records it in `decode_priced_requests_per_engine` and `decode_priced_tokens_per_engine`. A decode-to-prefill move uses the unscaled batch.
 
 ### Advisory rollout
 

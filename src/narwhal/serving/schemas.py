@@ -284,6 +284,8 @@ class ControllerDecisionOut(BaseModel):
     decode_kv_capacity_tokens: float | None = None
     decode_request_limit: int | None = None
     decode_requests_per_engine: float | None = None
+    decode_priced_requests_per_engine: float | None = None
+    decode_priced_tokens_per_engine: float | None = None
     pending_decode_requests: int | None = None
     pending_decode_tokens: float | None = None
     decode_profile_covered: bool | None = None

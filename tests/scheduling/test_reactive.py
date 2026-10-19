@@ -709,6 +709,139 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertTrue(decision["decode_profile_covered"])
                 self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
 
+    def test_the_current_split_and_a_move_toward_decode_price_the_same_seated_batch(self) -> None:
+        # 81 residents on each of four engines measured to 64 requests: every engine is past
+        # its seats, so the current split and the move toward decode both price 64 per engine,
+        # and the move toward prefill keeps the 81 it would carry.
+        snapshot = self._overload_snapshot(64, 81)
+        current, toward_decode, toward_prefill = (snapshot.score(p) for p in (2, 1, 3))
+        for score, raw in ((current, 81.0), (toward_decode, 64.8)):
+            with self.subTest(prefill=score.prefill):
+                self.assertEqual(score.decode_requests_per_engine, raw)
+                self.assertEqual(score.decode_priced_requests_per_engine, 64.0)
+                self.assertAlmostEqual(
+                    score.decode_priced_tokens_per_engine,
+                    score.decode_tokens_per_engine * 64.0 / raw,
+                )
+                self.assertTrue(score.decode_profile_covered)
+                self.assertTrue(math.isfinite(score.tpot_ratio))
+        self.assertTrue(math.isfinite(current.objective - toward_decode.objective))
+        self.assertEqual(toward_prefill.decode_priced_requests_per_engine, 81.0)
+        self.assertFalse(toward_prefill.decode_profile_covered)
+
+    def test_the_decision_records_the_priced_batch_beside_the_raw_one(self) -> None:
+        self._decode_overload(64, 81)
+        self.assertIsNotNone(self.fleet.step())
+        decision = self.fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["decode_requests_per_engine"], 64.8)
+        self.assertEqual(decision["decode_priced_requests_per_engine"], 64.0)
+        self.assertLess(
+            decision["decode_priced_tokens_per_engine"], decision["decode_tokens_per_engine"]
+        )
+
+    def test_decode_engines_inside_their_seats_keep_the_coverage_guard(self) -> None:
+        # The decode engines hold 50 of their 100 measured requests. A prefill engine measured
+        # to 32 cannot cover the 40 per engine that five decode engines would carry, so the
+        # move toward decode stays held, with or without decode pressure.
+        for pressure in (0.4, 6.0):
+            with self.subTest(decode_pressure=pressure):
+                self.setUp()
+                fleet = self.fleet
+                fleet.monitor.instances["e1"].role = Role.PREFILL
+                fleet.profiles.put(replace(fleet.profiles.get("e0"), decode_max_requests=32))
+                for iid in ("e2", "e3", "e4", "e5"):
+                    for index in range(50):
+                        fleet.monitor.dispatched(
+                            iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE)
+                        )
+                fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: pressure}
+                for _ in range(8):
+                    self.assertIsNone(fleet.step())
+                    decision = fleet.scheduler.roles._last_decision
+                    self.assertEqual(decision["prefill"], 1)
+                    self.assertEqual(
+                        decision["reason"], "decode profile does not cover proposed work"
+                    )
+                    self.assertEqual(decision["decode_priced_requests_per_engine"], 40.0)
+                self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
+
+    def test_consolidating_onto_decode_keeps_the_guard_when_decode_engines_have_seats(
+        self,
+    ) -> None:
+        # Three prefill engines, one measured to 32 requests, and three decode engines holding
+        # 50 of their 100 measured requests. Neither phase is loaded, and no move toward decode
+        # may take the fleet past what the low profile measured.
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        fleet.profiles.put(replace(fleet.profiles.get("e0"), decode_max_requests=32))
+        for iid in ("e3", "e4", "e5"):
+            for index in range(50):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
+        fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: 0.4}
+        for _ in range(40):
+            self.assertIsNone(fleet.step())
+        self.assertEqual(len(fleet.monitor.pool(Role.PREFILL)), 3)
+        self.assertEqual(
+            fleet.scheduler.roles._last_decision["reason"],
+            "decode profile does not cover proposed work",
+        )
+
+    def test_a_move_toward_decode_that_overloads_prefill_stays_held(self) -> None:
+        # Residents past every decode engine's seats no longer make the move toward decode an
+        # unbounded improvement: with prefill overloaded, removing a prefill engine raises the
+        # projected TTFT and the move holds.
+        for prefill, decode, reason in (
+            (6.0, 0.4, "projected prefill pressure blocks consolidation"),
+            (6.0, 1.2, "projected prefill pressure blocks consolidation"),
+            (12.0, 6.0, "projected improvement is below the movement margin"),
+        ):
+            for residents in (70, 81):
+                with self.subTest(prefill=prefill, decode=decode, residents=residents):
+                    self.setUp()
+                    self._decode_overload(64, residents)
+                    self.fleet.pressure = {Role.PREFILL: prefill, Role.DECODE: decode}
+                    for _ in range(6):
+                        self.assertIsNone(self.fleet.step())
+                        decision = self.fleet.scheduler.roles._last_decision
+                        self.assertEqual(decision["prefill"], 1)
+                        self.assertEqual(decision["result"], "held")
+                        self.assertEqual(decision["reason"], reason)
+                    self.assertEqual(len(self.fleet.monitor.pool(Role.PREFILL)), 2)
+
+    def test_kv_tokens_past_every_decode_engine_are_priced_at_the_measured_maximum(self) -> None:
+        # Four decode engines measured to 30,000 KV tokens each hold 40 requests of 1,000
+        # tokens. The move toward decode spreads 40,000 tokens per engine to 32,000, still past
+        # the measured maximum, and prices the batch at 30,000 tokens with the same share of
+        # requests.
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_kv_tokens=30_000))
+        for iid in ("e2", "e3", "e4", "e5"):
+            for index in range(40):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 1_000, phase=Phase.DECODE))
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now,
+            Demand(0.1, 3.0, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 1.0),
+        )
+        current, toward_decode, toward_prefill = (snapshot.score(p) for p in (2, 1, 3))
+        for score in (current, toward_decode):
+            with self.subTest(prefill=score.prefill):
+                share = 30_000 / score.decode_tokens_per_engine
+                self.assertAlmostEqual(score.decode_priced_tokens_per_engine, 30_000)
+                self.assertAlmostEqual(
+                    score.decode_priced_requests_per_engine,
+                    score.decode_requests_per_engine * share,
+                )
+                self.assertTrue(score.decode_profile_covered)
+        self.assertEqual(
+            toward_prefill.decode_priced_tokens_per_engine, toward_prefill.decode_tokens_per_engine
+        )
+        self.assertFalse(toward_prefill.decode_profile_covered)
+
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet
         for index in range(1, 6):
