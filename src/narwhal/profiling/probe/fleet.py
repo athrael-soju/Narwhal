@@ -22,7 +22,7 @@ from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import EngineDialect
 from ...provenance import stamp
-from ...runtime.role_switch import RoleSwitcher
+from ...runtime.role_switch import RoleSwitcher, restore_roles
 from ...types import Role
 from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
@@ -96,6 +96,76 @@ async def _reset_caches(
             raise RuntimeError(f"cache reset failed on {url} ({r.status_code}): {r.text[:200]}")
 
 
+def _other(role: Role) -> Role:
+    return Role.DECODE if role is Role.PREFILL else Role.PREFILL
+
+
+async def _pair_neighbours(
+    control: httpx.AsyncClient,
+    switcher: RoleSwitcher,
+    pairing: PairedTransport,
+    neighbours: list[EngineSpec],
+    roles: dict[str, Role],
+    launches: dict[str, dict],
+) -> set[str]:
+    """Pair each neighbour with a neighbour of the other role; return those left without one."""
+    withheld = set()
+    for index, spec in enumerate(neighbours):
+        partners = [peer for peer in neighbours if roles[peer.iid] is not roles[spec.iid]]
+        if not partners:
+            withheld.add(spec.iid)
+            continue
+        partner = partners[index % len(partners)]
+        own, other = (spec.url, launches.get(spec.iid)), (partner.url, launches.get(partner.iid))
+        producer, consumer = (own, other) if roles[spec.iid] is Role.PREFILL else (other, own)
+        await switcher.place(control, producer, consumer)
+        pairing.pair(spec.url, roles[spec.iid], partner.url, producer[1])
+    return withheld
+
+
+class _GroupLoad:
+    """Neighbour load around a paired target, paused while the target and its partner switch."""
+
+    def __init__(
+        self,
+        load: NeighbourLoad,
+        switcher: RoleSwitcher,
+        pairing: PairedTransport,
+        neighbours: list[EngineSpec],
+        launches: dict[str, dict],
+    ) -> None:
+        self.load = load
+        self.switcher = switcher
+        self.pairing = pairing
+        self.neighbours = neighbours
+        self.launches = launches
+
+    async def _withheld(self, control: httpx.AsyncClient, roles: dict[str, Role]) -> set[str]:
+        # A neighbour served alone needs no engine of the other role, so the target takes none
+        # of its legs; otherwise a neighbour whose only partner is the target sends nothing.
+        if self.load.peerless is not None:
+            return set()
+        return await _pair_neighbours(
+            control, self.switcher, self.pairing, self.neighbours, roles, self.launches
+        )
+
+    async def start(self, control: httpx.AsyncClient) -> None:
+        roles = {spec.iid: spec.role for spec in self.neighbours}
+        await self.load.start(await self._withheld(control, roles))
+
+    async def pause(self) -> None:
+        await self.load.pause()
+        self.unpair()
+
+    async def resume(self, control: httpx.AsyncClient, switched: dict[str, Role]) -> None:
+        roles = {spec.iid: switched.get(spec.iid, spec.role) for spec in self.neighbours}
+        await self.load.resume(roles, await self._withheld(control, roles))
+
+    def unpair(self) -> None:
+        for spec in self.neighbours:
+            self.pairing.unpair(spec.url)
+
+
 def _pair_roles(
     cfg: FleetConfig,
     dialect: EngineDialect,
@@ -105,6 +175,7 @@ def _pair_roles(
     peer: EngineSpec,
     launches: dict[str, dict],
     phases: Any = None,
+    group: _GroupLoad | None = None,
 ) -> Callable[[Role], Awaitable[None]]:
     async def serve_as(role: Role) -> None:
         if phases is not None:
@@ -115,9 +186,14 @@ def _pair_roles(
         async with httpx.AsyncClient(
             timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
         ) as control:
+            if group is not None:
+                # The engine refuses a switch or a cache reset while it holds requests.
+                await group.pause()
             await switcher.place(control, producer, consumer)
             await _reset_caches(control, dialect, (spec.url, peer.url))
-        pairing.pair(spec.url, role, peer.url, producer[1])
+            pairing.pair(spec.url, role, peer.url, producer[1])
+            if group is not None:
+                await group.resume(control, {peer.iid: _other(role)})
 
     return serve_as
 
@@ -295,8 +371,6 @@ async def run(
             f"profiling measures both roles of each engine, and engine.connector "
             f"{cfg.connector} keeps {backend.label} engine roles fixed"
         )
-    if paired and colocated_workload is not None:
-        raise ValueError(f"--colocated profiling needs a {backend.label} engine to serve alone")
     if paired and len(cfg.engines) < 2:
         raise ValueError(f"profiling a {backend.label} engine needs a peer engine")
     evidence_rows: dict[str, object] = {}
@@ -375,30 +449,63 @@ async def run(
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
             neighbour_load = None
+            group_load = None
+            partner = None
             group = spec.shared_device.group if spec.shared_device is not None else None
             if colocated_workload is not None:
                 if group is None:
                     raise ValueError(f"{spec.iid}: --colocated requires a shared_device group")
-                peers = [
-                    (peer.iid, peer.url, peer.role)
+                neighbours = [
+                    peer
                     for peer in cfg.engines
                     if peer.iid != spec.iid
                     and peer.shared_device is not None
                     and peer.shared_device.group == group
                 ]
-                if not peers:
+                if not neighbours:
                     raise ValueError(f"{spec.iid}: no neighbours in shared_device group {group}")
+                peerless = None
+                if pairing is not None:
+                    # The target's partner keeps the split's role counts: it takes the target's
+                    # role while the target measures the other one.
+                    partner = next(
+                        (peer for peer in neighbours if peer.role is not spec.role), None
+                    )
+                    if partner is None:
+                        raise ValueError(
+                            f"{spec.iid}: no {_other(spec.role).value} engine in shared_device "
+                            f"group {group} to pair with"
+                        )
+                    if dialect.peerless_fields() is not None:
+                        peerless = dialect.peerless_fields
                 neighbour_load = NeighbourLoad(
                     client,
-                    peers,
+                    [(peer.iid, peer.url, peer.role) for peer in neighbours],
                     cfg.model,
                     dialect,
                     cfg.chars_per_token,
                     colocated_workload,
                     observation_timeout_s,
+                    peerless=peerless,
                 )
+                if pairing is not None:
+                    group_load = _GroupLoad(neighbour_load, switcher, pairing, neighbours, launches)
             try:
-                if neighbour_load is not None:
+                if group_load is not None:
+                    async with httpx.AsyncClient(
+                        timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
+                    ) as control:
+                        # Every engine in the group serves its split role under neighbour load.
+                        await restore_roles(
+                            switcher,
+                            control,
+                            {
+                                peer.url: (peer.role, launches.get(peer.iid))
+                                for peer in [spec, *group_load.neighbours]
+                            },
+                        )
+                        await group_load.start(control)
+                elif neighbour_load is not None:
                     await neighbour_load.start()
                 generation = await read_generation(
                     cfg, spec, timeout_s=observation_timeout_s or cfg.health_timeout_s
@@ -406,14 +513,10 @@ async def run(
                 engine_evidence["generation_evidence"] = generation.document
                 roles = None
                 if pairing is not None and switcher.engine_held:
-                    peer = (
-                        _peer(spec, cfg.engines)
-                        if colocated_workload is not None
-                        else _lane_peer(spec, lane, cfg.engines)
-                    )
+                    peer = partner or _lane_peer(spec, lane, cfg.engines)
                     engine_evidence["peer"] = peer.iid
                     roles = _pair_roles(
-                        cfg, dialect, pairing, switcher, spec, peer, launches, phases
+                        cfg, dialect, pairing, switcher, spec, peer, launches, phases, group_load
                     )
                 profile = await profile_instance(
                     client,
@@ -485,6 +588,12 @@ async def run(
                         detail = f"{spec.iid}: {detail}"
                     raise RuntimeError(detail) from exc
                 raise
+            finally:
+                if pairing is not None:
+                    # The next target sends its neighbour load to this engine alone.
+                    pairing.unpair(spec.url)
+                if group_load is not None:
+                    group_load.unpair()
             engine_evidence["profile"] = asdict(profile)
             evidence_rows[spec.iid] = engine_evidence
             # Completed engines' observations survive a later engine's failure.

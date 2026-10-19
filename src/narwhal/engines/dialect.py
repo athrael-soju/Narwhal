@@ -86,6 +86,13 @@ class EngineDialect(ABC):
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"min_tokens": tokens, "ignore_eos": True}
 
+    def peerless_fields(self) -> dict[str, Any] | None:
+        """Fields that let a disaggregated engine serve a request in its role without a KV peer.
+
+        None when every request needs an engine of the other role.
+        """
+        return None
+
     def cold_probe_extras(self) -> dict[str, Any]:
         # The engine keys its prefix cache by cache_salt, so a fresh salt shares no prefix.
         return {"cache_salt": secrets.token_urlsafe(32)}

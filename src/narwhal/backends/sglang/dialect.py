@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 from ...engines.dialect import EngineDialect
-from .connector import BOOTSTRAP_FIELDS
+from .connector import BOOTSTRAP_FIELDS, FAKE_BOOTSTRAP_HOST
 from .identity import SERVER_INFO_PATH
 
 
@@ -26,6 +27,10 @@ class SglangDialect(EngineDialect):
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
         # SGLang takes the request ID from the body and ignores X-Request-Id.
         return {}, {"rid": rid}
+
+    def peerless_fields(self) -> dict[str, Any]:
+        # The room keys the request in the engine's transfer state, so each request takes its own.
+        return {"bootstrap_host": FAKE_BOOTSTRAP_HOST, "bootstrap_room": secrets.randbits(63)}
 
     def token_id_fields(self) -> dict[str, Any]:
         # The launcher pins --stream-interval 1, so each streamed chunk carries one token.

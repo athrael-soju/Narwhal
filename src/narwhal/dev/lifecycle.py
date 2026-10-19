@@ -254,8 +254,7 @@ def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
 
 def _profiles(run: Path, fleet: dict, spec: dict) -> None:
     count = len(fleet["engines"])
-    # A backend that profiles engines in pairs takes no neighbour load and measures both roles
-    # of each engine, so one split covers every split.
+    # Neighbour load follows the split's roles; without it, one split's profiles cover every split.
     colocated = "neighbour_prefill_rps" in spec["profile"]
     opening = sum(engine["role"] == "prefill" for engine in fleet["engines"])
     sources = []
