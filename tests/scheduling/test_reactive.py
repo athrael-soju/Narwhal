@@ -654,6 +654,55 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(len(fleet.monitor.instances["e1"].decode), 2)
 
+    def _decode_overload(self, profiled: int, residents: int) -> None:
+        """Hold `residents` decode streams on each of four decode engines under decode pressure."""
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=profiled))
+        for iid in ("e2", "e3", "e4", "e5"):
+            for index in range(residents):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
+        fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: 6.0}
+
+    def test_decode_move_coverage_ends_at_the_profiled_request_maximum(self) -> None:
+        # Moving from four to five decode engines spreads four engines' residents over
+        # five, so a profile measured to 48 requests covers up to 60 residents per engine.
+        for profiled, residents, covered in (
+            (48, 60, True),
+            (48, 61, False),
+            (64, 61, True),
+            (64, 80, True),
+            (64, 81, False),
+        ):
+            with self.subTest(profiled=profiled, residents=residents):
+                self.setUp()
+                self._decode_overload(profiled, residents)
+                snapshot = self.fleet.controller.scorer.capture(
+                    self.fleet.now,
+                    Demand(0.1, 3.0, 30, 0),
+                    utilization=0.8,
+                    observed_load=(0.1, 1.0),
+                )
+                candidate = snapshot.score(1)
+                self.assertEqual(candidate.decode_requests_per_engine, 4 * residents / 5)
+                self.assertEqual(candidate.decode_profile_covered, covered)
+
+    def test_decode_residents_past_the_profile_hold_the_move_toward_decode(self) -> None:
+        self._decode_overload(48, 61)
+        for _ in range(6):
+            self.assertIsNone(self.fleet.step())
+            decision = self.fleet.scheduler.roles._last_decision
+            self.assertEqual(decision["prefill"], 1)
+            self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
+
+    def test_a_profile_measured_to_the_sequence_limit_lets_decode_expand(self) -> None:
+        self._decode_overload(64, 61)
+        self.assertIsNotNone(self.fleet.step())
+        self.assertEqual(self.fleet.scheduler.roles._last_decision["result"], "applied")
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
+
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet
         for index in range(1, 6):
