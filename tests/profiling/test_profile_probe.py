@@ -813,6 +813,60 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(skipped[1]["kv_tokens"], 115 * (4096 + 64))
 
+    async def test_a_length_left_with_one_cohort_by_a_dropped_cohort_is_dropped(self):
+        """A dropped KV-bound cohort that leaves one cohort at its length drops the length."""
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            # Only the requested cohorts complete; the 2-stream KV-bound cohort never overlaps.
+            if size not in (1, 4):
+                return [], {"cohort": size}
+            return [(float(size), float(size * input_len), 0.01 + size * 1e-4)] * (2 * size), {
+                "cohort": size
+            }
+
+        # Four 8,192-token streams exceed the cache, so that length measures 1 and 2 streams.
+        capacity = 3 * (8192 + 64) + 10
+        self.assertEqual(decode_probe.decode_cells(8192, (1, 4), 64, capacity), (1, 2))
+        for input_lens, measured in (((512, 4096, 8192), (512, 4096)), ((4096, 8192), None)):
+            with self.subTest(input_lens=input_lens):
+                evidence: list[dict[str, object]] = []
+                skipped: list[dict[str, object]] = []
+                with (
+                    patch.object(
+                        decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])
+                    ),
+                    patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    sweep = probe_decode(
+                        None,
+                        "http://e",
+                        "stub",
+                        DIALECT,
+                        concurrency=(1, 4),
+                        input_lens=input_lens,
+                        tokens=64,
+                        evidence=evidence,
+                        max_model_len=32768,
+                        kv_capacity_tokens=capacity,
+                        skipped=skipped,
+                    )
+                    if measured is None:
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            r"fewer than two decode input lengths after dropping c=2 at "
+                            r"isl=8192 \(decode probe has insufficient complete-cohort",
+                        ):
+                            await sweep
+                        continue
+                    samples = await sweep
+                self.assertEqual(sorted({sample[1] / sample[0] for sample in samples}), [*measured])
+                self.assertEqual(sorted({row["input_tokens"] for row in evidence}), [*measured])
+                self.assertEqual(
+                    [(cell["input_tokens"], cell["concurrency"]) for cell in skipped],
+                    [(8192, 4), (8192, 2)],
+                )
+
     def test_decode_cells_count_whole_blocks_and_the_decode_reserve(self):
         # A vLLM stream of 100 input and 64 output tokens takes 11 blocks of 16, and the pool
         # keeps its null block back.

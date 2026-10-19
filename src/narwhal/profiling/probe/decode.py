@@ -208,7 +208,15 @@ def _retry_kv_limit(
     return per_stream - input_len
 
 
-def _too_few_lengths(url: str, kv_capacity_tokens: int | None, tokens: int) -> ValueError:
+def _too_few_lengths(
+    url: str, kv_capacity_tokens: int | None, tokens: int, dropped: list[str] | None = None
+) -> ValueError:
+    if dropped:
+        return ValueError(
+            f"{url} measured two decode concurrency points at fewer than two decode input "
+            f"lengths after dropping {'; '.join(dropped)}; choose shorter --decode-input-lens "
+            "or lower --decode-concurrency"
+        )
     return ValueError(
         f"{url} holds {kv_capacity_tokens} KV tokens, which fit two decode concurrency points "
         f"at fewer than two decode input lengths with {tokens} output tokens; choose shorter "
@@ -262,6 +270,8 @@ async def probe_decode(
         raise _too_few_lengths(url, kv_capacity_tokens, tokens)
     samples: list[tuple[float, float, float]] = []
     measured_lengths: set[int] = set()
+    # Each dropped cohort that left its input length with fewer than two cohorts.
+    dropped_lengths: list[str] = []
     warmed: set[int] = set()
     for target in input_lens:
         prompt, input_len = await make_prompt(
@@ -305,6 +315,10 @@ async def probe_decode(
             if c not in warmed:
                 await _decode_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
                 warmed.add(c)
+        # The length's cells and interval evidence, kept once two cohorts remain.
+        length_samples: list[tuple[float, float, float]] = []
+        length_evidence: list[dict[str, object]] = []
+        length_dropped: list[str] = []
         for c in cells:
             replicates: list[tuple[float, float, float]] = []
             intervals: list[dict[str, object]] = []
@@ -373,20 +387,28 @@ async def probe_decode(
                         }
                     )
                 print(f"    decode  isl={input_len:<6} dropped c={c}: {dropped}")
+                length_dropped.append(f"c={c} at isl={input_len} ({dropped})")
                 continue
-            if evidence is not None:
-                evidence.extend(intervals)
+            length_evidence.extend(intervals)
             requests, batch, gap = (
                 statistics.median(row[i] for row in replicates) for i in range(3)
             )
-            samples.append((requests, batch, gap))
-            measured_lengths.add(input_len)
+            length_samples.append((requests, batch, gap))
             print(
                 f"    decode  isl={input_len:<6} c={c:<3} "
                 f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "
                 f"-> {gap * 1000:6.2f} ms/token"
             )
+        if length_dropped and len(length_samples) < 2:
+            print(f"    decode  isl={input_len:<6} dropped: fewer than two cohorts remain")
+            dropped_lengths.extend(length_dropped)
+            continue
+        if evidence is not None:
+            evidence.extend(length_evidence)
+        samples.extend(length_samples)
+        if length_samples:
+            measured_lengths.add(input_len)
     # Tokenized prompts can run a token or two past their targets and drop a length at the limit.
     if kv_capacity_tokens is not None and len(measured_lengths) < 2:
-        raise _too_few_lengths(url, kv_capacity_tokens, tokens)
+        raise _too_few_lengths(url, kv_capacity_tokens, tokens, dropped_lengths)
     return samples
