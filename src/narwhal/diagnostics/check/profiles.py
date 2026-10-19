@@ -5,9 +5,10 @@ from pathlib import Path
 
 import httpx
 
+from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...profiling.generation import generation_problem, read_generation
-from ...profiling.model import decode_evidence_problems
+from ...profiling.model import Profile, decode_evidence_problems, evidence_matches
 from ...profiling.store import ProfileStore
 from ...types import Role
 from .report import Report
@@ -32,39 +33,59 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
     return store
 
 
-def _sequence_limits(samples: Path) -> dict[str, int]:
-    """Return each engine's `max_num_seqs` recorded in a sample sidecar or its merge sources.
-
-    An engine whose decode sweep skipped cohorts that exceed its KV cache measured what its KV
-    holds, so it is left out.
-    """
+def _measured_evidence(samples: Path, seen: set[Path] | None = None) -> dict[str, list[dict]]:
+    """Return each engine's measured evidence in a sample sidecar and its merge sources."""
+    seen = set() if seen is None else seen
     try:
+        key = samples.resolve()
+        if key in seen:
+            return {}
+        seen.add(key)
         document = json.loads(samples.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return {}
     if not isinstance(document, dict):
         return {}
-    limits: dict[str, int] = {}
-    for source in document.get("sources") or ():
+    found: dict[str, list[dict]] = {}
+    sources = document.get("sources")
+    for source in sources if isinstance(sources, list) else ():
         if isinstance(source, dict) and isinstance(source.get("samples"), str):
-            limits.update(_sequence_limits(Path(source["samples"])))
+            for iid, entries in _measured_evidence(Path(source["samples"]), seen).items():
+                found.setdefault(iid, []).extend(entries)
     engines = document.get("engines")
     for iid, evidence in engines.items() if isinstance(engines, dict) else ():
-        if not isinstance(evidence, dict):
-            continue
-        value = evidence.get("max_num_seqs")
-        if evidence.get("decode_skipped"):
-            limits.pop(iid, None)
-        elif isinstance(value, int) and not isinstance(value, bool):
-            limits[iid] = value
-    return limits
+        # A failed engine's entry carries no profile.
+        if isinstance(evidence, dict) and isinstance(evidence.get("profile"), dict):
+            found.setdefault(iid, []).append(evidence)
+    return found
+
+
+def _recorded_limit(entries: list[dict], row: Profile) -> tuple[int | None, bool]:
+    """Return the sequence limit recorded with the evidence for `row`, and whether its decode
+    sweep skipped cohorts that exceed its KV cache.
+    """
+    for evidence in entries:
+        if evidence_matches(evidence["profile"], row):
+            value = evidence.get("max_num_seqs")
+            limit = value if isinstance(value, int) and not isinstance(value, bool) else None
+            return limit, bool(evidence.get("decode_skipped"))
+    return None, False
+
+
+def _below_limit(iid: str, measured: int | None, limit: int, source: str) -> str | None:
+    if measured is None or measured >= limit:
+        return None
+    return (
+        f"{iid} profile measures decode up to {measured} requests and its {source} allows "
+        f"{limit}; re-run narwhal-profile with --limits"
+    )
 
 
 def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     print("profile")
     store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
-    limits = _sequence_limits(cfg.profiles_path.with_suffix(".samples.json"))
+    evidence = _measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
         p = store.get(spec.iid)
         if p is None:
@@ -92,13 +113,14 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             rep.fail(problem)
         if problems:
             continue
-        limit = limits.get(spec.iid)
-        measured = p.decode_max_requests
-        if limit is not None and measured is not None and measured < limit:
-            rep.warn(
-                f"{spec.iid} profile measures decode up to {measured} requests "
-                f"and the engine runs up to {limit}; re-run narwhal-profile with --limits"
-            )
+        limit, skipped = _recorded_limit(evidence.get(spec.iid, []), p)
+        # A sweep that skipped cohorts for KV measured what the engine's KV holds.
+        if (
+            limit is not None
+            and not skipped
+            and (warning := _below_limit(spec.iid, p.decode_max_requests, limit, "limits file"))
+        ):
+            rep.warn(warning)
         quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
             f"+{p.ttft_split:.4f} past {p.ttft_block_tokens}-token blocks"
             if p.ttft_split is not None
@@ -127,6 +149,8 @@ async def gate_profile_generation(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> set[str]:
     unsafe: set[str] = set()
+    identity = load_backend(cfg.backend).identity
+    evidence = _measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
         profiles = store.profiles_for_engine(spec.iid)
         if not profiles or spec.iid not in live:
@@ -154,6 +178,17 @@ async def gate_profile_generation(
             unsafe.add(spec.iid)
         if not problems:
             rep.ok(f"{spec.iid} profile generation {generation.digest}")
+        row = store.get(spec.iid)
+        if cfg.engine_contract is None or row is None:
+            continue
+        # A profile measured without --limits records no limit; the attestation still has one.
+        if _recorded_limit(evidence.get(spec.iid, []), row) != (None, False):
+            continue
+        attested = identity.sequence_limit(generation.document)
+        if attested is not None and (
+            warning := _below_limit(spec.iid, row.decode_max_requests, attested, "attested launch")
+        ):
+            rep.warn(warning)
     return unsafe
 
 

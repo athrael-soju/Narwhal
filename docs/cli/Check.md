@@ -54,7 +54,7 @@ Options for first-token calibration:
 | `reach` | Each engine answers `/health` with HTTP 200. Later gates skip an engine that fails here. |
 | `calibration` | The [first-token calibration](#the-calibration-gate) at `engine.first_token_calibration_path` matches the running engines. |
 | `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. |
-| `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. |
+| `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. The gate warns when a profile measures decode below the engine's sequence limit, as [Profile and preflight](../deploy/06-Profile-and-Preflight.md) describes. |
 | `model` | Each engine lists the fleet's `model` in `/v1/models`. |
 | `pace` | Each engine's best time over two cold one-token completions of a long prompt stays within 1.5 times the fleet median, with at least three timed engines, and within 1.5 times its own profile's prefill time. |
 | `tokenize` | Each engine returns an exact token count for the probe prompt. With `engine.tokenize` off, the gate is skipped. |

@@ -12,7 +12,7 @@ from typing import Any
 from ...contracts import PROFILES, versioned
 from ...provenance import stamp
 from ..fitting import fit_prefill_samples
-from ..model import CACHED_PROFILE_FIELDS, Profile
+from ..model import CACHED_PROFILE_FIELDS, Profile, evidence_matches
 from ..store import ProfileStore
 from .instance import prefill_fields
 from .warm import apply_cached_fit
@@ -113,16 +113,6 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
     return 0
 
 
-def _evidence_matches(saved: object, row: Profile) -> bool:
-    """Return whether saved profile evidence describes `row`; absent optional fields are unset."""
-    if not isinstance(saved, dict):
-        return False
-    try:
-        return Profile(**saved) == row
-    except (TypeError, ValueError):
-        return False
-
-
 def _measured_profiles(samples: Path) -> dict[str, list[Any]]:
     """Return saved profile evidence per engine, following a merged sidecar to its sources."""
     if not samples.is_file():
@@ -172,7 +162,7 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
             if row.iid not in engine_ids:
                 left_out.add(row.iid)
                 continue
-            if not any(_evidence_matches(saved, row) for saved in evidence.get(row.iid, [])):
+            if not any(evidence_matches(saved, row) for saved in evidence.get(row.iid, [])):
                 raise ValueError(
                     f"{samples}: profile {row.iid} lacks matching measurement evidence"
                 )

@@ -373,6 +373,16 @@ _OPTIONAL_FLOAT_FIELDS = tuple(
 _FIELD_NAMES = frozenset(f.name for f in fields(Profile))
 
 
+def evidence_matches(saved: object, row: Profile) -> bool:
+    """Return whether saved profile evidence describes `row`; absent optional fields are unset."""
+    if not isinstance(saved, dict):
+        return False
+    try:
+        return Profile(**saved) == row
+    except (TypeError, ValueError):
+        return False
+
+
 def decode_evidence_problems(
     profile: Profile,
     *,
