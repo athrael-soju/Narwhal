@@ -63,11 +63,12 @@ def _measured_evidence(samples: Path, seen: set[Path] | None = None) -> dict[str
 
 @dataclass(frozen=True)
 class _Recorded:
-    """The sequence limit a profile's evidence records, and whether its sweep skipped cohorts
-    that exceed the engine's KV cache.
+    """The sequence limit a profile's evidence records, the limits file it read it from, and
+    whether its sweep skipped cohorts that exceed the engine's KV cache.
     """
 
     limit: int | None
+    limits_path: str | None
     kv_bound: bool
 
 
@@ -77,28 +78,44 @@ def _recorded(entries: list[dict], row: Profile) -> _Recorded | None:
         if evidence_matches(evidence["profile"], row):
             value = evidence.get("max_num_seqs")
             limit = value if isinstance(value, int) and not isinstance(value, bool) else None
-            return _Recorded(limit, bool(evidence.get("decode_skipped")))
+            path = evidence.get("limits_path")
+            return _Recorded(
+                limit,
+                path if isinstance(path, str) else None,
+                bool(evidence.get("decode_skipped")),
+            )
     return None
 
 
 def _below_limit(
-    iid: str, row: Profile, limit: int, source: str, kv_bound: bool | None
+    iid: str, row: Profile, limit: int, source: str, recorded: _Recorded | None
 ) -> str | None:
     """Describe a profile whose decode coverage stops below `limit`, with the fix that applies.
 
-    `kv_bound` is None when no evidence says why the sweep stopped.
+    `recorded` is None when no evidence says how the sweep ran.
     """
     measured = row.decode_max_requests
     if measured is None or measured >= limit:
         return None
-    if kv_bound:
+    if recorded is not None and recorded.limit is not None and recorded.limit < limit:
+        limits_file = (
+            f"the limits file {recorded.limits_path}"
+            if recorded.limits_path is not None
+            else "the limits file it was profiled with"
+        )
+        remedy = (
+            f"{limits_file} records {recorded.limit}; regenerate that file and re-run "
+            "narwhal-profile with --limits"
+        )
+    elif recorded is not None and recorded.kv_bound:
         remedy = (
             f"its sweep skipped cohorts that exceed its {row.kv_capacity_tokens} KV tokens; "
-            "profile shorter --decode-input-lens or lower the engine's sequence limit"
+            "pass shorter --decode-input-lens, or lower the engine's sequence limit and "
+            "regenerate the limits file, then re-run narwhal-profile with --limits"
         )
-    elif kv_bound is None:
+    elif recorded is None:
         remedy = (
-            "re-run narwhal-profile with --limits, or with shorter --decode-input-lens if its "
+            "re-run narwhal-profile with --limits, and with shorter --decode-input-lens if its "
             "KV cache holds fewer streams"
         )
     else:
@@ -146,11 +163,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
         if (
             recorded is not None
             and recorded.limit is not None
-            and (
-                warning := _below_limit(
-                    spec.iid, p, recorded.limit, "limits file", recorded.kv_bound
-                )
-            )
+            and (warning := _below_limit(spec.iid, p, recorded.limit, "limits file", recorded))
         ):
             rep.warn(warning)
         quadratic = f"{p.ttft_a:.2e}n^2+{p.ttft_b:.2e}n+{p.ttft_c:.4f}" + (
@@ -221,8 +234,7 @@ async def gate_profile_generation(
         # The profile gate already compared the profile with a recorded limit this high.
         if recorded is not None and recorded.limit is not None and recorded.limit >= attested:
             continue
-        kv_bound = None if recorded is None else recorded.kv_bound
-        if warning := _below_limit(spec.iid, row, attested, "attested launch", kv_bound):
+        if warning := _below_limit(spec.iid, row, attested, "attested launch", recorded):
             rep.warn(warning)
     return unsafe
 

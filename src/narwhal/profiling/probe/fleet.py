@@ -399,6 +399,7 @@ async def run(
             }
             if max_num_seqs is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
+                engine_evidence["limits_path"] = str(limits_path)
             neighbour_load = None
             group = spec.shared_device.group if spec.shared_device is not None else None
             if colocated_workload is not None:

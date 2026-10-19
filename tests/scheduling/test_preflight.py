@@ -1134,8 +1134,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         below = f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
         rerun = below + "re-run narwhal-profile with --limits"
         kv_bound = (
-            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; profile shorter "
-            "--decode-input-lens or lower the engine's sequence limit"
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; pass shorter "
+            "--decode-input-lens, or lower the engine's sequence limit and regenerate the limits "
+            "file, then re-run narwhal-profile with --limits"
         )
         skipped = [{"input_tokens": 8192, "concurrency": 64}]
         for document, expected in (
@@ -1196,8 +1197,9 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             report.warnings,
             [
                 f"{first} profile measures decode up to 88 requests and its limits file allows "
-                "256; its sweep skipped cohorts that exceed its 967728 KV tokens; profile shorter "
-                "--decode-input-lens or lower the engine's sequence limit"
+                "256; its sweep skipped cohorts that exceed its 967728 KV tokens; pass shorter "
+                "--decode-input-lens, or lower the engine's sequence limit and regenerate the "
+                "limits file, then re-run narwhal-profile with --limits"
             ],
         )
 
@@ -1240,12 +1242,21 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         below = "e0 profile measures decode up to 16 requests and its attested launch allows 64; "
         rerun = below + "re-run narwhal-profile with --limits"
         kv_bound = (
-            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; profile shorter "
-            "--decode-input-lens or lower the engine's sequence limit"
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; pass shorter "
+            "--decode-input-lens, or lower the engine's sequence limit and regenerate the limits "
+            "file, then re-run narwhal-profile with --limits"
         )
         unknown = (
-            below + "re-run narwhal-profile with --limits, or with shorter --decode-input-lens "
+            below + "re-run narwhal-profile with --limits, and with shorter --decode-input-lens "
             "if its KV cache holds fewer streams"
+        )
+        stale = (
+            below + "the limits file runs/limits.json records 32; regenerate that file and re-run "
+            "narwhal-profile with --limits"
+        )
+        unnamed = (
+            below + "the limits file it was profiled with records 32; regenerate that file and "
+            "re-run narwhal-profile with --limits"
         )
         skipped = [{"input_tokens": 8192, "concurrency": 64}]
         other = asdict(replace(row, tpot_slope=1))
@@ -1258,8 +1269,22 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             ({"engines": {"e0": {"profile": other}}}, [unknown]),
             # The limits file already set this bound, and the profile gate reports it.
             ({"engines": {"e0": {"max_num_seqs": 64, "profile": asdict(row)}}}, []),
-            # A limits file below the attested limit leaves the router's bound uncompared.
-            ({"engines": {"e0": {"max_num_seqs": 32, "profile": asdict(row)}}}, [rerun]),
+            # A limits file below the attested limit is stale, whatever bounded the sweep.
+            (
+                {
+                    "engines": {
+                        "e0": {
+                            "max_num_seqs": 32,
+                            "limits_path": "runs/limits.json",
+                            "profile": asdict(row),
+                            "decode_skipped": skipped,
+                        }
+                    }
+                },
+                [stale],
+            ),
+            # A sidecar written before profiles recorded the limits file's path.
+            ({"engines": {"e0": {"max_num_seqs": 32, "profile": asdict(row)}}}, [unnamed]),
         ):
             with self.subTest(document=document):
                 samples.write_text(json.dumps(document))
