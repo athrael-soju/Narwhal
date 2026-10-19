@@ -397,9 +397,9 @@ async def run(
                 "max_model_len": max_model_len,
                 "sweep": asdict(engine_sweep),
             }
-            if max_num_seqs is not None:
+            if max_num_seqs is not None and limits_path is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
-                engine_evidence["limits_path"] = str(limits_path)
+                engine_evidence["limits_path"] = str(limits_path.resolve())
             neighbour_load = None
             group = spec.shared_device.group if spec.shared_device is not None else None
             if colocated_workload is not None:

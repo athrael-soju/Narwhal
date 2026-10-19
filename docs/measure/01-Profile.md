@@ -165,7 +165,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 - every prefill repeat
 - the per-length medians used for the TTFT fit
 - decode intervals and cell medians
-- `max_num_seqs` and `limits_path`: the engine's sequence limit from `--limits` and the path of that file, present only with `--limits`
+- `max_num_seqs` and `limits_path`: the engine's sequence limit from `--limits` and the absolute path of that file, present only with `--limits`
 - `decode_skipped`: the decode cells skipped because their streams exceed the engine's KV capacity, and the largest-fit cohort dropped with its `reason`, present only when the sweep skipped a cell
 - fitted profiles
 - `prefill_block_tokens`: the cache block size the engine exports, otherwise `null`

@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -1348,7 +1349,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(fleet_probe, "profile_instance", side_effect=measured),
                 redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(await fleet_probe.run(cfg, {"e0"}, limits_path=limits_path), 0)
+                # The sidecar names the limits file from any working directory.
+                relative = Path(os.path.relpath(limits_path))
+                self.assertEqual(await fleet_probe.run(cfg, {"e0"}, limits_path=relative), 0)
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), 1)
             self.assertEqual(
                 ProfileStore(cfg.profiles_path).get("e0").generation_digest,
@@ -1359,7 +1362,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["engines"]["e0"]["prefill"], [[10, 0.1]])
             self.assertEqual(saved["engines"]["e0"]["max_model_len"], 16384)
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
-            self.assertEqual(saved["engines"]["e0"]["limits_path"], str(limits_path))
+            self.assertEqual(saved["engines"]["e0"]["limits_path"], str(limits_path.resolve()))
             self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 16300)
 
     async def test_run_rejects_decode_fit_outside_policy(self):
