@@ -848,6 +848,31 @@ class DevTests(unittest.TestCase):
             self.assertIn(str(worker), state["errors"][0])
             self.assertIn(worker, lifecycle.native_engine._group_members(identity))
 
+    def test_status_reads_each_sglang_engine_health_route(self):
+        self.initialize_sglang(self.sglang_spec())
+        run = self.root / "run-test"
+        run.mkdir()
+        (run / "fleet.json").write_bytes((self.root / "fleet.json").read_bytes())
+        lifecycle.write(
+            self.root / "lifecycle.json", {"phase": "launched", "run": str(run), "processes": []}
+        )
+        router = httpx.URL(lifecycle.instance(self.root)["router_url"]).netloc
+        engine_paths = set()
+
+        def answer(request):
+            if request.url.netloc != router:
+                engine_paths.add(request.url.path)
+                # SGLang's /health generates a token, so a busy engine can miss the 2 s timeout.
+                if request.url.path == "/health":
+                    return httpx.Response(503)
+            return httpx.Response(200, json={})
+
+        client = httpx.Client(transport=httpx.MockTransport(answer))
+        with patch.object(lifecycle.httpx, "Client", return_value=client):
+            result = lifecycle.status(self.root)
+        self.assertEqual(engine_paths, {"/ready"})
+        self.assertFalse([problem for problem in result["problems"] if " health: " in problem])
+
     def test_saved_ready_state_requires_current_kv_evidence(self):
         self.initialize()
         run = self.root / "run-test"

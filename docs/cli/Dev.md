@@ -38,7 +38,7 @@ narwhal dev down
 | State | Condition |
 | --- | --- |
 | `starting` | `up` is running. |
-| `launched` | Every engine, sidecar and router process is running, every engine and the router answer `/health`, and the router answers `/ready`. |
+| `launched` | Every engine, sidecar and router process is running, every engine answers its health route, `/health` on vLLM and `/ready` on SGLang, and the router answers `/health` and `/ready`. |
 | `ready` | The `launched` conditions hold, and the KV evidence of the last `verify` still verifies against the running engines. |
 | `degraded` | `problems` lists a failed condition, a surviving process, or a failed `verify`. |
 | `stopped` | The last generation stopped and none of its processes survive, or `up` has never run. |

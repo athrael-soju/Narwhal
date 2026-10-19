@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.deployment import native_engine, stages
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
@@ -618,13 +620,15 @@ def status(root: Path) -> dict:
             "problems": problems,
         }
     fleet = read(fleet_path)
+    backend = fleet.get("engine", {}).get("backend", DEFAULT_BACKEND)
+    engine_health = load_backend(backend).dialect.health_path
     with httpx.Client(timeout=2, trust_env=False) as client:
         for name, url in [
-            ("router", config["router_url"]),
-            *[(e["iid"], e["url"]) for e in fleet["engines"]],
+            ("router", config["router_url"] + "/health"),
+            *[(e["iid"], e["url"] + engine_health) for e in fleet["engines"]],
         ]:
             try:
-                client.get(url + "/health").raise_for_status()
+                client.get(url).raise_for_status()
             except httpx.HTTPError as exc:
                 problems.append(f"{name} health: {exc}")
         try:
