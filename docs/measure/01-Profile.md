@@ -84,6 +84,7 @@ A decode cell is one combination of decode input length and concurrency.
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency values, including one stream and the intended operating range.
 - With `--limits`, each engine's top concurrency value is its sequence limit.
+- At each decode input length, the profiler skips the concurrency values whose streams, input plus requested output, exceed the engine's KV capacity. It skips an input length where fewer than two values fit, and stops when fewer than two input lengths remain.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live `max_model_len`.
 - When fewer than two decode input lengths fit, choose shorter inputs.
@@ -161,6 +162,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 - every prefill repeat
 - the per-length medians used for the TTFT fit
 - decode intervals and cell medians
+- `decode_skipped`: the decode cells skipped because their streams exceed the engine's KV capacity, present only when the sweep skipped a cell
 - fitted profiles
 - `prefill_block_tokens`: the cache block size the engine exports, otherwise `null`
 - `cached_prefill`: warm prefill evidence per engine

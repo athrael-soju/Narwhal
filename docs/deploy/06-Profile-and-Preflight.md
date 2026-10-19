@@ -30,11 +30,11 @@ Run these steps from the router shell.
 
 The effective sweep has these bounds:
 
-| Sweep input          | Bound                                                                     |
-| -------------------- | ------------------------------------------------------------------------- |
-| Decode concurrency   | Requested counts up to the engine's sequence limit, then the limit itself |
-| Prefill lengths      | Input plus one output token fits the live `max_model_len`                 |
-| Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`                 |
+| Sweep input          | Bound                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decode concurrency   | Requested counts up to the engine's sequence limit, then the limit itself, keeping at each input length the counts whose streams fit the KV capacity |
+| Prefill lengths      | Input plus one output token fits the live `max_model_len`                                                                                            |
+| Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`                                                                                            |
 
 Prefix caching can stay on during profiling.
 
@@ -44,7 +44,7 @@ If the live context leaves fewer than three prefill lengths or two decode input 
 
 Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 
-Preflight warns when an engine's profile measures decode below the sequence limit its sidecar records. The engine's [decode seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) stop at the profiled maximum. Re-profile that engine with `--limits`.
+Preflight warns when an engine's profile measures decode below the sequence limit its sidecar records and its sweep skipped no cell for KV capacity. The engine's [decode seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) stop at the profiled maximum. Re-profile that engine with `--limits`.
 
 Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 

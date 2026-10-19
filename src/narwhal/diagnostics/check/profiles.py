@@ -33,7 +33,11 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
 
 
 def _sequence_limits(samples: Path) -> dict[str, int]:
-    """Return each engine's `max_num_seqs` recorded in a sample sidecar or its merge sources."""
+    """Return each engine's `max_num_seqs` recorded in a sample sidecar or its merge sources.
+
+    An engine whose decode sweep skipped cohorts that exceed its KV cache measured what its KV
+    holds, so it is left out.
+    """
     try:
         document = json.loads(samples.read_text())
     except (OSError, ValueError):
@@ -46,8 +50,12 @@ def _sequence_limits(samples: Path) -> dict[str, int]:
             limits.update(_sequence_limits(Path(source["samples"])))
     engines = document.get("engines")
     for iid, evidence in engines.items() if isinstance(engines, dict) else ():
-        value = evidence.get("max_num_seqs") if isinstance(evidence, dict) else None
-        if isinstance(value, int) and not isinstance(value, bool):
+        if not isinstance(evidence, dict):
+            continue
+        value = evidence.get("max_num_seqs")
+        if evidence.get("decode_skipped"):
+            limits.pop(iid, None)
+        elif isinstance(value, int) and not isinstance(value, bool):
             limits[iid] = value
     return limits
 

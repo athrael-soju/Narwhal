@@ -149,6 +149,19 @@ async def _decode_cohort(
     return observed, state
 
 
+def decode_cells(
+    input_len: int, concurrency: tuple[int, ...], tokens: int, kv_capacity_tokens: int | None
+) -> tuple[int, ...]:
+    """Return the cohorts measured at `input_len`: those whose streams fit in the KV cache.
+
+    An input length where fewer than two cohorts fit is skipped whole.
+    """
+    if kv_capacity_tokens is None:
+        return concurrency
+    cells = tuple(c for c in concurrency if c * (input_len + tokens) <= kv_capacity_tokens)
+    return cells if len(cells) >= 2 else ()
+
+
 def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
     first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
     if first is None or joined is None or left is None or joined < left or left <= first:
@@ -173,9 +186,21 @@ async def probe_decode(
     max_model_len: int | None = None,
     repeats: int = 1,
     observation_timeout_s: float | None = None,
+    kv_capacity_tokens: int | None = None,
+    skipped: list[dict[str, object]] | None = None,
 ) -> list[tuple[float, float, float]]:
+    if (
+        kv_capacity_tokens is not None
+        and sum(bool(decode_cells(n, concurrency, tokens, kv_capacity_tokens)) for n in input_lens)
+        < 2
+    ):
+        raise ValueError(
+            f"{url} holds {kv_capacity_tokens} KV tokens, which fit two decode concurrency points "
+            f"at fewer than two decode input lengths with {tokens} output tokens; choose shorter "
+            "--decode-input-lens or lower --decode-concurrency"
+        )
     samples: list[tuple[float, float, float]] = []
-    warmed = False
+    warmed: set[int] = set()
     for target in input_lens:
         prompt, input_len = await make_prompt(
             client,
@@ -191,13 +216,31 @@ async def probe_decode(
                 f"decode input {input_len} plus {tokens} output tokens exceeds {url} "
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
-        if not warmed:
-            # An engine's first decode at each batch size can include kernel compilation; it
-            # stays out of the fit.
-            for c in concurrency:
+        cells = decode_cells(input_len, concurrency, tokens, kv_capacity_tokens)
+        if skipped is not None:
+            skipped.extend(
+                {
+                    "input_tokens": input_len,
+                    "concurrency": c,
+                    "kv_tokens": c * (input_len + tokens),
+                    "kv_capacity_tokens": kv_capacity_tokens,
+                }
+                for c in concurrency
+                if c not in cells
+            )
+        if len(cells) < len(concurrency):
+            print(
+                f"    decode  isl={input_len:<6} skipped c="
+                + ",".join(str(c) for c in concurrency if c not in cells)
+                + f": cohorts exceed {kv_capacity_tokens} KV tokens"
+            )
+        # An engine's first decode at each batch size can include kernel compilation; it stays
+        # out of the fit.
+        for c in cells:
+            if c not in warmed:
                 await _decode_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
-            warmed = True
-        for c in concurrency:
+                warmed.add(c)
+        for c in cells:
             replicates: list[tuple[float, float, float]] = []
             for repeat in range(repeats):
                 used = tokens
@@ -205,6 +248,10 @@ async def probe_decode(
                     client, url, model, prompt, input_len, c, used, dialect
                 )
                 limit = max_model_len - input_len if max_model_len is not None else None
+                if kv_capacity_tokens is not None:
+                    # A retry's longer streams must still fit in the KV cache.
+                    fits = kv_capacity_tokens // c - input_len
+                    limit = fits if limit is None else min(limit, fits)
                 for _ in range(DECODE_RETRIES):
                     if len(observed) >= 2 * c:
                         break

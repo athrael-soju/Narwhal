@@ -1133,6 +1133,18 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             ({"engines": {first: {"max_num_seqs": 64}}}, True),
             ({"engines": {first: {"max_num_seqs": 16}}}, False),
             ({"engines": {first: {}}}, False),
+            # The sweep skipped the limit's cohorts because the KV cache cannot hold them.
+            (
+                {
+                    "engines": {
+                        first: {
+                            "max_num_seqs": 64,
+                            "decode_skipped": [{"input_tokens": 512, "concurrency": 64}],
+                        }
+                    }
+                },
+                False,
+            ),
         ):
             with self.subTest(document=document):
                 samples.write_text(json.dumps(document))

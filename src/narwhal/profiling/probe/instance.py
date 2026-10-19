@@ -109,7 +109,9 @@ async def profile_instance(
             prefill_block_tokens=block_tokens,
         )
     decode_intervals: list[dict[str, object]] = []
+    decode_skipped: list[dict[str, object]] = []
     await serve_as(Role.DECODE)
+    capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     decode = await probe_decode(
         client,
         url,
@@ -123,12 +125,16 @@ async def profile_instance(
         max_model_len=max_model_len,
         repeats=s.decode_repeats,
         observation_timeout_s=observation_timeout_s,
+        kv_capacity_tokens=capacity,
+        skipped=decode_skipped,
     )
     decode_tokens_used = [
         used for row in decode_intervals if isinstance(used := row.get("tokens"), int)
     ]
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
+        if decode_skipped:
+            evidence["decode_skipped"] = decode_skipped
     await _require_cold(client, iid, url, metrics, hits_before, observation_timeout_s, evidence)
     cached: list[dict[str, Any]] = []
     reason: str | None
@@ -155,7 +161,8 @@ async def profile_instance(
         )
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
-    capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
+    if capacity is None:
+        capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     profile = Profile(
         iid=iid,
         **prefill_fields(prefill_fit, block_tokens),
