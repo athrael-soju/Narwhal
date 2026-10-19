@@ -43,7 +43,7 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
-Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine applies the fraction to nearly the whole GPU. A fraction that fits on native Ubuntu can then overcommit the GPU. For SGLang under WSL2, lower `--gpu-memory-utilization` until every engine starts.
+Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine receives the budget the first engine receives, and a fraction that fits on native Ubuntu can overcommit the GPU. For SGLang under WSL2, initialize a fresh instance with a lower `--gpu-memory-utilization`, in a new `--instance` directory for each attempt, until every engine starts.
 
 `--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
@@ -129,10 +129,11 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
 1. Install the libraries that Mooncake's native module links, `libibverbs.so.1`, `libmlx5.so.1` and `libnuma.so.1`:
 
     ```bash
+    sudo apt-get update
     sudo apt-get install -y libibverbs1 ibverbs-providers libnuma1
     ```
 
-2. On a GPU where SGLang compiles its kernels when an engine starts, SGLang needs a CUDA 13 toolkit with `bin/nvcc` and `lib64/libcudart.so`. The CUDA packages that pip installs do not provide that layout. Install the toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2, and export its root in the shell that runs the lifecycle commands:
+2. Install a CUDA 13 toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2. On a GPU where SGLang compiles its kernels when an engine starts, SGLang needs the toolkit's `bin/nvcc` and `lib64/libcudart.so`, which the CUDA packages that pip installs do not provide. Export the toolkit root in each shell that runs the lifecycle commands, and check that `nvcc` reports release 13:
 
     ```bash
     export CUDA_HOME=/usr/local/cuda  # replace with the CUDA 13 toolkit root
@@ -169,6 +170,8 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev up --instance runs/dev-sglang
     narwhal dev verify --instance runs/dev-sglang
     ```
+
+    Under WSL2, when an engine fails to start, lower each engine's memory fraction as [Template and GPU allocation](#template-and-gpu-allocation) describes.
 
 ## Inspecting and stopping the instance
 
