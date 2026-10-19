@@ -567,15 +567,22 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(source, state)
         # An aggregated engine holds both roles and serves both phases.
         self.assertIn("unless on(iid) (count by(iid) (count by(iid, role) (", state)
-        # Probing needs engine-side running requests across the window and no routed work on
-        # the engine from any router in the same window.
-        self.assertIn("label_replace(3 * clamp_max(min_over_time(((sum by(iid) (", state)
-        self.assertIn(
-            "[15s:5s]), 1) unless on(iid) (max_over_time((sum by(iid) (narwhal_resident_requests"
-            '{job="narwhal-router",iid=~"$iid"} and on(job,instance) '
-            '(up{job="narwhal-router"} == 1)))[15s:5s]) > 0), "s", "probing", "", "")',
-            state,
-        )
+        # Probing needs engine-side work in a window that ends one scrape interval ago, and no
+        # work any router sent or held on the engine, and no tool report, over a wider window.
+        self.assertIn("label_replace(3 * clamp_max(((max_over_time(((sum by(iid) (", state)
+        for source in (
+            "[15s:1s] offset 6s) > 0) or (changes(((sum by(iid) ({__name__=~",
+            ' and on(iid) (max by(iid) (up{job="engines",iid=~"$iid"} offset 21s))',
+            " unless on(iid) (max by(iid) (max_over_time(narwhal_resident_requests"
+            '{job="narwhal-router",iid=~"$iid"}[35s])) > 0)',
+            " unless on(iid) (sum by(iid) (increase(narwhal_engine_requests_total"
+            '{job="narwhal-router",iid=~"$iid"}[35s])) > 0)',
+            " unless on(iid) (max by(iid) (max_over_time(narwhal_tool_engine_in_use"
+            '{job="narwhal-tools",iid=~"$iid"}[35s])))',
+            ' unless on() ((max_over_time(up{job="narwhal-router"}[35s]) == 1) and '
+            '(min_over_time(up{job="narwhal-router"}[35s]) == 0)), 1), "s", "probing", "", "")',
+        ):
+            self.assertIn(source, state)
         # A tool names its operation for the engines Prometheus scrapes.
         for code, operation, name in (
             (4, "calibration", "calibrating"),

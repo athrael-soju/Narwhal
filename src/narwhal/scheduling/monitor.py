@@ -119,6 +119,8 @@ class InstanceMonitor:
         # Decode streams whose engine output has ended and await release.
         self._decode_ended: set[str] = set()
         self._last_prefill_activity: dict[str, float] = {}
+        # Requests the router has sent to each engine: placed legs and its own probes.
+        self.requests_sent: dict[str, int] = {}
 
     def add(self, instance: Instance) -> None:
         """Register an engine and initialize its interval state."""
@@ -128,6 +130,12 @@ class InstanceMonitor:
         self._handoffs[instance.iid] = _Window()
         self._prices[instance.iid] = _PriceWindow(anchor=now, window_start=now)
         self._decode_tokens[instance.iid] = instance.decode_tokens()
+        self.requests_sent.setdefault(instance.iid, 0)
+
+    def sent(self, *iids: str) -> None:
+        """Count one request the router sends to each of `iids`."""
+        for iid in iids:
+            self.requests_sent[iid] = self.requests_sent.get(iid, 0) + 1
 
     def pool(self, role: Role) -> list[Instance]:
         """Return engines assigned to a role."""
@@ -149,6 +157,7 @@ class InstanceMonitor:
         """Add `request` to the engine's resident prefill or decode set."""
         inst = self.instances[iid]
         self.waiting.pop(request.rid, None)
+        self.sent(iid)
         if request.phase is Phase.PREFILL:
             inst.prefill[request.rid] = request
             request.prefill_instance = iid

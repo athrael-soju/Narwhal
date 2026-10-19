@@ -33,7 +33,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_attempt_failures_total`, `narwhal_served_after_retry_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_upstream_seconds_total` |
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | In-flight limit and saturation | `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, `narwhal_saturation_threshold_seconds` |
-| Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`, `narwhal_engine_seats`, `narwhal_kv_lease_seconds`, `narwhal_handoff_bound_seconds` |
+| Pools | `narwhal_pool_instances`, `narwhal_pool_load`, `narwhal_instance_role`, `narwhal_resident_requests`, `narwhal_engine_requests_total`, `narwhal_engine_seats`, `narwhal_kv_lease_seconds`, `narwhal_handoff_bound_seconds` |
 | Health | `narwhal_ejected_instances`, `narwhal_ejected`, `narwhal_engine_quarantined`, `narwhal_engine_held`, `narwhal_engine_ejections_total`, `narwhal_engine_hold_starts_total`, `narwhal_engine_hold_ends_total`, `narwhal_engine_probes_total`, `narwhal_engine_readmissions_total`, `narwhal_probation_instances`, `narwhal_health_windows_scored_total`, `narwhal_health_windows_undersampled_total`, `narwhal_health_prefill_paused`, `narwhal_health_prefill_pauses_total`, `narwhal_engine_breaker_streak`, `narwhal_engine_breaker_verifying` |
 | Floors | `narwhal_prefill_below_floor`, `narwhal_decode_floor`, `narwhal_decode_below_floor`, `narwhal_prefill_below_floor_events_total`, `narwhal_prefill_below_floor_seconds_total`, `narwhal_decode_floor_restorations_total` |
 | Role controller | `narwhal_flips_total`, `narwhal_flip_reversals_total`, `narwhal_flips_refused_total`, `narwhal_flip_inflight_total`, `narwhal_controller_advisory`, `narwhal_controller_decisions_total`, `narwhal_controller_proposed_engines`, `narwhal_controller_phase_work_engines`, `narwhal_controller_projected_slo_ratio`, `narwhal_controller_objective`, `narwhal_controller_decode_tokens_per_engine`, `narwhal_controller_decode_requests_per_engine`, `narwhal_controller_decode_model`, `narwhal_controller_last_decision` |
@@ -43,16 +43,18 @@ The router exports these series on `/metrics`, grouped by area:
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
+`narwhal_engine_requests_total` counts, for each engine, the request legs the router has placed on it and the verification, readmission and peer release probes it has sent to it since the router started.
+
 ### Tool metrics
 
-With `--metrics-url`, `narwhal-check` serves these gauges on `/metrics` during preflight and first-token calibration, and `narwhal-profile` serves them during a live sweep. Each series carries an `operation` label of `preflight`, `calibration` or `profiling`.
+With `--metrics-url` or `NARWHAL_TOOL_METRICS_URL`, `narwhal-check` serves these gauges on `/metrics` during preflight and first-token calibration, and `narwhal-profile` serves them during a live sweep. Each series carries an `operation` label of `preflight`, `calibration` or `profiling`.
 
 | Series | Value |
 | --- | --- |
 | `narwhal_tool_operation` | `1` while the operation runs |
 | `narwhal_tool_engine_in_use` | `1` for each engine the operation sends requests to, labelled with the engine's `iid` |
 | `narwhal_tool_steps_completed` | Steps completed |
-| `narwhal_tool_steps_total` | Steps planned: one per gate for preflight, one per measurement round for calibration, and one per engine for profiling |
+| `narwhal_tool_steps_total` | Steps planned: one per gate for preflight; for calibration, one per directed pair and input length in the first sample, then one per concurrent round and input length in each later sample; and one per engine for profiling |
 
 A sweep that profiles lanes in separate processes counts each engine when its lane process records its profile.
 
