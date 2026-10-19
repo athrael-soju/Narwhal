@@ -16,6 +16,8 @@ from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 
 # Each retry sizes the cohort's tokens from the previous attempt's join lag.
 DECODE_RETRIES = 3
+# A cohort sized to the KV cache leaves the rest free for a lagged cohort's longer retry.
+LARGEST_FIT_KV_SHARE = 0.8
 
 
 async def _one_decode_stream(
@@ -157,9 +159,11 @@ def stream_kv_tokens(input_len: int, tokens: int, block_tokens: int | None, rese
     return need
 
 
-def _usable_kv(kv_capacity_tokens: int, block_tokens: int | None) -> int:
-    # vLLM holds one block back as its null block.
-    return kv_capacity_tokens - (block_tokens or 0)
+def usable_kv_tokens(
+    kv_capacity_tokens: int, block_tokens: int | None, reserved_blocks: int = 0
+) -> int:
+    """Return the KV tokens decode streams can use from the engine's reported capacity."""
+    return kv_capacity_tokens - reserved_blocks * (block_tokens or 0)
 
 
 def decode_cells(
@@ -170,24 +174,35 @@ def decode_cells(
     *,
     block_tokens: int | None = None,
     reserved: int = 0,
+    reserved_blocks: int = 0,
 ) -> tuple[int, ...]:
-    """Return the cohorts measured at `input_len`: those whose streams fit in the KV cache.
+    """Return the cohorts measured at `input_len`.
 
-    An input length where fewer than two cohorts fit is skipped whole.
+    Cohorts whose streams exceed the KV cache are skipped, and the largest cohort that fills at
+    most `LARGEST_FIT_KV_SHARE` of it is measured after the ones that fit. An input length
+    where fewer than two cohorts fit is skipped whole.
     """
     if kv_capacity_tokens is None:
         return concurrency
     need = stream_kv_tokens(input_len, tokens, block_tokens, reserved)
-    usable = _usable_kv(kv_capacity_tokens, block_tokens)
+    usable = usable_kv_tokens(kv_capacity_tokens, block_tokens, reserved_blocks)
     cells = tuple(c for c in concurrency if c * need <= usable)
+    if len(cells) < len(concurrency):
+        largest = int(usable * LARGEST_FIT_KV_SHARE) // need
+        if largest > max(cells, default=0):
+            cells += (largest,)
     return cells if len(cells) >= 2 else ()
 
 
 def _retry_kv_limit(
-    kv_capacity_tokens: int, cohort: int, input_len: int, block_tokens: int | None
+    kv_capacity_tokens: int,
+    cohort: int,
+    input_len: int,
+    block_tokens: int | None,
+    reserved_blocks: int,
 ) -> int:
     # A retry's longer streams must still fit in the KV cache, block by block.
-    per_stream = _usable_kv(kv_capacity_tokens, block_tokens) // cohort
+    per_stream = usable_kv_tokens(kv_capacity_tokens, block_tokens, reserved_blocks) // cohort
     if block_tokens:
         per_stream -= per_stream % block_tokens
     return per_stream - input_len
@@ -228,9 +243,9 @@ async def probe_decode(
     kv_capacity_tokens: int | None = None,
     block_tokens: int | None = None,
     skipped: list[dict[str, object]] | None = None,
-    sample_inputs: list[int] | None = None,
 ) -> list[tuple[float, float, float]]:
     reserved = dialect.decode_reserved_tokens
+    reserved_blocks = dialect.kv_reserved_blocks
 
     def cells_at(input_len: int) -> tuple[int, ...]:
         return decode_cells(
@@ -240,6 +255,7 @@ async def probe_decode(
             kv_capacity_tokens,
             block_tokens=block_tokens,
             reserved=reserved,
+            reserved_blocks=reserved_blocks,
         )
 
     if kv_capacity_tokens is not None and sum(bool(cells_at(n)) for n in input_lens) < 2:
@@ -274,11 +290,14 @@ async def probe_decode(
                 for c in concurrency
                 if c not in cells
             )
-        if len(cells) < len(concurrency):
+        missing = [c for c in concurrency if c not in cells]
+        if missing:
+            largest = [c for c in cells if c not in concurrency]
             print(
                 f"    decode  isl={input_len:<6} skipped c="
-                + ",".join(str(c) for c in concurrency if c not in cells)
+                + ",".join(str(c) for c in missing)
                 + f": cohorts exceed {kv_capacity_tokens} KV tokens"
+                + (f"; measuring c={largest[0]}" if largest else "")
             )
         # An engine's first decode at each batch size can include kernel compilation; it stays
         # out of the fit.
@@ -295,7 +314,9 @@ async def probe_decode(
                 )
                 limit = max_model_len - input_len if max_model_len is not None else None
                 if kv_capacity_tokens is not None:
-                    fits = _retry_kv_limit(kv_capacity_tokens, c, input_len, block_tokens)
+                    fits = _retry_kv_limit(
+                        kv_capacity_tokens, c, input_len, block_tokens, reserved_blocks
+                    )
                     limit = fits if limit is None else min(limit, fits)
                 for _ in range(DECODE_RETRIES):
                     if len(observed) >= 2 * c:
@@ -337,8 +358,6 @@ async def probe_decode(
             )
             samples.append((requests, batch, gap))
             measured_lengths.add(input_len)
-            if sample_inputs is not None:
-                sample_inputs.append(input_len)
             print(
                 f"    decode  isl={input_len:<6} c={c:<3} "
                 f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "

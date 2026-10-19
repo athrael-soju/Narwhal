@@ -22,8 +22,8 @@ class SglangDialect(EngineDialect):
         "add_generation_prompt",
         "add_special_tokens",
     )
-    # A decode engine admits a transferred request only with --num-reserved-decode-tokens, 512
-    # by default, free for it and for each running request.
+    # A decode engine admits a transferred request only with --num-reserved-decode-tokens free
+    # for it and for each running request. The launch plan leaves that flag at SGLang's 512.
     decode_reserved_tokens = 512
 
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:

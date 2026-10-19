@@ -38,6 +38,8 @@ class EngineDialect(ABC):
     # KV tokens the engine holds free for each running decode request beyond its prompt, when
     # that exceeds the request's output length.
     decode_reserved_tokens: ClassVar[int] = 0
+    # Cache blocks the engine's reported KV capacity includes but never gives to a request.
+    kv_reserved_blocks: ClassVar[int] = 0
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
