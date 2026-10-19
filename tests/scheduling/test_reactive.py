@@ -869,10 +869,11 @@ class MixedPressureTests(unittest.TestCase):
                         self.assertEqual(decision["decode_priced_requests_per_engine"], 40.0)
                     self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
 
-    def _residents_on_a_prefill_engine(self, residents: int, idle_limit: int) -> None:
+    def _residents_on_a_prefill_engine(self, residents: int, idle_limit: int | None) -> None:
         """Hold `residents` on prefill engine e1 and decode engines e2 to e4, and none on e5.
 
-        Every engine runs and measured 64 sequences, except that e5 runs `idle_limit`.
+        Every engine runs and measured 64 sequences, except that e5 runs `idle_limit`, or has no
+        attested limit when it is None.
         """
         fleet = self.fleet
         fleet.monitor.instances["e1"].role = Role.PREFILL
@@ -888,8 +889,15 @@ class MixedPressureTests(unittest.TestCase):
     def test_the_wait_counts_the_seats_of_the_engines_holding_residents(self) -> None:
         # Four engines hold the residents, one of them a prefill engine, and an idle decode
         # engine holds none. The residents wait only for the 256 seats of the engines holding
-        # them: 240 fit, and 280 wait 280/256 behind batches of 64.
-        for residents, idle_limit, wait in ((60, 8, 1.0), (70, 64, 280 / 256), (70, 8, 280 / 256)):
+        # them: 240 fit, and 280 wait 280/256 behind batches of 64, whatever the idle engine's
+        # seats, including none when it has no limit or runs past its 64-request profile.
+        for residents, idle_limit, wait in (
+            (60, 8, 1.0),
+            (70, 64, 280 / 256),
+            (70, 8, 280 / 256),
+            (70, None, 280 / 256),
+            (70, 128, 280 / 256),
+        ):
             with self.subTest(residents=residents, idle_limit=idle_limit):
                 self.setUp()
                 self._residents_on_a_prefill_engine(residents, idle_limit)
@@ -898,17 +906,20 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertEqual(current.decode_priced_requests_per_engine, min(residents, 64))
                 self.assertTrue(current.decode_profile_covered)
 
-    def test_residents_past_the_seats_of_a_prefill_engine_hold_under_prefill_overload(
+    def test_waiting_residents_on_a_prefill_engine_keep_the_split_under_prefill_overload(
         self,
     ) -> None:
         # 70 residents on each of four engines, one of them a prefill engine, run in batches of
         # 64. With prefill overloaded, the move toward decode doubles the projected TTFT, so the
-        # fleet stays at two prefill and four decode engines.
-        self._residents_on_a_prefill_engine(70, 64)
-        self.fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.4}
-        for _ in range(6):
-            self.assertIsNone(self.fleet.step())
-        self.assertEqual(self.fleet.scheduler.roles.flips, [])
+        # fleet stays at two prefill and four decode engines, whatever the idle engine's seats.
+        for idle_limit in (64, None, 128):
+            with self.subTest(idle_limit=idle_limit):
+                self.setUp()
+                self._residents_on_a_prefill_engine(70, idle_limit)
+                self.fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.4}
+                for _ in range(6):
+                    self.assertIsNone(self.fleet.step())
+                self.assertEqual(self.fleet.scheduler.roles.flips, [])
 
     def test_a_profile_below_its_sequence_limit_keeps_the_coverage_guard(self) -> None:
         # Engines that run 64 sequences hold 61 residents each. Residents past a profile below
