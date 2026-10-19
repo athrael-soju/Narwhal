@@ -771,6 +771,9 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertTrue(score.decode_profile_covered)
                 interval = (0.001 + 6_400 * 0.000001) * raw / 64
                 self.assertAlmostEqual(score.tpot_ratio, (interval - 0.001) / (0.01 - 0.001))
+                # The SLO capacity is the resident tokens whose waiting batch meets the target.
+                capacity = score.decode_slo_capacity_tokens or 0.0
+                self.assertAlmostEqual((0.001 + capacity * 64 / raw * 0.000001) * raw / 64, 0.01)
         self.assertGreater(current.objective - toward_decode.objective, 0.2)
 
     def test_the_decision_records_the_priced_batch_of_both_splits(self) -> None:
@@ -866,22 +869,57 @@ class MixedPressureTests(unittest.TestCase):
                         self.assertEqual(decision["decode_priced_requests_per_engine"], 40.0)
                     self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
 
-    def test_the_wait_counts_seats_on_the_engines_that_hold_residents(self) -> None:
-        # A prefill engine still holds 60 residents, three decode engines hold 60 each, and an
-        # idle decode engine runs 8 sequences. The 240 residents fit the 264 seats of those five
-        # engines, so the current split prices no wait.
+    def _residents_on_a_prefill_engine(self, residents: int, idle_limit: int | None) -> None:
+        """Hold `residents` on prefill engine e1 and decode engines e2 to e4, and none on e5.
+
+        Every engine runs and measured 64 sequences, except that e5 runs `idle_limit`, or has no
+        attested limit when it is None.
+        """
         fleet = self.fleet
         fleet.monitor.instances["e1"].role = Role.PREFILL
-        fleet.scheduler.sequence_limits = dict.fromkeys(fleet.monitor.instances, 64) | {"e5": 8}
+        fleet.scheduler.sequence_limits = dict.fromkeys(fleet.monitor.instances, 64) | {
+            "e5": idle_limit
+        }
         for iid in fleet.monitor.instances:
             fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=64))
         for iid in ("e1", "e2", "e3", "e4"):
-            for index in range(60):
+            for index in range(residents):
                 fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
-        current = self._snapshot().score(2)
-        self.assertEqual(current.decode_priced_wait_factor, 1.0)
-        self.assertEqual(current.decode_priced_requests_per_engine, 60.0)
-        self.assertTrue(current.decode_profile_covered)
+
+    def test_the_wait_counts_the_seats_of_the_engines_holding_residents(self) -> None:
+        # Four engines hold the residents, one of them a prefill engine, and an idle decode
+        # engine holds none. The residents wait only for the 256 seats of the engines holding
+        # them: 240 fit, and 280 wait 280/256 behind batches of 64, whatever the idle engine's
+        # seats, including none when it has no limit or runs past its 64-request profile.
+        for residents, idle_limit, wait in (
+            (60, 8, 1.0),
+            (70, 64, 280 / 256),
+            (70, 8, 280 / 256),
+            (70, None, 280 / 256),
+            (70, 128, 280 / 256),
+        ):
+            with self.subTest(residents=residents, idle_limit=idle_limit):
+                self.setUp()
+                self._residents_on_a_prefill_engine(residents, idle_limit)
+                current = self._snapshot().score(2)
+                self.assertAlmostEqual(current.decode_priced_wait_factor, wait)
+                self.assertEqual(current.decode_priced_requests_per_engine, min(residents, 64))
+                self.assertTrue(current.decode_profile_covered)
+
+    def test_waiting_residents_on_a_prefill_engine_keep_the_split_under_prefill_overload(
+        self,
+    ) -> None:
+        # 70 residents on each of four engines, one of them a prefill engine, run in batches of
+        # 64. With prefill overloaded, the move toward decode doubles the projected TTFT, so the
+        # fleet stays at two prefill and four decode engines, whatever the idle engine's seats.
+        for idle_limit in (64, None, 128):
+            with self.subTest(idle_limit=idle_limit):
+                self.setUp()
+                self._residents_on_a_prefill_engine(70, idle_limit)
+                self.fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.4}
+                for _ in range(6):
+                    self.assertIsNone(self.fleet.step())
+                self.assertEqual(self.fleet.scheduler.roles.flips, [])
 
     def test_a_profile_below_its_sequence_limit_keeps_the_coverage_guard(self) -> None:
         # Engines that run 64 sequences hold 61 residents each. Residents past a profile below

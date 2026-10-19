@@ -122,10 +122,10 @@ class SplitSnapshot:
     offered_outputs: tuple[int, ...] = ()
     # Decode-slot wait over the remaining TTFT budget, by decode engine count.
     decode_wait_ratios: tuple[tuple[int, float], ...] = ()
-    # Total decode seats and engine count over each split's decode engines and the engines
-    # holding decode residents, by prefill engine count, for splits where every such engine
-    # has seats.
-    decode_seat_options: tuple[tuple[int, int, int], ...] = ()
+    # By prefill engine count, for splits where every engine holding decode residents has
+    # seats: their total seats, and the total seats and count of the split's decode engines
+    # that hold none, or 0 and 0 when one of those has no seats.
+    decode_seat_options: tuple[tuple[int, int, int, int], ...] = ()
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -183,24 +183,39 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
-        # Residents past the split's decode seats wait for one: each engine runs a batch of the
-        # mean seats with the residents' mean KV tokens, and each resident receives a token
-        # `wait` times less often. A move toward prefill keeps every resident on its engine and
-        # prices them all.
-        seats = (
+        # Residents past the seats of the engines they spread over wait for one: each engine runs
+        # a batch of the mean seats with the residents' mean KV tokens, and each resident receives
+        # a token `wait` times less often. The spread counts the engines holding residents, and
+        # each further decode engine at the mean seats of the split's decode engines that hold
+        # none. A move toward prefill keeps every resident on its engine and prices them all.
+        row = (
             None
             if include_resident and prefill > self.current_prefill
             else next(
-                ((total, count) for p, total, count in self.decode_seat_options if p == prefill),
+                (row[1:] for row in self.decode_seat_options if row[0] == prefill),
                 None,
             )
         )
-        wait = max(1.0, self.resident_decode_requests / seats[0]) if seats else 1.0
+        # Seats over `scale`, in integers, so every priced value is one rounded quotient.
+        seats: int | None = None
+        scale = 1
+        if row is not None:
+            held, idle_sum, idle_count = row
+            extra = resident_engines - (self.active_decode_instances or self.current_decode)
+            if extra == 0:
+                seats = held
+            elif idle_count:
+                seats, scale = held * idle_count + extra * idle_sum, idle_count
+        wait = 1.0
         batch_requests, batch_tokens = active_requests, active_tokens
-        if seats and wait > 1.0:
-            # A clamp rather than a quotient, so rounding never prices a batch past the seats.
-            batch_requests = min(active_requests, seats[0] / seats[1])
-            batch_tokens = active_tokens / active_requests * batch_requests
+        if seats is not None and self.resident_decode_requests * scale > seats:
+            wait = self.resident_decode_requests * scale / seats
+            batch_requests = seats / (scale * resident_engines)
+            batch_tokens = (
+                self.resident_decode_tokens
+                * seats
+                / (self.resident_decode_requests * scale * resident_engines)
+            )
 
         correction = self.decode_correction
         pending_covered = bool(profiles)
@@ -306,6 +321,12 @@ class SplitScorer:
         self.demand = demand
         self.monitor = demand.monitor
         self.scheduler = demand.scheduler
+
+    def seats(self, iid: str) -> int | None:
+        """Return an engine's decode seats under its profile and attested sequence limit."""
+        return engine_seats(
+            self.scheduler.profiles.get(iid), self.scheduler.sequence_limits.get(iid)
+        )
 
     def recheck(self, waiting: Iterable[Request]) -> None:
         """Refresh the cache evidence of requests waiting for prefill placement."""
@@ -486,7 +507,7 @@ class SplitScorer:
         # Engines that run prefill under each split.
         prefill_iids: dict[int, set[str]] = {}
         holding = {inst.iid for inst in instances if inst.decode}
-        seat_options: list[tuple[int, int, int]] = []
+        seat_options: list[tuple[int, int, int, int]] = []
         for prefill in range(1, len(instances)):
             if prefills is not None and prefill not in prefills:
                 continue
@@ -505,16 +526,18 @@ class SplitScorer:
                 )
             profile_options_list.append((prefill, rows))
             prefill_iids[prefill] = {iid for iid, role in roles.items() if role is Role.PREFILL}
-            seated = [
-                engine_seats(
-                    self.scheduler.profiles.get(iid), self.scheduler.sequence_limits.get(iid)
-                )
-                for iid in holding | {iid for iid, role in roles.items() if role is Role.DECODE}
+            held = [self.seats(iid) for iid in holding]
+            idle = [
+                self.seats(iid)
+                for iid, role in roles.items()
+                if role is Role.DECODE and iid not in holding
             ]
-            if seated and all(seats is not None for seats in seated):
-                seat_options.append(
-                    (prefill, sum(seats for seats in seated if seats is not None), len(seated))
-                )
+            held_seats = [seats for seats in held if seats is not None]
+            idle_seats = [seats for seats in idle if seats is not None]
+            if len(held_seats) == len(held):
+                # Idle engines count only when every one of them has seats.
+                counted = idle_seats if len(idle_seats) == len(idle) else []
+                seat_options.append((prefill, sum(held_seats), sum(counted), len(counted)))
         profile_options = tuple(profile_options_list)
         demand_options = (
             tuple(
