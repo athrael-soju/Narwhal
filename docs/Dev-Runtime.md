@@ -220,7 +220,7 @@ The role controller measures a pool's load as its demand divided by its engine c
 
 The replay computes each phase's target range from the profiles at its starting split, the split it moves to and the split beyond, and stops with an error when the target falls outside that range. It also stops with an error when:
 
-- a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window
+- a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, within its duration or the 30-second demand window, whichever is shorter
 - no output within the template's context limit and the profiled decode domain balances the Balanced phase's prefill work
 - two phases would repeat a prompt: a phase's requests and its warm-up request take their prompts from consecutive seeds starting at the phase's `seed`
 

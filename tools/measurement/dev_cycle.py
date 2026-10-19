@@ -133,10 +133,13 @@ def sized(phase, split, rows, template):
     else:
         # A balanced phase's decode work matches its prefill work, so its prefill load sets it.
         rate = value / prefill_s
-    if rate * reactive["window_s"] < reactive["min_arrivals"]:
+    # A phase shorter than the demand window offers only its own requests to it.
+    span_s = min(phase["duration_s"], reactive["window_s"])
+    if rate * span_s < reactive["min_arrivals"]:
         raise ValueError(
-            f"phase {phase['name']} offers {rate:.3g} requests/s, fewer than "
-            f"{reactive['min_arrivals']} per {reactive['window_s']:g} s demand window"
+            f"phase {phase['name']} offers {rate * span_s:.3g} requests in {span_s:g} s, fewer "
+            f"than the {reactive['min_arrivals']} the controller needs in its "
+            f"{reactive['window_s']:g} s demand window"
         )
     return {
         **phase,

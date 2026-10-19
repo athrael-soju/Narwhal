@@ -394,11 +394,22 @@ class TargetTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 dev_cycle.check_target({**base, **change})
         light = {**base, "target": {"decode_engines": 0.001}}
-        with self.assertRaisesRegex(ValueError, "per 30 s demand window"):
+        with self.assertRaisesRegex(ValueError, "in its 30 s demand window"):
             dev_cycle.sized(light, (2, 2), self.rows((2, 2)), self.spec)
         missing = self.directory / "missing.json"
         with self.assertRaisesRegex(ValueError, "price no 2P:2D split"):
             dev_cycle.sized_recipe(self.spec, effective(missing))
+
+    def test_a_phase_shorter_than_the_demand_window_offers_its_arrivals_within_its_duration(self):
+        rows = self.rows((2, 2))
+        decode = self.spec["role_cycle"]["phases"][0]
+        decode_rps = dev_cycle.prices(decode, rows, self.spec["slo"])[1]
+        # 0.5 requests/s offers 15 requests in the 30 s demand window, and 7.5 in a 15 s phase.
+        phase = {**decode, "target": {"decode_engines": 0.5 / decode_rps}}
+        sized = dev_cycle.sized({**phase, "duration_s": 30.0}, (2, 2), rows, self.spec)
+        self.assertAlmostEqual(sized["rate_rps"], 0.5)
+        with self.assertRaisesRegex(ValueError, "offers 7.5 requests in 15 s, fewer than the 10"):
+            dev_cycle.sized({**phase, "duration_s": 15.0}, (2, 2), rows, self.spec)
 
     def test_command_sizes_phases_from_the_run_profiles(self):
         with tempfile.TemporaryDirectory() as temporary:
