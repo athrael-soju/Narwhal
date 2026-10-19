@@ -34,8 +34,10 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
 
 @dataclass(frozen=True)
 class _Recorded:
-    """The sequence limit a profile's evidence records, the limits file it read it from, and
-    whether its sweep skipped cohorts that exceed the engine's KV cache.
+    """What the evidence that measured a profile records about its decode sweep.
+
+    `limit` is the sequence limit, `limits_path` the limits file it came from, and `kv_bound`
+    whether the sweep skipped cohorts that exceed the engine's KV cache.
     """
 
     limit: int | None
