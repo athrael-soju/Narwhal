@@ -874,6 +874,61 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(skipped[2]["kv_tokens"], 8192 + 64)
 
+    async def test_a_length_where_one_cohort_fits_records_why_that_cohort_is_skipped(self):
+        """The cohort that fits at a skipped length records the reason, apart from the others."""
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            return [(float(size), float(size * input_len), 0.01)] * (2 * size), {"cohort": size}
+
+        # One 8,256-token stream fits 12,000 KV tokens and four exceed it. Without a requested
+        # cohort that fits, the one stream that fills at most 80% of the cache is that cohort.
+        for concurrency in ((1, 4, 16), (4, 16)):
+            with self.subTest(concurrency=concurrency):
+                skipped: list[dict[str, object]] = []
+                with (
+                    patch.object(
+                        decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])
+                    ),
+                    patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+                    redirect_stdout(io.StringIO()) as output,
+                ):
+                    await probe_decode(
+                        None,
+                        "http://e",
+                        "stub",
+                        DIALECT,
+                        concurrency=concurrency,
+                        input_lens=(512, 1024, 8192),
+                        tokens=64,
+                        max_model_len=32768,
+                        kv_capacity_tokens=12_000,
+                        skipped=skipped,
+                    )
+                cell = {"input_tokens": 8192, "kv_capacity_tokens": 12_000}
+                self.assertEqual(
+                    sorted(
+                        (row for row in skipped if row["input_tokens"] == 8192),
+                        key=lambda row: row["concurrency"],
+                    ),
+                    [
+                        {
+                            **cell,
+                            "concurrency": 1,
+                            "kv_tokens": 8256,
+                            "reason": "fewer than two cohorts fit at isl=8192",
+                        },
+                        {**cell, "concurrency": 4, "kv_tokens": 4 * 8256},
+                        {**cell, "concurrency": 16, "kv_tokens": 16 * 8256},
+                    ],
+                )
+                printed = output.getvalue()
+                self.assertIn(
+                    "isl=8192   skipped c=4,16: cohorts exceed 12000 KV tokens\n", printed
+                )
+                self.assertIn(
+                    "isl=8192   skipped c=1: fewer than two cohorts fit at isl=8192\n", printed
+                )
+
     def test_decode_cells_count_whole_blocks_and_the_decode_reserve(self):
         # A vLLM stream of 100 input and 64 output tokens takes 11 blocks of 16, and the pool
         # keeps its null block back.

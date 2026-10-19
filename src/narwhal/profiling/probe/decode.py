@@ -184,6 +184,22 @@ def decode_cells(
     """
     if kv_capacity_tokens is None:
         return concurrency
+    cells = _fitting_cells(
+        input_len, concurrency, tokens, kv_capacity_tokens, block_tokens, reserved, reserved_blocks
+    )
+    return cells if len(cells) >= 2 else ()
+
+
+def _fitting_cells(
+    input_len: int,
+    concurrency: tuple[int, ...],
+    tokens: int,
+    kv_capacity_tokens: int,
+    block_tokens: int | None,
+    reserved: int,
+    reserved_blocks: int,
+) -> tuple[int, ...]:
+    """Return the cohorts that fit the KV cache at `input_len`, however many there are."""
     need = stream_kv_tokens(input_len, tokens, block_tokens, reserved)
     usable = usable_kv_tokens(kv_capacity_tokens, block_tokens, reserved_blocks)
     cells = tuple(c for c in concurrency if c * need <= usable)
@@ -191,7 +207,7 @@ def decode_cells(
         largest = int(usable * LARGEST_FIT_KV_SHARE) // need
         if largest > max(cells, default=0):
             cells += (largest,)
-    return cells if len(cells) >= 2 else ()
+    return cells
 
 
 def _retry_kv_limit(
@@ -289,6 +305,19 @@ async def probe_decode(
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
         cells = cells_at(input_len)
+        # The cohorts that fit at a length skipped because fewer than two fit there.
+        alone: tuple[int, ...] = ()
+        if not cells and kv_capacity_tokens is not None:
+            alone = _fitting_cells(
+                input_len,
+                concurrency,
+                tokens,
+                kv_capacity_tokens,
+                block_tokens,
+                reserved,
+                reserved_blocks,
+            )
+        alone_reason = f"fewer than two cohorts fit at isl={input_len}"
         if skipped is not None:
             skipped.extend(
                 {
@@ -296,11 +325,12 @@ async def probe_decode(
                     "concurrency": c,
                     "kv_tokens": c * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
                     "kv_capacity_tokens": kv_capacity_tokens,
+                    **({"reason": alone_reason} if c in alone else {}),
                 }
-                for c in concurrency
+                for c in dict.fromkeys((*concurrency, *alone))
                 if c not in cells
             )
-        missing = [c for c in concurrency if c not in cells]
+        missing = [c for c in concurrency if c not in cells and c not in alone]
         if missing:
             largest = [c for c in cells if c not in concurrency]
             print(
@@ -308,6 +338,12 @@ async def probe_decode(
                 + ",".join(str(c) for c in missing)
                 + f": cohorts exceed {kv_capacity_tokens} KV tokens"
                 + (f"; measuring c={largest[0]}" if largest else "")
+            )
+        if alone:
+            print(
+                f"    decode  isl={input_len:<6} skipped c="
+                + ",".join(str(c) for c in alone)
+                + f": {alone_reason}"
             )
         # An engine's first decode at each batch size can include kernel compilation; it stays
         # out of the fit.
