@@ -399,6 +399,8 @@ These decisions add fields to `control.last_decision`:
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
 | `source_shrink`           | Ordinary consolidation, and a leading departure's later confirmation-span moves                                                       |
 
+While an SGLang engine [drains](../concepts/02-Role-Control.md#guards-on-role-changes) for an approved move to decode, the decisions that ask for the move again and the applied move record the rule that approved it, and `confirmations` equal to the approval's `required_confirmations`. Their pricing fields and `source_pressure_safe` come from the evaluation that records them, so an applied `source_shrink` move can show `source_pressure_safe` as `false`.
+
 #### Demand spans
 
 `demand_horizon_s`, `prefill_work`, `arrivals` and `decode_work` cover these spans:

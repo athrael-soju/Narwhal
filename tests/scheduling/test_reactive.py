@@ -202,6 +202,8 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNone(fleet.confirm())
         self.assertIn("holding", fleet.scheduler.roles._last_decision["reason"])
         (held,) = fleet.scheduler.held_for_switch()
+        # Only a move to decode keeps its approval while the donor drains.
+        self.assertIsNone(fleet.controller.reactive.drain)
         # Passes without an eligible move keep the proposal and the hold while the donor drains.
         fleet.pressure[Role.PREFILL] = 0.9
         for _ in range(4):
@@ -212,6 +214,45 @@ class MixedPressureTests(unittest.TestCase):
         moved = fleet.step()
         self.assertIsNotNone(moved)
         self.assertEqual(moved.iid, held)
+
+    def approve_drain(self) -> str:
+        """Approve 3P to 2P on busy SGLang engines and return the held prefill donor."""
+        fleet = self.fleet
+        fleet.scheduler.switch_requires_idle = True
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        for inst in fleet.monitor.instances.values():
+            residents = inst.prefill if inst.role is Role.PREFILL else inst.decode
+            residents[inst.iid] = Request(inst.iid, 100, wanted_len=10)
+        fleet.pressure = {Role.PREFILL: 0.3, Role.DECODE: 6.0}
+        self.assertIsNone(fleet.step())
+        drain = fleet.controller.reactive.drain
+        self.assertEqual(fleet.scheduler.held_for_switch(), {drain.donor})
+        return drain.donor
+
+    def test_a_move_to_prefill_ends_a_drain_and_holds_its_own_donor(self) -> None:
+        fleet = self.fleet
+        donor = self.approve_drain()
+        # A prefill surge with decode load below shrink at 4P admits the move at once.
+        fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.9}
+        self.assertIsNone(fleet.step())
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual((decision["current_prefill"], decision["prefill"]), (3, 4))
+        (held,) = fleet.scheduler.held_for_switch()
+        self.assertNotEqual(held, donor)
+        self.assertIs(fleet.monitor.instances[held].role, Role.DECODE)
+        self.assertIsNone(fleet.controller.reactive.drain)
+
+    def test_a_waiting_move_to_prefill_releases_a_drain_donor(self) -> None:
+        fleet = self.fleet
+        self.approve_drain()
+        fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 2.5}
+        self.assertIsNone(fleet.step())
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["prefill"], 4)
+        self.assertEqual(decision["reason"], "waiting for sustained demand")
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+        self.assertIsNone(fleet.controller.reactive.drain)
 
     def test_sustained_mixed_pressure_converges_without_oscillation(self) -> None:
         fleet = self.fleet
@@ -653,6 +694,59 @@ class MixedPressureTests(unittest.TestCase):
             "decode profile does not cover proposed work",
         )
         self.assertEqual(len(fleet.monitor.instances["e1"].decode), 2)
+
+    # The next three tests characterize the existing decode coverage guard, which the profiled
+    # request maximum feeds. They pass before and after the profiler measures decode up to each
+    # engine's sequence limit; that change decides which maximum the guard reads.
+
+    def _decode_overload(self, profiled: int, residents: int) -> None:
+        """Hold `residents` decode streams on each of four decode engines under decode pressure."""
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=profiled))
+        for iid in ("e2", "e3", "e4", "e5"):
+            for index in range(residents):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
+        fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: 6.0}
+
+    def test_decode_move_coverage_ends_at_the_profiled_request_maximum(self) -> None:
+        # Moving from four to five decode engines spreads four engines' residents over
+        # five, so a profile measured to 48 requests covers up to 60 residents per engine.
+        for profiled, residents, covered in (
+            (48, 60, True),
+            (48, 61, False),
+            (64, 61, True),
+            (64, 80, True),
+            (64, 81, False),
+        ):
+            with self.subTest(profiled=profiled, residents=residents):
+                self.setUp()
+                self._decode_overload(profiled, residents)
+                snapshot = self.fleet.controller.scorer.capture(
+                    self.fleet.now,
+                    Demand(0.1, 3.0, 30, 0),
+                    utilization=0.8,
+                    observed_load=(0.1, 1.0),
+                )
+                candidate = snapshot.score(1)
+                self.assertEqual(candidate.decode_requests_per_engine, 4 * residents / 5)
+                self.assertEqual(candidate.decode_profile_covered, covered)
+
+    def test_decode_residents_past_the_profile_hold_the_move_toward_decode(self) -> None:
+        self._decode_overload(48, 61)
+        for _ in range(6):
+            self.assertIsNone(self.fleet.step())
+            decision = self.fleet.scheduler.roles._last_decision
+            self.assertEqual(decision["prefill"], 1)
+            self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
+
+    def test_a_profile_measured_past_the_residents_lets_decode_expand(self) -> None:
+        self._decode_overload(64, 61)
+        self.assertIsNotNone(self.fleet.step())
+        self.assertEqual(self.fleet.scheduler.roles._last_decision["result"], "applied")
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
 
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet

@@ -12,8 +12,8 @@ from typing import Any
 from ...contracts import PROFILES, versioned
 from ...provenance import stamp
 from ..fitting import fit_prefill_samples
-from ..model import CACHED_PROFILE_FIELDS, Profile
-from ..store import ProfileStore
+from ..model import CACHED_PROFILE_FIELDS, Profile, evidence_matches
+from ..store import ProfileStore, measured_evidence
 from .instance import prefill_fields
 from .warm import apply_cached_fit
 
@@ -113,43 +113,6 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
     return 0
 
 
-def _evidence_matches(saved: object, row: Profile) -> bool:
-    """Return whether saved profile evidence describes `row`; absent optional fields are unset."""
-    if not isinstance(saved, dict):
-        return False
-    try:
-        return Profile(**saved) == row
-    except (TypeError, ValueError):
-        return False
-
-
-def _measured_profiles(samples: Path) -> dict[str, list[Any]]:
-    """Return saved profile evidence per engine, following a merged sidecar to its sources."""
-    if not samples.is_file():
-        raise FileNotFoundError(f"missing source measurement sidecar: {samples}")
-    record = json.loads(samples.read_text())
-    if isinstance(record, dict) and isinstance(record.get("engines"), dict):
-        return {
-            iid: [evidence.get("profile")]
-            for iid, evidence in record["engines"].items()
-            if isinstance(evidence, dict)
-        }
-    if not isinstance(record, dict) or not isinstance(record.get("sources"), list):
-        raise ValueError(f"invalid source measurement sidecar: {samples}")
-    found: dict[str, list[Any]] = {}
-    for source in record["sources"]:
-        if not isinstance(source, dict) or not isinstance(source.get("samples"), str):
-            raise ValueError(f"invalid source measurement sidecar: {samples}")
-        path = Path(source["samples"])
-        if not path.is_file():
-            raise FileNotFoundError(f"{samples}: missing merged source sidecar {path}")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != source.get("samples_sha256"):
-            raise ValueError(f"{samples}: merged source sidecar {path} changed")
-        for iid, profiles in _measured_profiles(path).items():
-            found.setdefault(iid, []).extend(profiles)
-    return found
-
-
 def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str]) -> int:
     """Combine measured profile stores; a later store's variant replaces an earlier one."""
     sidecar_path = output_path.with_suffix(".samples.json")
@@ -164,7 +127,9 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
     for source in sources:
         source_store = ProfileStore(source)
         samples = source.with_suffix(".samples.json")
-        evidence = _measured_profiles(samples)
+        evidence, problems = measured_evidence(samples)
+        if problems:
+            raise problems[0]
         rows = source_store.all_profiles()
         if not rows:
             raise ValueError(f"empty source profiles: {source}")
@@ -172,7 +137,9 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
             if row.iid not in engine_ids:
                 left_out.add(row.iid)
                 continue
-            if not any(_evidence_matches(saved, row) for saved in evidence.get(row.iid, [])):
+            if not any(
+                evidence_matches(saved.get("profile"), row) for saved in evidence.get(row.iid, [])
+            ):
                 raise ValueError(
                     f"{samples}: profile {row.iid} lacks matching measurement evidence"
                 )
@@ -191,9 +158,9 @@ def merge_profiles(sources: list[Path], output_path: Path, engine_ids: set[str])
             origin[key] = source
         records.append(
             {
-                "profiles": str(source),
+                "profiles": os.path.relpath(source.resolve(), output_path.resolve().parent),
                 "profiles_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-                "samples": str(samples),
+                "samples": os.path.relpath(samples.resolve(), output_path.resolve().parent),
                 "samples_sha256": hashlib.sha256(samples.read_bytes()).hexdigest(),
             }
         )

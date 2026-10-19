@@ -16,6 +16,8 @@ from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 
 # Each retry sizes the cohort's tokens from the previous attempt's join lag.
 DECODE_RETRIES = 3
+# A cohort sized to the KV cache leaves the rest free for a lagged cohort's longer retry.
+LARGEST_FIT_KV_SHARE = 0.8
 
 
 async def _one_decode_stream(
@@ -149,6 +151,95 @@ async def _decode_cohort(
     return observed, state
 
 
+def stream_kv_tokens(input_len: int, tokens: int, block_tokens: int | None, reserved: int) -> int:
+    """Return the KV tokens an engine sets aside for one decode stream."""
+    need = input_len + max(tokens, reserved)
+    if block_tokens:
+        need = math.ceil(need / block_tokens) * block_tokens
+    return need
+
+
+def usable_kv_tokens(
+    kv_capacity_tokens: int, block_tokens: int | None, reserved_blocks: int = 0
+) -> int:
+    """Return the KV tokens decode streams can use from the engine's reported capacity."""
+    return kv_capacity_tokens - reserved_blocks * (block_tokens or 0)
+
+
+def decode_cells(
+    input_len: int,
+    concurrency: tuple[int, ...],
+    tokens: int,
+    kv_capacity_tokens: int | None,
+    *,
+    block_tokens: int | None = None,
+    reserved: int = 0,
+    reserved_blocks: int = 0,
+) -> tuple[int, ...]:
+    """Return the cohorts measured at `input_len`.
+
+    Cohorts whose streams exceed the KV cache are skipped, and the largest cohort that fills at
+    most `LARGEST_FIT_KV_SHARE` of it is measured after the ones that fit. An input length
+    where fewer than two cohorts fit is skipped whole.
+    """
+    if kv_capacity_tokens is None:
+        return concurrency
+    cells = _fitting_cells(
+        input_len, concurrency, tokens, kv_capacity_tokens, block_tokens, reserved, reserved_blocks
+    )
+    return cells if len(cells) >= 2 else ()
+
+
+def _fitting_cells(
+    input_len: int,
+    concurrency: tuple[int, ...],
+    tokens: int,
+    kv_capacity_tokens: int,
+    block_tokens: int | None,
+    reserved: int,
+    reserved_blocks: int,
+) -> tuple[int, ...]:
+    """Return the cohorts that fit the KV cache at `input_len`, however many there are."""
+    need = stream_kv_tokens(input_len, tokens, block_tokens, reserved)
+    usable = usable_kv_tokens(kv_capacity_tokens, block_tokens, reserved_blocks)
+    cells = tuple(c for c in concurrency if c * need <= usable)
+    if len(cells) < len(concurrency):
+        largest = int(usable * LARGEST_FIT_KV_SHARE) // need
+        if largest > max(cells, default=0):
+            cells += (largest,)
+    return cells
+
+
+def _retry_kv_limit(
+    kv_capacity_tokens: int,
+    cohort: int,
+    input_len: int,
+    block_tokens: int | None,
+    reserved_blocks: int,
+) -> int:
+    # A retry's longer streams must still fit in the KV cache, block by block.
+    per_stream = usable_kv_tokens(kv_capacity_tokens, block_tokens, reserved_blocks) // cohort
+    if block_tokens:
+        per_stream -= per_stream % block_tokens
+    return per_stream - input_len
+
+
+def _too_few_lengths(
+    url: str, kv_capacity_tokens: int | None, tokens: int, dropped: list[str] | None = None
+) -> ValueError:
+    if dropped:
+        return ValueError(
+            f"{url} measured two decode concurrency points at fewer than two decode input "
+            f"lengths after dropping {'; '.join(dropped)}; choose shorter --decode-input-lens "
+            "or lower --decode-concurrency"
+        )
+    return ValueError(
+        f"{url} holds {kv_capacity_tokens} KV tokens, which fit two decode concurrency points "
+        f"at fewer than two decode input lengths with {tokens} output tokens; choose shorter "
+        "--decode-input-lens or lower --decode-concurrency"
+    )
+
+
 def _overlapping_tokens(state: dict[str, float], tokens: int, limit: int | None) -> int | None:
     first, joined, left = state.get("first_at"), state.get("last_join_at"), state.get("left_at")
     if first is None or joined is None or left is None or joined < left or left <= first:
@@ -173,9 +264,31 @@ async def probe_decode(
     max_model_len: int | None = None,
     repeats: int = 1,
     observation_timeout_s: float | None = None,
+    kv_capacity_tokens: int | None = None,
+    block_tokens: int | None = None,
+    skipped: list[dict[str, object]] | None = None,
 ) -> list[tuple[float, float, float]]:
+    reserved = dialect.decode_reserved_tokens
+    reserved_blocks = dialect.kv_reserved_blocks
+
+    def cells_at(input_len: int) -> tuple[int, ...]:
+        return decode_cells(
+            input_len,
+            concurrency,
+            tokens,
+            kv_capacity_tokens,
+            block_tokens=block_tokens,
+            reserved=reserved,
+            reserved_blocks=reserved_blocks,
+        )
+
+    if kv_capacity_tokens is not None and sum(bool(cells_at(n)) for n in input_lens) < 2:
+        raise _too_few_lengths(url, kv_capacity_tokens, tokens)
     samples: list[tuple[float, float, float]] = []
-    warmed = False
+    measured_lengths: set[int] = set()
+    # Each dropped cohort that left its input length with fewer than two cohorts.
+    dropped_lengths: list[str] = []
+    warmed: set[int] = set()
     for target in input_lens:
         prompt, input_len = await make_prompt(
             client,
@@ -191,20 +304,73 @@ async def probe_decode(
                 f"decode input {input_len} plus {tokens} output tokens exceeds {url} "
                 f"max_model_len {max_model_len}; choose shorter --decode-input-lens"
             )
-        if not warmed:
-            # An engine's first decode at each batch size can include kernel compilation; it
-            # stays out of the fit.
-            for c in concurrency:
+        cells = cells_at(input_len)
+        # The cohorts that fit at a length skipped because fewer than two fit there.
+        alone: tuple[int, ...] = ()
+        if not cells and kv_capacity_tokens is not None:
+            alone = _fitting_cells(
+                input_len,
+                concurrency,
+                tokens,
+                kv_capacity_tokens,
+                block_tokens,
+                reserved,
+                reserved_blocks,
+            )
+        alone_reason = f"fewer than two cohorts fit at isl={input_len}"
+        if skipped is not None:
+            skipped.extend(
+                {
+                    "input_tokens": input_len,
+                    "concurrency": c,
+                    "kv_tokens": c * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
+                    "kv_capacity_tokens": kv_capacity_tokens,
+                    **({"reason": alone_reason} if c in alone else {}),
+                }
+                for c in dict.fromkeys((*concurrency, *alone))
+                if c not in cells
+            )
+        missing = [c for c in concurrency if c not in cells and c not in alone]
+        if missing:
+            largest = [c for c in cells if c not in concurrency]
+            print(
+                f"    decode  isl={input_len:<6} skipped c="
+                + ",".join(str(c) for c in missing)
+                + f": cohorts exceed {kv_capacity_tokens} KV tokens"
+                + (f"; measuring c={largest[0]}" if largest else "")
+            )
+        if alone:
+            print(
+                f"    decode  isl={input_len:<6} skipped c="
+                + ",".join(str(c) for c in alone)
+                + f": {alone_reason}"
+            )
+        # An engine's first decode at each batch size can include kernel compilation; it stays
+        # out of the fit.
+        for c in cells:
+            if c not in warmed:
                 await _decode_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
-            warmed = True
-        for c in concurrency:
+                warmed.add(c)
+        # The length's cells and interval evidence, kept once two cohorts remain.
+        length_samples: list[tuple[float, float, float]] = []
+        length_cohorts: list[int] = []
+        length_evidence: list[dict[str, object]] = []
+        length_dropped: list[tuple[int, str]] = []
+        for c in cells:
             replicates: list[tuple[float, float, float]] = []
+            intervals: list[dict[str, object]] = []
+            dropped: str | None = None
             for repeat in range(repeats):
                 used = tokens
                 observed, state = await _decode_cohort(
                     client, url, model, prompt, input_len, c, used, dialect
                 )
                 limit = max_model_len - input_len if max_model_len is not None else None
+                if kv_capacity_tokens is not None:
+                    fits = _retry_kv_limit(
+                        kv_capacity_tokens, c, input_len, block_tokens, reserved_blocks
+                    )
+                    limit = fits if limit is None else min(limit, fits)
                 for _ in range(DECODE_RETRIES):
                     if len(observed) >= 2 * c:
                         break
@@ -216,21 +382,26 @@ async def probe_decode(
                         client, url, model, prompt, input_len, c, used, dialect
                     )
                 if len(observed) < 2 * c:
-                    raise RuntimeError(
+                    problem = (
                         f"decode probe has insufficient complete-cohort intervals: "
                         f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}, "
                         f"tokens={used}"
                     )
-                if evidence is not None:
-                    evidence.append(
-                        {
-                            "input_tokens": input_len,
-                            "concurrency": c,
-                            "repeat": repeat,
-                            "tokens": used,
-                            "intervals": observed,
-                        }
-                    )
+                    # The KV-bound cohort adds a point past the requested cohorts, which carry
+                    # the fit without it.
+                    if c in concurrency:
+                        raise RuntimeError(problem)
+                    dropped = problem
+                    break
+                intervals.append(
+                    {
+                        "input_tokens": input_len,
+                        "concurrency": c,
+                        "repeat": repeat,
+                        "tokens": used,
+                        "intervals": observed,
+                    }
+                )
                 replicates.append(
                     (
                         statistics.median(s[0] for s in observed),
@@ -240,13 +411,63 @@ async def probe_decode(
                         statistics.mean(s[2] for s in observed),
                     )
                 )
+            if dropped is not None:
+                if skipped is not None:
+                    skipped.append(
+                        {
+                            "input_tokens": input_len,
+                            "concurrency": c,
+                            "kv_tokens": c
+                            * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
+                            "kv_capacity_tokens": kv_capacity_tokens,
+                            "reason": dropped,
+                        }
+                    )
+                print(f"    decode  isl={input_len:<6} dropped c={c}: {dropped}")
+                length_dropped.append((c, dropped))
+                continue
+            length_evidence.extend(intervals)
             requests, batch, gap = (
                 statistics.median(row[i] for row in replicates) for i in range(3)
             )
-            samples.append((requests, batch, gap))
+            length_samples.append((requests, batch, gap))
+            length_cohorts.append(c)
             print(
                 f"    decode  isl={input_len:<6} c={c:<3} "
                 f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "
                 f"-> {gap * 1000:6.2f} ms/token"
             )
+        if length_dropped and len(length_samples) < 2:
+            reason = f"fewer than two cohorts remain at isl={input_len} after dropping " + (
+                ", ".join(f"c={c}" for c, _ in length_dropped)
+            )
+            if skipped is not None:
+                skipped.extend(
+                    {
+                        "input_tokens": input_len,
+                        "concurrency": c,
+                        "kv_tokens": c
+                        * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
+                        "kv_capacity_tokens": kv_capacity_tokens,
+                        "reason": reason,
+                    }
+                    for c in length_cohorts
+                )
+            print(
+                f"    decode  isl={input_len:<6} dropped c="
+                + ",".join(str(c) for c in length_cohorts)
+                + f": {reason}"
+            )
+            dropped_lengths.extend(
+                f"c={c} at isl={input_len} ({problem})" for c, problem in length_dropped
+            )
+            continue
+        if evidence is not None:
+            evidence.extend(length_evidence)
+        samples.extend(length_samples)
+        if length_samples:
+            measured_lengths.add(input_len)
+    # Tokenized prompts can run a token or two past their targets and drop a length at the limit.
+    if kv_capacity_tokens is not None and len(measured_lengths) < 2:
+        raise _too_few_lengths(url, kv_capacity_tokens, tokens, dropped_lengths)
     return samples

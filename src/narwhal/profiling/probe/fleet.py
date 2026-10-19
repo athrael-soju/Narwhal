@@ -32,7 +32,7 @@ from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
 from .pairing import PairedTransport, paired_transport
-from .sweep import Sweep, bounded_sweep, load_sequence_limits
+from .sweep import Sweep, bounded_sweep, decode_concurrency, load_sequence_limits
 
 
 class _Unhealthy(Exception): ...
@@ -64,10 +64,28 @@ def _profile_lanes(
     return list(lanes.values())
 
 
-def _pool_size(sweep: Sweep, lanes: int, engines: int, *, paired: bool) -> int:
-    # A paired request holds a connection for each leg until both finish.
+def _pool_size(
+    sweep: Sweep,
+    lanes: int,
+    engines: int,
+    *,
+    paired: bool,
+    limits: dict[str, int] | None = None,
+    targets: list[EngineSpec] | None = None,
+) -> int:
+    # Each lane streams one engine's decode cohort at a time, and a cohort ends at its engine's
+    # sequence limit. A paired request holds a connection for each leg until both finish.
+    limits = limits or {}
+    largest = max(
+        (
+            max(decode_concurrency(sweep, limits.get(spec.iid)))
+            for spec in targets or []
+            if spec.iid in limits
+        ),
+        default=0,
+    )
     legs = 2 if paired else 1
-    return max(sweep.decode_concurrency) * legs * lanes + engines
+    return max(largest, *sweep.decode_concurrency) * legs * lanes + engines
 
 
 def _peer(spec: EngineSpec, engines: list[EngineSpec]) -> EngineSpec:
@@ -323,7 +341,14 @@ async def run(
             limits_path=limits_path,
             observation_timeout_s=observation_timeout_s,
         )
-    connections = _pool_size(sweep or Sweep(), len(lanes), len(cfg.engines), paired=paired)
+    connections = _pool_size(
+        sweep or Sweep(),
+        len(lanes),
+        len(cfg.engines),
+        paired=paired,
+        limits=limits,
+        targets=targets,
+    )
     pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
     pairing, launches = await paired_transport(
         lambda: httpx.AsyncHTTPTransport(limits=pool),
@@ -372,8 +397,9 @@ async def run(
                 "max_model_len": max_model_len,
                 "sweep": asdict(engine_sweep),
             }
-            if max_num_seqs is not None:
+            if max_num_seqs is not None and limits_path is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
+                engine_evidence["limits_path"] = str(limits_path.resolve())
             neighbour_load = None
             group = spec.shared_device.group if spec.shared_device is not None else None
             if colocated_workload is not None:

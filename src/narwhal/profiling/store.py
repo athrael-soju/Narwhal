@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import asdict
@@ -17,6 +18,78 @@ from .model import _FIELD_NAMES, _REQUIRED_FIELDS, Profile
 def _reject_constant(name: str) -> NoReturn:
     # Profile values must be finite; NaN passes every range comparison.
     raise ValueError(f"non-finite JSON constant {name}")
+
+
+def measured_evidence(
+    samples: Path,
+) -> tuple[dict[str, list[dict[str, object]]], list[OSError | ValueError]]:
+    """Return each engine's measurement evidence in a sample sidecar, and the problems found.
+
+    A merged sidecar's evidence comes from its source sidecars in order, each read only while
+    its SHA-256 hash matches the one the merge recorded. A relative source path resolves against
+    the merged sidecar's directory, then against the working directory. A missing, changed or
+    invalid sidecar adds a problem, and reading continues with the next source.
+    """
+    found: dict[str, list[dict[str, object]]] = {}
+    problems: list[OSError | ValueError] = []
+    if not samples.is_file():
+        problems.append(FileNotFoundError(f"missing source measurement sidecar: {samples}"))
+    else:
+        _read_evidence(samples, found, problems)
+    return found, problems
+
+
+def _read_evidence(
+    samples: Path,
+    found: dict[str, list[dict[str, object]]],
+    problems: list[OSError | ValueError],
+) -> None:
+    try:
+        record = json.loads(samples.read_text())
+    except (OSError, ValueError) as exc:
+        problems.append(exc)
+        return
+    if isinstance(record, dict) and isinstance(record.get("engines"), dict):
+        for iid, evidence in record["engines"].items():
+            if isinstance(evidence, dict):
+                found.setdefault(iid, []).append(evidence)
+        return
+    if not isinstance(record, dict) or not isinstance(record.get("sources"), list):
+        problems.append(ValueError(f"invalid source measurement sidecar: {samples}"))
+        return
+    for source in record["sources"]:
+        if not isinstance(source, dict) or not isinstance(source.get("samples"), str):
+            problems.append(ValueError(f"invalid source measurement sidecar: {samples}"))
+            continue
+        recorded = Path(source["samples"])
+        # Merges record a source relative to the merged store; earlier merges recorded it
+        # relative to the directory they ran in.
+        candidates = [
+            path for path in dict.fromkeys((samples.parent / recorded, recorded)) if path.is_file()
+        ]
+        if not candidates:
+            problems.append(
+                FileNotFoundError(
+                    f"{samples}: missing merged source sidecar {samples.parent / recorded}"
+                )
+            )
+            continue
+        try:
+            path = next(
+                (
+                    path
+                    for path in candidates
+                    if hashlib.sha256(path.read_bytes()).hexdigest() == source.get("samples_sha256")
+                ),
+                None,
+            )
+        except OSError as exc:
+            problems.append(exc)
+            continue
+        if path is None:
+            problems.append(ValueError(f"{samples}: merged source sidecar {candidates[0]} changed"))
+            continue
+        _read_evidence(path, found, problems)
 
 
 class ProfileStore:

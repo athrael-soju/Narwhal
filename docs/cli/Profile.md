@@ -54,7 +54,7 @@ With `--only`, `--overwrite` writes a store that holds only the selected engines
 
 A refit needs each engine's saved generation evidence, and writes the raw samples and that evidence to its new sample sidecar.
 
-A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
+A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's SHA-256 hash and its path relative to the merged store's directory, so keep the source files in place relative to the merged store.
 
 Run each mode with:
 
@@ -72,7 +72,7 @@ Every mode validates these options:
 | --- | :---: | --- | --- |
 | `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths. Each engine keeps the lengths that fit its live context limit with one output token. | At least three distinct positive values, and three that fit each engine |
 | `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. Each engine keeps the lengths that fit its live context limit with `--decode-tokens`. | At least two distinct positive values, and two that fit each engine |
-| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. With `--limits`, each engine drops the counts above its limit and adds the limit. | At least two distinct values of at least 1, and two that remain for each engine |
+| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. With `--limits`, each engine drops the counts above its limit and adds the limit. When the engine reports its KV capacity, the profiler skips at each input length the counts whose streams exceed it and measures instead the largest cohort that fills at most 80% of it when that cohort is larger than every count that fits, as [Decode sweep](../measure/01-Profile.md#decode-sweep) describes. | At least two distinct values of at least 1, and two that remain for each engine |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
 | `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | Positive, with at least two distinct values and five prefix and suffix cases |
 | `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | Positive, with at least two distinct values |

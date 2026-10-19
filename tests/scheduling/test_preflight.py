@@ -3,8 +3,8 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stdout
-from dataclasses import replace
+from contextlib import ExitStack, chdir, redirect_stdout
+from dataclasses import asdict, replace
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +32,7 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
+from narwhal.profiling.probe.offline import merge_profiles
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import HandoffClient, calibration_document, fleet, profile
@@ -1121,6 +1122,269 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.failed), 2)
         self.assertTrue(any("decode_cv_mape" in failure for failure in report.failed))
         self.assertTrue(any("stale" in failure for failure in report.failed))
+
+    def test_profile_gate_warns_when_decode_stops_below_the_sequence_limit(self):
+        """A recorded `max_num_seqs` above the profiled request range is a warning."""
+        store = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        samples = self.cfg.profiles_path.with_suffix(".samples.json")
+        first = self.cfg.engines[0].iid
+        measured = asdict(profile(first))
+        other = asdict(profile(first, tpot_slope=1))
+        below = f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
+        rerun = below + "re-run narwhal-profile with --limits"
+        kv_bound = (
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; pass shorter "
+            "--decode-input-lens, or lower the engine's sequence limit and regenerate the limits "
+            "file, then re-run narwhal-profile with --limits"
+        )
+        skipped = [{"input_tokens": 8192, "concurrency": 64}]
+        for document, expected in (
+            ({"engines": {first: {"max_num_seqs": 64, "profile": measured}}}, [rerun]),
+            ({"engines": {first: {"max_num_seqs": 16, "profile": measured}}}, []),
+            ({"engines": {first: {"profile": measured}}}, []),
+            # Evidence for another measurement of the engine says nothing about this row.
+            ({"engines": {first: {"max_num_seqs": 64, "profile": other}}}, []),
+            # Decode seats stop at the profiled maximum whatever stopped the sweep, so a sweep
+            # bound by the KV cache warns too, with the remedy for that cause.
+            (
+                {
+                    "engines": {
+                        first: {
+                            "max_num_seqs": 64,
+                            "profile": measured,
+                            "decode_skipped": skipped,
+                        }
+                    }
+                },
+                [kv_bound],
+            ),
+        ):
+            with self.subTest(document=document):
+                samples.write_text(json.dumps(document))
+                report = Report()
+                with redirect_stdout(io.StringIO()):
+                    gate_profile(self.cfg, report)
+                self.assertEqual(report.failed, [])
+                self.assertEqual(report.warnings, expected)
+
+    def test_profile_gate_names_the_kv_cache_of_a_default_limit_engine(self):
+        """A 256-sequence engine whose KV cache holds 88 streams warns with the KV remedy."""
+        first = self.cfg.engines[0].iid
+        row = profile(first, decode_max_requests=88, kv_capacity_tokens=967_728)
+        store = ProfileStore(self.cfg.profiles_path)
+        store.put(row)
+        for spec in self.cfg.engines[1:]:
+            store.put(profile(spec.iid))
+        skipped = [{"input_tokens": 8192, "concurrency": 256}]
+        self.cfg.profiles_path.with_suffix(".samples.json").write_text(
+            json.dumps(
+                {
+                    "engines": {
+                        first: {
+                            "max_num_seqs": 256,
+                            "profile": asdict(row),
+                            "decode_skipped": skipped,
+                        }
+                    }
+                }
+            )
+        )
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            gate_profile(self.cfg, report)
+        self.assertEqual(
+            report.warnings,
+            [
+                f"{first} profile measures decode up to 88 requests and its limits file allows "
+                "256; its sweep skipped cohorts that exceed its 967728 KV tokens; pass shorter "
+                "--decode-input-lens, or lower the engine's sequence limit and regenerate the "
+                "limits file, then re-run narwhal-profile with --limits"
+            ],
+        )
+
+    def test_profile_gate_reads_the_limit_of_the_merged_source_that_measured_the_row(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        for spec in self.cfg.engines:
+            store.put(profile(spec.iid))
+        samples = self.cfg.profiles_path.with_suffix(".samples.json")
+        first = self.cfg.engines[0].iid
+        measured = asdict(profile(first))
+        measuring = samples.with_name("measuring.samples.json")
+        measuring.write_text(
+            json.dumps({"engines": {first: {"max_num_seqs": 64, "profile": measured}}})
+        )
+        # A later source holds a failed run of the same engine, which carries no profile.
+        failed = samples.with_name("failed.samples.json")
+        failed.write_text(json.dumps({"engines": {first: {"max_num_seqs": 16, "error": "x"}}}))
+
+        def source(path):
+            return {"samples": str(path), "samples_sha256": sha256(path.read_bytes()).hexdigest()}
+
+        for sources, warned in (
+            ([source(measuring), source(failed)], True),
+            ([source(failed)], False),
+            # Malformed and self-referencing sources are read as far as they go.
+            (7, False),
+            ([{"samples": str(samples)}, source(measuring)], True),
+            # A source that changed after the merge is not read.
+            ([{**source(measuring), "samples_sha256": "0" * 64}], False),
+        ):
+            with self.subTest(sources=sources):
+                samples.write_text(json.dumps({"method_version": 3, "sources": sources}))
+                report = Report()
+                with redirect_stdout(io.StringIO()):
+                    gate_profile(self.cfg, report)
+                self.assertEqual(report.failed, [])
+                self.assertEqual(len(report.warnings), 1 if warned else 0)
+
+    def test_profile_gate_reads_merged_sources_from_another_working_directory(self):
+        """A merged sidecar finds its sources next to the merged store, wherever preflight runs."""
+        root = self.cfg.profiles_path.parent
+        first = self.cfg.engines[0].iid
+        rows = [profile(spec.iid) for spec in self.cfg.engines]
+        measured = root / "runs" / "measured.json"
+        store = ProfileStore(measured, load=False)
+        for row in rows:
+            store.put(row)
+        sidecar = measured.with_suffix(".samples.json")
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "engines": {
+                        row.iid: {
+                            "profile": asdict(row),
+                            "max_num_seqs": 64 if row.iid == first else 16,
+                        }
+                        for row in rows
+                    }
+                }
+            )
+        )
+        with chdir(root):
+            merge_profiles(
+                [Path("runs/measured.json")],
+                Path("runs/merged.json"),
+                {spec.iid for spec in self.cfg.engines},
+            )
+        merged = root / "runs" / "merged.json"
+        sources = json.loads(merged.with_suffix(".samples.json").read_text())["sources"]
+        self.assertEqual(sources[0]["samples"], "measured.samples.json")
+        self.cfg.profiles_path = merged
+        warning = (
+            f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
+            "re-run narwhal-profile with --limits"
+        )
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        report = Report()
+        with chdir(elsewhere.name):
+            gate_profile(self.cfg, report)
+        self.assertEqual(report.warnings, [warning])
+        # A sidecar merged before merges recorded paths from the merged store names its sources
+        # from the directory the merge ran in.
+        merged.with_suffix(".samples.json").write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "samples": "runs/measured.samples.json",
+                            "samples_sha256": sha256(sidecar.read_bytes()).hexdigest(),
+                        }
+                    ]
+                }
+            )
+        )
+        report = Report()
+        with chdir(root):
+            gate_profile(self.cfg, report)
+        self.assertEqual(report.warnings, [warning])
+
+    async def test_profile_generation_gate_warns_below_the_attested_sequence_limit(self):
+        digest = "sha256:" + "0" * 64
+        row = profile("e0", generation_digest=digest)
+        store = ProfileStore(self.cfg.profiles_path, load=False)
+        store.put(row)
+        samples = self.cfg.profiles_path.with_suffix(".samples.json")
+        attestation = {"launch": {"args": ["--max-num-seqs", "64"]}}
+        below = "e0 profile measures decode up to 16 requests and its attested launch allows 64; "
+        rerun = below + "re-run narwhal-profile with --limits"
+        kv_bound = (
+            below + "its sweep skipped cohorts that exceed its 100000 KV tokens; pass shorter "
+            "--decode-input-lens, or lower the engine's sequence limit and regenerate the limits "
+            "file, then re-run narwhal-profile with --limits"
+        )
+        unknown = (
+            below + "re-run narwhal-profile with --limits, and with shorter --decode-input-lens "
+            "if its KV cache holds fewer streams"
+        )
+        stale = (
+            below + "the limits file runs/limits.json records 32; regenerate that file and re-run "
+            "narwhal-profile with --limits"
+        )
+        unnamed = (
+            below + "the limits file it was profiled with records 32; regenerate that file and "
+            "re-run narwhal-profile with --limits"
+        )
+        skipped = [{"input_tokens": 8192, "concurrency": 64}]
+        other = asdict(replace(row, tpot_slope=1))
+        for document, expected in (
+            # Profiled without --limits: the sidecar records no limit.
+            ({"engines": {"e0": {"profile": asdict(row)}}}, [rerun]),
+            # Profiled without --limits, and the KV cache bounded the sweep.
+            ({"engines": {"e0": {"profile": asdict(row), "decode_skipped": skipped}}}, [kv_bound]),
+            # No evidence measured this row, so the cause is unknown.
+            ({"engines": {"e0": {"profile": other}}}, [unknown]),
+            # The limits file already set this bound, and the profile gate reports it.
+            ({"engines": {"e0": {"max_num_seqs": 64, "profile": asdict(row)}}}, []),
+            # A limits file below the attested limit is stale, whatever bounded the sweep.
+            (
+                {
+                    "engines": {
+                        "e0": {
+                            "max_num_seqs": 32,
+                            "limits_path": "runs/limits.json",
+                            "profile": asdict(row),
+                            "decode_skipped": skipped,
+                        }
+                    }
+                },
+                [stale],
+            ),
+            # A sidecar written before profiles recorded the limits file's path.
+            ({"engines": {"e0": {"max_num_seqs": 32, "profile": asdict(row)}}}, [unnamed]),
+        ):
+            with self.subTest(document=document):
+                samples.write_text(json.dumps(document))
+                with patch.object(
+                    profiles,
+                    "read_generation",
+                    new=AsyncMock(return_value=GenerationEvidence(digest, attestation, 100.0)),
+                ):
+                    report = Report()
+                    with redirect_stdout(io.StringIO()):
+                        await profiles.gate_profile_generation(self.cfg, store, {"e0"}, report)
+                self.assertEqual(report.failed, [])
+                self.assertEqual(report.warnings, expected)
+        samples.write_text(json.dumps({"engines": {"e0": {"profile": asdict(row)}}}))
+        for live, cfg, failed in (
+            # An engine that fails the generation check gets a new profile, not this warning.
+            ("other", self.cfg, True),
+            # Without an engine contract the router seats engines without an attested limit.
+            (digest, replace(self.cfg, engine_contract=None), False),
+        ):
+            with self.subTest(live=live, contract=cfg.engine_contract is not None):
+                with patch.object(
+                    profiles,
+                    "read_generation",
+                    new=AsyncMock(return_value=GenerationEvidence(live, attestation, 100.0)),
+                ):
+                    report = Report()
+                    with redirect_stdout(io.StringIO()):
+                        await profiles.gate_profile_generation(cfg, store, {"e0"}, report)
+                self.assertEqual(bool(report.failed), failed)
+                self.assertEqual(report.warnings, [])
 
     def test_profile_gate_names_an_unmeasured_gpu_group_split(self):
         allocation = SharedDeviceAllocation("gpu", "GPU-0", 0.4, 0.3)

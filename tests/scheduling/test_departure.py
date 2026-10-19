@@ -13,19 +13,27 @@ from unittest.mock import patch
 
 from narwhal.profiling.store import ProfileStore
 from narwhal.scheduling.control import SLO, Flip, Thresholds
-from narwhal.scheduling.controller import ReactiveController
+from narwhal.scheduling.controller import PrefillRecovery, ReactiveController
 from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
-from narwhal.scheduling.reactive import Departure, ReactivePolicy, ShortView
+from narwhal.scheduling.reactive import (
+    Departure,
+    Evaluation,
+    ReactivePolicy,
+    ShortView,
+    SwitchDrain,
+)
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
-from narwhal.scheduling.scoring import SplitScore
+from narwhal.scheduling.scoring import PrefillProjection, SplitScore
 from narwhal.serving.schemas import ControllerDecisionOut
-from narwhal.types import Instance, Role
+from narwhal.types import Instance, Request, Role
 from tests.fixtures import profile
 
 PREFILL_HEAVY = (8192, 16, 13.5)
 DECODE_HEAVY = (256, 1200, 5.0)
 DECODE_LEANING = (2048, 128, 10.0)
+# Prefill near 1.33 engines and decode above four engines at full span.
+DECODE_RAMP = (8192, 6000, 3.75)
 
 
 def score(prefill: int, objective: float) -> SplitScore:
@@ -452,6 +460,370 @@ class SurgeTests(unittest.TestCase):
         self.assertEqual(move["required_confirmations"], 3)
         self.assertNotIn("departure_age_s", after[after.index(move) + 1])
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+
+class StandingDrainTests(unittest.TestCase):
+    """An approved move to decode stands while its donor drains, until a check ends it."""
+
+    def setUp(self) -> None:
+        self.holds = {"e0": 100.0}
+        self.controller = SimpleNamespace(
+            movement_margin=0.05,
+            scheduler=SimpleNamespace(
+                switch_hold_s=15.0,
+                th=Thresholds(),
+                held_for_switch=lambda: set(self.holds),
+            ),
+        )
+        self.policy = ReactivePolicy()
+        self.approve("source_shrink")
+
+    def approve(self, rule: str) -> None:
+        self.approval = SwitchDrain(3, "e0", 100.0, rule, 1)
+        self.policy.drain = self.approval
+        self.policy.proposal, self.policy.confirmations = (3, False, rule), 1
+
+    @staticmethod
+    def row(
+        *,
+        prefill: int = 3,
+        source: float = 0.6,
+        gain: float = 0.2,
+        covered: bool = True,
+        floors: bool = True,
+    ) -> Evaluation:
+        return (score(prefill, 1.0 - gain), source, gain, True, covered, False, floors)
+
+    def stand(
+        self,
+        rows: list[Evaluation],
+        eligible: list[Evaluation] | None = None,
+        *,
+        now: float = 105.0,
+        current_p: int = 4,
+    ) -> SwitchDrain | None:
+        return self.policy._standing_drain(self.controller, now, current_p, rows, eligible or [])
+
+    def test_an_approval_stands_above_shrink_within_expand(self):
+        self.assertIs(self.stand([self.row()]), self.approval)
+        self.assertIs(self.policy.drain, self.approval)
+
+    def test_an_approval_stands_for_the_hold_span(self):
+        self.assertIs(self.stand([self.row()], now=115.0), self.approval)
+        self.assertIsNone(self.stand([self.row()], now=115.5))
+        # A lapse keeps the proposal for an ordinary pass.
+        self.assertEqual(self.policy.proposal, (3, False, "source_shrink"))
+
+    def test_an_approval_lapses_when_the_split_changes(self):
+        # Two lost prefill engines leave the approved split one move toward prefill.
+        self.assertIsNone(self.stand([self.row(prefill=1), self.row()], current_p=2))
+        self.assertIsNone(self.policy.drain)
+
+    def test_an_approval_lapses_when_its_donor_is_no_longer_held(self):
+        self.holds.clear()
+        self.assertIsNone(self.stand([self.row()]))
+        self.assertIsNone(self.policy.drain)
+
+    def test_a_failed_check_withdraws_the_approval(self):
+        prefill_move = self.row(prefill=5, source=0.2)
+        for name, rows, eligible in (
+            ("unscored", [self.row(prefill=5)], []),
+            ("decode profile", [self.row(covered=False)], []),
+            ("role floors", [self.row(floors=False)], []),
+            ("prefill above expand", [self.row(source=1.2)], []),
+            ("gain below the margin", [self.row(gain=0.04)], []),
+            ("eligible move to prefill", [self.row(), prefill_move], [prefill_move]),
+        ):
+            with self.subTest(name):
+                self.approve("source_shrink")
+                self.assertIsNone(self.stand(rows, eligible))
+                self.assertIsNone(self.policy.drain)
+                self.assertEqual((self.policy.proposal, self.policy.confirmations), (None, 0))
+
+    def test_an_eligible_move_stands_above_expand(self):
+        self.approve("mixed_pressure")
+        row = self.row(source=1.2)
+        self.assertEqual(self.stand([row], [row]), replace(self.approval, approved_at=105.0))
+
+    def test_an_eligible_move_restarts_the_hold_span(self):
+        row = self.row()
+        renewed = replace(self.approval, approved_at=130.0)
+        self.assertEqual(self.stand([row], [row], now=130.0), renewed)
+        self.assertEqual(self.policy.drain, renewed)
+        self.assertEqual(self.stand([row], now=145.0), renewed)
+        self.assertIsNone(self.stand([row], now=145.5))
+
+    def test_a_mixed_pressure_approval_needs_a_positive_gain(self):
+        self.controller.movement_margin = 0.0
+        for rule, stands in (("source_shrink", True), ("mixed_pressure", False)):
+            with self.subTest(rule):
+                self.approve(rule)
+                result = self.stand([self.row(gain=0.0)])
+                self.assertEqual(result is self.approval, stands)
+
+
+class SwitchDrainTests(unittest.TestCase):
+    """A move to decode approved while busy SGLang prefill engines drain stays approved.
+
+    The replay follows the decode-heavy fleet runs: load starts after the router, the move is
+    approved before the confirmation span fills, and the next pass prices the filled span above
+    shrink at the new split.
+    """
+
+    def approve(
+        self,
+        directory: str,
+        *,
+        requires_idle: bool = True,
+        workload: tuple[int, int, float] = DECODE_RAMP,
+    ) -> Sim:
+        sim = Sim(directory, prefill=4)
+        sim.scheduler.switch_requires_idle = requires_idle
+        input_len, output_len, _ = workload
+        for inst in sim.monitor.pool(Role.PREFILL):
+            inst.prefill[inst.iid] = Request(inst.iid, input_len, wanted_len=output_len)
+        sim.run(35, (input_len, output_len, 0.0))
+        sim.run(10, workload)
+        self.addCleanup(sim.close)
+        return sim
+
+    def held(self, sim: Sim) -> str:
+        row = sim.decisions[-1]
+        self.assertEqual((row["current_prefill"], row["prefill"]), (4, 3))
+        self.assertIn("out of new placements until it is idle", row["reason"])
+        self.assertTrue(row["source_pressure_safe"])
+        (donor,) = sim.scheduler.held_for_switch()
+        return donor
+
+    def drain(self, sim: Sim) -> str:
+        donor = self.held(sim)
+        # The held donor takes no new work and finishes its prefill.
+        sim.monitor.instances[donor].prefill.clear()
+        return donor
+
+    def assertEnded(self, sim: Sim) -> None:
+        self.assertIsNone(sim.controller.reactive.drain)
+        self.assertEqual(sim.scheduler.held_for_switch(), set())
+        self.assertEqual(sim.scheduler.roles.flips, [])
+
+    def test_an_advisory_controller_holds_no_donor(self):
+        # A fixed-split run keeps every engine in service: the advisory controller takes no busy
+        # prefill engine out of placements for the move it would make.
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.scheduler.switch_requires_idle = True
+            sim.scheduler.advisory = True
+            self.addCleanup(sim.close)
+            input_len, output_len, _ = DECODE_RAMP
+            for inst in sim.monitor.pool(Role.PREFILL):
+                inst.prefill[inst.iid] = Request(inst.iid, input_len, wanted_len=output_len)
+            sim.run(35, (input_len, output_len, 0.0))
+            sim.run(10, DECODE_RAMP)
+            row = sim.decisions[-1]
+            self.assertEqual((row["current_prefill"], row["prefill"]), (4, 3))
+            self.assertEqual(row["reason"], "no idle prefill engine for an engine-side role switch")
+            self.assertEqual(sim.scheduler.held_for_switch(), set())
+            self.assertIsNone(sim.controller.reactive.drain)
+            self.assertEqual(sim.scheduler.roles.flips, [])
+
+    def test_the_move_completes_once_the_donor_is_idle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            donor = self.drain(sim)
+            sim.run(5, DECODE_RAMP)
+        move = sim.decisions[-1]
+        self.assertEqual((move["result"], move["prefill"]), ("applied", 3))
+        self.assertEqual(move["eligibility_rule"], "source_shrink")
+        self.assertEqual(move["confirmations"], move["required_confirmations"])
+        # The filled confirmation span prices the new split above shrink and within expand.
+        th = sim.scheduler.th
+        ratio = move["steady_prefill_work"] / (3 * sim.controller.utilization)
+        self.assertGreater(ratio, th.shrink)
+        self.assertLessEqual(ratio, th.expand)
+        self.assertFalse(move["source_pressure_safe"])
+        self.assertEqual([(f.iid, f.to) for f in sim.scheduler.roles.flips], [(donor, Role.DECODE)])
+        self.assertEqual(sim.scheduler.held_for_switch(), set())
+        self.assertIsNone(sim.controller.reactive.drain)
+        ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
+
+    def test_the_drain_records_the_approving_rule(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            donor = self.held(sim)
+            # A departure toward decode prices the later passes under their own rule.
+            sim.controller.reactive.departure = Departure(-1, sim.now)
+            sim.run(5, DECODE_RAMP)
+            asked = sim.decisions[-1]
+            sim.monitor.instances[donor].prefill.clear()
+            sim.run(5, DECODE_RAMP)
+        move = sim.decisions[-1]
+        self.assertIn("out of new placements until it is idle", asked["reason"])
+        self.assertEqual(move["result"], "applied")
+        for row in (asked, move):
+            self.assertEqual(row["demand_horizon_s"], row["steady_horizon_s"])
+            self.assertEqual(row["eligibility_rule"], "source_shrink")
+            self.assertEqual(row["confirmations"], row["required_confirmations"])
+
+    def test_a_mixed_pressure_approval_completes_above_expand(self):
+        input_len, output_len, rate = DECODE_RAMP
+        busier = (input_len, output_len, rate * 1.6)
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            self.drain(sim)
+            sim.run(5, busier)
+            while sim.now < 300 and not sim.decisions[-1]["reason"].startswith("holding"):
+                sim.run(1, busier)
+            approval = sim.decisions[-1]
+            (donor,) = sim.scheduler.held_for_switch()
+            sim.monitor.instances[donor].prefill.clear()
+            sim.run(5, busier)
+        th = sim.scheduler.th
+        self.assertEqual((approval["current_prefill"], approval["prefill"]), (3, 2))
+        self.assertEqual(approval["eligibility_rule"], "mixed_pressure")
+        self.assertGreater(
+            approval["steady_prefill_work"] / (2 * sim.controller.utilization), th.expand
+        )
+        move = sim.decisions[-1]
+        self.assertEqual((move["result"], move["prefill"]), ("applied", 2))
+        self.assertEqual(sim.scheduler.roles.flips[-1].iid, donor)
+
+    def test_a_prefill_surge_during_the_drain_withdraws_the_move(self):
+        input_len, output_len, rate = DECODE_RAMP
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            self.drain(sim)
+            sim.run(5, (input_len, output_len, rate * 4))
+        row = sim.decisions[-1]
+        th = sim.scheduler.th
+        self.assertEqual((row["result"], row["prefill"]), ("held", 3))
+        self.assertGreater(row["steady_prefill_work"] / (3 * sim.controller.utilization), th.expand)
+        # The donor returns to placements with the move.
+        self.assertEnded(sim)
+        self.assertIsNone(sim.controller.reactive.proposal)
+
+    def test_a_gain_below_the_margin_withdraws_the_move(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            self.drain(sim)
+            sim.controller.movement_margin = 0.9
+            sim.run(5, DECODE_RAMP)
+        self.assertEqual(sim.decisions[-1]["result"], "held")
+        self.assertEnded(sim)
+
+    def test_a_projected_ttft_recovery_withdraws_the_move(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            self.drain(sim)
+            sim.now += 1.0
+            projection = PrefillProjection("late", sim.now, 4.2, 2.1, 1.0, 3.0, 4)
+            recovery = PrefillRecovery(sim.now, 4.2, 1, projection)
+            sim.controller.reactive.step(sim.controller, prefill_recovery=recovery)
+        self.assertEqual(sim.decisions[-1]["eligibility_rule"], "projected_ttft_recovery")
+        self.assertEnded(sim)
+
+    def test_an_evaluation_that_stops_before_scoring_ends_the_approval(self):
+        for stop in ("insufficient demand history", "fleet health is changing"):
+            with self.subTest(stop), tempfile.TemporaryDirectory() as directory:
+                sim = self.approve(directory)
+                if stop == "fleet health is changing":
+                    for inst in sim.monitor.pool(Role.DECODE):
+                        sim.scheduler.eject(inst.iid, "test")
+                else:
+                    sim.controller.min_arrivals = 10**6
+                sim.run(5, DECODE_RAMP)
+                self.assertEqual(sim.decisions[-1]["reason"], stop)
+                self.assertEnded(sim)
+                self.assertEqual(sim.controller.reactive.confirmations, 0)
+
+    def test_an_ejected_donor_ends_the_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            donor = self.drain(sim)
+            sim.scheduler.eject(donor, "test")
+            sim.run(5, DECODE_RAMP)
+        self.assertEqual(sim.decisions[-1]["current_prefill"], 3)
+        self.assertEnded(sim)
+
+    def test_a_blocked_change_ends_the_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            self.drain(sim)
+            sim.scheduler.roles._last_p2d_flip = sim.now
+            sim.run(5, DECODE_RAMP)
+        self.assertEqual(sim.decisions[-1]["reason"], "decode cooldown has not elapsed")
+        self.assertEnded(sim)
+
+    def test_a_change_that_holds_no_prefill_engine_records_no_approval(self):
+        input_len, output_len, _ = DECODE_RAMP
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.scheduler.switch_requires_idle = True
+            for inst in sim.monitor.pool(Role.PREFILL):
+                inst.prefill[inst.iid] = Request(inst.iid, input_len, wanted_len=output_len)
+            sim.run(35, (input_len, output_len, 0.0))
+            sim.run(9, DECODE_RAMP)
+            # A decode engine is still held for a move toward prefill as the cooldown blocks.
+            sim.scheduler.switch_holds = {"e7": sim.now}
+            sim.scheduler.roles._last_p2d_flip = sim.now
+            sim.run(1, DECODE_RAMP)
+            sim.close()
+        self.assertEqual(sim.decisions[-1]["reason"], "decode cooldown has not elapsed")
+        self.assertIsNone(sim.controller.reactive.drain)
+
+    def test_the_approval_lapses_after_the_hold_span(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory)
+            # The donor still runs its prefill.
+            self.held(sim)
+            sim.run(15, DECODE_RAMP)
+            asked = sim.decisions[-3:]
+            sim.run(5, DECODE_RAMP)
+        for row in asked:
+            self.assertIn("out of new placements until it is idle", row["reason"])
+        row = sim.decisions[-1]
+        self.assertEqual(row["reason"], "projected prefill pressure blocks consolidation")
+        # The busy donor returns to placements with the lapsed approval.
+        self.assertEnded(sim)
+
+    @staticmethod
+    def evaluate_after(sim: Sim, seconds: float, workload: tuple[int, int, float]) -> None:
+        """Offer `seconds` of load and run one evaluation at its end."""
+        input_len, output_len, rate = workload
+        sim.carry += rate * seconds
+        count = int(sim.carry)
+        sim.carry -= count
+        for k in range(count):
+            at = sim.now + seconds * (k + 1) / (count + 1)
+            sim.controller.saw_arrival(input_len, wanted_len=output_len, at=at)
+        sim.now += seconds
+        sim.controller.sample()
+        sim.controller.step()
+
+    def test_an_admitted_move_keeps_its_donor_past_the_hold_span(self):
+        workload = (4096, 6000, 3.75)
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory, workload=workload)
+            donor = self.held(sim)
+            # Fleet evaluations run about 6 s apart, so the third falls after the hold span.
+            for _ in range(2):
+                self.evaluate_after(sim, 5.99, workload)
+            # Decode load below expand would make an ordinary pass wait for three confirmations.
+            sim.scheduler.th.expand = 5.0
+            self.evaluate_after(sim, 5.99, workload)
+        asked = sim.decisions[-3:]
+        for row in asked:
+            self.assertIn(f"holding {donor} out of new placements", row["reason"])
+            self.assertTrue(row["source_pressure_safe"])
+        self.assertEqual(sim.scheduler.held_for_switch(), {donor})
+        self.assertEqual(sim.controller.reactive.drain.approved_at, sim.now)
+
+    def test_router_side_switches_move_at_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = self.approve(directory, requires_idle=False)
+        move = sim.decisions[-1]
+        self.assertEqual((move["result"], move["prefill"]), ("applied", 3))
+        self.assertEqual([f.to for f in sim.scheduler.roles.flips], [Role.DECODE])
+        self.assertEqual(sim.scheduler.held_for_switch(), set())
 
 
 class AlternationTests(unittest.TestCase):
