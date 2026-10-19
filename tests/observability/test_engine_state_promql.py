@@ -207,6 +207,20 @@ def router(
     ]
 
 
+def tool(gone: float) -> list[tuple[str, Samples]]:
+    """A tool scraped every 5 s from second 2 that reports calibrating the engine until it exits,
+    just before its scrape at `gone`."""
+    up = scrapes(2, gone)
+    return [
+        series("up", TOOL, {**constant(up, "1"), **constant(scrapes(gone), "0")}),
+        series(
+            "narwhal_tool_engine_in_use",
+            {**TOOL, "operation": "calibration", "iid": "p0"},
+            {**constant(up, "1"), gone: "stale"},
+        ),
+    ]
+
+
 def seconds(*spans: tuple[float, float]) -> set[int]:
     """Whole seconds inside any of the `[start, end)` request spans."""
     return {t for start, end in spans for t in range(LENGTH) if start <= t < end}
@@ -355,6 +369,43 @@ class EngineStateQueryTests(unittest.TestCase):
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
         self.check(inputs, expected)
 
+    def test_direct_work_between_two_engine_scrapes_reads_serving(self):
+        # The request runs from 41 s to 45 s, between the engine's scrapes at 40 s and 45 s.
+        inputs = engine(seconds((41, 45))) + router({}, up=[], down=scrapes(3))
+        self.check(inputs, dict.fromkeys(range(23, 80), SERVING))
+
+    def test_direct_work_across_an_engine_scrape_reads_probing(self):
+        # The engine's scrape at 45 s sees the request running and its scrape at 50 s counts the
+        # request's last tokens.
+        inputs = engine(seconds((41, 49))) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(23, 80), SERVING)
+        expected.update({53: PROBING, 54: PROBING})
+        self.check(inputs, expected)
+
+    def test_direct_work_between_two_engine_scrapes_reads_probing_after_other_recent_work(self):
+        # Each request runs between two engine scrapes, and the scrape at 60 s or 65 s counts the
+        # second request's tokens.
+        cases = {
+            # The scrape at 40 s counts the first request's tokens.
+            ((36, 39), (56, 59)): {60: PROBING, 61: PROBING},
+            # The scrape at 40 s sees the first request running.
+            ((40, 41), (61, 64)): {65: PROBING, 66: PROBING},
+            # The scrape at 35 s counts the first request's tokens, before the 15 seconds that end
+            # 8 seconds before 60 s.
+            ((31, 34), (56, 59)): {},
+        }
+        for spans, probing in cases.items():
+            with self.subTest(spans=spans):
+                inputs = engine(seconds(*spans)) + router({}, up=[], down=scrapes(3))
+                self.check(inputs, dict.fromkeys(range(23, 80), SERVING) | probing)
+
+    def test_probing_starts_8_seconds_after_the_first_engine_scrape_that_sees_the_work(self):
+        # The engine's scrape at 45 s is the first to see the work that starts at 41 s.
+        inputs = engine(seconds((41, 130))) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(23, 53), SERVING)
+        expected.update(dict.fromkeys(range(53, 130), PROBING))
+        self.check(inputs, expected)
+
     def test_sglang_direct_requests_read_probing_until_their_kv_transfers_finish(self):
         # A prefill engine reports running requests, and counts each request's tokens, until its
         # KV transfer finishes, 12 s after the request.
@@ -372,27 +423,53 @@ class EngineStateQueryTests(unittest.TestCase):
         self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
 
     def test_a_tool_names_its_operation_and_its_engines_return_to_serving(self):
-        running = seconds((0, 61))
-        tool_up = scrapes(2, 62)
-        inputs = [
-            *engine(running),
-            *router({}, up=[], down=scrapes(3)),
-            series("up", TOOL, {**constant(tool_up, "1"), **constant(scrapes(62), "0")}),
-            series(
-                "narwhal_tool_engine_in_use",
-                {**TOOL, "operation": "calibration", "iid": "p0"},
-                {**constant(tool_up, "1"), 62: "stale"},
-            ),
-        ]
+        inputs = engine(seconds((0, 61))) + router({}, up=[], down=scrapes(3)) + tool(62)
         expected = dict.fromkeys(range(26, 60, 4), CALIBRATING)
         # The tool's next scrape after it exits clears the state.
         expected.update(dict.fromkeys(range(62, 120, 4), SERVING))
+        self.check(inputs, expected)
+
+    def test_direct_work_after_a_tool_exits_reads_probing_37_seconds_after_its_last_report(self):
+        # The tool last reports the engine at its scrape at 57 s, and direct work continues.
+        inputs = engine(seconds((0, 130))) + router({}, up=[], down=scrapes(3)) + tool(62)
+        expected = dict.fromkeys(range(5, 62), CALIBRATING)
+        expected.update(dict.fromkeys(range(62, 94), SERVING))
+        expected.update(dict.fromkeys(range(94, 130), PROBING))
         self.check(inputs, expected)
 
     def test_a_router_that_just_started_hides_probing(self):
         # A request the router sent before its first scrape leaves its counter flat.
         inputs = engine(seconds((20, 23))) + router({20: 1}, up=scrapes(23), down=scrapes(3, 23))
         self.check(inputs, dict.fromkeys(range(24, 70, 3), SERVING))
+
+    def test_a_router_change_hides_probing_until_37_seconds_after_the_scrape_before_it(self):
+        # The router answers its scrapes from 43 s to 78 s while direct work keeps the engine busy.
+        up = [t for t in scrapes(3) if 43 <= t <= 78]
+        down = [t for t in scrapes(3) if t not in up]
+        inputs = engine(seconds((0, 130))) + router({}, up=up, down=down)
+        expected = dict.fromkeys(range(23, 43), PROBING)
+        expected.update(dict.fromkeys(range(43, 75), SERVING))
+        expected.update(dict.fromkeys(range(75, 83), PROBING))
+        expected.update(dict.fromkeys(range(83, 115), SERVING))
+        expected.update(dict.fromkeys(range(115, 130), PROBING))
+        self.check(inputs, expected)
+
+    def test_a_sent_request_hides_probing_until_32_seconds_after_the_router_counts_it(self):
+        # The router sends a request at 50 s and counts it at its scrape at 53 s, while direct
+        # work keeps the engine busy.
+        inputs = engine(seconds((0, 130))) + router({50: 1})
+        expected = dict.fromkeys(range(23, 53), PROBING)
+        expected.update(dict.fromkeys(range(53, 85), SERVING))
+        expected.update(dict.fromkeys(range(85, 130), PROBING))
+        self.check(inputs, expected)
+
+    def test_held_work_hides_probing_until_37_seconds_after_the_router_scrape_that_sees_it(self):
+        # The router's scrape at 53 s sees the request it sent at 50 s still held on the engine.
+        inputs = engine(seconds((0, 130))) + router({50: 1}, resident={53})
+        expected = dict.fromkeys(range(23, 53), PROBING)
+        expected.update(dict.fromkeys(range(53, 90), SERVING))
+        expected.update(dict.fromkeys(range(90, 130), PROBING))
+        self.check(inputs, expected)
 
     def test_a_newly_scraped_engine_waits_for_a_full_window(self):
         inputs = engine(seconds((30, 120)), start=30) + router({}, up=[], down=scrapes(3))
