@@ -731,8 +731,18 @@ class MixedPressureTests(unittest.TestCase):
 
     def test_decode_residents_past_the_seats_let_decode_expand(self) -> None:
         # 81 and 82 residents on each of four engines put 64.8 and 65.6 on each of five, the
-        # state in which a 64-request profile held this move on the fleet.
-        for profiled, residents in ((48, 61), (64, 61), (64, 81), (64, 82)):
+        # state in which a 64-request profile held this move on the fleet. At 60, 100 and 200
+        # sequences, the seated batch is not an exact binary quotient of the residents.
+        for profiled, residents in (
+            (48, 61),
+            (64, 61),
+            (64, 81),
+            (64, 82),
+            (60, 76),
+            (60, 77),
+            (100, 137),
+            (200, 269),
+        ):
             with self.subTest(profiled=profiled, residents=residents):
                 self.setUp()
                 self._decode_overload(profiled, residents, profiled)
@@ -800,11 +810,11 @@ class MixedPressureTests(unittest.TestCase):
         # projected TTFT. The move toward prefill keeps residents past the profile, so its
         # coverage check holds it. The fleet stays at two prefill and four decode engines.
         for prefill, decode in ((6.0, 0.4), (6.0, 1.2), (12.0, 6.0)):
-            for residents in (70, 81):
-                with self.subTest(prefill=prefill, decode=decode, residents=residents):
+            for limit, residents in ((64, 70), (64, 81), (60, 65), (100, 113), (200, 201)):
+                with self.subTest(prefill=prefill, decode=decode, limit=limit, residents=residents):
                     self.setUp()
                     fleet = self.fleet
-                    self._decode_overload(64, residents, 64)
+                    self._decode_overload(limit, residents, limit)
                     fleet.pressure = {Role.PREFILL: prefill, Role.DECODE: decode}
                     snapshot = fleet.controller.scorer.capture(
                         fleet.now,
@@ -855,6 +865,23 @@ class MixedPressureTests(unittest.TestCase):
                         )
                         self.assertEqual(decision["decode_priced_requests_per_engine"], 40.0)
                     self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
+
+    def test_the_wait_counts_seats_on_the_engines_that_hold_residents(self) -> None:
+        # A prefill engine still holds 60 residents, three decode engines hold 60 each, and an
+        # idle decode engine runs 8 sequences. The 240 residents fit the 264 seats of those five
+        # engines, so the current split prices no wait.
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.scheduler.sequence_limits = dict.fromkeys(fleet.monitor.instances, 64) | {"e5": 8}
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=64))
+        for iid in ("e1", "e2", "e3", "e4"):
+            for index in range(60):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
+        current = self._snapshot().score(2)
+        self.assertEqual(current.decode_priced_wait_factor, 1.0)
+        self.assertEqual(current.decode_priced_requests_per_engine, 60.0)
+        self.assertTrue(current.decode_profile_covered)
 
     def test_a_profile_below_its_sequence_limit_keeps_the_coverage_guard(self) -> None:
         # Engines that run 64 sequences hold 61 residents each. Residents past a profile below

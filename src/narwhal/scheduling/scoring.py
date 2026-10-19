@@ -122,9 +122,10 @@ class SplitSnapshot:
     offered_outputs: tuple[int, ...] = ()
     # Decode-slot wait over the remaining TTFT budget, by decode engine count.
     decode_wait_ratios: tuple[tuple[int, float], ...] = ()
-    # Mean decode seats over each split's decode engines and the engines holding decode
-    # residents, by prefill engine count, for splits where every such engine has seats.
-    decode_seat_options: tuple[tuple[int, float], ...] = ()
+    # Total decode seats and engine count over each split's decode engines and the engines
+    # holding decode residents, by prefill engine count, for splits where every such engine
+    # has seats.
+    decode_seat_options: tuple[tuple[int, int, int], ...] = ()
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -182,17 +183,24 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
-        # Residents past the split's mean decode seats wait for one: the running batch holds the
-        # seats and their share of the KV tokens, and each resident receives a token `wait` times
-        # less often. A move toward prefill keeps every resident on its engine and prices them all.
+        # Residents past the split's decode seats wait for one: each engine runs a batch of the
+        # mean seats with the residents' mean KV tokens, and each resident receives a token
+        # `wait` times less often. A move toward prefill keeps every resident on its engine and
+        # prices them all.
         seats = (
             None
             if include_resident and prefill > self.current_prefill
-            else next((row for p, row in self.decode_seat_options if p == prefill), None)
+            else next(
+                ((total, count) for p, total, count in self.decode_seat_options if p == prefill),
+                None,
+            )
         )
-        wait = max(1.0, active_requests / seats) if seats else 1.0
-        batch_requests = active_requests / wait
-        batch_tokens = active_tokens / wait
+        wait = max(1.0, self.resident_decode_requests / seats[0]) if seats else 1.0
+        batch_requests, batch_tokens = active_requests, active_tokens
+        if seats and wait > 1.0:
+            # A clamp rather than a quotient, so rounding never prices a batch past the seats.
+            batch_requests = min(active_requests, seats[0] / seats[1])
+            batch_tokens = active_tokens / active_requests * batch_requests
 
         correction = self.decode_correction
         pending_covered = bool(profiles)
@@ -210,9 +218,11 @@ class SplitSnapshot:
                     for p in profiles
                 ):
                     pending_covered = False
+        # Resident tokens per engine whose residents meet the TPOT target at the batch and wait.
         capacity = (
-            sum(p.max_tokens(self.tpot_slo / correction, batch_requests) for p in profiles)
+            sum(p.max_tokens(self.tpot_slo / (correction * wait), batch_requests) for p in profiles)
             / len(profiles)
+            * wait
             if profiles
             else None
         )
@@ -476,7 +486,7 @@ class SplitScorer:
         # Engines that run prefill under each split.
         prefill_iids: dict[int, set[str]] = {}
         holding = {inst.iid for inst in instances if inst.decode}
-        seat_options: list[tuple[int, float]] = []
+        seat_options: list[tuple[int, int, int]] = []
         for prefill in range(1, len(instances)):
             if prefills is not None and prefill not in prefills:
                 continue
@@ -503,7 +513,7 @@ class SplitScorer:
             ]
             if seated and all(seats is not None for seats in seated):
                 seat_options.append(
-                    (prefill, sum(seats for seats in seated if seats is not None) / len(seated))
+                    (prefill, sum(seats for seats in seated if seats is not None), len(seated))
                 )
         profile_options = tuple(profile_options_list)
         demand_options = (
