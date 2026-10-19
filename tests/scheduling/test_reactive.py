@@ -814,6 +814,20 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(decision["decode_requests_per_engine"], 64.8)
         self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
 
+    def test_an_unpriced_current_split_holds_a_move_into_prefill_overload(self) -> None:
+        # The current split's residents exceed its profiles, so the move's gain is unpriced.
+        # Two prefill engines at 0.6 each project 1.2 on one, above expand.
+        self._decode_overload(64, 81, limit=64)
+        self.fleet.pressure[Role.PREFILL] = 1.2
+        for _ in range(6):
+            self.assertIsNone(self.fleet.step())
+            decision = self.fleet.scheduler.roles._last_decision
+            self.assertEqual(decision["prefill"], 1)
+            self.assertEqual(decision["eligibility_rule"], "mixed_pressure")
+            self.assertEqual(decision["reason"], "projected prefill pressure blocks consolidation")
+            self.assertFalse(decision["source_pressure_safe"])
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
+
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet
         for index in range(1, 6):

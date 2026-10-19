@@ -538,6 +538,7 @@ The `mixed_pressure` rule moves one engine when all of these hold:
 - for a move to decode, the current split's projected decode load is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile
 - the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
+- if decode profiles do not cover the current split's resident decode work, projected source load is at or below `controller.thresholds.expand`
 
 The settled run is the time the current split has held without a better adjacent split. It restarts when any of these happens:
 

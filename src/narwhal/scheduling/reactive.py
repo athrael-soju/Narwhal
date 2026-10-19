@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -410,7 +411,14 @@ class ReactivePolicy:
             return "source_shrink"
 
         def source_safe(row: Evaluation) -> bool:
-            return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand" or surge_move(row)
+            # Decode work past the current split's profiles leaves the move's gain unpriced, so
+            # mixed pressure then also needs projected source load at or below expand.
+            return (
+                row[1] <= th.shrink
+                or (row[5] and (math.isfinite(current.objective) or row[1] <= th.expand))
+                or rule(row) == "steady_demand"
+                or surge_move(row)
+            )
 
         def admitted(row: Evaluation) -> bool:
             candidate, source_ratio, improvement, capacity_safe, covered, mixed, floors = row
