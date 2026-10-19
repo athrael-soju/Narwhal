@@ -95,7 +95,9 @@ class ReactivePolicy:
             controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
             for role in (Role.PREFILL, Role.DECODE)
         ):
-            self.proposal, self.confirmations, self.drain = None, 0, None
+            self.proposal, self.confirmations = None, 0
+            self._release(controller, self.drain)
+            self.drain = None
             self.settled_since = self.balanced_since = None
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
@@ -161,7 +163,9 @@ class ReactivePolicy:
                 or (recovery and not recovery_ready)
             )
         ):
-            self.proposal, self.confirmations, self.drain = None, 0, None
+            self.proposal, self.confirmations = None, 0
+            self._release(controller, self.drain)
+            self.drain = None
             if prefill_recovery is None:
                 self.settled_since = self.balanced_since = None
             details: dict[str, object] = {
@@ -479,10 +483,13 @@ class ReactivePolicy:
             return details
 
         eligible = [row for row in evaluations if admitted(row)]
+        # An approval's donor stays held only while each pass asks for the move.
+        approved = self.drain
         drain = self._standing_drain(controller, now, current_p, evaluations, eligible)
         if drain is not None:
             eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
+            self._release(controller, approved)
             # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
             if controller.scheduler.held_for_switch():
                 controller.scheduler.renew_draining_holds()
@@ -585,6 +592,7 @@ class ReactivePolicy:
         details["confirmations"] = self.confirmations
         details["required_confirmations"] = confirmations
         if self.confirmations < confirmations:
+            self._release(controller, approved)
             controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
                 decode=candidate.decode,
@@ -599,16 +607,19 @@ class ReactivePolicy:
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
-        holds = controller.scheduler.held_for_switch()
-        if moved is None and holds:
+        if moved is None and controller.scheduler.held_for_switch():
             # The next pass with this proposal moves the donor once it is idle.
             self.proposal, self.confirmations = proposal, confirmations
-            if target is Role.DECODE and self.drain is None:
-                self.drain = SwitchDrain(
-                    candidate_p, min(holds), now, eligibility_rule, confirmations
-                )
+        donor = controller.scheduler.roles.held_donor
+        if moved is None and target is Role.DECODE and donor is not None:
+            approved_at = drain.approved_at if drain is not None else now
+            self.drain = SwitchDrain(
+                candidate_p, donor, approved_at, eligibility_rule, confirmations
+            )
         else:
             self.drain = None
+        if approved is not None and approved.donor != donor:
+            self._release(controller, approved)
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
@@ -632,11 +643,12 @@ class ReactivePolicy:
     ) -> SwitchDrain | None:
         """Return the approved move to decode whose donor still drains, if it stands.
 
-        The approval stands for `switch_hold_s` while its donor stays held. Projected prefill
-        load above expand at the new split, a failed guard or an eligible move to prefill
-        withdraws it and releases the donor.
+        The approval stands for `switch_hold_s` while its donor stays held. An eligible move to
+        prefill withdraws it. Unless the move is still eligible, so does a failed profile or floor
+        check, projected prefill load above expand at the new split, or an objective gain below
+        the one its rule requires.
         """
-        drain = self.drain
+        drain, self.drain = self.drain, None
         if drain is None:
             return None
         scheduler = controller.scheduler
@@ -645,20 +657,31 @@ class ReactivePolicy:
             or now - drain.approved_at > scheduler.switch_hold_s
             or drain.donor not in scheduler.held_for_switch()
         ):
-            self.drain = None
             return None
         row = next((row for row in evaluations if row[0].prefill == drain.prefill), None)
         if (
             row is None
-            or row[1] > scheduler.th.expand
-            or not (row[3] and row[4] and row[6])
             or any(other[0].prefill > current_p for other in eligible)
+            or (
+                row not in eligible
+                and (
+                    not (row[4] and row[6])
+                    or row[1] > scheduler.th.expand
+                    or row[2] < controller.movement_margin
+                    or (row[2] <= 0.0 and drain.rule == "mixed_pressure")
+                )
+            )
         ):
-            self.drain = None
             self.proposal, self.confirmations = None, 0
-            scheduler.switch_holds.pop(drain.donor, None)
             return None
+        self.drain = drain
         return drain
+
+    @staticmethod
+    def _release(controller: ReactiveController, drain: SwitchDrain | None) -> None:
+        """End the hold on an approval's donor."""
+        if drain is not None:
+            controller.scheduler.switch_holds.pop(drain.donor, None)
 
     @staticmethod
     def _short_view(
