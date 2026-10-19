@@ -923,6 +923,58 @@ class MixedPressureTests(unittest.TestCase):
                     self.assertIsNone(self.fleet.step())
                 self.assertEqual(self.fleet.scheduler.roles.flips, [])
 
+    def _residents_beside_an_idle_engine(self, residents: int, idle_limit: int | None) -> None:
+        """Hold `residents` on each of decode engines e2 to e4, and none on decode engine e5.
+
+        Every engine runs and measured 64 sequences, except that e5 runs `idle_limit`, or has no
+        attested limit when it is None.
+        """
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        fleet.scheduler.sequence_limits = dict.fromkeys(fleet.monitor.instances, 64) | {
+            "e5": idle_limit
+        }
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=64))
+        for iid in ("e2", "e3", "e4"):
+            for index in range(residents):
+                fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
+
+    def test_an_idle_decode_engine_adds_its_seats_to_the_spread(self) -> None:
+        # Three decode engines hold 100 residents each, and a fourth that runs 32 sequences holds
+        # none. The current split spreads the 300 residents over 64 + 64 + 64 + 32 = 224 seats on
+        # four engines. A move toward decode adds a fifth engine at the mean seats of the two
+        # engines that then hold none, (64 + 32) / 2, for 192 + 2 * 48 = 288 seats.
+        self._residents_beside_an_idle_engine(100, 32)
+        snapshot = self._snapshot()
+        for prefill, seats, engines in ((2, 224, 4), (1, 288, 5)):
+            with self.subTest(prefill=prefill):
+                score = snapshot.score(prefill)
+                self.assertAlmostEqual(score.decode_priced_wait_factor, 300 / seats)
+                self.assertAlmostEqual(score.decode_priced_requests_per_engine, seats / engines)
+                self.assertAlmostEqual(score.decode_priced_tokens_per_engine, 100 * seats / engines)
+                self.assertTrue(score.decode_profile_covered)
+
+    def test_an_idle_decode_engine_without_seats_adds_none(self) -> None:
+        # Three decode engines that run 64 sequences hold 90 residents each, and a fourth with
+        # no attested limit, or past its 64-request profile, holds none. The residents wait
+        # 270/192 for the three engines' seats, at four engines and at five after a move toward
+        # decode, and with prefill overloaded the fleet keeps its split.
+        for idle_limit in (None, 128):
+            with self.subTest(idle_limit=idle_limit):
+                self.setUp()
+                self._residents_beside_an_idle_engine(90, idle_limit)
+                snapshot = self._snapshot()
+                for prefill, engines in ((2, 4), (1, 5)):
+                    score = snapshot.score(prefill)
+                    self.assertAlmostEqual(score.decode_priced_wait_factor, 270 / 192)
+                    self.assertAlmostEqual(score.decode_priced_requests_per_engine, 192 / engines)
+                    self.assertTrue(score.decode_profile_covered)
+                self.fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.4}
+                for _ in range(6):
+                    self.assertIsNone(self.fleet.step())
+                self.assertEqual(self.fleet.scheduler.roles.flips, [])
+
     def test_a_profile_below_its_sequence_limit_keeps_the_coverage_guard(self) -> None:
         # Engines that run 64 sequences hold 61 residents each. Residents past a profile below
         # 64 may all be running, so the move toward decode holds when every profile measured

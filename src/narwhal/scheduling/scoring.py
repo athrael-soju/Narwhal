@@ -187,12 +187,13 @@ class SplitSnapshot:
         # a batch of the mean seats with the residents' mean KV tokens, and each resident receives
         # a token `wait` times less often. The spread counts the engines holding residents, and
         # each further decode engine at the mean seats of the split's decode engines that hold
-        # none. A move toward prefill keeps every resident on its engine and prices them all.
+        # none, or at no seats when one of those has none. A move toward prefill keeps every
+        # resident on its engine and prices them all.
         row = (
             None
             if include_resident and prefill > self.current_prefill
             else next(
-                (row[1:] for row in self.decode_seat_options if row[0] == prefill),
+                (option[1:] for option in self.decode_seat_options if option[0] == prefill),
                 None,
             )
         )
@@ -202,10 +203,10 @@ class SplitSnapshot:
         if row is not None:
             held, idle_sum, idle_count = row
             extra = resident_engines - (self.active_decode_instances or self.current_decode)
-            if extra == 0:
-                seats = held
-            elif idle_count:
+            if extra and idle_count:
                 seats, scale = held * idle_count + extra * idle_sum, idle_count
+            else:
+                seats = held
         wait = 1.0
         batch_requests, batch_tokens = active_requests, active_tokens
         if seats is not None and self.resident_decode_requests * scale > seats:
