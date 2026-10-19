@@ -151,6 +151,8 @@ def _main(argv: list[str]) -> int:
         ap.error("--evidence-out requires the full KV mesh")
     if args.evidence_out is not None and args.verify_evidence is not None:
         ap.error("choose --evidence-out or --verify-evidence")
+    if args.metrics_url is not None and args.verify_evidence is not None:
+        ap.error("--metrics-url applies only to preflight and calibration")
     if args.evidence_out is not None:
         results.add_artifact("directed_kv_evidence", args.evidence_out)
     # Evidence verification sends no requests to engines, so it serves no metrics.

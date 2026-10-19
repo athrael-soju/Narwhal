@@ -50,6 +50,7 @@ The mode options depend on each other:
 | `--merge` | `--out` | `--only`, `--overwrite`, `--refit-samples` |
 | `--out` | A store path and sidecar path that do not exist yet | `--overwrite` |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
+| `--metrics-url` | A live sweep | `--refit-samples`, `--merge` |
 
 With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 

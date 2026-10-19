@@ -229,6 +229,34 @@ class ToolMetricsCliTests(unittest.TestCase):
             )
         merge.assert_called_once()
 
+    def test_modes_that_send_no_requests_reject_an_explicit_url(self):
+        for command, operation, flags, scope in (
+            (
+                check_cli,
+                "verify_directed_kv_evidence",
+                ["--verify-evidence", "evidence.json"],
+                "preflight and calibration",
+            ),
+            (profile_cli, "merge_profiles", ["--merge", "a.json", "--out", "b.json"], "live"),
+            (
+                profile_cli,
+                "refit_saved_prefill",
+                ["--refit-samples", "samples.json", "--out", "b.json"],
+                "live",
+            ),
+        ):
+            stderr = io.StringIO()
+            with (
+                self.subTest(mode=flags[0]),
+                mock.patch.object(command, operation) as called,
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_,
+            ):
+                command.main(["--fleet", FLEET, *flags, "--metrics-url", "http://127.0.0.1:1"])
+            self.assertEqual(exit_.exception.code, 2)
+            self.assertIn(f"--metrics-url applies only to {scope}", stderr.getvalue())
+            called.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

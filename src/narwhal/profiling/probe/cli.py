@@ -190,6 +190,8 @@ def _main(argv: list[str]) -> int:
         ap.error("--observation-timeout-s applies only to live profiling")
     # Only live profiling sends requests to engines, so only it serves metrics.
     live = not args.merge and args.refit_samples is None
+    if args.metrics_url is not None and not live:
+        ap.error("--metrics-url applies only to live profiling")
     metrics_url = tool_metrics_url(ap, args.metrics_url) if live else None
     try:
         cfg = FleetConfig.load(args.fleet)
