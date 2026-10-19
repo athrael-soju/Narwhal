@@ -606,6 +606,26 @@ class SwitchDrainTests(unittest.TestCase):
         self.assertEqual(sim.scheduler.held_for_switch(), set())
         self.assertEqual(sim.scheduler.roles.flips, [])
 
+    def test_an_advisory_controller_holds_no_donor(self):
+        # A fixed-split run keeps every engine in service: the advisory controller takes no busy
+        # prefill engine out of placements for the move it would make.
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.scheduler.switch_requires_idle = True
+            sim.scheduler.advisory = True
+            self.addCleanup(sim.close)
+            input_len, output_len, _ = DECODE_RAMP
+            for inst in sim.monitor.pool(Role.PREFILL):
+                inst.prefill[inst.iid] = Request(inst.iid, input_len, wanted_len=output_len)
+            sim.run(35, (input_len, output_len, 0.0))
+            sim.run(10, DECODE_RAMP)
+            row = sim.decisions[-1]
+            self.assertEqual((row["current_prefill"], row["prefill"]), (4, 3))
+            self.assertEqual(row["reason"], "no idle prefill engine for an engine-side role switch")
+            self.assertEqual(sim.scheduler.held_for_switch(), set())
+            self.assertIsNone(sim.controller.reactive.drain)
+            self.assertEqual(sim.scheduler.roles.flips, [])
+
     def test_the_move_completes_once_the_donor_is_idle(self):
         with tempfile.TemporaryDirectory() as directory:
             sim = self.approve(directory)
