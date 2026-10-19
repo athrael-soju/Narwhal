@@ -34,6 +34,7 @@
     "model_dtype": "bfloat16",
     "kv_cache_dtype": "auto",
     "max_model_len": 4096,
+    "max_num_seqs": 12,
     "decode_cuda_graph_memory_gb": 1.0,
     "extra_args": [
       "--mamba-radix-cache-strategy",

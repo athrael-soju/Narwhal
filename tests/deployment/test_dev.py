@@ -249,6 +249,7 @@ class DevTests(unittest.TestCase):
             ["prefill", "prefill", "decode", "decode"],
         )
         self.assertEqual(FleetConfig.load(self.root / "fleet.json").backend, "sglang")
+        self.assertEqual(self.requested_caps(), [(12, "12")] * 4)
         run = self.root / "run-profiles"
         run.mkdir()
         with patch.object(lifecycle, "_run") as command:
