@@ -22,7 +22,9 @@ ENGINE = {"job": "engines", "instance": "e0:9000", "iid": "p0"}
 ROUTER = {"job": "narwhal-router", "instance": "r:8000"}
 TOOL = {"job": "narwhal-tools", "instance": "t:9100"}
 
-SERVING, PROBING, CALIBRATING = 0, 3, 4
+SERVING, BACKLOGGED, PROBING, CALIBRATING = 0, 2, 3, 4
+
+Samples = dict[float, str]
 
 
 def _docker_image() -> bool:
@@ -85,23 +87,23 @@ def state_query() -> str:
     return expr.replace("$iid", ".*").replace("$router", ".*")
 
 
-def series(name: str, labels: dict[str, str], samples: dict[int, str]) -> tuple[str, str]:
+def series(name: str, labels: dict[str, str], samples: Samples) -> tuple[str, Samples]:
     """One series with `samples` at their seconds and no sample elsewhere."""
     text = ",".join(f'{key}="{value}"' for key, value in labels.items())
-    cells = [samples.get(t, "_") for t in range(LENGTH)]
-    return f"{name}{{{text}}}", " ".join(cells)
+    return f"{name}{{{text}}}", samples
 
 
-def scrapes(phase: int, until: int = LENGTH) -> range:
+def scrapes(phase: float, until: float = LENGTH) -> list[float]:
     """Scrape times of a target scraped every 5 seconds from `phase`."""
-    return range(phase, min(until, LENGTH), 5)
+    end = min(until, LENGTH)
+    return [round(phase + 5 * k, 1) for k in range(LENGTH // 5) if phase + 5 * k < end]
 
 
-def constant(times: range, value: str) -> dict[int, str]:
+def constant(times, value: str) -> Samples:
     return dict.fromkeys(times, value)
 
 
-def counter(times: range, steps: dict[int, int]) -> dict[int, str]:
+def counter(times: list[float], steps: dict[float, int]) -> Samples:
     """A counter scraped at `times` that has risen by `steps[t]` at each request time t."""
     out, total = {}, 0
     events = sorted(steps.items())
@@ -112,40 +114,78 @@ def counter(times: range, steps: dict[int, int]) -> dict[int, str]:
     return out
 
 
-def engine(running: set[int], start: int = 0, until: int = LENGTH) -> list[tuple[str, str]]:
-    """An engine scraped every 5 s from `start`, running requests at the seconds in `running`."""
+def engine(
+    running: set[int], start: int = 0, until: int = LENGTH, waiting: set[int] = frozenset()
+) -> list[tuple[str, Samples]]:
+    """An engine scraped every 5 s from `start`, running requests at the seconds in `running`
+    and holding waiting requests at the seconds in `waiting`."""
     times = scrapes(start, until)
     tokens = dict.fromkeys(sorted(running), 8)
+    labels = {**ENGINE, "model_name": "m"}
     return [
         series("up", ENGINE, constant(times, "1")),
         series(
-            "vllm:num_requests_running",
-            {**ENGINE, "model_name": "m"},
-            {t: "1" if t in running else "0" for t in times},
+            "vllm:num_requests_running", labels, {t: "1" if t in running else "0" for t in times}
         ),
-        series("vllm:num_requests_waiting", {**ENGINE, "model_name": "m"}, constant(times, "0")),
         series(
-            "vllm:generation_tokens_total", {**ENGINE, "model_name": "m"}, counter(times, tokens)
+            "vllm:num_requests_waiting", labels, {t: "1" if t in waiting else "0" for t in times}
         ),
+        series("vllm:generation_tokens_total", labels, counter(times, tokens)),
+    ]
+
+
+def sglang_engine(running: set[int], finished: dict[float, int]) -> list[tuple[str, Samples]]:
+    """An SGLang engine scraped every 5 s, reporting running requests at the seconds in
+    `running` and counting a request's tokens when it finishes, at the times in `finished`."""
+    times = scrapes(0)
+    labels = {**ENGINE, "model_name": "m"}
+    return [
+        series("up", ENGINE, constant(times, "1")),
+        series("sglang:num_running_reqs", labels, {t: "1" if t in running else "0" for t in times}),
+        series("sglang:num_queue_reqs", labels, constant(times, "0")),
+        series("sglang:prompt_tokens_total", labels, counter(times, finished)),
+        series("sglang:generation_tokens_total", labels, counter(times, finished)),
     ]
 
 
 def router(
-    sent: dict[int, int], resident: set[int] = frozenset(), up: range | None = None, down=()
-) -> list[tuple[str, str]]:
-    """A router scraped every 5 s from second 3, offset from the engine's scrapes."""
+    sent: dict[float, int],
+    resident: set[int] = frozenset(),
+    up: list[float] | None = None,
+    down=(),
+    *,
+    instance: str = "r:8000",
+    restart: float | None = None,
+    delay: float = 0.0,
+) -> list[tuple[str, Samples]]:
+    """A router scraped every 5 s from second 3, offset from the engine's scrapes.
+
+    A router that restarts at `restart`, between two scrapes, counts from zero again. Each
+    sample lands `delay` seconds after its scrape starts, as from a slow scrape.
+    """
     up = up if up is not None else scrapes(3)
-    labels = {**ROUTER, "iid": "p0"}
+    target = {**ROUTER, "instance": instance}
+    labels = {**target, "iid": "p0"}
+    total = counter(up, sent)
+    if restart is not None:
+        later = {t: count for t, count in sent.items() if t > restart}
+        total.update(counter([t for t in up if t > restart], later))
+
+    def landed(samples: Samples) -> Samples:
+        return {round(t + delay, 1): value for t, value in samples.items()}
+
     return [
-        series("up", ROUTER, {**constant(up, "1"), **constant(down, "0")}),
-        series("narwhal_instance_role", {**labels, "role": "decode"}, constant(up, "1")),
+        series("up", target, landed({**constant(up, "1"), **constant(down, "0")})),
+        series("narwhal_instance_role", {**labels, "role": "decode"}, landed(constant(up, "1"))),
         series(
             "narwhal_resident_requests",
             {**labels, "phase": "decode"},
-            {t: "1" if t in resident else "0" for t in up},
+            landed({t: "1" if t in resident else "0" for t in up}),
         ),
-        series("narwhal_resident_requests", {**labels, "phase": "prefill"}, constant(up, "0")),
-        series("narwhal_engine_requests_total", labels, counter(up, sent)),
+        series(
+            "narwhal_resident_requests", {**labels, "phase": "prefill"}, landed(constant(up, "0"))
+        ),
+        series("narwhal_engine_requests_total", labels, landed(total)),
     ]
 
 
@@ -155,21 +195,35 @@ def seconds(*spans: tuple[float, float]) -> set[int]:
 
 
 class EngineStateQueryTests(unittest.TestCase):
-    def check(self, inputs: list[tuple[str, str]], expected: dict[int, int]) -> None:
+    def check(
+        self, inputs: list[tuple[str, Samples]], expected: dict[float, int], step: float = 1.0
+    ) -> None:
+        """Evaluate the State query at each expected time, with `step`-second input samples."""
+        interval = f"{round(step * 1000)}ms"
         with tempfile.TemporaryDirectory() as folder:
             command = promtool(Path(folder))
             if command is None:
                 self.skipTest(f"the {IMAGE} image and a promtool {MAJOR}.x are unavailable")
-            lines = ["rule_files: []", "evaluation_interval: 1s", "tests:", "  - interval: 1s"]
+            lines = [
+                "rule_files: []",
+                f"evaluation_interval: {interval}",
+                "tests:",
+                f"  - interval: {interval}",
+            ]
             lines.append("    input_series:")
-            for name, values in inputs:
-                if set(values.split()) != {"_"}:
+            for name, samples in inputs:
+                cells = ["_"] * round(LENGTH / step)
+                for at, value in samples.items():
+                    if at < LENGTH:
+                        cells[round(at / step)] = value
+                if set(cells) != {"_"}:
+                    values = " ".join(cells)
                     lines += [f"      - series: {json.dumps(name)}", f"        values: {values!r}"]
             lines.append("    promql_expr_test:")
             for at, value in sorted(expected.items()):
                 lines += [
                     f"      - expr: {json.dumps(state_query())}",
-                    f"        eval_time: {at}s",
+                    f"        eval_time: {round(at * 1000)}ms",
                     "        exp_samples:",
                     "          - labels: '{iid=\"p0\"}'",
                     f"            value: {value}",
@@ -204,6 +258,18 @@ class EngineStateQueryTests(unittest.TestCase):
         inputs = engine(running) + router(dict.fromkeys(starts, 1))
         self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
 
+    def test_routed_requests_read_serving_when_router_samples_land_late(self):
+        # Each 0.5 s request starts just after a router scrape and covers an engine scrape, so
+        # the router counts it at its next scrape, whose sample lands up to 1.5 s late.
+        starts = [39.95 + 5 * k for k in range(8)]
+        expected = {round(40 + 0.2 * k, 1): SERVING for k in range(250)}
+        for delay in (0.0, 1.5):
+            with self.subTest(delay=delay):
+                inputs = engine(set(range(40, 76, 5))) + router(
+                    dict.fromkeys(starts, 1), up=scrapes(4.9), delay=delay
+                )
+                self.check(inputs, expected, step=0.1)
+
     def test_a_steady_routed_stream_reads_serving(self):
         # Requests shorter than a scrape interval, back to back, never resident at a router scrape.
         starts = range(0, 120, 4)
@@ -214,30 +280,79 @@ class EngineStateQueryTests(unittest.TestCase):
         inputs = engine(seconds((0, 120))) + router({0: 1}, resident=seconds((0, 120)))
         self.check(inputs, dict.fromkeys(range(22, 120, 7), SERVING))
 
+    def test_requests_from_either_of_two_routers_read_serving(self):
+        # The second router routes requests until 40 s; direct requests follow from 60 s.
+        starts = range(4, 40, 5)
+        running = seconds(*((s, s + 2) for s in starts), (60, 110))
+        inputs = [
+            *engine(running),
+            *router({}),
+            *router(dict.fromkeys(starts, 1), instance="r2:8000"),
+        ]
+        expected = dict.fromkeys(range(16, 74, 3), SERVING)
+        # The second router's last count leaves its 37-second window.
+        expected.update(dict.fromkeys(range(76, 115, 3), PROBING))
+        expected.update(dict.fromkeys(range(115, 130, 3), SERVING))
+        self.check(inputs, expected)
+
+    def test_a_router_restart_between_scrapes_still_counts_its_requests(self):
+        # The router restarts at 60 s between two scrapes it answers, so its counter falls from
+        # 6 to 1 with no failed scrape.
+        starts = [*range(4, 30, 5), *range(61, 120, 5)]
+        running = seconds(*((s, s + 2) for s in starts))
+        inputs = engine(running) + router(dict.fromkeys(starts, 1), restart=60)
+        self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
+
     def test_direct_requests_read_probing_while_the_router_is_down(self):
         # Bursty direct traffic, as calibration sends: work, a short gap, then work again.
         running = seconds((0, 12), (15, 30), (33, 61))
-        inputs = engine(running) + router({}, up=range(0), down=scrapes(3))
-        expected = dict.fromkeys(range(21, 65, 3), PROBING)
+        inputs = engine(running) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(23, 65, 3), PROBING)
         # The engine's second scrape after the last request clears the state.
+        expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
+        self.check(inputs, expected)
+
+    def test_probing_outranks_backlogged(self):
+        running = seconds((0, 61))
+        inputs = engine(running, waiting=seconds((0, 16), (40, 56))) + router(
+            {}, up=[], down=scrapes(3)
+        )
+        expected = dict.fromkeys(range(2, 20, 3), BACKLOGGED)
+        expected.update(dict.fromkeys(range(23, 65, 3), PROBING))
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
         self.check(inputs, expected)
 
     def test_an_engine_idle_for_a_scrape_interval_reads_serving_until_it_works_again(self):
         running = seconds((0, 30), (42, 61))
-        inputs = engine(running) + router({}, up=range(0), down=scrapes(3))
-        expected = dict.fromkeys(range(21, 35, 3), PROBING)
+        inputs = engine(running) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(23, 35, 3), PROBING)
         expected.update(dict.fromkeys(range(35, 45, 3), SERVING))
         expected.update(dict.fromkeys(range(45, 65, 3), PROBING))
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
         self.check(inputs, expected)
+
+    def test_sglang_direct_requests_read_probing_until_their_kv_transfers_finish(self):
+        # A prefill engine reports running requests, and counts each request's tokens, until its
+        # KV transfer finishes, 12 s after the request.
+        finished = dict.fromkeys(range(16, 73, 4), 8)
+        inputs = sglang_engine(seconds((0, 73)), finished) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(23, 80, 3), PROBING)
+        # The engine's second scrape after the last transfer clears the state.
+        expected.update(dict.fromkeys(range(80, 120, 4), SERVING))
+        self.check(inputs, expected)
+
+    def test_routed_sglang_requests_read_serving_while_their_kv_transfers_finish(self):
+        starts = range(0, 61, 4)
+        finished = {start + 12: 8 for start in starts}
+        inputs = sglang_engine(seconds((0, 73)), finished) + router(dict.fromkeys(starts, 1))
+        self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
 
     def test_a_tool_names_its_operation_and_its_engines_return_to_serving(self):
         running = seconds((0, 61))
         tool_up = scrapes(2, 62)
         inputs = [
             *engine(running),
-            *router({}, up=range(0), down=scrapes(3)),
+            *router({}, up=[], down=scrapes(3)),
             series("up", TOOL, {**constant(tool_up, "1"), **constant(scrapes(62), "0")}),
             series(
                 "narwhal_tool_engine_in_use",
@@ -256,9 +371,9 @@ class EngineStateQueryTests(unittest.TestCase):
         self.check(inputs, dict.fromkeys(range(24, 70, 3), SERVING))
 
     def test_a_newly_scraped_engine_waits_for_a_full_window(self):
-        inputs = engine(seconds((30, 120)), start=30) + router({}, up=range(0), down=scrapes(3))
-        expected = dict.fromkeys(range(31, 51, 4), SERVING)
-        expected.update(dict.fromkeys(range(52, 120, 6), PROBING))
+        inputs = engine(seconds((30, 120)), start=30) + router({}, up=[], down=scrapes(3))
+        expected = dict.fromkeys(range(31, 53, 4), SERVING)
+        expected.update(dict.fromkeys(range(53, 120, 6), PROBING))
         self.check(inputs, expected)
 
 
