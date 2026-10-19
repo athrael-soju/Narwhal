@@ -218,7 +218,7 @@ The role controller measures a pool's load as its demand divided by its engine c
 - Prefill surge: 0.8 engines of prefill demand load two prefill engines to 0.5 and three to about 0.33, so the move to 3P:1D lowers the objective by about 0.17. Because an SGLang engine switches roles only when idle, and a request holds its decode engine from admission, the moving engine stops taking requests and finishes its own while the surge continues.
 - Balanced: 0.3 engines of demand on each pool load one decode engine to 0.375 and two engines in each pool to about 0.19, so the move to 2P:2D lowers the objective by about 0.19. A move on to 1P:3D would load one prefill engine to 0.375, so the controller holds at 2P:2D. It holds while measured decode runs up to twice as slow as profiled, the largest correction that `controller.reactive.decode_correction_max`, 2.0, allows.
 
-The replay computes each steady phase's target range from the profiles at its starting split, the split it moves to and the split beyond, and stops with an error when the target falls outside that range. It also stops with an error when:
+The replay computes each phase's target range from the profiles at its starting split, the split it moves to and the split beyond, and stops with an error when the target falls outside that range. It also stops with an error when:
 
 - a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window
 - no output within the template's context limit and the profiled decode domain balances the Balanced phase's prefill work
@@ -230,9 +230,9 @@ The replay saves the sized phases in `phases.json`. Each phase there, and its en
 | --- | --- |
 | `split` | Prefill and decode engine counts where the phase starts |
 | `prefill_s` | Mean prefill seconds of one request at that split |
-| `decode_rps` | Mean decode requests per second that one engine serves within the TPOT budget, for a steady phase |
-| `prefill_engines`, `decode_engines` | Offered demand in engine-equivalents, for a steady phase |
-| `target_band` | Lowest and highest target at which the controller makes the phase's move and holds, for a steady phase |
+| `decode_rps` | Mean decode requests per second that one engine serves within the TPOT budget |
+| `prefill_engines`, `decode_engines` | Offered demand in engine-equivalents |
+| `target_band` | Lowest and highest target at which the controller makes the phase's move and holds |
 
 ## Inspecting and stopping the instance
 

@@ -25,7 +25,7 @@ from tools.measurement import load_trial as trial
 
 # A phase target sets its load in engine-equivalents of the profiles the controller prices at
 # the split where the phase starts, so the same recipe raises the same controller load on any GPU.
-TARGETS = ("decode_engines", "prefill_engines", "balanced_engines", "prefill_backlog_s")
+TARGETS = ("decode_engines", "prefill_engines", "balanced_engines")
 
 
 def plan(root):
@@ -50,8 +50,7 @@ def check_target(phase):
     value = next(iter(target.values()))
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
         raise ValueError(f"phase {phase['name']} target requires a positive number")
-    required = ("rate_rps",) if "prefill_backlog_s" in target else ("duration_s", "max_inflight")
-    for key in required:
+    for key in ("duration_s", "max_inflight"):
         if not phase.get(key, 0) > 0:
             raise ValueError(f"phase {phase['name']} target requires a positive {key}")
 
@@ -113,11 +112,10 @@ def balanced_output(phase, rows, template):
     return low
 
 
-def sized(phase, split, rows, template, limit):
+def sized(phase, split, rows, template):
     """Return the phase with its rate, request count and in-flight cap set from its target.
 
-    `rows` are the profiles the controller prices at `split`, where the phase starts, and
-    `limit` is the router's in-flight limit.
+    `rows` are the profiles the controller prices at `split`, where the phase starts.
     """
     target = phase.get("target")
     if target is None:
@@ -128,25 +126,6 @@ def sized(phase, split, rows, template, limit):
     if kind == "balanced_engines":
         phase = {**phase, "output_tokens": balanced_output(phase, rows, template)}
     prefill_s, decode_rps = prices(phase, rows, slo)
-    if kind == "prefill_backlog_s":
-        # The whole backlog arrives at once, so every request is in flight together.
-        requests = min(math.ceil(value / prefill_s), limit)
-        backlog_s = requests * prefill_s
-        if backlog_s / split[0] <= slo["ttft_s"]:
-            raise ValueError(
-                f"phase {phase['name']} queues {backlog_s / split[0]:.3g} s of prefill work on "
-                f"each of {split[0]} prefill engines, within the {slo['ttft_s']:g} s TTFT budget"
-            )
-        return {
-            **phase,
-            "requests": requests,
-            "max_inflight": requests,
-            "sizing": {
-                "split": list(split),
-                "prefill_s": prefill_s,
-                "prefill_backlog_s": backlog_s,
-            },
-        }
     if kind == "decode_engines":
         if not decode_rps > 0:
             raise ValueError(f"phase {phase['name']}: the profiles price no decode capacity")
@@ -242,22 +221,20 @@ def sized_recipe(template, effective):
             priced[split] = split_profiles(store, roles, split)
         return priced[split]
 
-    limit = effective["serving"]["max_connections"] + effective["serving"]["queue_capacity"]
     phases = []
     for index, phase in enumerate(recipe["phases"]):
         if "target" in phase:
             start, end = splits[index], splits[index + 1]
-            phase = sized(phase, start, rows_at(start), template, limit)
-            if "prefill_backlog_s" not in phase["target"]:
-                low, high = target_band(phase, start, end, rows_at, template)
-                value = next(iter(phase["target"].values()))
-                if not low <= value < high:
-                    raise ValueError(
-                        f"phase {phase['name']} target {value:g} lies outside {low:.3g} to "
-                        f"{high:.3g}, where its load moves the controller from "
-                        f"{start[0]}P:{start[1]}D to {end[0]}P:{end[1]}D and holds it there"
-                    )
-                phase["sizing"]["target_band"] = [low, high]
+            phase = sized(phase, start, rows_at(start), template)
+            low, high = target_band(phase, start, end, rows_at, template)
+            value = next(iter(phase["target"].values()))
+            if not low <= value < high:
+                raise ValueError(
+                    f"phase {phase['name']} target {value:g} lies outside {low:.3g} to "
+                    f"{high:.3g}, where its load moves the controller from "
+                    f"{start[0]}P:{start[1]}D to {end[0]}P:{end[1]}D and holds it there"
+                )
+            phase["sizing"]["target_band"] = [low, high]
         phases.append(phase)
     # Request i's prompt draws from seed + i and the warm-up's from seed + requests, so
     # overlapping ranges repeat cached prompts.

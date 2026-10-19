@@ -26,16 +26,6 @@ from tests.fixtures import profile
 from tools.measurement import dev_cycle
 
 FOUR_SGLANG = "four-engine-cuda-sglang-v1.json"
-# A phase that queues its prefill work at once.
-BURST = {
-    "name": "prefill-burst",
-    "input_tokens": 3840,
-    "output_tokens": 1,
-    "seed": 201730,
-    "target": {"prefill_backlog_s": 3.0},
-    "rate_rps": 100.0,
-    "require_slo": False,
-}
 ROLES = {"n1": Role.PREFILL, "n2": Role.PREFILL, "n3": Role.DECODE, "n4": Role.DECODE}
 SPLITS = ((1, 3), (2, 2), (3, 1))
 
@@ -92,12 +82,11 @@ def colocated_store(path, prefill=1.0, decode=1.0, contention=0.0):
     return store
 
 
-def effective(path, max_connections=768, queue_capacity=0):
+def effective(path):
     """Return the effective-config fields that size a role cycle."""
     return {
         "engines": [{"iid": iid, "role": role.value} for iid, role in ROLES.items()],
         "profiles": {"path": str(path)},
-        "serving": {"max_connections": max_connections, "queue_capacity": queue_capacity},
     }
 
 
@@ -315,12 +304,6 @@ class TargetTests(unittest.TestCase):
             prefill_s = statistics.fmean(p.prefill_time(3840) for p in self.rows(split))
             self.assertEqual(phase["sizing"]["split"], list(split))
             self.assertAlmostEqual(phase["rate_rps"], target / prefill_s)
-        burst = dev_cycle.sized(BURST, (2, 2), self.rows((2, 2)), self.spec, 768)
-        prefill_s = statistics.fmean(p.prefill_time(3840) for p in self.rows((2, 2)))
-        self.assertEqual(burst["sizing"]["split"], [2, 2])
-        self.assertEqual(burst["requests"], math.ceil(3.0 / prefill_s))
-        self.assertAlmostEqual(burst["sizing"]["prefill_backlog_s"], burst["requests"] * prefill_s)
-        self.assertEqual(burst["max_inflight"], burst["requests"])
 
     def test_balanced_phase_takes_the_shortest_output_that_matches_its_prefill_work(self):
         tpot_s = self.spec["slo"]["tpot_s"]
@@ -371,17 +354,6 @@ class TargetTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "lies outside"):
                 dev_cycle.sized_recipe(spec, effective(path))
 
-    def test_burst_stays_within_the_router_in_flight_limit(self):
-        rows = self.rows((2, 2))
-        unlimited = dev_cycle.sized(BURST, (2, 2), rows, self.spec, 768)
-        prefill_s = unlimited["sizing"]["prefill_s"]
-        self.assertGreater(unlimited["requests"], 30)
-        burst = dev_cycle.sized(BURST, (2, 2), rows, self.spec, 28 + 2)
-        self.assertEqual((burst["requests"], burst["max_inflight"]), (30, 30))
-        self.assertAlmostEqual(burst["sizing"]["prefill_backlog_s"], 30 * prefill_s)
-        with self.assertRaisesRegex(ValueError, "within the 1 s TTFT budget"):
-            dev_cycle.sized(BURST, (2, 2), rows, self.spec, 18 + 2)
-
     def test_phases_draw_distinct_prompts(self):
         # The trial's warm-up request takes the seed after the phase's last request.
         ranges = sorted((p["seed"], p["seed"] + p["requests"] + 1) for p in self.phases.values())
@@ -421,11 +393,9 @@ class TargetTests(unittest.TestCase):
         ):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 dev_cycle.check_target({**base, **change})
-        with self.assertRaisesRegex(ValueError, "requires a positive rate_rps"):
-            dev_cycle.check_target({**BURST, "rate_rps": 0})
         light = {**base, "target": {"decode_engines": 0.001}}
         with self.assertRaisesRegex(ValueError, "per 30 s demand window"):
-            dev_cycle.sized(light, (2, 2), self.rows((2, 2)), self.spec, 768)
+            dev_cycle.sized(light, (2, 2), self.rows((2, 2)), self.spec)
         missing = self.directory / "missing.json"
         with self.assertRaisesRegex(ValueError, "price no 2P:2D split"):
             dev_cycle.sized_recipe(self.spec, effective(missing))
