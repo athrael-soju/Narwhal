@@ -54,7 +54,7 @@ The small templates set development SLO targets of 5 seconds for time to first t
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
 
-`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer requests than that, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer. `up` then stops at attestation and reports how many running requests the engine serves. Lower `runtime.max_num_seqs` to that number in your template, and initialize a fresh instance from it.
+`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer requests than that, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer. `up` then stops at attestation and reports how many running requests the engine serves. On native Ubuntu, each engine serves fewer than the one started before it. Each engine's `startup.log` in its launch directory records its cap as `max_running_requests is capped to N`. Set `runtime.max_num_seqs` in your template to the lowest N across the engines, and initialize a fresh instance from it.
 
 Create a custom template:
 
@@ -178,7 +178,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
 
 ## Four SGLang engines and the role cycle
 
-The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and two decode SGLang engines with the checkpoint and packages of `small-cuda-sglang-v1.json`, each engine with a memory fraction of 0.15, at most 12 running requests and a context limit of 4,096 tokens. On native Ubuntu, each engine takes its fraction of the memory still free when it starts, so each engine holds less than the one before it. When an engine serves fewer than 12 running requests, `up` stops at attestation, as [Template and GPU allocation](#template-and-gpu-allocation) describes. The role cycle needs at least 6 on the engine that runs prefill at 1P:3D. Its profile sets neighbour load, so `narwhal dev up` profiles every engine at 1P:3D, 2P:2D and 3P:1D under [shared-GPU neighbour traffic](cli/Profile.md#shared-gpu-neighbour-traffic).
+The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and two decode SGLang engines with the checkpoint and packages of `small-cuda-sglang-v1.json`, each engine with a memory fraction of 0.15, at most 12 running requests and a context limit of 4,096 tokens. When an engine serves fewer than 12 running requests, `up` stops at attestation, as [Template and GPU allocation](#template-and-gpu-allocation) describes. Its profile sets neighbour load, so `narwhal dev up` profiles every engine at 1P:3D, 2P:2D and 3P:1D under [shared-GPU neighbour traffic](cli/Profile.md#shared-gpu-neighbour-traffic).
 
 1. Complete steps 1 to 4 of [Running SGLang engines](#running-sglang-engines).
 2. Export the template and start an instance from it:
