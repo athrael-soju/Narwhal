@@ -26,12 +26,26 @@ from tests.fixtures import profile
 from tools.measurement import dev_cycle
 
 FOUR_SGLANG = "four-engine-cuda-sglang-v1.json"
+# A phase that queues its prefill work at once.
+BURST = {
+    "name": "prefill-burst",
+    "input_tokens": 3840,
+    "output_tokens": 1,
+    "seed": 201730,
+    "target": {"prefill_backlog_s": 3.0},
+    "rate_rps": 100.0,
+    "require_slo": False,
+}
 ROLES = {"n1": Role.PREFILL, "n2": Role.PREFILL, "n3": Role.DECODE, "n4": Role.DECODE}
 SPLITS = ((1, 3), (2, 2), (3, 1))
 
 
 def small_gpu_profile(iid):
-    """A profile with prefill and decode costs of the order a small GPU measures."""
+    """A profile with prefill and decode costs of the order a small GPU measures.
+
+    Its decode domain is the four-engine template's sweep: up to 12 requests of 3840 prompt
+    tokens, halfway through 128 output tokens.
+    """
     return profile(
         iid,
         ttft_a=1e-9,
@@ -40,8 +54,8 @@ def small_gpu_profile(iid):
         tpot_slope=1e-7,
         tpot_intercept=0.008,
         tpot_request_slope=0.0005,
-        decode_max_requests=2,
-        decode_max_kv_tokens=20_000,
+        decode_max_requests=12,
+        decode_max_kv_tokens=12 * (3840 + 64),
         kv_capacity_tokens=200_000,
     )
 
@@ -271,7 +285,7 @@ class TargetTests(unittest.TestCase):
             if (p.colocated_prefill_engines, p.colocated_decode_engines) == split
         ]
 
-    def test_sglang_template_matches_the_reference_cycle_and_controller(self):
+    def test_sglang_template_matches_the_reference_splits_and_controller(self):
         recipe = self.spec["role_cycle"]
         self.assertEqual(self.spec["runtime"]["backend"], "sglang")
         self.assertEqual(self.spec["allocation"]["engine_count"], 4)
@@ -279,9 +293,10 @@ class TargetTests(unittest.TestCase):
         for key in ("controller", "slo"):
             self.assertEqual(self.spec[key], reference()[key])
         self.assertEqual(recipe["expected_splits"], reference()["role_cycle"]["expected_splits"])
+        # A phase drives each of the four moves.
         self.assertEqual(
             [phase["name"] for phase in recipe["phases"]],
-            [phase["name"] for phase in reference()["role_cycle"]["phases"]],
+            ["decode", "prefill-steady", "prefill-surge", "balanced"],
         )
         for phase in recipe["phases"]:
             dev_cycle.check_target(phase)
@@ -289,19 +304,47 @@ class TargetTests(unittest.TestCase):
     def test_each_phase_takes_the_prices_of_the_split_it_starts_from(self):
         tpot_s = self.spec["slo"]["tpot_s"]
         decode = self.phases["decode"]
-        capacity = statistics.fmean(p.decode_rps(tpot_s, 256 + 128, 256) for p in self.rows((2, 2)))
+        capacity = statistics.fmean(p.decode_rps(tpot_s, 256 + 384, 768) for p in self.rows((2, 2)))
         self.assertEqual(decode["sizing"]["split"], [2, 2])
-        self.assertAlmostEqual(decode["rate_rps"], 1.8 * capacity)
-        steady = self.phases["prefill-steady"]
-        prefill_s = statistics.fmean(p.prefill_time(3840) for p in self.rows((1, 3)))
-        self.assertEqual(steady["sizing"]["split"], [1, 3])
-        self.assertAlmostEqual(steady["rate_rps"], 0.22 / prefill_s)
-        burst = self.phases["prefill-burst"]
+        self.assertAlmostEqual(decode["rate_rps"], 1.0 * capacity)
+        for name, split, target in (
+            ("prefill-steady", (1, 3), 0.22),
+            ("prefill-surge", (2, 2), 0.8),
+        ):
+            phase = self.phases[name]
+            prefill_s = statistics.fmean(p.prefill_time(3840) for p in self.rows(split))
+            self.assertEqual(phase["sizing"]["split"], list(split))
+            self.assertAlmostEqual(phase["rate_rps"], target / prefill_s)
+        burst = dev_cycle.sized(BURST, (2, 2), self.rows((2, 2)), self.spec, 768)
         prefill_s = statistics.fmean(p.prefill_time(3840) for p in self.rows((2, 2)))
         self.assertEqual(burst["sizing"]["split"], [2, 2])
         self.assertEqual(burst["requests"], math.ceil(3.0 / prefill_s))
         self.assertAlmostEqual(burst["sizing"]["prefill_backlog_s"], burst["requests"] * prefill_s)
         self.assertEqual(burst["max_inflight"], burst["requests"])
+
+    def test_balanced_phase_takes_the_shortest_output_that_matches_its_prefill_work(self):
+        tpot_s = self.spec["slo"]["tpot_s"]
+        rows = self.rows((3, 1))
+        balanced = self.phases["balanced"]
+        output = balanced["output_tokens"]
+        prefill_s = statistics.fmean(p.prefill_time(1024) for p in rows)
+
+        def decode_s(tokens):
+            return 1 / statistics.fmean(
+                p.decode_rps(tpot_s, 1024 + tokens / 2, tokens) for p in rows
+            )
+
+        self.assertEqual(balanced["sizing"]["split"], [3, 1])
+        self.assertLess(decode_s(output - 1), prefill_s)
+        self.assertGreaterEqual(decode_s(output), prefill_s)
+        self.assertAlmostEqual(balanced["rate_rps"], 0.3 / prefill_s)
+        self.assertAlmostEqual(balanced["sizing"]["prefill_engines"], 0.3)
+        self.assertGreaterEqual(balanced["sizing"]["decode_engines"], 0.3)
+        # Within the context limit, no output can match a slower prefill.
+        spec = copy.deepcopy(self.spec)
+        spec["runtime"]["max_model_len"] = 1024 + output - 1
+        with self.assertRaisesRegex(ValueError, "phase balanced: no output"):
+            dev_cycle.sized_recipe(spec, effective(self.path))
 
     def test_steady_prefill_band_follows_the_controller_settings(self):
         path = self.directory / "uniform.json"
@@ -329,13 +372,15 @@ class TargetTests(unittest.TestCase):
                 dev_cycle.sized_recipe(spec, effective(path))
 
     def test_burst_stays_within_the_router_in_flight_limit(self):
-        prefill_s = self.phases["prefill-burst"]["sizing"]["prefill_s"]
-        self.assertGreater(self.phases["prefill-burst"]["requests"], 30)
-        burst = dev_cycle.sized_recipe(self.spec, effective(self.path, 28, 2))["phases"][2]
+        rows = self.rows((2, 2))
+        unlimited = dev_cycle.sized(BURST, (2, 2), rows, self.spec, 768)
+        prefill_s = unlimited["sizing"]["prefill_s"]
+        self.assertGreater(unlimited["requests"], 30)
+        burst = dev_cycle.sized(BURST, (2, 2), rows, self.spec, 28 + 2)
         self.assertEqual((burst["requests"], burst["max_inflight"]), (30, 30))
         self.assertAlmostEqual(burst["sizing"]["prefill_backlog_s"], 30 * prefill_s)
         with self.assertRaisesRegex(ValueError, "within the 1 s TTFT budget"):
-            dev_cycle.sized_recipe(self.spec, effective(self.path, 18, 2))
+            dev_cycle.sized(BURST, (2, 2), rows, self.spec, 18 + 2)
 
     def test_phases_draw_distinct_prompts(self):
         # The trial's warm-up request takes the seed after the phase's last request.
@@ -345,7 +390,7 @@ class TargetTests(unittest.TestCase):
         spec = copy.deepcopy(self.spec)
         phases = spec["role_cycle"]["phases"]
         phases[2]["seed"] = phases[1]["seed"] + self.phases["prefill-steady"]["requests"]
-        with self.assertRaisesRegex(ValueError, "prefill-steady and prefill-burst repeat prompts"):
+        with self.assertRaisesRegex(ValueError, "prefill-steady and prefill-surge repeat prompts"):
             dev_cycle.sized_recipe(spec, effective(self.path))
 
     def test_targets_scale_with_the_profiles(self):
@@ -377,7 +422,7 @@ class TargetTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, message):
                 dev_cycle.check_target({**base, **change})
         with self.assertRaisesRegex(ValueError, "requires a positive rate_rps"):
-            dev_cycle.check_target({**self.spec["role_cycle"]["phases"][2], "rate_rps": 0})
+            dev_cycle.check_target({**BURST, "rate_rps": 0})
         light = {**base, "target": {"decode_engines": 0.001}}
         with self.assertRaisesRegex(ValueError, "per 30 s demand window"):
             dev_cycle.sized(light, (2, 2), self.rows((2, 2)), self.spec, 768)
@@ -459,18 +504,21 @@ class TargetTests(unittest.TestCase):
                     tuple(
                         self.phases[name][key] for key in ("rate_rps", "requests", "max_inflight")
                     )
-                    for name in ("decode", "prefill-steady", "prefill-burst")
+                    for name in ("decode", "prefill-steady", "prefill-surge", "balanced")
                 ]
                 self.assertEqual(offered, expected)
                 saved = json.loads((out / "phases.json").read_text())
                 self.assertEqual([phase["requests"] for phase in saved], [e[1] for e in expected])
                 self.assertEqual(
-                    [phase["sizing"]["split"] for phase in saved], [[2, 2], [1, 3], [2, 2]]
+                    [phase["sizing"]["split"] for phase in saved],
+                    [[2, 2], [1, 3], [2, 2], [3, 1]],
                 )
+                balanced = self.phases["balanced"]
+                self.assertEqual(saved[3]["output_tokens"], balanced["output_tokens"])
                 self.assertEqual(json.loads((out / "template.json").read_text()), spec)
                 summary = json.loads((out / "summary.json").read_text())
                 self.assertTrue(summary["passed"])
-                self.assertAlmostEqual(summary["phases"][0]["sizing"]["decode_engines"], 1.8)
+                self.assertAlmostEqual(summary["phases"][0]["sizing"]["decode_engines"], 1.0)
                 # A store that predicts no prefill time stops the replay before traffic.
                 colocated_store(root / "profiles.json", prefill=0.0)
                 errors = io.StringIO()
@@ -505,9 +553,10 @@ class CycleSim:
     """Serve sized phases through the real reactive controller on a fake clock.
 
     Each prefill engine serves its requests in arrival order at its profile's prefill time, and
-    a request decodes at its decode engine's token interval for the batch it joins. Engines
-    price and serve at the profiles measured for the live split. Observed pool load reads zero,
-    as in tests/scheduling/test_departure.py.
+    a request decodes at its decode engine's token interval for the batch it joins. As with
+    SGLang, a request holds its decode engine from admission, and an engine switches roles only
+    once idle. Engines price and serve at the profiles measured for the live split. Observed
+    pool load reads zero, as in tests/scheduling/test_departure.py.
     """
 
     def __init__(self, store, spec):
@@ -538,6 +587,7 @@ class CycleSim:
             on_control_event=self.events.append,
         )
         self.scheduler.switch_hold_s = 3 * reactive["step_s"]
+        self.scheduler.switch_requires_idle = True
         self.controller = ReactiveController(
             self.monitor,
             self.scheduler,
@@ -563,14 +613,19 @@ class CycleSim:
                 self.now = self.next_step
                 self.controller.sample()
                 self.controller.step()
+                self.scheduler.roles.settle_drains()
                 self.next_step += self.step_s
         self.now = until
+
+    def engines(self, role):
+        held = self.scheduler.held_for_switch()
+        return [inst for inst in self.scheduler.live_instances(role) if inst.iid not in held]
 
     def arrive(self, at, input_len, output_len):
         self.advance(at)
         self.controller.saw_arrival(input_len, wanted_len=output_len, at=at)
         engine = min(
-            self.scheduler.live_instances(Role.PREFILL),
+            self.engines(Role.PREFILL),
             key=lambda inst: (max(self.free_at[inst.iid], at), inst.iid),
         )
         done = max(self.free_at[engine.iid], at)
@@ -579,25 +634,25 @@ class CycleSim:
         order = next(self.order)
         request = Request(f"r{order}", input_len, wanted_len=output_len, arrived_at=at)
         self.monitor.dispatched(engine.iid, request)
-        heapq.heappush(self.queue, (done, order, engine.iid, request))
+        request.phase = Phase.DECODE
+        decode = min(self.engines(Role.DECODE), key=lambda inst: (len(inst.decode), inst.iid))
+        self.monitor.dispatched(decode.iid, request)
+        heapq.heappush(self.queue, (done, order, engine.iid, decode.iid, request))
 
     def complete(self):
-        at, order, iid, request = heapq.heappop(self.queue)
+        at, order, prefill, decode, request = heapq.heappop(self.queue)
         self.now = at
-        self.monitor.finished(iid, request.rid)
-        if request.phase is Phase.PREFILL:
-            request.phase = Phase.DECODE
-            engine = min(
-                self.scheduler.live_instances(Role.DECODE),
-                key=lambda inst: (len(inst.decode), inst.iid),
-            )
-            self.monitor.dispatched(engine.iid, request)
-            batch = len(engine.decode)
-            interval = self.scheduler.profiles.get(engine.iid).token_interval(
-                batch * (request.input_len + request.wanted_len / 2), batch
-            )
-            done = at + (request.wanted_len - 1) * interval
-            heapq.heappush(self.queue, (done, order, engine.iid, request))
+        if prefill is None:
+            self.monitor.finished(decode, request.rid)
+            return
+        self.monitor.first_token(prefill, request.rid)
+        engine = self.monitor.instances[decode]
+        batch = len(engine.decode)
+        interval = self.scheduler.profiles.get(decode).token_interval(
+            batch * (request.input_len + request.wanted_len / 2), batch
+        )
+        done = at + (request.wanted_len - 1) * interval
+        heapq.heappush(self.queue, (done, order, None, decode, request))
 
     def run(self, phases, gap_s, idle_s):
         """Offer each phase once the previous one drains; return when each phase starts."""
@@ -629,7 +684,7 @@ class RoleCycleControllerTests(unittest.TestCase):
     def test_sized_phases_drive_the_controller_through_the_cycle(self):
         spec = _read_template(FOUR_SGLANG)
         splits = spec["role_cycle"]["expected_splits"]
-        expected = [(a[0], b[0]) for a, b in itertools.pairwise(splits[:4])]
+        expected = [(a[0], b[0]) for a, b in itertools.pairwise(splits)]
         # Prefill and decode cost scales, and the share each same-role neighbour adds.
         for prefill, decode, contention in (
             (1.0, 1.0, 0.0),
@@ -649,13 +704,16 @@ class RoleCycleControllerTests(unittest.TestCase):
                 with patch.object(sim.scheduler, "pool_load", return_value=0.0):
                     starts = sim.run(phases, gap_s=1.0, idle_s=10.0)
                 moves = sim.moves()
-                self.assertEqual([move[:2] for move in moves[:3]], expected)
-                # Decode load moves an engine to decode, and prefill-steady load moves it back
-                # and holds 2P:2D until the burst moves a third engine to prefill.
+                self.assertEqual([move[:2] for move in moves], expected)
+                # Decode load moves an engine to decode, prefill-steady load moves it back and
+                # holds 2P:2D until the surge moves a third engine to prefill, and balanced load
+                # returns that engine to decode.
                 self.assertLess(moves[0][2], starts["prefill-steady"])
                 self.assertGreaterEqual(moves[1][2], starts["prefill-steady"])
-                self.assertLess(moves[1][2], starts["prefill-burst"])
-                self.assertGreaterEqual(moves[2][2], starts["prefill-burst"])
+                self.assertLess(moves[1][2], starts["prefill-surge"])
+                self.assertGreaterEqual(moves[2][2], starts["prefill-surge"])
+                self.assertLess(moves[2][2], starts["balanced"])
+                self.assertGreaterEqual(moves[3][2], starts["balanced"])
 
 
 if __name__ == "__main__":

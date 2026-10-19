@@ -178,7 +178,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
 
 ## Four SGLang engines and the role cycle
 
-The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and two decode SGLang engines with the checkpoint and packages of `small-cuda-sglang-v1.json`, each engine with a memory fraction of 0.15, at most 12 running requests and a context limit of 4,096 tokens. When an engine serves fewer than 12 running requests, `up` stops at attestation, as [Template and GPU allocation](#template-and-gpu-allocation) describes. Its profile sets neighbour load, so `narwhal dev up` profiles every engine at 1P:3D, 2P:2D and 3P:1D under [shared-GPU neighbour traffic](cli/Profile.md#shared-gpu-neighbour-traffic).
+The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and two decode SGLang engines with the checkpoint and packages of `small-cuda-sglang-v1.json`, each engine with a memory fraction of 0.15, at most 12 running requests and a context limit of 4,096 tokens. When an engine serves fewer than 12 running requests, `up` stops at attestation, as [Template and GPU allocation](#template-and-gpu-allocation) describes. Its profile sets neighbour load, so `narwhal dev up` profiles every engine at 1P:3D, 2P:2D and 3P:1D under [shared-GPU neighbour traffic](cli/Profile.md#shared-gpu-neighbour-traffic). The decode sweep runs 1, 2, 4, 8 and 12 concurrent requests, so each profile covers all 12 running requests.
 
 1. Complete steps 1 to 4 of [Running SGLang engines](#running-sglang-engines).
 2. Export the template and start an instance from it:
@@ -202,24 +202,26 @@ The installed `four-engine-cuda-sglang-v1.json` template runs two prefill and tw
     narwhal dev down --instance runs/dev-sglang4
     ```
 
-The replay has the split sequence, pass conditions, records and exit codes of the [reference role cycle](dev/RTX-5090-Reference.md#replaying-all-three-role-splits). Each phase of this template sets its load in engine-equivalents instead of a fixed request rate. Before the first phase, the replay reads the run's `profiles.json` and takes, for each phase, the profiles that the role controller prices at the split where the phase starts: each engine's profile measured at that split in its role there. It prices the phase's requests by the mean prefill time at their input length and by the mean decode requests per second that one engine serves within the TPOT budget, and from those prices sets the phase's request rate, request count and in-flight cap.
+The replay has the split sequence, records and exit codes of the [reference role cycle](dev/RTX-5090-Reference.md#replaying-all-three-role-splits). It passes when the observed splits match the sequence, with every move made by the role controller on the same engine processes, and every request of every phase meets the template's TTFT and TPOT budgets. Each phase of this template sets its load in engine-equivalents instead of a fixed request rate. Before the first phase, the replay reads the run's `profiles.json` and takes, for each phase, the profiles that the role controller prices at the split where the phase starts: each engine's profile measured at that split in its role there. It prices the phase's requests by the mean prefill time at their input length and by the mean decode requests per second that one engine serves within the TPOT budget, and from those prices sets the phase's request rate, request count and in-flight cap. For the Balanced phase, it first sets the output length: the shortest output whose decode work per request reaches the request's prefill work.
 
 | Phase | Starts at | Input / output tokens | Target | Duration |
 | --- | :---: | :---: | --- | :---: |
-| Decode | 2P:2D | 256 / 256 | Decode demand of 1.8 engines | 48 s |
+| Decode | 2P:2D | 256 / 768 | Decode demand of 1 engine | 48 s |
 | Prefill steady | 1P:3D | 3,840 / 1 | Prefill demand of 0.22 engines | 35 s |
-| Prefill burst | 2P:2D | 3,840 / 1 | 3 seconds of prefill work, offered at 100 requests/s and all in flight at once | |
+| Prefill surge | 2P:2D | 3,840 / 1 | Prefill demand of 0.8 engines | 15 s |
+| Balanced | 3P:1D | 1,024 / set from the profiles | Prefill and decode demand of 0.3 engines each | 45 s |
 
 The role controller measures a pool's load as its demand divided by its engine count times `controller.reactive.utilization`, 0.8 in this template, and takes the larger pool load as its objective. It moves one engine when the move lowers the objective by at least `controller.reactive.movement_margin`, 0.05, and leaves the pool that gives up the engine at or below `controller.thresholds.shrink`, 0.5. A move into a pool whose load is at or above `controller.thresholds.expand`, 1.0, needs one confirming step instead of three. The controller holds while demand stays below `controller.reactive.demand_floor`, 0.2 engines.
 
-- Decode: 1.8 engines of decode demand load two decode engines to 1.8 / (2 × 0.8) = 1.125 and three to 0.75, so the move to 1P:3D lowers the objective by 0.375.
+- Decode: 1 engine of decode demand loads two decode engines to 1 / (2 × 0.8) = 0.625 and three to about 0.42, so the move to 1P:3D lowers the objective by about 0.21.
 - Prefill steady: when every split prices prompts alike and prefill load sets the objective, a steady prefill demand P lowers the objective by P / (2 × 0.8) on the move from 1P:3D to 2P:2D and by P / (6 × 0.8) on a further move to 3P:1D. The controller moves to 2P:2D when P is at least 2 × 0.8 × 0.05 = 0.08 and holds there while P stays below 6 × 0.8 × 0.05 = 0.24. The phase's prefill and decode demand together must also reach the demand floor. The target of 0.22 meets all three bounds.
-- Prefill burst: 3 seconds of prefill work queues 1.5 seconds on each of two prefill engines, above the 1-second TTFT budget.
+- Prefill surge: 0.8 engines of prefill demand load two prefill engines to 0.5 and three to about 0.33, so the move to 3P:1D lowers the objective by about 0.17. Because an SGLang engine switches roles only when idle, and a request holds its decode engine from admission, the moving engine stops taking requests and finishes its own while the surge continues.
+- Balanced: 0.3 engines of demand on each pool load one decode engine to 0.375 and two engines in each pool to about 0.19, so the move to 2P:2D lowers the objective by about 0.19. A move on to 1P:3D would load one prefill engine to 0.375, so the controller holds at 2P:2D. It holds while measured decode runs up to twice as slow as profiled, the largest correction that `controller.reactive.decode_correction_max`, 2.0, allows.
 
 The replay computes each steady phase's target range from the profiles at its starting split, the split it moves to and the split beyond, and stops with an error when the target falls outside that range. It also stops with an error when:
 
-- the Decode or Prefill steady phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window
-- the burst, capped at the router's in-flight limit of `serving.max_connections` plus `serving.queue_capacity` requests, would queue no more than the TTFT budget on each prefill engine
+- a phase would offer fewer than `controller.reactive.min_arrivals` requests, 10, in one 30-second demand window
+- no output within the template's context limit and the profiled decode domain balances the Balanced phase's prefill work
 - two phases would repeat a prompt: a phase's requests and its warm-up request take their prompts from consecutive seeds starting at the phase's `seed`
 
 The replay saves the sized phases in `phases.json`. Each phase there, and its entry in `summary.json`, holds a `sizing` object:
@@ -231,7 +233,6 @@ The replay saves the sized phases in `phases.json`. Each phase there, and its en
 | `decode_rps` | Mean decode requests per second that one engine serves within the TPOT budget, for a steady phase |
 | `prefill_engines`, `decode_engines` | Offered demand in engine-equivalents, for a steady phase |
 | `target_band` | Lowest and highest target at which the controller makes the phase's move and holds, for a steady phase |
-| `prefill_backlog_s` | Prefill seconds the burst queues |
 
 ## Inspecting and stopping the instance
 

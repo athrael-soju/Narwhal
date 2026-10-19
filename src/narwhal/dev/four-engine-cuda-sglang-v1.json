@@ -107,7 +107,10 @@
     ],
     "decode_concurrency": [
       1,
-      2
+      2,
+      4,
+      8,
+      12
     ],
     "decode_tokens": 128,
     "neighbour_prefill_rps": 0.5,
@@ -186,10 +189,10 @@
       {
         "name": "decode",
         "input_tokens": 256,
-        "output_tokens": 256,
+        "output_tokens": 768,
         "seed": 1731,
         "target": {
-          "decode_engines": 1.8
+          "decode_engines": 1.0
         },
         "duration_s": 48.0,
         "max_inflight": 8,
@@ -208,15 +211,27 @@
         "require_slo": true
       },
       {
-        "name": "prefill-burst",
+        "name": "prefill-surge",
         "input_tokens": 3840,
         "output_tokens": 1,
         "seed": 201730,
         "target": {
-          "prefill_backlog_s": 3.0
+          "prefill_engines": 0.8
         },
-        "rate_rps": 100.0,
-        "require_slo": false
+        "duration_s": 15.0,
+        "max_inflight": 8,
+        "require_slo": true
+      },
+      {
+        "name": "balanced",
+        "input_tokens": 1024,
+        "seed": 301730,
+        "target": {
+          "balanced_engines": 0.3
+        },
+        "duration_s": 45.0,
+        "max_inflight": 8,
+        "require_slo": true
       }
     ]
   }

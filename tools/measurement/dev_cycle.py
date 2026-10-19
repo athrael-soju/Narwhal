@@ -25,7 +25,7 @@ from tools.measurement import load_trial as trial
 
 # A phase target sets its load in engine-equivalents of the profiles the controller prices at
 # the split where the phase starts, so the same recipe raises the same controller load on any GPU.
-TARGETS = ("decode_engines", "prefill_engines", "prefill_backlog_s")
+TARGETS = ("decode_engines", "prefill_engines", "balanced_engines", "prefill_backlog_s")
 
 
 def plan(root):
@@ -88,6 +88,31 @@ def prices(phase, rows, slo):
     return prefill_s, decode_rps
 
 
+def balanced_output(phase, rows, template):
+    """Return the shortest output whose decode work per request reaches its prefill work."""
+    slo = template["slo"]
+    longest = template["runtime"]["max_model_len"] - phase["input_tokens"]
+
+    def decode_s(output):
+        decode_rps = prices({**phase, "output_tokens": output}, rows, slo)[1]
+        return 1 / decode_rps if decode_rps > 0 else math.inf
+
+    prefill_s = prices({**phase, "output_tokens": 1}, rows, slo)[0]
+    low, high = 1, max(1, longest)
+    while low < high:
+        middle = (low + high) // 2
+        if decode_s(middle) < prefill_s:
+            low = middle + 1
+        else:
+            high = middle
+    if not prefill_s <= decode_s(low) < math.inf:
+        raise ValueError(
+            f"phase {phase['name']}: no output within the context limit and the profiled decode "
+            "domain balances its prefill work"
+        )
+    return low
+
+
 def sized(phase, split, rows, template, limit):
     """Return the phase with its rate, request count and in-flight cap set from its target.
 
@@ -99,8 +124,10 @@ def sized(phase, split, rows, template, limit):
         return phase
     slo = template["slo"]
     reactive = template["controller"]["reactive"]
-    prefill_s, decode_rps = prices(phase, rows, slo)
     kind, value = next(iter(target.items()))
+    if kind == "balanced_engines":
+        phase = {**phase, "output_tokens": balanced_output(phase, rows, template)}
+    prefill_s, decode_rps = prices(phase, rows, slo)
     if kind == "prefill_backlog_s":
         # The whole backlog arrives at once, so every request is in flight together.
         requests = min(math.ceil(value / prefill_s), limit)
@@ -125,6 +152,7 @@ def sized(phase, split, rows, template, limit):
             raise ValueError(f"phase {phase['name']}: the profiles price no decode capacity")
         rate = value * decode_rps
     else:
+        # A balanced phase's decode work matches its prefill work, so its prefill load sets it.
         rate = value / prefill_s
     if rate * reactive["window_s"] < reactive["min_arrivals"]:
         raise ValueError(
@@ -193,7 +221,7 @@ def target_band(phase, start, end, rows_at, template):
         further = max(loads(end)) - max(loads(beyond))
         if further > 0:
             high = min(high, margin / further)
-    unit = prefill_s if "prefill_engines" in phase["target"] else 1 / decode_rps
+    unit = 1 / decode_rps if "decode_engines" in phase["target"] else prefill_s
     return low * unit, high * unit
 
 

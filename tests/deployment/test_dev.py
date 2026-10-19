@@ -250,6 +250,21 @@ class DevTests(unittest.TestCase):
         )
         self.assertEqual(FleetConfig.load(self.root / "fleet.json").backend, "sglang")
         self.assertEqual(self.requested_caps(), [(12, "12")] * 4)
+        # The decode sweep fits the engine and reaches its request cap, so the profiles price
+        # every request an engine runs.
+        profile, runtime = spec["profile"], spec["runtime"]
+        sweep = Sweep(
+            prefill_lens=tuple(profile["prefill_lens"]),
+            decode_input_lens=tuple(profile["decode_input_lens"]),
+            decode_concurrency=tuple(profile["decode_concurrency"]),
+            decode_tokens=profile["decode_tokens"],
+            cached_prefix_lens=tuple(profile["cached_prefix_lens"]),
+            cached_suffix_lens=tuple(profile["cached_suffix_lens"]),
+        )
+        self.assertEqual(
+            bounded_sweep(sweep, runtime["max_model_len"], runtime["max_num_seqs"]), sweep
+        )
+        self.assertEqual(max(sweep.decode_concurrency), runtime["max_num_seqs"])
         run = self.root / "run-profiles"
         run.mkdir()
         with patch.object(lifecycle, "_run") as command:
