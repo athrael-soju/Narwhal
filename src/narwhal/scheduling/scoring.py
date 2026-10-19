@@ -102,6 +102,8 @@ class SplitSnapshot:
     offered_outputs: tuple[int, ...] = ()
     # Decode-slot wait over the remaining TTFT budget, by decode engine count.
     decode_wait_ratios: tuple[tuple[int, float], ...] = ()
+    # Engine ID to the sequence limit from its verified attestation.
+    sequence_limits: tuple[tuple[str, int], ...] = ()
 
     @property
     def prefill_recovery_ratio(self) -> float:
@@ -159,6 +161,22 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
+        # An engine runs at most its attested sequence limit, and residents past it wait inside
+        # the engine. A move toward decode checks a profile that measures decode up to its
+        # engine's limit at no more than the limit, with the same share of the KV tokens.
+        limits = dict(self.sequence_limits) if prefill < self.current_prefill else {}
+
+        def running(profile: Profile) -> tuple[float, float]:
+            limit = limits.get(profile.iid)
+            if (
+                limit is None
+                or active_requests <= limit
+                or profile.decode_max_requests is None
+                or profile.decode_max_requests < limit
+            ):
+                return active_requests, active_tokens
+            return float(limit), active_tokens * limit / active_requests
+
         correction = self.decode_correction
         pending_covered = bool(profiles)
         if include_resident:
@@ -200,7 +218,7 @@ class SplitSnapshot:
                 for profile in profiles
                 for length in self.offered_outputs
             )
-            and all(p.covers_decode(active_requests, active_tokens) for p in profiles)
+            and all(p.covers_decode(*running(p)) for p in profiles)
         )
         if include_resident and prefill > self.current_prefill:
             covered = covered and self.resident_profile_covered
@@ -506,6 +524,7 @@ class SplitScorer:
             ),
             resident_profile_covered=resident_covered,
             queued_prefill_s=queued_prefill,
+            sequence_limits=tuple(sorted(self.scheduler.sequence_limits.items())),
             active_decode_instances=sum(bool(inst.decode) for inst in instances),
             profile_options=profile_options,
             demand_options=demand_options,
