@@ -89,7 +89,9 @@ class SeatedDecodeTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        scheduler = role_scheduler(folder.name, {"d1": Role.DECODE, "d2": Role.DECODE})
+        scheduler = role_scheduler(
+            folder.name, {"p1": Role.PREFILL, "d1": Role.DECODE, "d2": Role.DECODE}
+        )
         self.monitor = scheduler.monitor
         self.router = SimpleNamespace(
             scheduler=scheduler,
@@ -104,6 +106,12 @@ class SeatedDecodeTests(unittest.TestCase):
 
     def resident(self, iid, rid, left):
         request = Request(rid, 128, phase=Phase.DECODE, output_len=8, wanted_len=8 + left)
+        self.monitor.instances[iid].decode[rid] = request
+
+    def prefilling(self, iid, rid, input_len, left):
+        # With a concurrent KV connector, the decode leg holds its seat while p1 prefills.
+        request = Request(rid, input_len, phase=Phase.DECODE, wanted_len=left)
+        self.monitor.instances["p1"].prefill[rid] = request
         self.monitor.instances[iid].decode[rid] = request
 
     def skipped(self, exclude=frozenset()):
@@ -137,6 +145,15 @@ class SeatedDecodeTests(unittest.TestCase):
             self.resident("d1", rid, left)
         self.resident("d2", "r5", 300)
         self.resident("d2", "r6", 300)
+        self.assertEqual(self.skipped(), {"d1"})
+
+    def test_a_leg_in_prefill_decodes_only_once_its_prefill_completes(self):
+        # d1's legs decode 10 tokens each, but only after p1 finishes their prompts, about 2 and
+        # 4 seconds from now; d2's running legs free a seat in about 1 second.
+        self.prefilling("d1", "r1", 2048, 10)
+        self.prefilling("d1", "r2", 2048, 10)
+        self.resident("d2", "r3", 300)
+        self.resident("d2", "r4", 300)
         self.assertEqual(self.skipped(), {"d1"})
 
 

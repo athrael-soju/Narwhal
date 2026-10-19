@@ -79,6 +79,10 @@ class DecodeOccupancy:
     deadlines: tuple[float, ...]
     # Projected last token of each resident, by engine and request ID.
     ends: dict[tuple[str, str], float]
+    # Seconds from now to each resident's predicted prefill completion, 0 once prefilled.
+    prefill_done: dict[tuple[str, str], float]
+    # Seconds each resident decodes its remaining output, from its first decode step.
+    decode_s: dict[tuple[str, str], float]
     # Resident KV tokens on each engine.
     held: dict[str, int]
 
@@ -159,14 +163,8 @@ def decode_occupancy(
             batch, limit
         ) * scheduler.monitor.decode_correction(inst.iid)
     step = sum(steps.values()) / len(steps)
-    residents: list[DecodeSpan] = []
-    ends: dict[tuple[str, str], float] = {}
-    for inst in engines:
-        for rid, r in inst.decode.items():
-            resident = decode_span(r, 0.0, steps[inst.iid], estimate)
-            residents.append(resident)
-            ends[inst.iid, rid] = resident[1]
-    handoffs = [(0.0, r) for r in scheduler.monitor.waiting.values() if r.phase is Phase.DECODE]
+    # Predicted prefill completion of each request in prefill.
+    prefilled: dict[str, float] = {}
     prefilling: list[tuple[float, Request]] = []
     for inst in scheduler.monitor.instances.values():
         prefill_profile = scheduler.profiles.get(inst.iid)
@@ -174,7 +172,22 @@ def decode_occupancy(
         for r in inst.prefill.values():
             if prefill_profile is not None:
                 done += prefill_seconds(prefill_profile, r)
+            prefilled[r.rid] = done
             prefilling.append((done, r))
+    residents: list[DecodeSpan] = []
+    ends: dict[tuple[str, str], float] = {}
+    prefill_done: dict[tuple[str, str], float] = {}
+    decode_s: dict[tuple[str, str], float] = {}
+    for inst in engines:
+        for rid, r in inst.decode.items():
+            resident = decode_span(r, 0.0, steps[inst.iid], estimate)
+            residents.append(resident)
+            ends[inst.iid, rid] = resident[1]
+            # A decode leg placed before its prefill completes, as with a concurrent KV
+            # connector, starts decoding once that prefill completes.
+            prefill_done[inst.iid, rid] = prefilled.get(rid, 0.0)
+            decode_s[inst.iid, rid] = decode_span(r, 0.0, steps[inst.iid], estimate)[1]
+    handoffs = [(0.0, r) for r in scheduler.monitor.waiting.values() if r.phase is Phase.DECODE]
     handoffs += sorted(prefilling, key=lambda row: row[0])
     now = scheduler._clock()
     return DecodeOccupancy(
@@ -189,6 +202,8 @@ def decode_occupancy(
             for _, r in handoffs
         ),
         ends,
+        prefill_done,
+        decode_s,
         held,
     )
 

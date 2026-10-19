@@ -188,6 +188,7 @@ def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set
     While an engine has a free seat, the leg skips the full engines. When every engine is full, it
     skips all but the engine whose seat the profiles project to free first. An engine's residents
     take its seats in placement order, so legs waiting for a seat there delay its next free one.
+    A resident holds its seat from the time the seat frees, and decodes once its prefill completes.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
     seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}
@@ -206,7 +207,8 @@ def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set
     def frees(inst: Instance) -> float:
         free = [0.0] * seats[inst.iid]
         for rid in inst.decode:
-            heapq.heapreplace(free, free[0] + occupancy.ends[inst.iid, rid])
+            start = max(free[0], occupancy.prefill_done[inst.iid, rid])
+            heapq.heapreplace(free, start + occupancy.decode_s[inst.iid, rid])
         return free[0]
 
     first = min(pool, key=lambda inst: (frees(inst), inst.iid))
