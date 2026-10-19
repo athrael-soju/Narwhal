@@ -14,6 +14,7 @@ import httpx
 from narwhal.runtime import monitoring
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.runtime.monitoring import MonitoringLedger, monitor_once, readmit, sweep_liveness
+from narwhal.serving import app as app_module
 from narwhal.serving.app import create_app
 from tests.fixtures import bind_identity_profiles, fleet
 
@@ -107,7 +108,8 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         cfg.state_path = root / "handoff.json"
         cfg.monitor_failure_limit = 1
         cfg.liveness_every = 0
-        self.router = create_app(cfg).state.router
+        app = create_app(cfg)
+        self.app, self.router = app, app.state.router
         bind_identity_profiles(self.router)
         self.addAsyncCleanup(self.router.engines.aclose)
 
@@ -260,6 +262,26 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             await monitor_once(self.router)
             self.assertEqual(self.router.monitoring.degraded, "")
 
+    async def test_the_router_runs_the_liveness_loop_while_it_serves(self):
+        self.router.cfg.monitor_interval_s = 0.02
+        self.router.cfg.liveness_every = 1
+        app, swept = self.app, asyncio.Event()
+
+        async def sweep(router):
+            swept.set()
+            return []
+
+        with (
+            patch.object(monitoring, "sweep_liveness", new=sweep),
+            # The fixture engines have no attestation sidecars to read at startup.
+            patch.object(app_module, "read_generation", new=AsyncMock()),
+            patch.object(app_module, "generation_problem", return_value=None),
+            patch.object(app_module, "check_process_identities", new=AsyncMock(return_value=[])),
+            patch.object(app_module, "refresh_idle_consumers", new=AsyncMock()),
+        ):
+            async with app.router.lifespan_context(app):
+                await asyncio.wait_for(swept.wait(), timeout=2.0)
+
     async def test_a_slow_liveness_answer_leaves_monitor_passes_on_time(self):
         """The liveness loop owns the sweep, so a pass never waits on an engine's answer."""
         self.router.cfg.monitor_interval_s = 0.02
@@ -281,8 +303,8 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
                 await sweep
         self.assertEqual(self.router.monitoring.stages["liveness"].failures, 0)
 
-    async def test_liveness_loop_records_a_failed_sweep_and_waits_out_standby(self):
-        """A sweep failure counts toward the next pass, and a standby router sweeps nothing."""
+    async def test_liveness_loop_records_a_failed_sweep_and_waits_out_standby_and_holds(self):
+        """A sweep failure counts toward the next pass; standby or a lifecycle hold sweeps none."""
         self.router.cfg.monitor_interval_s = 0.02
         self.router.cfg.liveness_every = 1
         with (
@@ -296,6 +318,10 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
             sweep.assert_not_called()
             self.router.standby = False
+            self.router.lifecycle_blocked = "wave hold"
+            await asyncio.sleep(0.1)
+            sweep.assert_not_called()
+            self.router.lifecycle_blocked = ""
             await asyncio.sleep(0.1)
             task.cancel()
             with suppress(asyncio.CancelledError):

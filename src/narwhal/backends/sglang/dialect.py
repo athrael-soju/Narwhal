@@ -11,7 +11,9 @@ from .identity import SERVER_INFO_PATH
 class SglangDialect(EngineDialect):
     name = "sglang"
     # /health generates a token and answers after at least a second. /ready answers at once from
-    # the server state: 200 once warmup passes, 503 while starting, paused or shutting down.
+    # the server state: 200 once warmup passes, 503 while starting, paused or shutting down, and
+    # 503 once a failed warmup, or a /health or /health_generate that times out, marks the
+    # server unhealthy.
     health_path = "/ready"
     cache_reset_path = "/flush_cache"
     # /tokenize reports the tokenizer's limit, not the --context-length the engine serves.
