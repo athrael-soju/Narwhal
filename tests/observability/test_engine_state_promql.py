@@ -192,11 +192,21 @@ class EngineStateQueryTests(unittest.TestCase):
         self.check(inputs, dict.fromkeys(range(22, 120, 7), SERVING))
 
     def test_direct_requests_read_probing_while_the_router_is_down(self):
-        # Bursty direct traffic, as calibration sends: work, a gap, then work again.
-        running = seconds((0, 12), (20, 30), (36, 61))
+        # Bursty direct traffic, as calibration sends: work, a short gap, then work again.
+        running = seconds((0, 12), (15, 30), (33, 61))
         inputs = engine(running) + router({}, up=range(0), down=scrapes(3))
-        expected = dict.fromkeys(range(26, 82, 4), PROBING)
-        expected.update(dict.fromkeys(range(87, 120, 4), SERVING))
+        expected = dict.fromkeys(range(21, 65, 3), PROBING)
+        # The engine's second scrape after the last request clears the state.
+        expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
+        self.check(inputs, expected)
+
+    def test_an_engine_idle_for_a_scrape_interval_reads_serving_until_it_works_again(self):
+        running = seconds((0, 30), (42, 61))
+        inputs = engine(running) + router({}, up=range(0), down=scrapes(3))
+        expected = dict.fromkeys(range(21, 35, 3), PROBING)
+        expected.update(dict.fromkeys(range(35, 45, 3), SERVING))
+        expected.update(dict.fromkeys(range(45, 65, 3), PROBING))
+        expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
         self.check(inputs, expected)
 
     def test_a_tool_names_its_operation_and_its_engines_return_to_serving(self):

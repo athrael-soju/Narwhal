@@ -234,7 +234,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
 | Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
 
-An engine reads Probing when it reports running requests or processed tokens in the 15 seconds that end 6 seconds ago, and over the last 35 seconds no router sent it a request or held work on it and no Narwhal tool reported it. Probing starts 6 to 11 seconds after the first such request and ends 21 to 26 seconds after the last. For 35 seconds after a router starts or stops, no engine reads Probing.
+An engine reads Probing when it reports running requests or processed tokens in the 15 seconds that end 6 seconds ago, its latest scrape shows running requests or tokens processed since the scrape before, and over the last 35 seconds no router sent it a request or held work on it and no Narwhal tool reported it. Probing starts 6 to 11 seconds after the first such request and ends at the engine's second scrape after the last, 5 to 10 seconds after it. An engine that is idle for a whole 5-second scrape interval reads Serving until it works again. For 35 seconds after a router starts or stops, no engine reads Probing.
 
 First-token calibration, profiling and preflight send requests to engines directly, so the engines they keep busy read Probing. When Prometheus [scrapes the tools](01-Start-and-Verify.md#scraping-narwhal-tools), the engines a tool reports read Calibrating, Profiling or Preflight instead, and return to Serving at the tool's first 5-second scrape after it exits.
 

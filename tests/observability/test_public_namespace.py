@@ -567,11 +567,14 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(source, state)
         # An aggregated engine holds both roles and serves both phases.
         self.assertIn("unless on(iid) (count by(iid) (count by(iid, role) (", state)
-        # Probing needs engine-side work in a window that ends one scrape interval ago, and no
-        # work any router sent or held on the engine, and no tool report, over a wider window.
+        # Probing needs engine-side work in a window that ends one scrape interval ago and at the
+        # latest scrape, and no work any router sent or held on the engine, and no tool report,
+        # over a wider window.
         self.assertIn("label_replace(3 * clamp_max(((max_over_time(((sum by(iid) (", state)
         for source in (
             "[15s:1s] offset 6s) > 0) or (changes(((sum by(iid) ({__name__=~",
+            "[15s:1s] offset 6s) > 0)) and on(iid) ((((sum by(iid) (",
+            "[5100ms:100ms]) > 0))",
             ' and on(iid) (max by(iid) (up{job="engines",iid=~"$iid"} offset 21s))',
             " unless on(iid) (max by(iid) (max_over_time(narwhal_resident_requests"
             '{job="narwhal-router",iid=~"$iid"}[35s])) > 0)',
