@@ -217,6 +217,45 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(moved)
         self.assertEqual(moved.iid, held)
 
+    def approve_drain(self) -> str:
+        """Approve 3P to 2P on busy SGLang engines and return the held prefill donor."""
+        fleet = self.fleet
+        fleet.scheduler.switch_requires_idle = True
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.PREFILL
+        for inst in fleet.monitor.instances.values():
+            residents = inst.prefill if inst.role is Role.PREFILL else inst.decode
+            residents[inst.iid] = Request(inst.iid, 100, wanted_len=10)
+        fleet.pressure = {Role.PREFILL: 0.3, Role.DECODE: 6.0}
+        self.assertIsNone(fleet.step())
+        drain = fleet.controller.reactive.drain
+        self.assertEqual(fleet.scheduler.held_for_switch(), {drain.donor})
+        return drain.donor
+
+    def test_a_move_to_prefill_ends_a_drain_and_holds_its_own_donor(self) -> None:
+        fleet = self.fleet
+        donor = self.approve_drain()
+        # A prefill surge with decode load below shrink at 4P admits the move at once.
+        fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 0.9}
+        self.assertIsNone(fleet.step())
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual((decision["current_prefill"], decision["prefill"]), (3, 4))
+        (held,) = fleet.scheduler.held_for_switch()
+        self.assertNotEqual(held, donor)
+        self.assertIs(fleet.monitor.instances[held].role, Role.DECODE)
+        self.assertIsNone(fleet.controller.reactive.drain)
+
+    def test_a_waiting_move_to_prefill_releases_a_drain_donor(self) -> None:
+        fleet = self.fleet
+        self.approve_drain()
+        fleet.pressure = {Role.PREFILL: 6.0, Role.DECODE: 2.5}
+        self.assertIsNone(fleet.step())
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["prefill"], 4)
+        self.assertEqual(decision["reason"], "waiting for sustained demand")
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+        self.assertIsNone(fleet.controller.reactive.drain)
+
     def test_sustained_mixed_pressure_converges_without_oscillation(self) -> None:
         fleet = self.fleet
         for index in range(60):

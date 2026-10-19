@@ -543,7 +543,15 @@ class StandingDrainTests(unittest.TestCase):
     def test_an_eligible_move_stands_above_expand(self):
         self.approve("mixed_pressure")
         row = self.row(source=1.2)
-        self.assertIs(self.stand([row], [row]), self.approval)
+        self.assertEqual(self.stand([row], [row]), replace(self.approval, approved_at=105.0))
+
+    def test_an_eligible_move_restarts_the_hold_span(self):
+        row = self.row()
+        renewed = replace(self.approval, approved_at=130.0)
+        self.assertEqual(self.stand([row], [row], now=130.0), renewed)
+        self.assertEqual(self.policy.drain, renewed)
+        self.assertEqual(self.stand([row], now=145.0), renewed)
+        self.assertIsNone(self.stand([row], now=145.5))
 
     def test_a_mixed_pressure_approval_needs_a_positive_gain(self):
         self.controller.movement_margin = 0.0
@@ -618,17 +626,23 @@ class SwitchDrainTests(unittest.TestCase):
         self.assertIsNone(sim.controller.reactive.drain)
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
-    def test_the_completing_move_records_the_approving_rule(self):
+    def test_the_drain_records_the_approving_rule(self):
         with tempfile.TemporaryDirectory() as directory:
             sim = self.approve(directory)
-            self.drain(sim)
-            # A departure toward decode prices the completing pass under its own rule.
+            donor = self.held(sim)
+            # A departure toward decode prices the later passes under their own rule.
             sim.controller.reactive.departure = Departure(-1, sim.now)
             sim.run(5, DECODE_RAMP)
+            asked = sim.decisions[-1]
+            sim.monitor.instances[donor].prefill.clear()
+            sim.run(5, DECODE_RAMP)
         move = sim.decisions[-1]
+        self.assertIn("out of new placements until it is idle", asked["reason"])
         self.assertEqual(move["result"], "applied")
-        self.assertEqual(move["demand_horizon_s"], move["steady_horizon_s"])
-        self.assertEqual(move["eligibility_rule"], "source_shrink")
+        for row in (asked, move):
+            self.assertEqual(row["demand_horizon_s"], row["steady_horizon_s"])
+            self.assertEqual(row["eligibility_rule"], "source_shrink")
+            self.assertEqual(row["confirmations"], row["required_confirmations"])
 
     def test_a_mixed_pressure_approval_completes_above_expand(self):
         input_len, output_len, rate = DECODE_RAMP
@@ -751,31 +765,37 @@ class SwitchDrainTests(unittest.TestCase):
         # The busy donor returns to placements with the lapsed approval.
         self.assertEnded(sim)
 
-    def test_a_lapse_keeps_the_donor_when_the_pass_asks_again(self):
+    @staticmethod
+    def evaluate_after(sim: Sim, seconds: float, workload: tuple[int, int, float]) -> None:
+        """Offer `seconds` of load and run one evaluation at its end."""
+        input_len, output_len, rate = workload
+        sim.carry += rate * seconds
+        count = int(sim.carry)
+        sim.carry -= count
+        for k in range(count):
+            at = sim.now + seconds * (k + 1) / (count + 1)
+            sim.controller.saw_arrival(input_len, wanted_len=output_len, at=at)
+        sim.now += seconds
+        sim.controller.sample()
+        sim.controller.step()
+
+    def test_an_admitted_move_keeps_its_donor_past_the_hold_span(self):
         workload = (4096, 6000, 3.75)
         with tempfile.TemporaryDirectory() as directory:
             sim = self.approve(directory, workload=workload)
             donor = self.held(sim)
-            approved_at = sim.now
-            sim.run(20, workload)
-        row = sim.decisions[-1]
-        self.assertIn(f"holding {donor} out of new placements", row["reason"])
-        self.assertTrue(row["source_pressure_safe"])
-        self.assertEqual(sim.scheduler.held_for_switch(), {donor})
-        drain = sim.controller.reactive.drain
-        self.assertEqual((drain.donor, drain.approved_at), (donor, approved_at + 20.0))
-
-    def test_a_lapse_releases_the_donor_while_the_move_waits(self):
-        workload = (4096, 6000, 3.75)
-        with tempfile.TemporaryDirectory() as directory:
-            sim = self.approve(directory, workload=workload)
-            self.held(sim)
-            sim.run(15, workload)
-            # Decode load below expand makes the move wait for the sustained confirmation count.
+            # Fleet evaluations run about 6 s apart, so the third falls after the hold span.
+            for _ in range(2):
+                self.evaluate_after(sim, 5.99, workload)
+            # Decode load below expand would make an ordinary pass wait for three confirmations.
             sim.scheduler.th.expand = 5.0
-            sim.run(5, workload)
-        self.assertEqual(sim.decisions[-1]["reason"], "waiting for sustained demand")
-        self.assertEnded(sim)
+            self.evaluate_after(sim, 5.99, workload)
+        asked = sim.decisions[-3:]
+        for row in asked:
+            self.assertIn(f"holding {donor} out of new placements", row["reason"])
+            self.assertTrue(row["source_pressure_safe"])
+        self.assertEqual(sim.scheduler.held_for_switch(), {donor})
+        self.assertEqual(sim.controller.reactive.drain.approved_at, sim.now)
 
     def test_router_side_switches_move_at_approval(self):
         with tempfile.TemporaryDirectory() as directory:

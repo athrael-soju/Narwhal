@@ -43,6 +43,7 @@ class SwitchDrain:
 
     prefill: int
     donor: str
+    # Latest evaluation whose rules admitted the move.
     approved_at: float
     rule: str
     confirmations: int
@@ -490,7 +491,7 @@ class ReactivePolicy:
             eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
             self._release(controller, approved)
-            # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
+            # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
             if controller.scheduler.held_for_switch():
                 controller.scheduler.renew_draining_holds()
             else:
@@ -643,22 +644,23 @@ class ReactivePolicy:
     ) -> SwitchDrain | None:
         """Return the approved move to decode whose donor still drains, if it stands.
 
-        The approval stands for `switch_hold_s` while its donor stays held. An eligible move to
-        prefill withdraws it. Unless the move is still eligible, so does a failed profile or floor
-        check, projected prefill load above expand at the new split, or an objective gain below
-        the one its rule requires.
+        The approval stands while its donor stays held and the live prefill count is unchanged,
+        and lapses `switch_hold_s` after the latest evaluation whose rules admitted the move. An
+        eligible move to prefill withdraws it. Unless the move is still eligible, so does a failed
+        profile or floor check, projected prefill load above expand at the new split, or an
+        objective gain below the one its rule requires.
         """
         drain, self.drain = self.drain, None
         if drain is None:
             return None
         scheduler = controller.scheduler
-        if (
-            drain.prefill != current_p - 1
-            or now - drain.approved_at > scheduler.switch_hold_s
-            or drain.donor not in scheduler.held_for_switch()
-        ):
+        if drain.prefill != current_p - 1 or drain.donor not in scheduler.held_for_switch():
             return None
         row = next((row for row in evaluations if row[0].prefill == drain.prefill), None)
+        if row is not None and row in eligible:
+            drain = replace(drain, approved_at=now)
+        elif now - drain.approved_at > scheduler.switch_hold_s:
+            return None
         if (
             row is None
             or any(other[0].prefill > current_p for other in eligible)
