@@ -69,12 +69,6 @@ class EngineSeatTests(unittest.TestCase):
         self.assertEqual(decode_seats(self.router, "e3"), profiled)
         self.assertEqual(decode_seats(self.router, "unprofiled"), 0)
 
-    def test_the_role_controller_reads_the_attested_sequence_limits(self):
-        self.router.attested("e3", launch("--max-num-seqs", "60"))
-        self.assertEqual(self.router.scheduler.sequence_limits, {"e3": 60})
-        self.router.attested("e3", launch())
-        self.assertEqual(self.router.scheduler.sequence_limits, {})
-
     def test_prefill_seats_fit_back_to_back_prefills_within_the_ttft_target(self):
         self.assertEqual(prefill_seats(self.router, "e0"), 0)
         self.router.input_lengths.add(1_000)
