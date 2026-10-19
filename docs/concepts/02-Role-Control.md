@@ -95,15 +95,16 @@ While an engine is ejected, quarantined, draining, or recovering, the role contr
 
 Requests already running on a vLLM engine finish there after the engine changes role.
 
-An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle, for a move to prefill only if the controller still selects the move. The controller renews the hold each time it asks for the move, and, for a move to prefill, at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
+An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle: for a move to decode, while the move's approval stands, and for a move to prefill, if the controller still selects the move. The controller renews the hold each time it asks for the move, and, for a move to prefill, at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
 
-A move to decode keeps its approval while its engine stays held and the live split is unchanged, for up to three `controller.reactive.step_s` intervals after approval. Each evaluation in that time asks for the move again without new confirmations, so the move takes place at the first evaluation that finds a prefill engine idle. The approval ends, and the engine returns to new placements, when:
+A move to decode keeps its approval while its engine stays held and the number of live prefill engines is unchanged. Each evaluation while the approval stands asks for the move again without new confirmations, so the move takes place at the first evaluation that finds a prefill engine idle. The approval ends, and the engine returns to new placements, when:
 
+- three `controller.reactive.step_s` intervals pass after the latest evaluation that found the move eligible
 - a move to prefill becomes eligible
 - a projected-TTFT recovery evaluation runs, or an evaluation with incomplete demand finds the decode recovery ratio below `controller.thresholds.expand`
 - an evaluation stops before scoring splits
+- the role change is blocked, such as by the decode cooldown
 - the move is no longer eligible and fails the decode profile or role floor check, projects prefill load above `controller.thresholds.expand` at the new split, or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, or by zero or less when `mixed_pressure` approved it
-- its time runs out, unless the same evaluation asks for the move again
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 
