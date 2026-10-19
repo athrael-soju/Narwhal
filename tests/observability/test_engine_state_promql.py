@@ -15,6 +15,7 @@ SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
 IMAGE = re.search(r"image:\s*(prom/prometheus:\S+)", (artifacts.BASE / "compose.yml").read_text())[
     1
 ]
+MAJOR = re.search(r":v(\d+)\.", IMAGE)[1]
 LENGTH = 130
 
 ENGINE = {"job": "engines", "instance": "e0:9000", "iid": "p0"}
@@ -27,16 +28,32 @@ SERVING, PROBING, CALIBRATING = 0, 3, 4
 def _docker_image() -> bool:
     if shutil.which("docker") is None:
         return False
-    found = subprocess.run(
-        ["docker", "image", "inspect", IMAGE], capture_output=True, check=False, timeout=30
-    )
+    try:
+        found = subprocess.run(
+            ["docker", "image", "inspect", IMAGE], capture_output=True, check=False, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return found.returncode == 0
+
+
+def _local_promtool() -> str | None:
+    """Return the promtool on PATH when it has the pinned image's major version."""
+    local = shutil.which("promtool")
+    if local is None:
+        return None
+    try:
+        version = subprocess.run(
+            [local, "--version"], capture_output=True, text=True, check=False, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    found = re.search(r"version (\d+)\.", version.stdout + version.stderr)
+    return local if found and found[1] == MAJOR else None
 
 
 def promtool(folder: Path) -> list[str] | None:
     """Return the promtool command for files in `folder`, or None when none is available."""
-    if shutil.which("promtool") is not None:
-        return ["promtool"]
     # The pinned image runs promtool when it is already present; the test never pulls it.
     # The container runs as this user so it can read the private test folder.
     if _docker_image():
@@ -54,7 +71,8 @@ def promtool(folder: Path) -> list[str] | None:
             "promtool",
             IMAGE,
         ]
-    return None
+    local = _local_promtool()
+    return [local] if local is not None else None
 
 
 def state_query() -> str:
@@ -141,7 +159,7 @@ class EngineStateQueryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             command = promtool(Path(folder))
             if command is None:
-                self.skipTest(f"promtool and the {IMAGE} image are unavailable")
+                self.skipTest(f"the {IMAGE} image and a promtool {MAJOR}.x are unavailable")
             lines = ["rule_files: []", "evaluation_interval: 1s", "tests:", "  - interval: 1s"]
             lines.append("    input_series:")
             for name, values in inputs:
@@ -158,13 +176,18 @@ class EngineStateQueryTests(unittest.TestCase):
                 ]
             path = Path(folder) / "state_test.yml"
             path.write_text("\n".join(lines) + "\n")
-            result = subprocess.run(
-                [*command, "test", "rules", str(path)],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=120,
-            )
+            try:
+                result = subprocess.run(
+                    [*command, "test", "rules", str(path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                if command[0] != "docker":
+                    raise
+                self.skipTest(f"Docker did not run promtool from {IMAGE} within 120 seconds")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_short_routed_requests_between_router_scrapes_read_serving(self):
