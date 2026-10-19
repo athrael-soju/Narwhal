@@ -770,9 +770,10 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(candidate.decode_requests_per_engine, 64.8)
         self.assertTrue(candidate.decode_profile_covered)
         self.assertLess(candidate.tpot_ratio, float("inf"))
-        # The current split and a move toward prefill still count every resident.
-        self.assertFalse(current.decode_profile_covered)
-        self.assertEqual(current.tpot_ratio, float("inf"))
+        # The current split runs at the same limit. A move toward prefill counts every resident.
+        self.assertEqual(current.decode_requests_per_engine, 81)
+        self.assertTrue(current.decode_profile_covered)
+        self.assertLess(current.tpot_ratio, float("inf"))
         self.assertFalse(toward_prefill.decode_profile_covered)
         # The TPOT estimate still prices every resident.
         self.setUp()
@@ -813,6 +814,20 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(decision["result"], "applied")
         self.assertEqual(decision["decode_requests_per_engine"], 64.8)
         self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
+
+    def test_a_move_toward_decode_past_the_limit_needs_a_lower_objective(self) -> None:
+        # Two prefill engines at 0.8 each project 1.6 on one, above the current split's 1.5.
+        self._decode_overload(64, 81, limit=64)
+        self.fleet.pressure[Role.PREFILL] = 1.6
+        for _ in range(6):
+            self.assertIsNone(self.fleet.step())
+            decision = self.fleet.scheduler.roles._last_decision
+            self.assertEqual(decision["prefill"], 1)
+            self.assertEqual(
+                decision["reason"], "projected improvement is below the movement margin"
+            )
+            self.assertLess(decision["objective_delta"], 0)
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
 
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet

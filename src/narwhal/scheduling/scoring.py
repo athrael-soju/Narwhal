@@ -162,9 +162,10 @@ class SplitSnapshot:
             self.profiles,
         )
         # An engine runs at most its attested sequence limit, and residents past it wait inside
-        # the engine. A move toward decode checks a profile that measures decode up to its
-        # engine's limit at no more than the limit, with the same share of the KV tokens.
-        limits = dict(self.sequence_limits) if prefill < self.current_prefill else {}
+        # the engine. The current split and a move toward decode check a profile that measures
+        # decode up to its engine's limit at no more than the limit, with the same share of the
+        # KV tokens.
+        limits = dict(self.sequence_limits) if prefill <= self.current_prefill else {}
 
         def running(profile: Profile) -> tuple[float, float]:
             limit = limits.get(profile.iid)
