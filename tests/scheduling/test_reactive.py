@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from dataclasses import replace
@@ -22,6 +23,7 @@ from narwhal.scheduling.demand import Demand
 from narwhal.scheduling.monitor import InstanceMonitor
 from narwhal.scheduling.reactive import Departure, ReactivePolicy
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
+from narwhal.scheduling.scoring import SplitSnapshot
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.response import RequestStreamResponse
 from narwhal.serving.router.routing import NarwhalRouter
@@ -654,10 +656,6 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(len(fleet.monitor.instances["e1"].decode), 2)
 
-    # The next three tests characterize the existing decode coverage guard, which the profiled
-    # request maximum feeds. They pass before and after the profiler measures decode up to each
-    # engine's sequence limit; that change decides which maximum the guard reads.
-
     def _decode_overload(self, profiled: int, residents: int) -> None:
         """Hold `residents` decode streams on each of four decode engines under decode pressure."""
         fleet = self.fleet
@@ -669,43 +667,47 @@ class MixedPressureTests(unittest.TestCase):
                 fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
         fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: 6.0}
 
-    def test_decode_move_coverage_ends_at_the_profiled_request_maximum(self) -> None:
-        # Moving from four to five decode engines spreads four engines' residents over
-        # five, so a profile measured to 48 requests covers up to 60 residents per engine.
-        for profiled, residents, covered in (
-            (48, 60, True),
-            (48, 61, False),
-            (64, 61, True),
-            (64, 80, True),
-            (64, 81, False),
-        ):
+    def _overload_snapshot(self, profiled: int, residents: int) -> SplitSnapshot:
+        self.setUp()
+        self._decode_overload(profiled, residents)
+        return self.fleet.controller.scorer.capture(
+            self.fleet.now,
+            Demand(0.1, 3.0, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 1.0),
+        )
+
+    def test_a_move_toward_decode_prices_residents_past_the_profile_at_its_maximum(self) -> None:
+        # Moving from four to five decode engines spreads four engines' residents over five.
+        # Residents past the profiled maximum already exceed the decode seats at four engines.
+        for profiled, residents in ((48, 60), (48, 61), (64, 80), (64, 81)):
+            with self.subTest(profiled=profiled, residents=residents):
+                candidate = self._overload_snapshot(profiled, residents).score(1)
+                self.assertEqual(candidate.decode_requests_per_engine, 4 * residents / 5)
+                self.assertTrue(candidate.decode_profile_covered)
+                self.assertTrue(math.isfinite(candidate.tpot_ratio))
+                self.assertGreater(candidate.decode_slo_capacity_tokens or 0.0, 0.0)
+
+    def test_a_move_toward_prefill_keeps_residents_inside_the_profile(self) -> None:
+        # Moving to three decode engines keeps four engines' residents, so the batch stays put.
+        for profiled, residents, covered in ((48, 48, True), (48, 49, False), (64, 65, False)):
+            with self.subTest(profiled=profiled, residents=residents):
+                candidate = self._overload_snapshot(profiled, residents).score(3)
+                self.assertEqual(candidate.decode_requests_per_engine, residents)
+                self.assertEqual(candidate.decode_profile_covered, covered)
+
+    def test_decode_residents_past_the_profile_let_decode_expand(self) -> None:
+        # 81 and 82 residents on each of four engines put 64.8 and 65.6 on each of five, the
+        # state in which a 64-request profile held this move on the fleet.
+        for profiled, residents in ((48, 61), (64, 61), (64, 81), (64, 82)):
             with self.subTest(profiled=profiled, residents=residents):
                 self.setUp()
                 self._decode_overload(profiled, residents)
-                snapshot = self.fleet.controller.scorer.capture(
-                    self.fleet.now,
-                    Demand(0.1, 3.0, 30, 0),
-                    utilization=0.8,
-                    observed_load=(0.1, 1.0),
-                )
-                candidate = snapshot.score(1)
-                self.assertEqual(candidate.decode_requests_per_engine, 4 * residents / 5)
-                self.assertEqual(candidate.decode_profile_covered, covered)
-
-    def test_decode_residents_past_the_profile_hold_the_move_toward_decode(self) -> None:
-        self._decode_overload(48, 61)
-        for _ in range(6):
-            self.assertIsNone(self.fleet.step())
-            decision = self.fleet.scheduler.roles._last_decision
-            self.assertEqual(decision["prefill"], 1)
-            self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
-        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
-
-    def test_a_profile_measured_past_the_residents_lets_decode_expand(self) -> None:
-        self._decode_overload(64, 61)
-        self.assertIsNotNone(self.fleet.step())
-        self.assertEqual(self.fleet.scheduler.roles._last_decision["result"], "applied")
-        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
+                self.assertIsNotNone(self.fleet.step())
+                decision = self.fleet.scheduler.roles._last_decision
+                self.assertEqual(decision["result"], "applied")
+                self.assertTrue(decision["decode_profile_covered"])
+                self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
 
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet

@@ -159,6 +159,18 @@ class SplitSnapshot:
             ),
             self.profiles,
         )
+        # A move toward decode cannot raise an engine's resident decode batch: residents stay on
+        # their engines and the new decode engine adds seats. Residents past a profile's measured
+        # maximum already exceed the engine's decode seats at the current split, so the move
+        # prices each engine's batch at that maximum.
+        seated = include_resident and prefill < self.current_prefill
+
+        def batch(profile: Profile) -> tuple[float, float]:
+            limit = profile.decode_max_requests
+            if seated and limit is not None and active_requests > limit:
+                return float(limit), active_tokens * limit / active_requests
+            return active_requests, active_tokens
+
         correction = self.decode_correction
         pending_covered = bool(profiles)
         if include_resident:
@@ -176,7 +188,7 @@ class SplitSnapshot:
                 ):
                     pending_covered = False
         capacity = (
-            sum(p.max_tokens(self.tpot_slo / correction, active_requests) for p in profiles)
+            sum(p.max_tokens(self.tpot_slo / correction, batch(p)[0]) for p in profiles)
             / len(profiles)
             if profiles
             else None
@@ -200,7 +212,7 @@ class SplitSnapshot:
                 for profile in profiles
                 for length in self.offered_outputs
             )
-            and all(p.covers_decode(active_requests, active_tokens) for p in profiles)
+            and all(p.covers_decode(*batch(p)) for p in profiles)
         )
         if include_resident and prefill > self.current_prefill:
             covered = covered and self.resident_profile_covered
@@ -218,10 +230,7 @@ class SplitSnapshot:
             )
             if profiles:
                 interval = (
-                    sum(
-                        p.token_interval(math.ceil(active_tokens), active_requests)
-                        for p in profiles
-                    )
+                    sum(p.token_interval(math.ceil(batch(p)[1]), batch(p)[0]) for p in profiles)
                     / len(profiles)
                     * correction
                 )

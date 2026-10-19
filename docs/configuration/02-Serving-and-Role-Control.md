@@ -459,6 +459,8 @@ A decode-to-prefill move requires:
 - the new split and resident decode batches inside the profile's decode domain
 - KV capacity for the resident work
 
+A prefill-to-decode move cannot raise an engine's resident decode batch, so it prices each decode engine's batch at no more than the profile's `decode_max_requests`. Residents beyond that count already exceed the engine's decode seats at the current split.
+
 ### Advisory rollout
 
 Before allowing role changes in production, run advisory mode against recorded traffic.
