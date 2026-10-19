@@ -1,6 +1,7 @@
 """Evaluate the engines table State query with promtool against scraped series."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ def promtool(folder: Path) -> list[str] | None:
     if shutil.which("promtool") is not None:
         return ["promtool"]
     # The pinned image runs promtool when it is already present; the test never pulls it.
+    # The container runs as this user so it can read the private test folder.
     if _docker_image():
         return [
             "docker",
@@ -44,6 +46,8 @@ def promtool(folder: Path) -> list[str] | None:
             "--rm",
             "--network",
             "none",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
             "--volume",
             f"{folder}:{folder}:ro",
             "--entrypoint",
