@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import math
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -185,7 +186,8 @@ def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set
     """Return the decode engines that a decode leg skips.
 
     While an engine has a free seat, the leg skips the full engines. When every engine is full, it
-    skips all but the engine whose seat the profiles project to free first.
+    skips all but the engine whose seat the profiles project to free first. An engine's residents
+    take its seats in placement order, so legs waiting for a seat there delay its next free one.
     """
     pool = router.scheduler.live_instances(Role.DECODE, exclude=exclude)
     seats = {inst.iid: decode_seats(router, inst.iid) for inst in pool}
@@ -202,9 +204,10 @@ def _seated_decode_engines(router: NarwhalRouter, request: Request, exclude: set
         return set()
 
     def frees(inst: Instance) -> float:
-        ends = sorted(end for (iid, _), end in occupancy.ends.items() if iid == inst.iid)
-        behind = len(inst.decode) - seats[inst.iid]
-        return ends[behind] if behind < len(ends) else math.inf
+        free = [0.0] * seats[inst.iid]
+        for rid in inst.decode:
+            heapq.heapreplace(free, free[0] + occupancy.ends[inst.iid, rid])
+        return free[0]
 
     first = min(pool, key=lambda inst: (frees(inst), inst.iid))
     return full - {first.iid}

@@ -130,6 +130,15 @@ class SeatedDecodeTests(unittest.TestCase):
         self.resident("d2", "r6", 600)
         self.assertEqual(self.skipped(), {"d2"})
 
+    def test_legs_queued_behind_full_seats_hold_them_until_they_finish(self):
+        # d1's queued legs start when its residents leave, so its next seat frees after 100 + 250
+        # tokens, later than d2's after 300.
+        for rid, left in (("r1", 100), ("r2", 100), ("r3", 250), ("r4", 250)):
+            self.resident("d1", rid, left)
+        self.resident("d2", "r5", 300)
+        self.resident("d2", "r6", 300)
+        self.assertEqual(self.skipped(), {"d1"})
+
 
 if __name__ == "__main__":
     unittest.main()
