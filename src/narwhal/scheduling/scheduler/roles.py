@@ -36,6 +36,8 @@ class RoleChanges:
         self._decode_floor_restores = 0
         self._last_decision: dict | None = None
         self._decision_counts: Counter[tuple[str, str]] = Counter()
+        # Engine the latest change held out of new placements for an engine-side switch.
+        self.held_donor: str | None = None
 
     def decode_floor_snapshot(self) -> dict:
         live_decode = self.scheduler.decode_live()
@@ -176,6 +178,7 @@ class RoleChanges:
                 donor = held[0] if held else min(pool, key=self.flip_cost)
                 if hold:
                     self.scheduler.hold_for_switch(donor.iid)
+                    self.held_donor = donor.iid
                 return None, (
                     f"holding {donor.iid} out of new placements until it is idle "
                     "for an engine-side role switch"
@@ -196,6 +199,7 @@ class RoleChanges:
         """Pins, availability and role floors apply even with the bypass flags."""
         take_from = Role.DECODE if target is Role.PREFILL else Role.PREFILL
         now = self.scheduler._clock()
+        self.held_donor = None
 
         def blocked(reason: str) -> None:
             self._record_flip_refusal(target, reason)

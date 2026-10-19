@@ -204,6 +204,8 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNone(fleet.confirm())
         self.assertIn("holding", fleet.scheduler.roles._last_decision["reason"])
         (held,) = fleet.scheduler.held_for_switch()
+        # Only a move to decode keeps its approval while the donor drains.
+        self.assertIsNone(fleet.controller.reactive.drain)
         # Passes without an eligible move keep the proposal and the hold while the donor drains.
         fleet.pressure[Role.PREFILL] = 0.9
         for _ in range(4):
