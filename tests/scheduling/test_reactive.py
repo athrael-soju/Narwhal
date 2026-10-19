@@ -877,6 +877,83 @@ class MixedPressureTests(unittest.TestCase):
                     )
                 self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 4)
 
+    def test_a_profile_below_its_sequence_limit_records_every_resident_in_the_batch(self) -> None:
+        # Engines that run 64 sequences, measured to 48, hold 81 residents each. Without seats
+        # the decision records every resident in the batch and no wait, for the move toward
+        # decode and for the current split.
+        self._decode_overload(48, 81, 64)
+        self.assertIsNone(self.fleet.step())
+        decision = self.fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
+        self.assertEqual(decision["decode_priced_requests_per_engine"], 64.8)
+        self.assertEqual(decision["decode_priced_wait_factor"], 1.0)
+        self.assertEqual(decision["current_decode_priced_requests_per_engine"], 81.0)
+        self.assertEqual(decision["current_decode_priced_tokens_per_engine"], 8_100.0)
+        self.assertEqual(decision["current_decode_priced_wait_factor"], 1.0)
+
+    def test_unequal_sequence_limits_inside_their_seats_add_no_wait(self) -> None:
+        # Every engine runs as many sequences as its profile measured, and every decode engine
+        # holds no more residents than its seats. No resident waits, so no split records a wait
+        # and the role controller holds as it does without seats.
+        for limits, residents in (
+            # Prefill engines run 32 sequences, and the decode engines 64.
+            ((32, 32, 64, 64, 64, 64), (50, 50, 50, 50)),
+            ((32, 32, 64, 64, 64, 64), (60, 60, 60, 60)),
+            # Two decode engines run 32 sequences, and the other two 64.
+            ((64, 64, 32, 32, 64, 64), (30, 30, 60, 60)),
+        ):
+            with self.subTest(limits=limits, residents=residents):
+                self.setUp()
+                fleet = self.fleet
+                fleet.monitor.instances["e1"].role = Role.PREFILL
+                fleet.scheduler.sequence_limits = dict(
+                    zip(fleet.monitor.instances, limits, strict=True)
+                )
+                for iid, limit in fleet.scheduler.sequence_limits.items():
+                    fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=limit))
+                for iid, count in zip(("e2", "e3", "e4", "e5"), residents, strict=True):
+                    for index in range(count):
+                        fleet.monitor.dispatched(
+                            iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE)
+                        )
+                fleet.pressure = {Role.PREFILL: 0.4, Role.DECODE: 0.4}
+                for _ in range(8):
+                    self.assertIsNone(fleet.step())
+                    decision = fleet.scheduler.roles._last_decision
+                    self.assertEqual(
+                        decision["reason"], "decode profile does not cover proposed work"
+                    )
+                    self.assertEqual(decision["decode_priced_wait_factor"], 1.0)
+                    self.assertEqual(decision["current_decode_priced_wait_factor"], 1.0)
+                self.assertEqual(fleet.scheduler.roles.flips, [])
+
+    def test_one_engine_past_its_profile_holds_a_move_toward_prefill(self) -> None:
+        # One decode engine holds 70 residents and three hold 40, on engines that run and
+        # measured 64 sequences. The average fits the profile, but the move toward prefill
+        # keeps the 70 on their engine, past what its profile measured.
+        self._decode_overload(64, 40, 64)
+        for index in range(40, 70):
+            self.fleet.monitor.dispatched("e2", Request(f"e2-{index}", 100, phase=Phase.DECODE))
+        snapshot = self._snapshot()
+        self.assertFalse(snapshot.resident_profile_covered)
+        self.assertTrue(snapshot.score(2).decode_profile_covered)
+        self.assertFalse(snapshot.score(3).decode_profile_covered)
+
+    def test_a_low_profile_holds_a_move_toward_prefill_past_the_seats(self) -> None:
+        # Decode engines measured to 64 run 32 sequences and hold 50 residents each, inside
+        # their own profiles. A move toward prefill keeps all 50 per engine, past the 48 a
+        # prefill engine measured, while the current split runs 32 per engine.
+        self._decode_overload(64, 50, 32)
+        self.fleet.profiles.put(replace(self.fleet.profiles.get("e0"), decode_max_requests=48))
+        snapshot = self._snapshot()
+        self.assertTrue(snapshot.resident_profile_covered)
+        current, toward_prefill = snapshot.score(2), snapshot.score(3)
+        self.assertTrue(current.decode_profile_covered)
+        self.assertEqual(current.decode_priced_requests_per_engine, 32.0)
+        self.assertFalse(toward_prefill.decode_profile_covered)
+        self.assertEqual(toward_prefill.decode_priced_requests_per_engine, 50.0)
+        self.assertEqual(toward_prefill.decode_priced_wait_factor, 1.0)
+
     def test_consolidating_onto_decode_keeps_the_guard_when_decode_engines_have_seats(
         self,
     ) -> None:

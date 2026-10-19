@@ -391,7 +391,7 @@ These decisions add fields to `control.last_decision`:
 | Scored during an open departure | `departure_age_s` and `departure_reverses`                                                                                                                                                                                                                                 |
 | Decode-to-prefill               | `risk_kind`, `risk_age_s`, and the [`demand_evidence`](06-SLO-and-Demand.md#consolidation-evidence) fields with an `evidence_` prefix                                                                                                                                      |
 
-The priced decode batch is the running requests and KV tokens per decode engine that the profile checks price. `decode_priced_wait_factor` is the factor on the batch's token interval for residents waiting for a seat, and is 1 when every resident runs. [Resident work during role changes](../configuration/02-Serving-and-Role-Control.md#resident-work-during-role-changes) describes the batch.
+The priced decode batch is the requests and KV tokens per decode engine that the profile coverage check and the TPOT estimate price: the running batch for the current split and a prefill-to-decode move, and every resident for a decode-to-prefill move. `decode_priced_wait_factor` is the factor on the batch's token interval for residents waiting for a seat, and is 1 when every resident is in the batch. [Resident work during role changes](../configuration/02-Serving-and-Role-Control.md#resident-work-during-role-changes) describes the batch.
 
 `eligibility_rule` takes the first value that applies, in table order:
 
