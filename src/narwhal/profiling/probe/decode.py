@@ -317,8 +317,9 @@ async def probe_decode(
                 warmed.add(c)
         # The length's cells and interval evidence, kept once two cohorts remain.
         length_samples: list[tuple[float, float, float]] = []
+        length_cohorts: list[int] = []
         length_evidence: list[dict[str, object]] = []
-        length_dropped: list[str] = []
+        length_dropped: list[tuple[int, str]] = []
         for c in cells:
             replicates: list[tuple[float, float, float]] = []
             intervals: list[dict[str, object]] = []
@@ -387,21 +388,43 @@ async def probe_decode(
                         }
                     )
                 print(f"    decode  isl={input_len:<6} dropped c={c}: {dropped}")
-                length_dropped.append(f"c={c} at isl={input_len} ({dropped})")
+                length_dropped.append((c, dropped))
                 continue
             length_evidence.extend(intervals)
             requests, batch, gap = (
                 statistics.median(row[i] for row in replicates) for i in range(3)
             )
             length_samples.append((requests, batch, gap))
+            length_cohorts.append(c)
             print(
                 f"    decode  isl={input_len:<6} c={c:<3} "
                 f"batch~{batch:>7.0f} tok, seq~{requests:>4.0f} "
                 f"-> {gap * 1000:6.2f} ms/token"
             )
         if length_dropped and len(length_samples) < 2:
-            print(f"    decode  isl={input_len:<6} dropped: fewer than two cohorts remain")
-            dropped_lengths.extend(length_dropped)
+            reason = f"fewer than two cohorts remain at isl={input_len} after dropping " + (
+                ", ".join(f"c={c}" for c, _ in length_dropped)
+            )
+            if skipped is not None:
+                skipped.extend(
+                    {
+                        "input_tokens": input_len,
+                        "concurrency": c,
+                        "kv_tokens": c
+                        * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
+                        "kv_capacity_tokens": kv_capacity_tokens,
+                        "reason": reason,
+                    }
+                    for c in length_cohorts
+                )
+            print(
+                f"    decode  isl={input_len:<6} dropped c="
+                + ",".join(str(c) for c in length_cohorts)
+                + f": {reason}"
+            )
+            dropped_lengths.extend(
+                f"c={c} at isl={input_len} ({problem})" for c, problem in length_dropped
+            )
             continue
         if evidence is not None:
             evidence.extend(length_evidence)

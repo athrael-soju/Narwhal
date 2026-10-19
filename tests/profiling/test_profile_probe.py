@@ -863,10 +863,16 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     samples = await sweep
                 self.assertEqual(sorted({sample[1] / sample[0] for sample in samples}), [*measured])
                 self.assertEqual(sorted({row["input_tokens"] for row in evidence}), [*measured])
+                # The sidecar records the requested cohort measured at the dropped length.
                 self.assertEqual(
                     [(cell["input_tokens"], cell["concurrency"]) for cell in skipped],
-                    [(8192, 4), (8192, 2)],
+                    [(8192, 4), (8192, 2), (8192, 1)],
                 )
+                self.assertEqual(
+                    skipped[2]["reason"],
+                    "fewer than two cohorts remain at isl=8192 after dropping c=2",
+                )
+                self.assertEqual(skipped[2]["kv_tokens"], 8192 + 64)
 
     def test_decode_cells_count_whole_blocks_and_the_decode_reserve(self):
         # A vLLM stream of 100 input and 64 output tokens takes 11 blocks of 16, and the pool
