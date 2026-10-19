@@ -73,7 +73,7 @@ Each profile row has these fields:
 | `tpot_intercept` | number | Nonnegative zero-contention decode interval. |
 | `tpot_request_slope` | number, optional | Nonnegative increase in decode interval per active sequence, default `0`. |
 | `kv_capacity_tokens` | integer, optional | Positive, and at least `decode_max_kv_tokens`. |
-| `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. |
+| `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. `decode_max_requests` is the largest cohort measured at every decode input length. |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer | Positive measured range of resident KV tokens with `min <= max`. |
 | `decode_fit_mape`, `decode_cv_mape` | number | Nonnegative fit error and leave-one-cell-out cross-validation error. |
 | `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). |

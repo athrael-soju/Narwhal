@@ -84,7 +84,9 @@ A decode cell is one combination of decode input length and concurrency.
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency values, including one stream and the intended operating range.
 - With `--limits`, each engine's top concurrency value is its sequence limit.
-- At each decode input length, the profiler skips the concurrency values whose streams, input plus requested output, exceed the engine's KV capacity. It skips an input length where fewer than two values fit, and stops when fewer than two input lengths remain.
+- When the engine reports its [KV capacity](#kv-capacity-source), the profiler skips, at each decode input length, the concurrency values whose streams exceed it. A stream counts its input plus its requested output, or plus the KV tokens an SGLang decode engine holds free for each running request (512 by default) when that is larger. When the engine reports its cache block size, each stream rounds up to whole blocks and one block of the capacity is left out. The profiler skips an input length where fewer than two values fit, and stops when fewer than two measured input lengths remain.
+- A lagged cohort's retry keeps its longer streams within the same KV capacity.
+- `decode_max_requests` is the largest cohort measured at every decode input length, so a cohort skipped at the longer lengths does not raise it.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live `max_model_len`.
 - When fewer than two decode input lengths fit, choose shorter inputs.

@@ -36,9 +36,11 @@ from narwhal.types import Role
 from tests.fixtures import fleet, invalid_token_choices, profile
 from tests.profiling.fixtures import patched_profile_sweeps
 from tests.wire import routed
+from tools.measurement.simulated_engine import SimulatedEngine
 
 VLLM_METRICS = load_backend("vllm").metrics
 DIALECT = load_backend("vllm").dialect
+SGLANG_DIALECT = load_backend("sglang").dialect
 
 
 def measured_store(path, rows):
@@ -627,7 +629,18 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         # Fewer than two cohorts that fit skip the input length.
         self.assertEqual(decode_probe.decode_cells(8192, cohorts, 64, 10_000), ())
 
-    async def sweep_calls(self, concurrency, capacity, *, overlap_tokens=64, skipped=None):
+    async def sweep_calls(
+        self,
+        concurrency,
+        capacity,
+        *,
+        overlap_tokens=64,
+        skipped=None,
+        dialect=DIALECT,
+        block_tokens=None,
+        input_lens=(512, 4096, 8192),
+        inputs=None,
+    ):
         """Run a three-length decode sweep and return each cohort's (input, size, tokens)."""
         calls: list[tuple[int, int, int]] = []
 
@@ -650,13 +663,15 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 "http://e",
                 "stub",
-                DIALECT,
+                dialect,
                 concurrency=concurrency,
-                input_lens=(512, 4096, 8192),
+                input_lens=input_lens,
                 tokens=64,
                 max_model_len=32762,
                 kv_capacity_tokens=capacity,
+                block_tokens=block_tokens,
                 skipped=skipped,
+                sample_inputs=inputs,
             )
         return calls, samples
 
@@ -665,21 +680,32 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         cohorts = (1, 4, 16, 48, 64)
         warmup = [(512, c, 64) for c in cohorts]
         cells = [(n, c, 64) for n in (512, 4096, 8192) for c in cohorts]
-        for capacity in (None, 1_481_418, 967_728):
-            with self.subTest(capacity=capacity):
+        engines = (
+            (None, DIALECT, None),
+            (1_481_418, DIALECT, 16),
+            (967_728, SGLANG_DIALECT, 1),
+            (967_728, DIALECT, 16),
+        )
+        for capacity, dialect, block in engines:
+            with self.subTest(capacity=capacity, dialect=dialect.name):
                 skipped: list[dict[str, object]] = []
-                calls, samples = await self.sweep_calls(cohorts, capacity, skipped=skipped)
+                calls, samples = await self.sweep_calls(
+                    cohorts, capacity, skipped=skipped, dialect=dialect, block_tokens=block
+                )
                 self.assertEqual(calls, warmup + cells)
                 self.assertEqual(len(samples), 15)
                 self.assertEqual(skipped, [])
         # Overlap retries that reached about 1,500 tokens on a lagged 8,192-token cohort size
         # their streams the same way.
         lagged = [
-            await self.sweep_calls(cohorts, capacity, overlap_tokens=1500)
-            for capacity in (None, 967_728)
+            await self.sweep_calls(
+                cohorts, capacity, overlap_tokens=1500, dialect=dialect, block_tokens=block
+            )
+            for capacity, dialect, block in engines
         ]
-        self.assertEqual(lagged[0], lagged[1])
-        self.assertIn((8192, 64, 1728), lagged[1][0])
+        for run in lagged[1:]:
+            self.assertEqual(run, lagged[0])
+        self.assertIn((8192, 64, 1728), lagged[0][0])
 
     async def test_decode_sweep_skips_cohorts_that_exceed_the_kv_cache(self):
         skipped: list[dict[str, object]] = []
@@ -704,6 +730,139 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ValueError, "fewer than two decode input lengths"):
             await self.sweep_calls((1, 4, 16, 48, 256), 10_000)
+
+    def test_decode_cells_count_whole_blocks_and_the_decode_reserve(self):
+        # A vLLM stream of 100 input and 64 output tokens takes 11 blocks of 16, and the pool
+        # keeps one block back.
+        self.assertEqual(
+            decode_probe.decode_cells(100, (1, 2, 4), 64, 16 + 4 * 176, block_tokens=16),
+            (1, 2, 4),
+        )
+        self.assertEqual(
+            decode_probe.decode_cells(100, (1, 2, 4), 64, 15 + 4 * 176, block_tokens=16), (1, 2)
+        )
+        # An SGLang decode engine holds 512 tokens free for each running request.
+        cohorts = (1, 4, 16, 48, 64)
+        self.assertEqual(
+            decode_probe.decode_cells(8192, cohorts, 64, 64 * 8704, reserved=512), cohorts
+        )
+        self.assertEqual(
+            decode_probe.decode_cells(8192, cohorts, 64, 64 * 8704 - 1, reserved=512),
+            (1, 4, 16, 48),
+        )
+
+    async def test_decode_retry_keeps_lagged_streams_within_whole_kv_blocks(self):
+        """A lagged cohort retries only with streams whose blocks still fit in the KV cache."""
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            # The four-stream cohort at 100 tokens joins late and needs 192 tokens to overlap.
+            state = {"cohort": size, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
+            if size == 4 and input_len == 100 and tokens < 192:
+                return [], state
+            return [(float(size), float(input_len), 0.01)] * (2 * size), state
+
+        async def sweep(block_tokens):
+            with (
+                patch.object(decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])),
+                patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+                redirect_stdout(io.StringIO()),
+            ):
+                return await probe_decode(
+                    None,
+                    "http://e",
+                    "stub",
+                    DIALECT,
+                    concurrency=(1, 4),
+                    input_lens=(100, 50),
+                    tokens=64,
+                    max_model_len=4096,
+                    kv_capacity_tokens=1200,
+                    block_tokens=block_tokens,
+                )
+
+        # Without blocks, 1,200 tokens hold four streams of 300: 100 input and 192 output fit.
+        self.assertEqual(len(await sweep(None)), 4)
+        # With 16-token blocks and one block held back, four streams get 288 tokens each.
+        with self.assertRaisesRegex(
+            RuntimeError, "insufficient complete-cohort.*isl=100, c=4, tokens=64"
+        ):
+            await sweep(16)
+
+    async def test_decode_sweep_warms_each_cohort_where_it_first_fits(self):
+        inputs: list[int] = []
+        calls, samples = await self.sweep_calls(
+            (1, 4, 16, 48, 256), 600_000, input_lens=(8192, 512), inputs=inputs
+        )
+        small = [(8192, c, 64) for c in (1, 4, 16, 48)]
+        self.assertEqual(
+            calls,
+            small + small + [(512, 256, 64)] + [(512, c, 64) for c in (1, 4, 16, 48, 256)],
+        )
+        self.assertEqual(inputs, [8192] * 4 + [512] * 5)
+        self.assertEqual(len(samples), 9)
+
+    async def test_decode_sweep_rechecks_input_lengths_after_tokenizing(self):
+        """A prompt that tokenizes past a KV boundary drops its length, and the sweep says so."""
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            state = {"cohort": size}
+            return [(float(size), float(input_len), 0.01)] * (2 * size), state
+
+        async def prompt(client, url, model, target, *args, **kwargs):
+            return "p", target + 2
+
+        with (
+            patch.object(decode_probe, "make_prompt", side_effect=prompt),
+            patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+            redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(ValueError, "fewer than two decode input lengths"),
+        ):
+            # Four streams of 200 input and 64 output tokens fit in 1,056 tokens; of 202, not.
+            await probe_decode(
+                None,
+                "http://e",
+                "stub",
+                DIALECT,
+                concurrency=(1, 4),
+                input_lens=(100, 200),
+                tokens=64,
+                max_model_len=4096,
+                kv_capacity_tokens=1056,
+            )
+
+    async def test_decode_sweep_fills_a_cohort_of_its_engine_limit_through_the_pool(self):
+        """The profiler's pool holds every stream of a cohort at the engine's sequence limit."""
+        cohorts = bounded_sweep(Sweep(decode_concurrency=(1, 16)), 131072, 64).decode_concurrency
+        self.assertEqual(cohorts, (1, 16, 64))
+        connections = fleet_probe._pool_size(
+            Sweep(decode_concurrency=(1, 16)),
+            1,
+            2,
+            paired=False,
+            limits={"e0": 64},
+            targets=[SimpleNamespace(iid="e0")],
+        )
+        engine = SimulatedEngine("e0", token_interval_s=0.01)
+        url = await engine.start("127.0.0.1", 0)
+        pool = httpx.Limits(max_connections=connections, max_keepalive_connections=connections)
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(20.0, connect=5.0), limits=pool
+            ) as client:
+                with redirect_stdout(io.StringIO()):
+                    samples = await probe_decode(
+                        client,
+                        url,
+                        "m",
+                        DIALECT,
+                        concurrency=cohorts,
+                        tokens=16,
+                        input_lens=(32, 64),
+                        max_model_len=131072,
+                    )
+        finally:
+            await engine.close()
+        self.assertEqual(max(sample[0] for sample in samples), 64)
 
     def test_overlapping_tokens_cover_the_admission_lag(self):
         lagged = {"cohort": 4, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
@@ -890,6 +1049,26 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(row.kv_capacity_tokens, 600_000)
         self.assertEqual(evidence["decode_skipped"], [cell])
+
+    async def test_profile_bounds_decode_requests_by_the_cohort_every_length_measured(self):
+        """With cohorts skipped for KV, coverage stays inside measured requests and KV tokens."""
+        prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
+        rows = [(512, c) for c in (1, 4, 16, 48, 256)] + [(8192, c) for c in (1, 4, 16, 48)]
+        decode = [(float(c), float(c * n), 0.001 * c + 0.000001 * c * n + 0.01) for n, c in rows]
+
+        async def sweep(*args, sample_inputs, **kwargs):
+            sample_inputs.extend(n for n, _ in rows)
+            return decode
+
+        with patched_profile_sweeps(prefill, decode, hits=[7, 7, 7], block=16, capacity=600_000):
+            instance_probe.probe_decode.side_effect = sweep
+            row = await profile_instance(
+                None, "e", "http://e", "stub", DIALECT, metrics=VLLM_METRICS
+            )
+            self.assertEqual(instance_probe.probe_decode.await_args.kwargs["block_tokens"], 16)
+        self.assertEqual(row.decode_max_requests, 48)
+        self.assertEqual(row.decode_max_kv_tokens, 48 * 8192)
+        self.assertEqual(instance_probe.covered_decode_requests(decode, []), 256)
 
     async def test_cold_profile_rejects_prefix_cache_hits_and_records_missing_counter(self):
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
@@ -1430,3 +1609,30 @@ class PoolSizeTests(unittest.TestCase):
         sweep = Sweep(decode_concurrency=(1, 4, 16, 48))
         self.assertEqual(fleet_probe._pool_size(sweep, 1, 8, paired=False), 56)
         self.assertEqual(fleet_probe._pool_size(sweep, 1, 8, paired=True), 104)
+
+    def test_a_cohort_at_an_engine_limit_gets_a_connection_for_each_stream(self):
+        sweep = Sweep(decode_concurrency=(1, 4, 16, 48))
+        engines = [SimpleNamespace(iid=iid) for iid in ("e0", "e1")]
+        for limits, paired, lanes, expected in (
+            ({"e0": 64, "e1": 64}, False, 1, 64 + 8),
+            ({"e0": 64, "e1": 64}, False, 8, 64 * 8 + 8),
+            # A paired SGLang lane at the default request cap.
+            ({"e0": 256, "e1": 256}, True, 1, 256 * 2 + 8),
+            # An engine limit below the sweep keeps the sweep's largest cohort.
+            ({"e0": 32, "e1": 32}, False, 1, 48 + 8),
+            ({"e0": 16, "e1": 128}, False, 1, 128 + 8),
+        ):
+            with self.subTest(limits=limits, paired=paired, lanes=lanes):
+                self.assertEqual(
+                    fleet_probe._pool_size(
+                        sweep, lanes, 8, paired=paired, limits=limits, targets=engines
+                    ),
+                    expected,
+                )
+        # Only the engines this run profiles size the pool.
+        self.assertEqual(
+            fleet_probe._pool_size(
+                sweep, 1, 8, paired=False, limits={"e0": 32, "e1": 128}, targets=engines[:1]
+            ),
+            48 + 8,
+        )

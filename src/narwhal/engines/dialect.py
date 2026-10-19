@@ -35,6 +35,9 @@ class EngineDialect(ABC):
     reserved_fields: ClassVar[tuple[str, ...]] = ()
     # Chat template fields the tokenize route needs to count the engine's render.
     tokenize_passthrough: ClassVar[tuple[str, ...]] = ()
+    # KV tokens the engine holds free for each running decode request beyond its prompt, when
+    # that exceeds the request's output length.
+    decode_reserved_tokens: ClassVar[int] = 0
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...

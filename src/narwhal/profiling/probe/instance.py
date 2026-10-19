@@ -58,6 +58,21 @@ async def _require_cold(
         )
 
 
+def covered_decode_requests(decode: list[tuple[float, float, float]], inputs: list[int]) -> float:
+    """Return the largest cohort measured at every decode input length.
+
+    A cohort skipped at the longer lengths for KV would otherwise set the request bound while
+    the KV bound comes from a smaller cohort, and the profile would claim coverage of requests
+    and KV tokens that no cell measured together.
+    """
+    if not inputs:
+        return max(row[0] for row in decode)
+    largest: dict[int, float] = {}
+    for (requests, _, _), input_len in zip(decode, inputs, strict=True):
+        largest[input_len] = max(largest.get(input_len, 0.0), requests)
+    return min(largest.values())
+
+
 async def profile_instance(
     client: httpx.AsyncClient,
     iid: str,
@@ -110,6 +125,7 @@ async def profile_instance(
         )
     decode_intervals: list[dict[str, object]] = []
     decode_skipped: list[dict[str, object]] = []
+    decode_inputs: list[int] = []
     await serve_as(Role.DECODE)
     capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     decode = await probe_decode(
@@ -126,7 +142,9 @@ async def profile_instance(
         repeats=s.decode_repeats,
         observation_timeout_s=observation_timeout_s,
         kv_capacity_tokens=capacity,
+        block_tokens=block_tokens,
         skipped=decode_skipped,
+        sample_inputs=decode_inputs,
     )
     decode_tokens_used = [
         used for row in decode_intervals if isinstance(used := row.get("tokens"), int)
@@ -171,7 +189,7 @@ async def profile_instance(
         kv_capacity_tokens=capacity,
         tpot_request_slope=request_slope,
         decode_min_requests=max(1, math.ceil(min(row[0] for row in decode))),
-        decode_max_requests=max(1, math.floor(max(row[0] for row in decode))),
+        decode_max_requests=max(1, math.floor(covered_decode_requests(decode, decode_inputs))),
         decode_min_kv_tokens=max(1, math.ceil(min(row[1] for row in decode))),
         decode_max_kv_tokens=max(1, math.floor(max(row[1] for row in decode))),
         decode_fit_mape=decode_mape(decode, coefficients),
