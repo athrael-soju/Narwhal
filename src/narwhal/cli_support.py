@@ -27,8 +27,9 @@ def add_tool_metrics_argument(parser: argparse.ArgumentParser) -> None:
     """Add `--metrics-url`, where an operation that sends requests to engines serves metrics."""
     parser.add_argument(
         "--metrics-url",
-        help="serve the operation, its engines and its progress at this http://host:port "
-        f"/metrics while the operation runs (default: ${METRICS_URL_ENV}, else no endpoint)",
+        help="serve the operation, its engines and its progress at URL/metrics, where URL is "
+        f"http://host:port, while the operation runs (default: ${METRICS_URL_ENV}, else no "
+        "endpoint)",
     )
 
 

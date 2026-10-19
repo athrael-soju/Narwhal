@@ -473,8 +473,8 @@ class EngineStateQueryTests(unittest.TestCase):
 
     def test_a_newly_scraped_engine_waits_for_a_full_window(self):
         inputs = engine(seconds((30, 120)), start=30) + router({}, up=[], down=scrapes(3))
-        expected = dict.fromkeys(range(31, 53, 4), SERVING)
-        expected.update(dict.fromkeys(range(53, 120, 6), PROBING))
+        expected = dict.fromkeys(range(31, 53), SERVING)
+        expected.update(dict.fromkeys(range(53, 120), PROBING))
         self.check(inputs, expected)
 
 
