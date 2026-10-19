@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, chdir, redirect_stdout
 from dataclasses import asdict, replace
 from hashlib import sha256
 from pathlib import Path
@@ -32,6 +32,7 @@ from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
 from narwhal.profiling.generation import GenerationEvidence, read_generation
+from narwhal.profiling.probe.offline import merge_profiles
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import HandoffClient, calibration_document, fleet, profile
@@ -1217,12 +1218,18 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         # A later source holds a failed run of the same engine, which carries no profile.
         failed = samples.with_name("failed.samples.json")
         failed.write_text(json.dumps({"engines": {first: {"max_num_seqs": 16, "error": "x"}}}))
+
+        def source(path):
+            return {"samples": str(path), "samples_sha256": sha256(path.read_bytes()).hexdigest()}
+
         for sources, warned in (
-            ([{"samples": str(measuring)}, {"samples": str(failed)}], True),
-            ([{"samples": str(failed)}], False),
+            ([source(measuring), source(failed)], True),
+            ([source(failed)], False),
             # Malformed and self-referencing sources are read as far as they go.
             (7, False),
-            ([{"samples": str(samples)}, {"samples": str(measuring)}], True),
+            ([{"samples": str(samples)}, source(measuring)], True),
+            # A source that changed after the merge is not read.
+            ([{**source(measuring), "samples_sha256": "0" * 64}], False),
         ):
             with self.subTest(sources=sources):
                 samples.write_text(json.dumps({"method_version": 3, "sources": sources}))
@@ -1231,6 +1238,68 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                     gate_profile(self.cfg, report)
                 self.assertEqual(report.failed, [])
                 self.assertEqual(len(report.warnings), 1 if warned else 0)
+
+    def test_profile_gate_reads_merged_sources_from_another_working_directory(self):
+        """A merged sidecar finds its sources next to the merged store, wherever preflight runs."""
+        root = self.cfg.profiles_path.parent
+        first = self.cfg.engines[0].iid
+        rows = [profile(spec.iid) for spec in self.cfg.engines]
+        measured = root / "runs" / "measured.json"
+        store = ProfileStore(measured, load=False)
+        for row in rows:
+            store.put(row)
+        sidecar = measured.with_suffix(".samples.json")
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "engines": {
+                        row.iid: {
+                            "profile": asdict(row),
+                            "max_num_seqs": 64 if row.iid == first else 16,
+                        }
+                        for row in rows
+                    }
+                }
+            )
+        )
+        with chdir(root):
+            merge_profiles(
+                [Path("runs/measured.json")],
+                Path("runs/merged.json"),
+                {spec.iid for spec in self.cfg.engines},
+            )
+        merged = root / "runs" / "merged.json"
+        sources = json.loads(merged.with_suffix(".samples.json").read_text())["sources"]
+        self.assertEqual(sources[0]["samples"], "measured.samples.json")
+        self.cfg.profiles_path = merged
+        warning = (
+            f"{first} profile measures decode up to 16 requests and its limits file allows 64; "
+            "re-run narwhal-profile with --limits"
+        )
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        report = Report()
+        with chdir(elsewhere.name):
+            gate_profile(self.cfg, report)
+        self.assertEqual(report.warnings, [warning])
+        # A sidecar merged before merges recorded paths from the merged store names its sources
+        # from the directory the merge ran in.
+        merged.with_suffix(".samples.json").write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "samples": "runs/measured.samples.json",
+                            "samples_sha256": sha256(sidecar.read_bytes()).hexdigest(),
+                        }
+                    ]
+                }
+            )
+        )
+        report = Report()
+        with chdir(root):
+            gate_profile(self.cfg, report)
+        self.assertEqual(report.warnings, [warning])
 
     async def test_profile_generation_gate_warns_below_the_attested_sequence_limit(self):
         digest = "sha256:" + "0" * 64

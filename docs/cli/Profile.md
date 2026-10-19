@@ -54,7 +54,7 @@ With `--only`, `--overwrite` writes a store that holds only the selected engines
 
 A refit needs each engine's saved generation evidence, and writes the raw samples and that evidence to its new sample sidecar.
 
-A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's path and SHA-256 hash, so keep the source files.
+A merge needs measurement evidence in each source's sample sidecar that matches every profile in the source store. The merged stores must cover every configured engine. A later store replaces an earlier store's row for the same combination of engine, GPU group, role split and target role. The merge leaves out rows for engines outside the fleet. A merged store can be a source. The merged sample sidecar records each source file's SHA-256 hash and its path relative to the merged store's directory, so keep the source files in place relative to the merged store.
 
 Run each mode with:
 

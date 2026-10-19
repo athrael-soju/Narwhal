@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 
@@ -10,7 +8,7 @@ from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...profiling.generation import generation_problem, read_generation
 from ...profiling.model import Profile, decode_evidence_problems, evidence_matches
-from ...profiling.store import ProfileStore
+from ...profiling.store import ProfileStore, measured_evidence
 from ...types import Role
 from .report import Report
 
@@ -34,33 +32,6 @@ def _bind_configured_mix(store: ProfileStore, cfg: FleetConfig) -> ProfileStore:
     return store
 
 
-def _measured_evidence(samples: Path, seen: set[Path] | None = None) -> dict[str, list[dict]]:
-    """Return each engine's measured evidence in a sample sidecar and its merge sources."""
-    seen = set() if seen is None else seen
-    try:
-        key = samples.resolve()
-        if key in seen:
-            return {}
-        seen.add(key)
-        document = json.loads(samples.read_text())
-    except (OSError, ValueError, RuntimeError):
-        return {}
-    if not isinstance(document, dict):
-        return {}
-    found: dict[str, list[dict]] = {}
-    sources = document.get("sources")
-    for source in sources if isinstance(sources, list) else ():
-        if isinstance(source, dict) and isinstance(source.get("samples"), str):
-            for iid, entries in _measured_evidence(Path(source["samples"]), seen).items():
-                found.setdefault(iid, []).extend(entries)
-    engines = document.get("engines")
-    for iid, evidence in engines.items() if isinstance(engines, dict) else ():
-        # A failed engine's entry carries no profile.
-        if isinstance(evidence, dict) and isinstance(evidence.get("profile"), dict):
-            found.setdefault(iid, []).append(evidence)
-    return found
-
-
 @dataclass(frozen=True)
 class _Recorded:
     """The sequence limit a profile's evidence records, the limits file it read it from, and
@@ -72,10 +43,10 @@ class _Recorded:
     kv_bound: bool
 
 
-def _recorded(entries: list[dict], row: Profile) -> _Recorded | None:
+def _recorded(entries: list[dict[str, object]], row: Profile) -> _Recorded | None:
     """Return what the evidence that measured `row` records, or None when none matches it."""
     for evidence in entries:
-        if evidence_matches(evidence["profile"], row):
+        if evidence_matches(evidence.get("profile"), row):
             value = evidence.get("max_num_seqs")
             limit = value if isinstance(value, int) and not isinstance(value, bool) else None
             path = evidence.get("limits_path")
@@ -130,7 +101,7 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
     print("profile")
     store = _bind_configured_mix(ProfileStore(cfg.profiles_path), cfg)
     policy = cfg.profile_validation
-    evidence = _measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
+    evidence, _ = measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
         p = store.get(spec.iid)
         if p is None:
@@ -195,7 +166,7 @@ async def gate_profile_generation(
 ) -> set[str]:
     unsafe: set[str] = set()
     identity = load_backend(cfg.backend).identity
-    evidence = _measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
+    evidence, _ = measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
         profiles = store.profiles_for_engine(spec.iid)
         if not profiles or spec.iid not in live:
