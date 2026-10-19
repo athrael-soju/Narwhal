@@ -93,6 +93,10 @@ class EngineDialect(ABC):
         """
         return None
 
+    def cache_reset_params(self, wait_s: float) -> dict[str, Any]:
+        """Query parameters that make a cache reset wait up to `wait_s` for the engine to idle."""
+        return {}
+
     def cold_probe_extras(self) -> dict[str, Any]:
         # The engine keys its prefix cache by cache_salt, so a fresh salt shares no prefix.
         return {"cache_salt": secrets.token_urlsafe(32)}

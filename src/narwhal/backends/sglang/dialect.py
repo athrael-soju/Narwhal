@@ -32,6 +32,10 @@ class SglangDialect(EngineDialect):
         # The room keys the request in the engine's transfer state, so each request takes its own.
         return {"bootstrap_host": FAKE_BOOTSTRAP_HOST, "bootstrap_room": secrets.randbits(63)}
 
+    def cache_reset_params(self, wait_s: float) -> dict[str, Any]:
+        # SGLang refuses a flush while it holds requests; with a timeout it waits for them first.
+        return {"timeout": wait_s}
+
     def token_id_fields(self) -> dict[str, Any]:
         # The launcher pins --stream-interval 1, so each streamed chunk carries one token.
         return {"return_token_ids": True}

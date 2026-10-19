@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -53,18 +53,16 @@ class NeighbourLoad:
         self.peerless = peerless
         self.tasks: list[asyncio.Task[None]] = []
         self.roles = {iid: role for iid, _, role in peers}
+        self._index = {iid: index for index, (iid, _, _) in enumerate(peers)}
         self.counts = {iid: 0 for iid, _, _ in peers}
         self.role_counts = {iid: dict.fromkeys(Role, 0) for iid, _, _ in peers}
         self.errors: dict[str, str] = {}
         self.started = 0.0
         self.elapsed: float | None = None
-        # Neighbours with no engine to serve their other leg send nothing until resumed.
-        self.withheld: set[str] = set()
-        self.withheld_s = {iid: 0.0 for iid, _, _ in peers}
-        self.active: set[str] = set()
         self.paused_s = 0.0
         self._paused_at: float | None = None
-        self._interval_at = 0.0
+        self._resumes = 0
+        self._resumed_at = 0.0
         self._open = False
         self._inflight = 0
         self._state = asyncio.Condition()
@@ -72,6 +70,10 @@ class NeighbourLoad:
 
     def _rate(self, role: Role) -> float:
         return self.workload.prefill_rps if role is Role.PREFILL else self.workload.decode_rps
+
+    def _offset(self, iid: str) -> float:
+        # Each neighbour starts at its own point in one period, so they do not send together.
+        return self._index[iid] / len(self.peers) / self._rate(self.roles[iid])
 
     async def _prepare(self, iid: str, url: str, role: Role) -> None:
         if (iid, role) in self._prompts:
@@ -102,16 +104,13 @@ class NeighbourLoad:
             raise ValueError(f"neighbour {iid}: {count}+{output} exceeds max_model_len {limit}")
         self._prompts[iid, role] = (prompt, output)
 
-    async def start(self, withheld: Collection[str] = ()) -> None:
+    async def start(self) -> None:
         """Start paced load on every peer and return after one warmup period."""
-        jobs = []
-        for index, (iid, url, role) in enumerate(self.peers):
+        for iid, url, role in self.peers:
             await self._prepare(iid, url, role)
-            jobs.append((iid, url, index / len(self.peers) / self._rate(role)))
-        self.withheld = set(withheld)
         self.started = time.monotonic()
         self._open = True
-        self.tasks = [asyncio.create_task(self._serve(*job)) for job in jobs]
+        self.tasks = [asyncio.create_task(self._serve(iid, url)) for iid, url, _ in self.peers]
         # Warmup lasts one full period; stored rates cover only the latency sweep.
         await asyncio.sleep(max(1.0 / self._rate(role) for _, _, role in self.peers))
         self._collect_task_errors()
@@ -120,15 +119,21 @@ class NeighbourLoad:
             raise RuntimeError("neighbour load failed during warmup: " + self._error_detail())
         self.counts = dict.fromkeys(self.counts, 0)
         self.role_counts = {iid: dict.fromkeys(Role, 0) for iid in self.counts}
-        self.started = self._interval_at = time.monotonic()
-        self.active = set(self.counts) - self.withheld
+        self.started = time.monotonic()
 
-    async def _serve(self, iid: str, url: str, phase_s: float) -> None:
-        next_at = self.started + phase_s
+    async def _serve(self, iid: str, url: str) -> None:
+        resumes = self._resumes
+        next_at = self.started + self._offset(iid)
         while True:
             await asyncio.sleep(max(0.0, next_at - time.monotonic()))
             async with self._state:
-                await self._state.wait_for(lambda: self._open and iid not in self.withheld)
+                await self._state.wait_for(lambda: self._open)
+                if self._resumes != resumes:
+                    # After a pause each neighbour starts again from its own offset.
+                    resumes = self._resumes
+                    next_at = self._resumed_at + self._offset(iid)
+                    if next_at > time.monotonic():
+                        continue
                 self._inflight += 1
                 role = self.roles[iid]
             prompt, output = self._prompts[iid, role]
@@ -159,16 +164,11 @@ class NeighbourLoad:
                         self._state.notify_all()
             next_at = max(next_at + 1.0 / self._rate(role), time.monotonic())
 
-    def _close_interval(self, now: float) -> None:
-        for iid in self.withheld:
-            self.withheld_s[iid] += now - self._interval_at
-
     async def pause(self) -> None:
         """Stop issuing requests and return once every request in flight has finished."""
         async with self._state:
             self._open = False
             self._paused_at = time.monotonic()
-            self._close_interval(self._paused_at)
             bound = self.observation_timeout_s or 300.0
             try:
                 async with asyncio.timeout(bound):
@@ -179,9 +179,7 @@ class NeighbourLoad:
                     "after it paused"
                 ) from None
 
-    async def resume(
-        self, roles: Mapping[str, Role] | None = None, withheld: Collection[str] = ()
-    ) -> None:
+    async def resume(self, roles: Mapping[str, Role] | None = None) -> None:
         """Issue requests again, with each neighbour in its role from `roles`."""
         roles = {**self.roles, **(roles or {})}
         for iid, url, _ in self.peers:
@@ -192,9 +190,8 @@ class NeighbourLoad:
                 self.paused_s += now - self._paused_at
                 self._paused_at = None
             self.roles = roles
-            self.withheld = set(withheld)
-            self.active |= set(self.counts) - self.withheld
-            self._interval_at = now
+            self._resumes += 1
+            self._resumed_at = now
             self._open = True
             self._state.notify_all()
 
@@ -226,8 +223,6 @@ class NeighbourLoad:
                 row["completed_by_role"] = {
                     served.value: count for served, count in self.role_counts[iid].items()
                 }
-            if self.withheld_s[iid] or iid in self.withheld:
-                row["withheld_s"] = self.withheld_s[iid]
             peers[iid] = row
         evidence: dict[str, Any] = {
             "elapsed_s": elapsed,
@@ -245,18 +240,19 @@ class NeighbourLoad:
             evidence["peerless"] = True
         return evidence
 
-    async def stop(self) -> dict[str, Any]:
-        """Stop the load and return its evidence; raise when a peer failed or completed none."""
-        now = time.monotonic()
-        if self._paused_at is None:
-            self._close_interval(now)
-            self._interval_at = now
-        self.elapsed = self._measured_s(now)
+    async def stop(self, *, drain: bool = False) -> dict[str, Any]:
+        """Stop the load and return its evidence; raise when a peer failed or completed none.
+
+        With `drain`, requests in flight finish before the load stops, because an engine keeps
+        serving a request whose client went away.
+        """
+        if drain:
+            await self.pause()
+        self.elapsed = self._measured_s(time.monotonic())
         await cancel_tasks(self.tasks)
         self._collect_task_errors()
         for iid, count in self.counts.items():
-            # A neighbour withheld for the whole measurement had nothing to complete.
-            if count == 0 and iid in self.active:
+            if count == 0:
                 self.errors.setdefault(iid, "completed 0 requests during measurement")
         if self.errors:
             raise RuntimeError("neighbour load failed: " + self._error_detail())

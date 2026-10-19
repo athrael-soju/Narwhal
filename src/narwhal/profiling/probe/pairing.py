@@ -46,8 +46,8 @@ class _Joined(httpx.AsyncByteStream):
             yield part
 
     async def aclose(self) -> None:
-        await self.inner.aclose()
         try:
+            await self.inner.aclose()
             # The peer leg finishes with its KV transfer; a lost one ends at the decode wait.
             with contextlib.suppress(TimeoutError, httpx.HTTPError):
                 async with asyncio.timeout(self.wait_s):

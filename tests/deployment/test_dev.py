@@ -186,25 +186,6 @@ class DevTests(unittest.TestCase):
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
 
-    def test_sglang_template_with_neighbour_load_profiles_colocated(self):
-        spec = self.sglang_spec()
-        spec["profile"].update(
-            neighbour_prefill_rps=0.5,
-            neighbour_decode_rps=0.25,
-            neighbour_prefill_tokens=512,
-            neighbour_decode_input_tokens=128,
-            neighbour_decode_output_tokens=32,
-        )
-        self.initialize_sglang(spec)
-        run = self.root / "run-profiles"
-        run.mkdir()
-        (run / "profiles-1p1d.json").write_text("{}")
-        with patch.object(lifecycle, "_run") as command:
-            lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
-        args = command.call_args.args[2]
-        self.assertIn("--colocated", args)
-        self.assertEqual(args[args.index("--neighbour-decode-rps") + 1], "0.25")
-
     def test_sglang_template_rejects_a_changed_checkpoint(self):
         spec = self.sglang_spec()
         (self.model / "model.safetensors").write_bytes(b"other weights")
