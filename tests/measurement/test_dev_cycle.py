@@ -329,6 +329,28 @@ class TargetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "phase balanced: no output"):
             dev_cycle.sized_recipe(spec, effective(self.path))
 
+    def test_balanced_band_counts_prefill_demand(self):
+        # A balanced target sets the phase's prefill demand, so its band takes prefill units.
+        balanced = self.phases["balanced"]
+
+        def band(target):
+            return dev_cycle.target_band(
+                {**balanced, "target": target},
+                (3, 1),
+                (2, 2),
+                lambda split: dev_cycle.split_profiles(self.store, ROLES, split),
+                self.spec,
+            )
+
+        low, high = band({"balanced_engines": 0.3})
+        self.assertEqual(balanced["sizing"]["target_band"], [low, high])
+        self.assertEqual((low, high), band({"prefill_engines": 0.3}))
+        decode_low, decode_high = band({"decode_engines": 0.3})
+        to_prefill = balanced["sizing"]["prefill_s"] * balanced["sizing"]["decode_rps"]
+        self.assertNotAlmostEqual(to_prefill, 1.0)
+        self.assertAlmostEqual(low, decode_low * to_prefill)
+        self.assertAlmostEqual(high, decode_high * to_prefill)
+
     def test_steady_prefill_band_follows_the_controller_settings(self):
         path = self.directory / "uniform.json"
         store = colocated_store(path)
