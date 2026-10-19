@@ -408,6 +408,30 @@ class MixedPressureTests(unittest.TestCase):
         # Pricing holds no engine; only a move does.
         self.assertEqual(fleet.scheduler.held_for_switch(), set())
 
+    def test_a_busy_switch_donor_runs_prefill_in_the_priced_split_without_shared_gpus(
+        self,
+    ) -> None:
+        # Cached arrivals take warm prefill prices from the engines that run prefill in a split.
+        fleet = self.fleet
+        fleet.scheduler.switch_requires_idle = True
+        for inst in fleet.monitor.pool(Role.DECODE):
+            inst.decode[f"busy-{inst.iid}"] = Request(f"busy-{inst.iid}", 100, phase=Phase.DECODE)
+        donor, _ = fleet.scheduler.roles.planned_donor(Role.PREFILL, busy=True)
+        assert donor is not None
+        demand = fleet.controller.scorer.demand
+        with patch.object(demand, "price_profiles", wraps=demand.price_profiles) as price:
+            fleet.controller.scorer.capture(
+                fleet.now,
+                Demand(0.0, 0.0, 0, 0),
+                utilization=0.8,
+                observed_load=(0.0, 0.0),
+                window_s=30.0,
+                step_s=1.0,
+                prefills=(2,),
+            )
+        self.assertEqual(price.call_args.kwargs["prefill_iids"], {"e0", donor.iid})
+        self.assertEqual(fleet.scheduler.held_for_switch(), set())
+
     def test_prefill_below_expand_preserves_source_shrink_gate(self) -> None:
         fleet = self.fleet
         fleet.pressure[Role.PREFILL] = 0.9
