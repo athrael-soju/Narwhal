@@ -53,6 +53,8 @@ The small templates set development SLO targets of 5 seconds for time to first t
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
 
+`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer requests than that, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer. `up` then stops at attestation and reports how many running requests the engine serves. Lower `runtime.max_num_seqs` to that number in your template, and initialize a fresh instance from it.
+
 Create a custom template:
 
 1. Export an installed template:
@@ -124,7 +126,7 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
 1. Install the libraries that Mooncake's native module links, `libibverbs.so.1`, `libmlx5.so.1` and `libnuma.so.1`:
 

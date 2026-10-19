@@ -15,9 +15,11 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.backends.sglang import dev as sglang_dev
+from narwhal.backends.sglang import plan as sglang_plan
 from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
 from narwhal.deployment import stages
+from narwhal.deployment.launch_engine.plan import option
 from narwhal.dev import lifecycle, template
 from narwhal.dev.cli import main
 from narwhal.profiling.probe.sweep import Sweep, bounded_sweep
@@ -176,6 +178,9 @@ class DevTests(unittest.TestCase):
             runtime["extra_args"][-3:],
             ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
         )
+        # The profile's decode cohorts fit the engine's request cap.
+        self.assertEqual(runtime["max_sequences"], spec["runtime"]["max_num_seqs"])
+        self.assertLessEqual(max(spec["profile"]["decode_concurrency"]), runtime["max_sequences"])
         self.assertEqual(lifecycle.instance(self.root)["model_path"], str(self.model))
         run = self.root / "run-profiles"
         run.mkdir()
@@ -185,6 +190,41 @@ class DevTests(unittest.TestCase):
         args = command.call_args.args[2]
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
+
+    def requested_caps(self):
+        """Return each engine's launch-record cap and the cap its SGLang command requests."""
+        launch = lifecycle.read(self.root / "engine-launch.json")
+        caps = []
+        for record in launch["engines"].values():
+            args, _ = sglang_plan.serve_args(
+                record, model="/model", served_name="m", host="127.0.0.1", port=1, kv_events=None
+            )
+            cap = record["runtime"].get("max_sequences")
+            caps.append((cap, option(args, "--max-running-requests")))
+        return caps
+
+    def test_sglang_template_sets_the_engine_request_cap(self):
+        spec = self.sglang_spec()
+        spec["runtime"]["max_num_seqs"] = 6
+        self.initialize_sglang(spec)
+        self.assertEqual(self.requested_caps(), [(6, "6"), (6, "6")])
+
+    def test_sglang_template_without_a_request_cap_requests_the_launch_default(self):
+        spec = self.sglang_spec()
+        spec["runtime"].pop("max_num_seqs", None)
+        self.initialize_sglang(spec)
+        self.assertEqual(self.requested_caps(), [(None, "256"), (None, "256")])
+
+    def test_sglang_template_rejects_an_invalid_request_cap(self):
+        for value in (0, 257, "8", 8.0, True):
+            spec = self.sglang_spec()
+            spec["runtime"]["max_num_seqs"] = value
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "runtime.max_sequences must be from 1 to 256"),
+            ):
+                self.initialize_sglang(spec)
+            self.assertFalse(self.root.exists())
 
     def test_sglang_template_rejects_a_changed_checkpoint(self):
         spec = self.sglang_spec()

@@ -34,6 +34,7 @@
     "model_dtype": "bfloat16",
     "kv_cache_dtype": "auto",
     "max_model_len": 1024,
+    "max_num_seqs": 4,
     "decode_cuda_graph_memory_gb": 1.0,
     "extra_args": ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
     "environment": {
