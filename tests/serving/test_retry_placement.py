@@ -112,6 +112,25 @@ class RetryPlacementTests(HttpHarness):
                 )
                 self.assert_released()
 
+    async def test_every_attempt_counts_each_leg_it_sends(self):
+        """The engines table reads each retried leg as router work on the engine it reached."""
+        for leg, fault in (("prefill", 503), ("decode", "drop")):
+            with self.subTest(leg=leg, fault=fault):
+                self.legs.clear()
+                client = self.client()
+                before = dict(self.router.monitor.requests_sent)
+                self.inject(leg, fault)
+                response = await self.post(client)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(self.terminal_rows()[-1]["attempts"], 2)
+                served = self.used("prefill", "decode")
+                sent = {
+                    iid: count - before.get(iid, 0)
+                    for iid, count in self.router.monitor.requests_sent.items()
+                }
+                self.assertEqual(sent, {iid: served.count(iid) for iid in sent})
+                self.assertEqual(sum(sent.values()), len(served))
+
     async def test_a_retry_without_a_remaining_engine_ends_with_503(self):
         # Pinned engines keep their roles, so decode engines cannot take the prefill legs.
         self.cfg.engines = [replace(spec, pin=True) for spec in self.cfg.engines]

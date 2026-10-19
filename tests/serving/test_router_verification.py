@@ -264,6 +264,35 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e3", self.router.verifier.sources)
         self.assertNotIn("e3", self.router.scheduler.inference_suspects)
 
+    async def test_inference_probes_count_as_router_requests_on_each_engine_they_reach(self):
+        """The engines table reads a probe as router work on the probed engine and its peer."""
+        monitor = self.router.monitor
+
+        async def sent_by(verify):
+            before = dict(monitor.requests_sent)
+            with patch.object(
+                self.router.engines,
+                "probe_inference",
+                new=AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg())),
+            ):
+                await verify()
+            return {iid: count - before.get(iid, 0) for iid, count in monitor.requests_sent.items()}
+
+        # A decode engine: one standalone probe and one through its recorded producer.
+        self.router.verifier.sources["e3"] = {"", "e0"}
+        self.router.scheduler.inference_suspects.add("e3")
+        sent = await sent_by(
+            lambda: self.router.verifier.verify_inference("e3", self.cfg.engines[1].url)
+        )
+        self.assertEqual(sent, {"e0": 1, "e3": 2})
+        # A prefill engine bound to its role: one probe through each live consumer.
+        self.router.scheduler.availability.roles_bound = True
+        self.router.scheduler.inference_suspects.add("e0")
+        sent = await sent_by(
+            lambda: self.router.verifier.verify_inference("e0", self.cfg.engines[0].url)
+        )
+        self.assertEqual(sent, {"e0": 1, "e3": 1})
+
     async def test_new_or_missing_transfer_paths_keep_verification_pending(self):
         """Recovery waits for checks of newly added producers."""
         self.router.verifier.sources["e3"] = {"unknown"}
