@@ -403,6 +403,8 @@ The priced decode batch is the requests and KV tokens per engine the residents s
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
 | `source_shrink`           | Ordinary consolidation, and a leading departure's later confirmation-span moves                                                       |
 
+A move to decode that an SGLang engine completes after [draining](../concepts/02-Role-Control.md#guards-on-role-changes) records the rule that approved it.
+
 #### Demand spans
 
 `demand_horizon_s`, `prefill_work`, `arrivals` and `decode_work` cover these spans:

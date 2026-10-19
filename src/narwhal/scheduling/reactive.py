@@ -37,6 +37,17 @@ class Departure:
     reverses: bool = False
 
 
+@dataclass(frozen=True)
+class SwitchDrain:
+    """A move to decode approved while its donor drains for an engine-side role switch."""
+
+    prefill: int
+    donor: str
+    approved_at: float
+    rule: str
+    confirmations: int
+
+
 class ReactivePolicy:
     def __init__(self) -> None:
         self.proposal: tuple[int, bool, str] | None = None
@@ -50,6 +61,7 @@ class ReactivePolicy:
         self.unsettled_since: float | None = None
         # Start of the current run of evaluations that would end the departure's lead.
         self.lead_break_since: float | None = None
+        self.drain: SwitchDrain | None = None
 
     def interrupt(self) -> None:
         self.settled_since = self.balanced_since = None
@@ -83,7 +95,7 @@ class ReactivePolicy:
             controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
             for role in (Role.PREFILL, Role.DECODE)
         ):
-            self.proposal, self.confirmations = None, 0
+            self.proposal, self.confirmations, self.drain = None, 0, None
             self.settled_since = self.balanced_since = None
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
@@ -149,7 +161,7 @@ class ReactivePolicy:
                 or (recovery and not recovery_ready)
             )
         ):
-            self.proposal, self.confirmations = None, 0
+            self.proposal, self.confirmations, self.drain = None, 0, None
             if prefill_recovery is None:
                 self.settled_since = self.balanced_since = None
             details: dict[str, object] = {
@@ -467,6 +479,9 @@ class ReactivePolicy:
             return details
 
         eligible = [row for row in evaluations if admitted(row)]
+        drain = self._standing_drain(controller, now, current_p, evaluations, eligible)
+        if drain is not None:
+            eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
             # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
             if controller.scheduler.held_for_switch():
@@ -531,10 +546,11 @@ class ReactivePolicy:
 
         chosen = min(eligible, key=lambda row: (row[0].objective, row[0].prefill))
         candidate = chosen[0]
-        eligibility_rule = rule(chosen)
+        eligibility_rule = rule(chosen) if drain is None else drain.rule
         candidate_p = candidate.prefill
         direction = 1 if candidate_p > current_p else -1
         details = describe(chosen)
+        details["eligibility_rule"] = eligibility_rule
         destination_ratio = (
             current.ttft_ratio
             if direction > 0
@@ -558,7 +574,10 @@ class ReactivePolicy:
             )
         )
         proposal = candidate_p, recovery, eligibility_rule
-        if proposal != self.proposal:
+        if drain is not None:
+            # The approved move keeps its confirmations while its donor drains.
+            confirmations = self.confirmations = drain.confirmations
+        elif proposal != self.proposal:
             self.proposal = proposal
             self.confirmations = 1
         else:
@@ -580,9 +599,16 @@ class ReactivePolicy:
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
-        if moved is None and controller.scheduler.held_for_switch():
+        holds = controller.scheduler.held_for_switch()
+        if moved is None and holds:
             # The next pass with this proposal moves the donor once it is idle.
             self.proposal, self.confirmations = proposal, confirmations
+            if target is Role.DECODE and self.drain is None:
+                self.drain = SwitchDrain(
+                    candidate_p, min(holds), now, eligibility_rule, confirmations
+                )
+        else:
+            self.drain = None
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
@@ -595,6 +621,44 @@ class ReactivePolicy:
             # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)
         return moved
+
+    def _standing_drain(
+        self,
+        controller: ReactiveController,
+        now: float,
+        current_p: int,
+        evaluations: list[Evaluation],
+        eligible: list[Evaluation],
+    ) -> SwitchDrain | None:
+        """Return the approved move to decode whose donor still drains, if it stands.
+
+        The approval stands for `switch_hold_s` while its donor stays held. Projected prefill
+        load above expand at the new split, a failed guard or an eligible move to prefill
+        withdraws it and releases the donor.
+        """
+        drain = self.drain
+        if drain is None:
+            return None
+        scheduler = controller.scheduler
+        if (
+            drain.prefill != current_p - 1
+            or now - drain.approved_at > scheduler.switch_hold_s
+            or drain.donor not in scheduler.held_for_switch()
+        ):
+            self.drain = None
+            return None
+        row = next((row for row in evaluations if row[0].prefill == drain.prefill), None)
+        if (
+            row is None
+            or row[1] > scheduler.th.expand
+            or not (row[3] and row[4] and row[6])
+            or any(other[0].prefill > current_p for other in eligible)
+        ):
+            self.drain = None
+            self.proposal, self.confirmations = None, 0
+            scheduler.switch_holds.pop(drain.donor, None)
+            return None
+        return drain
 
     @staticmethod
     def _short_view(
