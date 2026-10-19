@@ -756,9 +756,9 @@ class MixedPressureTests(unittest.TestCase):
     def _overload_snapshot(self):
         return self.fleet.controller.scorer.capture(
             self.fleet.now,
-            Demand(0.1, 3.0, 30, 0),
+            Demand(0.1, 0.1, 30, 0),
             utilization=0.8,
-            observed_load=(0.1, 1.0),
+            observed_load=(0.1, 0.1),
         )
 
     def test_a_move_toward_decode_checks_each_engine_up_to_its_sequence_limit(self) -> None:
