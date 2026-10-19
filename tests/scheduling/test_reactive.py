@@ -654,6 +654,10 @@ class MixedPressureTests(unittest.TestCase):
         )
         self.assertEqual(len(fleet.monitor.instances["e1"].decode), 2)
 
+    # The next three tests characterize the existing decode coverage guard, which the profiled
+    # request maximum feeds. They pass before and after the profiler measures decode up to each
+    # engine's sequence limit; that change decides which maximum the guard reads.
+
     def _decode_overload(self, profiled: int, residents: int) -> None:
         """Hold `residents` decode streams on each of four decode engines under decode pressure."""
         fleet = self.fleet
@@ -697,7 +701,7 @@ class MixedPressureTests(unittest.TestCase):
             self.assertEqual(decision["reason"], "decode profile does not cover proposed work")
         self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
 
-    def test_a_profile_measured_to_the_sequence_limit_lets_decode_expand(self) -> None:
+    def test_a_profile_measured_past_the_residents_lets_decode_expand(self) -> None:
         self._decode_overload(64, 61)
         self.assertIsNotNone(self.fleet.step())
         self.assertEqual(self.fleet.scheduler.roles._last_decision["result"], "applied")
