@@ -206,7 +206,7 @@ The replay has the split sequence, pass conditions, records and exit codes of th
 
 | Phase | Starts at | Input / output tokens | Target | Duration |
 | --- | :---: | :---: | --- | :---: |
-| Decode | 2P:2D | 256 / 128 | Decode demand of 1.8 engines | 48 s |
+| Decode | 2P:2D | 256 / 256 | Decode demand of 1.8 engines | 48 s |
 | Prefill steady | 1P:3D | 3,840 / 1 | Prefill demand of 0.22 engines | 35 s |
 | Prefill burst | 2P:2D | 3,840 / 1 | 3 seconds of prefill work, offered at 100 requests/s and all in flight at once | |
 

@@ -186,7 +186,7 @@
       {
         "name": "decode",
         "input_tokens": 256,
-        "output_tokens": 128,
+        "output_tokens": 256,
         "seed": 1731,
         "target": {
           "decode_engines": 1.8

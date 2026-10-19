@@ -289,7 +289,7 @@ class TargetTests(unittest.TestCase):
     def test_each_phase_takes_the_prices_of_the_split_it_starts_from(self):
         tpot_s = self.spec["slo"]["tpot_s"]
         decode = self.phases["decode"]
-        capacity = statistics.fmean(p.decode_rps(tpot_s, 256 + 64, 128) for p in self.rows((2, 2)))
+        capacity = statistics.fmean(p.decode_rps(tpot_s, 256 + 128, 256) for p in self.rows((2, 2)))
         self.assertEqual(decode["sizing"]["split"], [2, 2])
         self.assertAlmostEqual(decode["rate_rps"], 1.8 * capacity)
         steady = self.phases["prefill-steady"]
