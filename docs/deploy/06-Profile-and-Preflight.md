@@ -32,7 +32,7 @@ The effective sweep has these bounds:
 
 | Sweep input          | Bound                                                                                                                                                |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Decode concurrency   | Requested counts up to the engine's sequence limit, then the limit itself. At each input length, the counts whose streams exceed the KV capacity the engine reports give way to the largest cohort that fills at most 80% of it |
+| Decode concurrency   | Requested counts up to the engine's sequence limit, then the limit itself. At each input length, the counts whose streams exceed the KV capacity the engine reports give way to the largest cohort that fills at most 80% of it, when that cohort is larger than every count that fits |
 | Prefill lengths      | Input plus one output token fits the live `max_model_len`                                                                                            |
 | Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`                                                                                            |
 

@@ -764,6 +764,55 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 # Decode seats stop at the cohort of the cell that held the most KV tokens.
                 self.assertEqual(instance_probe.covered_decode_requests(samples), covered)
 
+    async def test_a_kv_bound_cohort_that_cannot_complete_is_dropped(self):
+        """The sweep keeps the cells it measured when its KV-bound cohort cannot overlap."""
+        calls: list[tuple[int, int]] = []
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            calls.append((input_len, size))
+            # The 115-stream cohort's second repeat never overlaps, and nothing can lengthen it.
+            if (input_len, size) == (4096, 115) and calls.count((4096, 115)) == 3:
+                return [], {"cohort": size}
+            return [(float(size), float(size * input_len), 0.01)] * (2 * size), {"cohort": size}
+
+        evidence: list[dict[str, object]] = []
+        skipped: list[dict[str, object]] = []
+        with (
+            patch.object(decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])),
+            patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+            redirect_stdout(io.StringIO()),
+        ):
+            samples = await probe_decode(
+                None,
+                "http://e",
+                "stub",
+                DIALECT,
+                concurrency=(1, 4, 16, 48, 256),
+                input_lens=(512, 4096, 8192),
+                tokens=64,
+                evidence=evidence,
+                max_model_len=32762,
+                repeats=2,
+                kv_capacity_tokens=600_000,
+                skipped=skipped,
+            )
+        cells = [(row["input_tokens"], row["concurrency"]) for row in evidence]
+        self.assertNotIn((4096, 115), cells)
+        self.assertEqual(len(cells), 2 * 14)
+        self.assertEqual(len(samples), 14)
+        self.assertNotIn(115.0, [sample[0] for sample in samples])
+        self.assertIn(58.0, [sample[0] for sample in samples])
+        self.assertEqual(
+            [(cell["input_tokens"], cell["concurrency"]) for cell in skipped],
+            [(4096, 256), (4096, 115), (8192, 256)],
+        )
+        self.assertEqual(
+            skipped[1]["reason"],
+            "decode probe has insufficient complete-cohort intervals: got 0, need 230, "
+            "isl=4096, c=115, tokens=64",
+        )
+        self.assertEqual(skipped[1]["kv_tokens"], 115 * (4096 + 64))
+
     def test_decode_cells_count_whole_blocks_and_the_decode_reserve(self):
         # A vLLM stream of 100 input and 64 output tokens takes 11 blocks of 16, and the pool
         # keeps its null block back.

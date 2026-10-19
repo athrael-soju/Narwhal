@@ -86,6 +86,7 @@ A decode cell is one combination of decode input length and concurrency.
 - With `--limits`, each engine's top concurrency value is its sequence limit.
 - When the engine reports its [KV capacity](#kv-capacity-source), the profiler skips, at each decode input length, the concurrency values whose streams exceed it, and measures instead the largest cohort whose streams fill at most 80% of it when that cohort is larger than every value that fits. A stream counts its input plus its requested output, or plus the 512 KV tokens an SGLang decode engine holds free for each running request when that is larger. When the engine reports its cache block size, each stream rounds up to whole blocks, and a vLLM engine's capacity leaves out the block vLLM keeps as its null block. The profiler skips an input length where fewer than two cohorts fit, and stops when fewer than two measured input lengths remain.
 - A lagged cohort's retry keeps its longer streams within the same KV capacity.
+- When the largest cohort that fills at most 80% of the KV capacity still completes too few intervals after its retries, the profiler drops that cell, records it in `decode_skipped` with its `reason`, and keeps the cells it measured.
 - `decode_max_requests` is the cohort of the measured cell that held the most KV tokens, so the profile's request and KV bounds meet at a measured cell.
 - Use a broader sweep for long-context deployments.
 - Each decode input plus its requested output must fit the live `max_model_len`.
@@ -165,7 +166,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
 - the per-length medians used for the TTFT fit
 - decode intervals and cell medians
 - `max_num_seqs` and `limits_path`: the engine's sequence limit from `--limits` and the path of that file, present only with `--limits`
-- `decode_skipped`: the decode cells skipped because their streams exceed the engine's KV capacity, present only when the sweep skipped a cell
+- `decode_skipped`: the decode cells skipped because their streams exceed the engine's KV capacity, and the largest-fit cohort dropped with its `reason`, present only when the sweep skipped a cell
 - fitted profiles
 - `prefill_block_tokens`: the cache block size the engine exports, otherwise `null`
 - `cached_prefill`: warm prefill evidence per engine

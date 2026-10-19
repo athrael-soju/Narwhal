@@ -307,6 +307,8 @@ async def probe_decode(
                 warmed.add(c)
         for c in cells:
             replicates: list[tuple[float, float, float]] = []
+            intervals: list[dict[str, object]] = []
+            dropped: str | None = None
             for repeat in range(repeats):
                 used = tokens
                 observed, state = await _decode_cohort(
@@ -329,21 +331,26 @@ async def probe_decode(
                         client, url, model, prompt, input_len, c, used, dialect
                     )
                 if len(observed) < 2 * c:
-                    raise RuntimeError(
+                    problem = (
                         f"decode probe has insufficient complete-cohort intervals: "
                         f"got {len(observed)}, need {2 * c}, isl={input_len}, c={c}, "
                         f"tokens={used}"
                     )
-                if evidence is not None:
-                    evidence.append(
-                        {
-                            "input_tokens": input_len,
-                            "concurrency": c,
-                            "repeat": repeat,
-                            "tokens": used,
-                            "intervals": observed,
-                        }
-                    )
+                    # The KV-bound cohort adds a point past the requested cohorts, which carry
+                    # the fit without it.
+                    if c in concurrency:
+                        raise RuntimeError(problem)
+                    dropped = problem
+                    break
+                intervals.append(
+                    {
+                        "input_tokens": input_len,
+                        "concurrency": c,
+                        "repeat": repeat,
+                        "tokens": used,
+                        "intervals": observed,
+                    }
+                )
                 replicates.append(
                     (
                         statistics.median(s[0] for s in observed),
@@ -353,6 +360,22 @@ async def probe_decode(
                         statistics.mean(s[2] for s in observed),
                     )
                 )
+            if dropped is not None:
+                if skipped is not None:
+                    skipped.append(
+                        {
+                            "input_tokens": input_len,
+                            "concurrency": c,
+                            "kv_tokens": c
+                            * stream_kv_tokens(input_len, tokens, block_tokens, reserved),
+                            "kv_capacity_tokens": kv_capacity_tokens,
+                            "reason": dropped,
+                        }
+                    )
+                print(f"    decode  isl={input_len:<6} dropped c={c}: {dropped}")
+                continue
+            if evidence is not None:
+                evidence.extend(intervals)
             requests, batch, gap = (
                 statistics.median(row[i] for row in replicates) for i in range(3)
             )
