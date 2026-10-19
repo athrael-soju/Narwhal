@@ -27,16 +27,20 @@ def add_tool_metrics_argument(parser: argparse.ArgumentParser) -> None:
     """Add `--metrics-url`, where an operation that sends requests to engines serves metrics."""
     parser.add_argument(
         "--metrics-url",
-        default=os.environ.get(METRICS_URL_ENV) or None,
         help="serve the operation, its engines and its progress at this http://host:port "
         f"/metrics while the operation runs (default: ${METRICS_URL_ENV}, else no endpoint)",
     )
 
 
-def check_tool_metrics_argument(parser: argparse.ArgumentParser, url: str | None) -> None:
-    """Exit with a usage error when `url` is not an http://host:port origin."""
+def tool_metrics_url(parser: argparse.ArgumentParser, url: str | None) -> str | None:
+    """Return `--metrics-url`, else the environment's URL; exit with a usage error naming the
+    source when the URL is not an http://host:port origin."""
+    source = "--metrics-url"
+    if url is None:
+        url, source = os.environ.get(METRICS_URL_ENV) or None, METRICS_URL_ENV
     if url:
         try:
-            listen_address(url)
+            listen_address(url, source)
         except ValueError as exc:
             parser.error(str(exc))
+    return url

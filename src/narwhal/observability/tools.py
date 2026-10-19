@@ -44,6 +44,17 @@ class ToolActivity:
         with self._lock:
             self._completed += steps
 
+    def freeze(self) -> None:
+        """Keep the steps the shared count reports now, and stop reading it."""
+        with self._lock:
+            count, completed = self._count, self._completed
+        if count is not None:
+            with contextlib.suppress(OSError, EOFError):
+                completed = count()
+        with self._lock:
+            self._count = None
+            self._completed = completed
+
     def render(self) -> str:
         with self._lock:
             engines = sorted(self._engines)
@@ -84,13 +95,13 @@ class ToolActivity:
         return "\n".join(lines) + "\n"
 
 
-def listen_address(url: str) -> tuple[str, int]:
-    """Return the host and port in an `http://host:port` metrics URL."""
+def listen_address(url: str, source: str = METRICS_URL_ENV) -> tuple[str, int]:
+    """Return the host and port in an `http://host:port` metrics URL that `source` names."""
     try:
         parsed = urlsplit(url)
         port = parsed.port
     except ValueError as exc:
-        raise ValueError(f"{METRICS_URL_ENV}: invalid URL {url!r}: {exc}") from None
+        raise ValueError(f"{source}: invalid URL {url!r}: {exc}") from None
     if (
         parsed.scheme != "http"
         or parsed.hostname is None
@@ -101,7 +112,7 @@ def listen_address(url: str) -> tuple[str, int]:
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError(f"{METRICS_URL_ENV} must be http://host:port, got {url!r}")
+        raise ValueError(f"{source} must be http://host:port, got {url!r}")
     return parsed.hostname, port
 
 

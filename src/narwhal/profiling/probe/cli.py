@@ -11,11 +11,7 @@ import httpx
 
 from ... import command_results as results
 from ...cli_errors import failure
-from ...cli_support import (
-    add_tool_metrics_argument,
-    add_version_argument,
-    check_tool_metrics_argument,
-)
+from ...cli_support import add_tool_metrics_argument, add_version_argument, tool_metrics_url
 from ...config import FleetConfig
 from ...observability.tools import ToolActivity, serve_tool_metrics
 from ..fitting import cached_fit_possible
@@ -192,7 +188,9 @@ def _main(argv: list[str]) -> int:
         ap.error("--observation-timeout-s must be finite and positive")
     if args.observation_timeout_s is not None and (args.merge or args.refit_samples):
         ap.error("--observation-timeout-s applies only to live profiling")
-    check_tool_metrics_argument(ap, args.metrics_url)
+    # Only live profiling sends requests to engines, so only it serves metrics.
+    live = not args.merge and args.refit_samples is None
+    metrics_url = tool_metrics_url(ap, args.metrics_url) if live else None
     try:
         cfg = FleetConfig.load(args.fleet)
     except (OSError, ValueError) as exc:
@@ -293,7 +291,7 @@ def _main(argv: list[str]) -> int:
                 args.refit_samples, args.out, {engine.iid for engine in cfg.engines}
             )
         activity = ToolActivity("profiling")
-        with serve_tool_metrics(activity, args.metrics_url):
+        with serve_tool_metrics(activity, metrics_url):
             return asyncio.run(
                 run(
                     cfg,

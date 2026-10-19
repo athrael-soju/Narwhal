@@ -12,11 +12,7 @@ from pathlib import Path
 import httpx
 
 from ... import command_results as results
-from ...cli_support import (
-    add_tool_metrics_argument,
-    add_version_argument,
-    check_tool_metrics_argument,
-)
+from ...cli_support import add_tool_metrics_argument, add_version_argument, tool_metrics_url
 from ...config import FleetConfig
 from ...contracts import manifest
 from ...observability.tools import ToolActivity, serve_tool_metrics
@@ -134,7 +130,6 @@ def _main(argv: list[str]) -> int:
 
     if args.fleet is None:
         ap.error("give --fleet")
-    check_tool_metrics_argument(ap, args.metrics_url)
     if args.calibrate_first_token:
         if args.input_tokens is None or args.observation_timeout_s is None:
             ap.error("calibration requires --input-tokens and --observation-timeout-s")
@@ -158,6 +153,8 @@ def _main(argv: list[str]) -> int:
         ap.error("choose --evidence-out or --verify-evidence")
     if args.evidence_out is not None:
         results.add_artifact("directed_kv_evidence", args.evidence_out)
+    # Evidence verification sends no requests to engines, so it serves no metrics.
+    metrics_url = tool_metrics_url(ap, args.metrics_url) if args.verify_evidence is None else None
     from ...cli_errors import failure
 
     try:
@@ -179,7 +176,7 @@ def _main(argv: list[str]) -> int:
             results.add_artifact("first_token_calibration", calibration_out)
             lengths = tuple(int(part) for part in input_tokens.split(","))
             activity = ToolActivity("calibration")
-            with serve_tool_metrics(activity, args.metrics_url):
+            with serve_tool_metrics(activity, metrics_url):
                 return asyncio.run(
                     calibrate(
                         cfg,
@@ -206,7 +203,7 @@ def _main(argv: list[str]) -> int:
             print("directed KV evidence matches the current fleet, profiles, and processes")
             return 0
         activity = ToolActivity("preflight")
-        with serve_tool_metrics(activity, args.metrics_url):
+        with serve_tool_metrics(activity, metrics_url):
             return asyncio.run(
                 run(
                     cfg,

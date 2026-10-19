@@ -190,39 +190,40 @@ async def _run_lanes_apart(
             done = manager.list()
             total = sum(len(lane) for lane in lanes)
             activity.plan(total, lambda: len(done))
-            futures = [
-                loop.run_in_executor(
-                    pool,
-                    _lane_worker,
-                    lane_cfg,
-                    {spec.iid for spec in lane},
-                    sweep,
-                    limits_path,
-                    observation_timeout_s,
-                    phases,
-                    done,
-                )
-                for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
-            ]
-            outcomes: list[BaseException | int] = []
-            stand_ins: list[asyncio.Future[None]] = []
-            for finished in asyncio.as_completed(futures):
-                try:
-                    outcomes.append(await finished)
-                except Exception as error:
-                    outcomes.append(error)
-                if phases is None:
-                    continue
-                if outcomes[-1] != 0 or len(outcomes) == len(futures):
-                    # The first failure stops the lanes waiting for it at a phase switch, and
-                    # the last lane to finish stops the stand-ins.
-                    phases.abort()
-                else:
-                    stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
-            await asyncio.gather(*stand_ins)
-            # The manager stops with this block, so the count stays with the activity.
-            activity.plan(total)
-            activity.advance(len(done))
+            try:
+                futures = [
+                    loop.run_in_executor(
+                        pool,
+                        _lane_worker,
+                        lane_cfg,
+                        {spec.iid for spec in lane},
+                        sweep,
+                        limits_path,
+                        observation_timeout_s,
+                        phases,
+                        done,
+                    )
+                    for lane_cfg, lane in zip(lane_cfgs, lanes, strict=True)
+                ]
+                outcomes: list[BaseException | int] = []
+                stand_ins: list[asyncio.Future[None]] = []
+                for finished in asyncio.as_completed(futures):
+                    try:
+                        outcomes.append(await finished)
+                    except Exception as error:
+                        outcomes.append(error)
+                    if phases is None:
+                        continue
+                    if outcomes[-1] != 0 or len(outcomes) == len(futures):
+                        # The first failure stops the lanes waiting for it at a phase switch, and
+                        # the last lane to finish stops the stand-ins.
+                        phases.abort()
+                    else:
+                        stand_ins.append(loop.run_in_executor(None, _stand_in, phases))
+                await asyncio.gather(*stand_ins)
+            finally:
+                # The manager stops with this block, so the count stays with the activity.
+                activity.freeze()
         profiles: list[Profile] = []
         for lane_cfg in lane_cfgs:
             lane_evidence = lane_cfg.profiles_path.with_suffix(".samples.json")
