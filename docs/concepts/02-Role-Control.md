@@ -12,7 +12,7 @@ Every vLLM engine runs with the `kv_both` role, so a vLLM role change takes effe
 
 During normal operation, the role controller runs at most one evaluation every `controller.reactive.step_s`. Each evaluation scores the current split of engines and every split that differs from it by one engine. A split's score is the worst of three ratios, each a projected value divided by its service-level objective (SLO) target: time to first token (TTFT), time per output token (TPOT), and the wait for a decode slot.
 
-The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) covers requests waiting for a decode slot and requests still in prefill. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
+The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) covers requests waiting for a decode slot and requests in prefill not resident in decode. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
 
 The demand estimate includes prompts longer than any in the profiled range, pricing them by extending the [prompt-processing cost curve](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile) past that range.
 
