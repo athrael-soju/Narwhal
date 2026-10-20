@@ -10,10 +10,9 @@ from collections.abc import Callable, Iterable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from .metrics.exposition import metric_lines
+from .metrics.exposition import CONTENT_TYPE, metric_lines
 
 METRICS_URL_ENV = "NARWHAL_TOOL_METRICS_URL"
-CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
 class ToolActivity:
@@ -46,25 +45,24 @@ class ToolActivity:
 
     def freeze(self) -> None:
         """Keep the steps the shared count reports now, and stop reading it."""
-        with self._lock:
-            count, completed = self._count, self._completed
-        if count is not None:
-            with contextlib.suppress(OSError, EOFError):
-                completed = count()
+        completed, _ = self._progress()
         with self._lock:
             self._count = None
             self._completed = completed
 
-    def render(self) -> str:
+    def _progress(self) -> tuple[int, int]:
         with self._lock:
-            engines = sorted(self._engines)
-            total = self._total
-            count = self._count
-            completed = self._completed
+            count, completed, total = self._count, self._completed, self._total
         if count is not None:
             # A count shared with worker processes fails once their manager stops.
             with contextlib.suppress(OSError, EOFError):
                 completed = count()
+        return completed, total
+
+    def render(self) -> str:
+        with self._lock:
+            engines = sorted(self._engines)
+        completed, total = self._progress()
         operation = {"operation": self.operation}
         lines = [
             *metric_lines(

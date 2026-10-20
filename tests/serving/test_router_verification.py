@@ -4,6 +4,7 @@ import asyncio
 import math
 import tempfile
 import unittest
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -269,14 +270,14 @@ class RouterVerificationTests(unittest.IsolatedAsyncioTestCase):
         monitor = self.router.monitor
 
         async def sent_by(verify):
-            before = dict(monitor.requests_sent)
+            before = Counter(monitor.requests_sent)
             with patch.object(
                 self.router.engines,
                 "probe_inference",
                 new=AsyncMock(return_value=InferenceProbe(ProbeLeg(), ProbeLeg())),
             ):
                 await verify()
-            return {iid: count - before.get(iid, 0) for iid, count in monitor.requests_sent.items()}
+            return Counter(monitor.requests_sent) - before
 
         # A decode engine: one standalone probe and one through its recorded producer.
         self.router.verifier.sources["e3"] = {"", "e0"}

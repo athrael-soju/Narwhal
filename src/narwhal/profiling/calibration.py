@@ -689,7 +689,8 @@ async def calibrate(
         )
         for batch, targets in batches.items()
     ]
-    activity.use(iid for src, dst, _ in needed for iid in (src, dst))
+    used = {iid for src, dst, _ in needed for iid in (src, dst)}
+    activity.use(used)
     # Each lockstep step is one step: sweep 1 steps each group alone, later sweeps each round.
     activity.plan(
         sum(
@@ -710,7 +711,7 @@ async def calibrate(
                 timeout=observation_timeout_s, headers=cfg.engine_headers()
             ) as sizing:
                 context_limits: dict[str, int] = {}
-                for iid in sorted({iid for src, dst, _ in needed for iid in (src, dst)}):
+                for iid in sorted(used):
                     spec = by_id[iid]
                     async with asyncio.timeout(observation_timeout_s):
                         context_limit = await engine_context_limit(

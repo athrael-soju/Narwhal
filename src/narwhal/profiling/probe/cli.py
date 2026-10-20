@@ -182,14 +182,14 @@ def _main(argv: list[str]) -> int:
         "fit its live max_model_len; required with --colocated",
     )
     args = ap.parse_args(argv)
+    live = not args.merge and args.refit_samples is None
     if args.observation_timeout_s is not None and (
         not math.isfinite(args.observation_timeout_s) or args.observation_timeout_s <= 0
     ):
         ap.error("--observation-timeout-s must be finite and positive")
-    if args.observation_timeout_s is not None and (args.merge or args.refit_samples):
+    if args.observation_timeout_s is not None and not live:
         ap.error("--observation-timeout-s applies only to live profiling")
     # Only live profiling sends requests to engines, so only it serves metrics.
-    live = not args.merge and args.refit_samples is None
     if args.metrics_url is not None and not live:
         ap.error("--metrics-url applies only to live profiling")
     metrics_url = tool_metrics_url(ap, args.metrics_url) if live else None
@@ -199,7 +199,7 @@ def _main(argv: list[str]) -> int:
         if results.json_mode():
             raise
         return failure("narwhal-profile", f"load fleet {args.fleet}", exc, 2)
-    if args.out is not None and not args.merge and args.refit_samples is None:
+    if args.out is not None and live:
         if args.overwrite:
             ap.error("--out takes a fresh path; drop --overwrite")
         cfg.profiles_path = args.out

@@ -12,12 +12,13 @@ from pathlib import Path
 from unittest import mock
 
 from tools.observability import artifacts
+from tools.observability.start.services import PROMETHEUS_IMAGE, PROMETHEUS_VERSION
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-IMAGE = re.search(r"image:\s*(prom/prometheus:\S+)", (artifacts.BASE / "compose.yml").read_text())[
-    1
-]
-MAJOR = re.search(r":v(\d+)\.", IMAGE)[1]
+MAJOR = PROMETHEUS_VERSION.split(".")[0]
+RUN_TIMEOUT_S = 120
+UNAVAILABLE = f"the {PROMETHEUS_IMAGE} image and a promtool {MAJOR}.x are unavailable"
+STALLED = f"Docker did not run promtool from {PROMETHEUS_IMAGE} within {RUN_TIMEOUT_S} seconds"
 LENGTH = 130
 
 ENGINE = {"job": "engines", "instance": "e0:9000", "iid": "p0"}
@@ -34,7 +35,10 @@ def _docker_image() -> bool:
         return False
     try:
         found = subprocess.run(
-            ["docker", "image", "inspect", IMAGE], capture_output=True, check=False, timeout=30
+            ["docker", "image", "inspect", PROMETHEUS_IMAGE],
+            capture_output=True,
+            check=False,
+            timeout=30,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -61,10 +65,7 @@ FOUND: dict[str, str | None] = {}
 
 
 def _source() -> str | None:
-    """Return "docker" when the pinned image is present, else a matching promtool on PATH.
-
-    The first case decides for the whole run, so a hung Docker daemon costs one timeout.
-    """
+    """Return "docker" when the pinned image is present, else a matching promtool on PATH."""
     if "promtool" not in FOUND:
         FOUND["promtool"] = "docker" if _docker_image() else _local_promtool()
     return FOUND["promtool"]
@@ -90,7 +91,7 @@ def promtool(folder: Path) -> list[str] | None:
             f"{folder}:{folder}:ro",
             "--entrypoint",
             "promtool",
-            IMAGE,
+            PROMETHEUS_IMAGE,
         ]
     return [source] if source is not None else None
 
@@ -121,6 +122,11 @@ def constant(times, value: str) -> Samples:
     return dict.fromkeys(times, value)
 
 
+def flags(times: list[float], on: set[int]) -> Samples:
+    """1 at the `times` in `on` and 0 at the others."""
+    return {t: "1" if t in on else "0" for t in times}
+
+
 def counter(times: list[float], steps: dict[float, int]) -> Samples:
     """A counter scraped at `times` that has risen by `steps[t]` at each request time t."""
     out, total = {}, 0
@@ -133,21 +139,17 @@ def counter(times: list[float], steps: dict[float, int]) -> Samples:
 
 
 def engine(
-    running: set[int], start: int = 0, until: int = LENGTH, waiting: set[int] = frozenset()
+    running: set[int], start: int = 0, waiting: set[int] = frozenset()
 ) -> list[tuple[str, Samples]]:
     """An engine scraped every 5 s from `start`, running requests at the seconds in `running`
     and holding waiting requests at the seconds in `waiting`."""
-    times = scrapes(start, until)
+    times = scrapes(start)
     tokens = dict.fromkeys(sorted(running), 8)
     labels = {**ENGINE, "model_name": "m"}
     return [
         series("up", ENGINE, constant(times, "1")),
-        series(
-            "vllm:num_requests_running", labels, {t: "1" if t in running else "0" for t in times}
-        ),
-        series(
-            "vllm:num_requests_waiting", labels, {t: "1" if t in waiting else "0" for t in times}
-        ),
+        series("vllm:num_requests_running", labels, flags(times, running)),
+        series("vllm:num_requests_waiting", labels, flags(times, waiting)),
         series("vllm:generation_tokens_total", labels, counter(times, tokens)),
     ]
 
@@ -159,7 +161,7 @@ def sglang_engine(running: set[int], finished: dict[float, int]) -> list[tuple[s
     labels = {**ENGINE, "model_name": "m"}
     return [
         series("up", ENGINE, constant(times, "1")),
-        series("sglang:num_running_reqs", labels, {t: "1" if t in running else "0" for t in times}),
+        series("sglang:num_running_reqs", labels, flags(times, running)),
         series("sglang:num_queue_reqs", labels, constant(times, "0")),
         series("sglang:prompt_tokens_total", labels, counter(times, finished)),
         series("sglang:generation_tokens_total", labels, counter(times, finished)),
@@ -198,13 +200,17 @@ def router(
         series(
             "narwhal_resident_requests",
             {**labels, "phase": "decode"},
-            landed({t: "1" if t in resident else "0" for t in up}),
+            landed(flags(up, resident)),
         ),
         series(
             "narwhal_resident_requests", {**labels, "phase": "prefill"}, landed(constant(up, "0"))
         ),
         series("narwhal_engine_requests_total", labels, landed(total)),
     ]
+
+
+# A router that fails every scrape.
+ROUTER_DOWN = router({}, up=[], down=scrapes(3))
 
 
 def tool(gone: float) -> list[tuple[str, Samples]]:
@@ -235,19 +241,19 @@ class EngineStateQueryTests(unittest.TestCase):
     ) -> None:
         """Evaluate the State query at each expected time, with `step`-second input samples."""
         if EngineStateQueryTests.docker_stalled:
-            self.skipTest(f"Docker did not run promtool from {IMAGE} within 120 seconds")
+            self.skipTest(STALLED)
         interval = f"{round(step * 1000)}ms"
         with tempfile.TemporaryDirectory() as folder:
             command = promtool(Path(folder))
             if command is None:
-                self.skipTest(f"the {IMAGE} image and a promtool {MAJOR}.x are unavailable")
+                self.skipTest(UNAVAILABLE)
             lines = [
                 "rule_files: []",
                 f"evaluation_interval: {interval}",
                 "tests:",
                 f"  - interval: {interval}",
+                "    input_series:",
             ]
-            lines.append("    input_series:")
             for name, samples in inputs:
                 cells = ["_"] * round(LENGTH / step)
                 for at, value in samples.items():
@@ -257,9 +263,10 @@ class EngineStateQueryTests(unittest.TestCase):
                     values = " ".join(cells)
                     lines += [f"      - series: {json.dumps(name)}", f"        values: {values!r}"]
             lines.append("    promql_expr_test:")
+            expr = json.dumps(state_query())
             for at, value in sorted(expected.items()):
                 lines += [
-                    f"      - expr: {json.dumps(state_query())}",
+                    f"      - expr: {expr}",
                     f"        eval_time: {round(at * 1000)}ms",
                     "        exp_samples:",
                     "          - labels: '{iid=\"p0\"}'",
@@ -273,28 +280,31 @@ class EngineStateQueryTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     check=False,
-                    timeout=120,
+                    timeout=RUN_TIMEOUT_S,
                 )
             except subprocess.TimeoutExpired:
                 if command[0] != "docker":
                     raise
                 EngineStateQueryTests.docker_stalled = True
-                self.skipTest(f"Docker did not run promtool from {IMAGE} within 120 seconds")
+                self.skipTest(STALLED)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_short_routed_requests_between_router_scrapes_read_serving(self):
-        # Each request runs 2 s, covers an engine scrape and ends before the router scrape.
-        starts = range(9, 120, 20)
-        running = seconds(*((s, s + 2) for s in starts))
-        inputs = engine(running) + router(dict.fromkeys(starts, 1))
-        self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
-
-    def test_routed_requests_seen_only_at_engine_scrapes_read_serving(self):
-        # Every engine scrape sees a 2 s request that ends before the next router scrape.
-        starts = range(4, 120, 5)
-        running = seconds(*((s, s + 2) for s in starts))
-        inputs = engine(running) + router(dict.fromkeys(starts, 1))
-        self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
+    def test_short_routed_requests_read_serving(self):
+        # Each request runs 2 s and ends before the next router scrape.
+        cases = {
+            # Each request covers an engine scrape.
+            "between router scrapes": (range(9, 120, 20), None),
+            # Every engine scrape sees a request.
+            "seen only at engine scrapes": (range(4, 120, 5), None),
+            # The router restarts at 60 s between two scrapes it answers, so its counter falls
+            # from 6 to 1 with no failed scrape.
+            "across a router restart": ([*range(4, 30, 5), *range(61, 120, 5)], 60),
+        }
+        for case, (starts, restart) in cases.items():
+            with self.subTest(case):
+                running = seconds(*((s, s + 2) for s in starts))
+                inputs = engine(running) + router(dict.fromkeys(starts, 1), restart=restart)
+                self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
 
     def test_routed_requests_read_serving_when_router_samples_land_late(self):
         # Each 0.5 s request starts just after a router scrape and covers an engine scrape, so
@@ -333,18 +343,10 @@ class EngineStateQueryTests(unittest.TestCase):
         expected.update(dict.fromkeys(range(115, 130, 3), SERVING))
         self.check(inputs, expected)
 
-    def test_a_router_restart_between_scrapes_still_counts_its_requests(self):
-        # The router restarts at 60 s between two scrapes it answers, so its counter falls from
-        # 6 to 1 with no failed scrape.
-        starts = [*range(4, 30, 5), *range(61, 120, 5)]
-        running = seconds(*((s, s + 2) for s in starts))
-        inputs = engine(running) + router(dict.fromkeys(starts, 1), restart=60)
-        self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
-
     def test_direct_requests_read_probing_while_the_router_is_down(self):
         # Bursty direct traffic, as calibration sends: work, a short gap, then work again.
         running = seconds((0, 12), (15, 30), (33, 61))
-        inputs = engine(running) + router({}, up=[], down=scrapes(3))
+        inputs = engine(running) + ROUTER_DOWN
         expected = dict.fromkeys(range(23, 65, 3), PROBING)
         # The engine's second scrape after the last request clears the state.
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
@@ -352,9 +354,7 @@ class EngineStateQueryTests(unittest.TestCase):
 
     def test_probing_outranks_backlogged(self):
         running = seconds((0, 61))
-        inputs = engine(running, waiting=seconds((0, 16), (40, 56))) + router(
-            {}, up=[], down=scrapes(3)
-        )
+        inputs = engine(running, waiting=seconds((0, 16), (40, 56))) + ROUTER_DOWN
         expected = dict.fromkeys(range(2, 20, 3), BACKLOGGED)
         expected.update(dict.fromkeys(range(23, 65, 3), PROBING))
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
@@ -362,30 +362,23 @@ class EngineStateQueryTests(unittest.TestCase):
 
     def test_an_engine_idle_for_a_scrape_interval_reads_serving_until_it_works_again(self):
         running = seconds((0, 30), (42, 61))
-        inputs = engine(running) + router({}, up=[], down=scrapes(3))
+        inputs = engine(running) + ROUTER_DOWN
         expected = dict.fromkeys(range(23, 35, 3), PROBING)
         expected.update(dict.fromkeys(range(35, 45, 3), SERVING))
         expected.update(dict.fromkeys(range(45, 65, 3), PROBING))
         expected.update(dict.fromkeys(range(65, 120, 4), SERVING))
         self.check(inputs, expected)
 
-    def test_direct_work_between_two_engine_scrapes_reads_serving(self):
-        # The request runs from 41 s to 45 s, between the engine's scrapes at 40 s and 45 s.
-        inputs = engine(seconds((41, 45))) + router({}, up=[], down=scrapes(3))
-        self.check(inputs, dict.fromkeys(range(23, 80), SERVING))
-
-    def test_direct_work_across_an_engine_scrape_reads_probing(self):
-        # The engine's scrape at 45 s sees the request running and its scrape at 50 s counts the
-        # request's last tokens.
-        inputs = engine(seconds((41, 49))) + router({}, up=[], down=scrapes(3))
-        expected = dict.fromkeys(range(23, 80), SERVING)
-        expected.update({53: PROBING, 54: PROBING})
-        self.check(inputs, expected)
-
-    def test_direct_work_between_two_engine_scrapes_reads_probing_after_other_recent_work(self):
-        # Each request runs between two engine scrapes, and the scrape at 60 s or 65 s counts the
-        # second request's tokens.
+    def test_short_direct_work_reads_probing_only_when_both_windows_see_it(self):
+        # Probing needs work in the 15 seconds that end 8 seconds ago and at the latest engine
+        # scrape. In the two-request cases, each request runs between two engine scrapes, and the
+        # scrape at 60 s or 65 s counts the second request's tokens.
         cases = {
+            # The request runs from 41 s to 45 s, between the engine's scrapes at 40 s and 45 s.
+            ((41, 45),): {},
+            # The engine's scrape at 45 s sees the request running and its scrape at 50 s counts
+            # the request's last tokens.
+            ((41, 49),): {53: PROBING, 54: PROBING},
             # The scrape at 40 s counts the first request's tokens.
             ((36, 39), (56, 59)): {60: PROBING, 61: PROBING},
             # The scrape at 40 s sees the first request running.
@@ -396,12 +389,12 @@ class EngineStateQueryTests(unittest.TestCase):
         }
         for spans, probing in cases.items():
             with self.subTest(spans=spans):
-                inputs = engine(seconds(*spans)) + router({}, up=[], down=scrapes(3))
+                inputs = engine(seconds(*spans)) + ROUTER_DOWN
                 self.check(inputs, dict.fromkeys(range(23, 80), SERVING) | probing)
 
     def test_probing_starts_8_seconds_after_the_first_engine_scrape_that_sees_the_work(self):
         # The engine's scrape at 45 s is the first to see the work that starts at 41 s.
-        inputs = engine(seconds((41, 130))) + router({}, up=[], down=scrapes(3))
+        inputs = engine(seconds((41, 130))) + ROUTER_DOWN
         expected = dict.fromkeys(range(23, 53), SERVING)
         expected.update(dict.fromkeys(range(53, 130), PROBING))
         self.check(inputs, expected)
@@ -410,7 +403,7 @@ class EngineStateQueryTests(unittest.TestCase):
         # A prefill engine reports running requests, and counts each request's tokens, until its
         # KV transfer finishes, 12 s after the request.
         finished = dict.fromkeys(range(16, 73, 4), 8)
-        inputs = sglang_engine(seconds((0, 73)), finished) + router({}, up=[], down=scrapes(3))
+        inputs = sglang_engine(seconds((0, 73)), finished) + ROUTER_DOWN
         expected = dict.fromkeys(range(23, 80, 3), PROBING)
         # The engine's second scrape after the last transfer clears the state.
         expected.update(dict.fromkeys(range(80, 120, 4), SERVING))
@@ -423,7 +416,7 @@ class EngineStateQueryTests(unittest.TestCase):
         self.check(inputs, dict.fromkeys(range(16, 120, 3), SERVING))
 
     def test_a_tool_names_its_operation_and_its_engines_return_to_serving(self):
-        inputs = engine(seconds((0, 61))) + router({}, up=[], down=scrapes(3)) + tool(62)
+        inputs = engine(seconds((0, 61))) + ROUTER_DOWN + tool(62)
         expected = dict.fromkeys(range(26, 60, 4), CALIBRATING)
         # The tool's next scrape after it exits clears the state.
         expected.update(dict.fromkeys(range(62, 120, 4), SERVING))
@@ -431,7 +424,7 @@ class EngineStateQueryTests(unittest.TestCase):
 
     def test_direct_work_after_a_tool_exits_reads_probing_37_seconds_after_its_last_report(self):
         # The tool last reports the engine at its scrape at 57 s, and direct work continues.
-        inputs = engine(seconds((0, 130))) + router({}, up=[], down=scrapes(3)) + tool(62)
+        inputs = engine(seconds((0, 130))) + ROUTER_DOWN + tool(62)
         expected = dict.fromkeys(range(5, 62), CALIBRATING)
         expected.update(dict.fromkeys(range(62, 94), SERVING))
         expected.update(dict.fromkeys(range(94, 130), PROBING))
@@ -472,7 +465,7 @@ class EngineStateQueryTests(unittest.TestCase):
         self.check(inputs, expected)
 
     def test_a_newly_scraped_engine_waits_for_a_full_window(self):
-        inputs = engine(seconds((30, 120)), start=30) + router({}, up=[], down=scrapes(3))
+        inputs = engine(seconds((30, 120)), start=30) + ROUTER_DOWN
         expected = dict.fromkeys(range(31, 53), SERVING)
         expected.update(dict.fromkeys(range(53, 120), PROBING))
         self.check(inputs, expected)
@@ -503,23 +496,17 @@ class PromtoolAvailabilityTests(unittest.TestCase):
 
     def test_an_image_check_that_times_out_skips_every_case(self):
         result, commands = self.run_cases(subprocess.TimeoutExpired("docker", 30))
-        self.assertEqual(
-            [reason for _, reason in result.skipped],
-            [f"the {IMAGE} image and a promtool {MAJOR}.x are unavailable"] * 2,
-        )
-        self.assertEqual(commands, [["docker", "image", "inspect", IMAGE]])
+        self.assertEqual([reason for _, reason in result.skipped], [UNAVAILABLE] * 2)
+        self.assertEqual(commands, [["docker", "image", "inspect", PROMETHEUS_IMAGE]])
 
     def test_a_promtool_run_that_times_out_skips_the_remaining_cases(self):
         def run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
             if command[1] == "run":
-                raise subprocess.TimeoutExpired(command, 120)
+                raise subprocess.TimeoutExpired(command, RUN_TIMEOUT_S)
             return subprocess.CompletedProcess(command, 0)
 
         result, commands = self.run_cases(run)
-        self.assertEqual(
-            [reason for _, reason in result.skipped],
-            [f"Docker did not run promtool from {IMAGE} within 120 seconds"] * 2,
-        )
+        self.assertEqual([reason for _, reason in result.skipped], [STALLED] * 2)
         self.assertEqual(
             [command[:2] for command in commands], [["docker", "image"], ["docker", "run"]]
         )

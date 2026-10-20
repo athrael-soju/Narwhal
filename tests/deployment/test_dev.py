@@ -192,7 +192,6 @@ class DevTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
 
     def requested_caps(self):
-        """Return each engine's launch-record cap and the cap its SGLang command requests."""
         launch = lifecycle.read(self.root / "engine-launch.json")
         caps = []
         for record in launch["engines"].values():

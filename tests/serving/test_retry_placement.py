@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections import Counter
 from dataclasses import replace
 
 import httpx
@@ -72,6 +73,12 @@ class RetryPlacementTests(HttpHarness):
         """Return the engines that served the named legs, in order."""
         return [iid for iid, leg in self.legs if leg in (*legs, "connect")]
 
+    def assert_counted(self):
+        """Every attempt counts each leg it sends on the engine the leg reached."""
+        self.assertEqual(
+            Counter(self.router.monitor.requests_sent), Counter(self.used("prefill", "decode"))
+        )
+
     def attempts(self):
         """Return the engines each failed attempt used, as the journal records them."""
         return [
@@ -88,6 +95,7 @@ class RetryPlacementTests(HttpHarness):
                 self.inject("prefill", fault)
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 200, response.text)
+                self.assert_counted()
                 first, second = self.used("prefill")
                 self.assertEqual({first, second}, {"e0", "e1"})
                 ((phase, prefill_iid, _, reason),) = self.attempts()
@@ -103,6 +111,7 @@ class RetryPlacementTests(HttpHarness):
                 self.inject("decode", fault)
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 200, response.text)
+                self.assert_counted()
                 prefill, decode = self.used("prefill"), self.used("decode")
                 self.assertEqual((len(set(prefill)), len(set(decode))), (2, 2))
                 ((phase, prefill_iid, decode_iid, reason),) = self.attempts()
@@ -111,25 +120,6 @@ class RetryPlacementTests(HttpHarness):
                     ("decode", prefill[0], decode[0], "allowed"),
                 )
                 self.assert_released()
-
-    async def test_every_attempt_counts_each_leg_it_sends(self):
-        """The engines table reads each retried leg as router work on the engine it reached."""
-        for leg, fault in (("prefill", 503), ("decode", "drop")):
-            with self.subTest(leg=leg, fault=fault):
-                self.legs.clear()
-                client = self.client()
-                before = dict(self.router.monitor.requests_sent)
-                self.inject(leg, fault)
-                response = await self.post(client)
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(self.terminal_rows()[-1]["attempts"], 2)
-                served = self.used("prefill", "decode")
-                sent = {
-                    iid: count - before.get(iid, 0)
-                    for iid, count in self.router.monitor.requests_sent.items()
-                }
-                self.assertEqual(sent, {iid: served.count(iid) for iid in sent})
-                self.assertEqual(sum(sent.values()), len(served))
 
     async def test_a_retry_without_a_remaining_engine_ends_with_503(self):
         # Pinned engines keep their roles, so decode engines cannot take the prefill legs.

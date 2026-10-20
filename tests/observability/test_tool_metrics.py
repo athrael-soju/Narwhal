@@ -14,14 +14,9 @@ from narwhal.diagnostics.check import cli as check_cli
 from narwhal.observability.tools import ToolActivity, listen_address, serve_tool_metrics
 from narwhal.profiling.probe import cli as profile_cli
 from tests.fixtures import ROOT
+from tools.measurement.router_benchmark.processes import free_port
 
 FLEET = str(ROOT / "tests/data/fleet.json")
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 def scrape(url: str) -> str:
@@ -146,50 +141,28 @@ class ToolMetricsCliTests(unittest.TestCase):
 
         return stand_in
 
-    def assert_closed(self, url: str) -> None:
-        with self.assertRaises(urllib.error.URLError):
-            scrape(url)
-
-    def test_preflight_serves_at_the_environment_url_only_while_it_runs(self):
+    def test_each_operation_serves_at_its_url_only_while_it_runs(self):
         url = f"http://127.0.0.1:{free_port()}"
-        scraped: list[str] = []
-        with (
-            mock.patch.dict(os.environ, {"NARWHAL_TOOL_METRICS_URL": url}),
-            mock.patch.object(check_cli, "run", self.serve_during("preflight", scraped, url)),
+        calibration = [
+            *("--calibrate-first-token", "--input-tokens", "16", "--observation-timeout-s", "5"),
+            *("--calibration-out", "unused.json", "--metrics-url", url),
+        ]
+        # Calibration takes the flag URL over the environment's.
+        for command, target, operation, env_url, flags in (
+            (check_cli, "run", "preflight", url, []),
+            (check_cli, "calibrate", "calibration", "http://127.0.0.1:1", calibration),
+            (profile_cli, "run", "profiling", url, []),
         ):
-            self.assertEqual(check_cli.main(["--fleet", FLEET]), 0)
-        self.assertIn('narwhal_tool_operation{operation="preflight"} 1', scraped[0])
-        self.assert_closed(url)
-
-    def test_calibration_serves_at_the_flag_url_over_the_environment(self):
-        url = f"http://127.0.0.1:{free_port()}"
-        scraped: list[str] = []
-        calibrate = self.serve_during("calibration", scraped, url)
-        with (
-            mock.patch.dict(os.environ, {"NARWHAL_TOOL_METRICS_URL": "http://127.0.0.1:1"}),
-            mock.patch.object(check_cli, "calibrate", calibrate),
-        ):
-            code = check_cli.main(
-                [
-                    *("--fleet", FLEET, "--calibrate-first-token", "--input-tokens", "16"),
-                    *("--observation-timeout-s", "5", "--calibration-out", "unused.json"),
-                    *("--metrics-url", url),
-                ]
-            )
-        self.assertEqual(code, 0)
-        self.assertIn('narwhal_tool_operation{operation="calibration"} 1', scraped[0])
-        self.assert_closed(url)
-
-    def test_profiling_serves_at_the_environment_url_only_while_it_runs(self):
-        url = f"http://127.0.0.1:{free_port()}"
-        scraped: list[str] = []
-        with (
-            mock.patch.dict(os.environ, {"NARWHAL_TOOL_METRICS_URL": url}),
-            mock.patch.object(profile_cli, "run", self.serve_during("profiling", scraped, url)),
-        ):
-            self.assertEqual(profile_cli.main(["--fleet", FLEET]), 0)
-        self.assertIn('narwhal_tool_operation{operation="profiling"} 1', scraped[0])
-        self.assert_closed(url)
+            with self.subTest(operation=operation):
+                scraped: list[str] = []
+                with (
+                    mock.patch.dict(os.environ, {"NARWHAL_TOOL_METRICS_URL": env_url}),
+                    mock.patch.object(command, target, self.serve_during(operation, scraped, url)),
+                ):
+                    self.assertEqual(command.main(["--fleet", FLEET, *flags]), 0)
+                self.assertIn(f'narwhal_tool_operation{{operation="{operation}"}} 1', scraped[0])
+                with self.assertRaises(urllib.error.URLError):
+                    scrape(url)
 
     def test_an_invalid_url_exits_2_and_names_its_source(self):
         for command in (check_cli, profile_cli):
@@ -210,52 +183,42 @@ class ToolMetricsCliTests(unittest.TestCase):
                 self.assertIn(f"{source} must be http://host:port", stderr.getvalue())
                 run.assert_not_called()
 
-    def test_modes_that_send_no_requests_ignore_the_url(self):
-        env = {"NARWHAL_TOOL_METRICS_URL": "not-a-url"}
-        with (
-            mock.patch.dict(os.environ, env),
-            mock.patch.object(check_cli, "verify_directed_kv_evidence", return_value=[]),
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            self.assertEqual(
-                check_cli.main(["--fleet", FLEET, "--verify-evidence", "evidence.json"]), 0
-            )
-        with (
-            mock.patch.dict(os.environ, env),
-            mock.patch.object(profile_cli, "merge_profiles", return_value=0) as merge,
-        ):
-            self.assertEqual(
-                profile_cli.main(["--fleet", FLEET, "--merge", "a.json", "--out", "b.json"]), 0
-            )
-        merge.assert_called_once()
-
-    def test_modes_that_send_no_requests_reject_an_explicit_url(self):
-        for command, operation, flags, scope in (
+    def test_modes_that_send_no_requests_ignore_the_environment_and_reject_the_flag(self):
+        for command, operation, result, flags, scope in (
             (
                 check_cli,
                 "verify_directed_kv_evidence",
+                [],
                 ["--verify-evidence", "evidence.json"],
                 "preflight and calibration",
             ),
-            (profile_cli, "merge_profiles", ["--merge", "a.json", "--out", "b.json"], "live"),
+            (profile_cli, "merge_profiles", 0, ["--merge", "a.json", "--out", "b.json"], "live"),
             (
                 profile_cli,
                 "refit_saved_prefill",
+                0,
                 ["--refit-samples", "samples.json", "--out", "b.json"],
                 "live",
             ),
         ):
-            stderr = io.StringIO()
-            with (
-                self.subTest(mode=flags[0]),
-                mock.patch.object(command, operation) as called,
-                contextlib.redirect_stderr(stderr),
-                self.assertRaises(SystemExit) as exit_,
-            ):
-                command.main(["--fleet", FLEET, *flags, "--metrics-url", "http://127.0.0.1:1"])
-            self.assertEqual(exit_.exception.code, 2)
-            self.assertIn(f"--metrics-url applies only to {scope}", stderr.getvalue())
-            called.assert_not_called()
+            with self.subTest(mode=flags[0]):
+                with (
+                    mock.patch.dict(os.environ, {"NARWHAL_TOOL_METRICS_URL": "not-a-url"}),
+                    mock.patch.object(command, operation, return_value=result) as called,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(command.main(["--fleet", FLEET, *flags]), 0)
+                called.assert_called_once()
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(command, operation) as called,
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as exit_,
+                ):
+                    command.main(["--fleet", FLEET, *flags, "--metrics-url", "http://127.0.0.1:1"])
+                self.assertEqual(exit_.exception.code, 2)
+                self.assertIn(f"--metrics-url applies only to {scope}", stderr.getvalue())
+                called.assert_not_called()
 
 
 if __name__ == "__main__":

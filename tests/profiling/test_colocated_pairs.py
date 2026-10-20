@@ -25,6 +25,7 @@ from narwhal.profiling.probe.pairing import PairedTransport
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
 from tests.fixtures import fleet, profile
+from tests.wire import routed
 
 WORKLOAD = ColocatedWorkload(200, 200, 32, 32, 4)
 GROUP = SharedDeviceAllocation("gpu-0", "uuid", 0.2, 0.2)
@@ -41,13 +42,18 @@ class Body(httpx.AsyncByteStream):
         yield self.payload
 
 
+def completed(body):
+    return httpx.Response(200, json={"usage": {"completion_tokens": body["max_tokens"]}})
+
+
 class SglangGroup:
     """SGLang engines on one GPU that refuse a switch or cache reset while busy.
 
     Like SGLang, an engine keeps serving a request after its client goes away.
     """
 
-    def __init__(self, hosts):
+    def __init__(self, cfg):
+        hosts = [httpx.URL(spec.url).host for spec in cfg.engines]
         # Each engine launches as prefill.
         self.roles = dict.fromkeys(hosts, Role.PREFILL)
         self.inflight = dict.fromkeys(hosts, 0)
@@ -122,23 +128,11 @@ def split_fleet(root, prefill):
 
 
 @contextlib.contextmanager
-def sglang_engines(cfg, group, measured, *, peerless=True):
-    """Serve `cfg`'s engines from `group` and measure each target with `measured`."""
-    launches = {
-        spec.iid: {"bootstrap": {"bootstrap_host": f"10.0.0.{index}", "bootstrap_port": 8998}}
-        for index, spec in enumerate(cfg.engines)
-    }
-    transport = httpx.MockTransport(group.handle)
-    real_client = httpx.AsyncClient
-
-    def client(*args, **kwargs):
-        kwargs.setdefault("transport", transport)
-        return real_client(*args, **kwargs)
-
+def colocated_run(handler, measured):
+    """Serve every engine request from `handler` and measure each target with `measured`."""
     with (
-        patch.object(fleet_probe.httpx, "AsyncClient", side_effect=client),
-        patch.object(fleet_probe.httpx, "AsyncHTTPTransport", return_value=transport),
-        patch.object(pairing_probe, "attested_launches", AsyncMock(return_value=launches)),
+        patch.object(httpx, "AsyncClient", routed(handler)),
+        patch.object(httpx, "AsyncHTTPTransport", return_value=httpx.MockTransport(handler)),
         patch.object(fleet_probe, "engine_context_limit", AsyncMock(return_value=16384)),
         patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=16384)),
         patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("neighbour", 32))),
@@ -148,13 +142,21 @@ def sglang_engines(cfg, group, measured, *, peerless=True):
             AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {}, 100.0)),
         ),
         patch.object(fleet_probe, "profile_instance", side_effect=measured),
-        patch.object(
-            SglangDialect,
-            "peerless_fields",
-            autospec=True,
-            side_effect=SglangDialect.peerless_fields if peerless else (lambda self: None),
-        ),
         redirect_stdout(io.StringIO()),
+    ):
+        yield
+
+
+@contextlib.contextmanager
+def sglang_engines(cfg, group, measured):
+    """Serve `cfg`'s engines from `group` and measure each target with `measured`."""
+    launches = {
+        spec.iid: {"bootstrap": {"bootstrap_host": f"10.0.0.{index}", "bootstrap_port": 8998}}
+        for index, spec in enumerate(cfg.engines)
+    }
+    with (
+        colocated_run(group.handle, measured),
+        patch.object(pairing_probe, "attested_launches", AsyncMock(return_value=launches)),
     ):
         yield
 
@@ -163,7 +165,7 @@ class ColocatedPairsTests(unittest.IsolatedAsyncioTestCase):
     async def profile_split(self, prefill):
         with tempfile.TemporaryDirectory() as folder:
             cfg = split_fleet(Path(folder), prefill)
-            group = SglangGroup({httpx.URL(spec.url).host: spec for spec in cfg.engines})
+            group = SglangGroup(cfg)
             phases = []
             targets = []
 
@@ -206,12 +208,10 @@ class ColocatedPairsTests(unittest.IsolatedAsyncioTestCase):
                     on_target = [
                         row for row in group.received[start:end] if row["host"] == hosts[iid]
                     ]
-                    self.assertTrue(on_target)
                     self.assertEqual({row["prompt"] for row in on_target}, {"measured"}, iid)
                 # The engines switch and reset their caches only with no request in flight, and
                 # each reset waits for its engine to go idle.
                 self.assertEqual(group.busy_controls, [])
-                self.assertTrue(group.flush_timeouts)
                 self.assertEqual(set(group.flush_timeouts), {str(cfg.health_timeout_s)})
                 rows = [row for row in group.received if row["prompt"] == "neighbour"]
                 self.assertTrue(rows)
@@ -234,10 +234,10 @@ class ColocatedPairsTests(unittest.IsolatedAsyncioTestCase):
                     {split},
                 )
 
-    async def assert_refused_before_measuring(self, cfg, group, message, *, peerless=True):
+    async def assert_refused_before_measuring(self, cfg, message):
         measured = AsyncMock()
         with (
-            sglang_engines(cfg, group, measured, peerless=peerless),
+            sglang_engines(cfg, SglangGroup(cfg), measured),
             self.assertRaisesRegex(ValueError, message),
         ):
             await fleet_probe.run(cfg, None, colocated_workload=WORKLOAD)
@@ -245,11 +245,12 @@ class ColocatedPairsTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cfg.profiles_path.exists())
 
     async def test_a_backend_without_peerless_requests_stops_before_measuring(self):
-        with tempfile.TemporaryDirectory() as folder:
-            cfg = split_fleet(Path(folder), 2)
-            group = SglangGroup({httpx.URL(spec.url).host: spec for spec in cfg.engines})
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(SglangDialect, "peerless_fields", return_value=None),
+        ):
             await self.assert_refused_before_measuring(
-                cfg, group, "without a KV peer", peerless=False
+                split_fleet(Path(folder), 2), "without a KV peer"
             )
 
     async def test_every_target_needs_a_partner_before_any_engine_is_measured(self):
@@ -263,18 +264,23 @@ class ColocatedPairsTests(unittest.IsolatedAsyncioTestCase):
                 replace(e1, shared_device=OTHER_GROUP),
                 replace(e3, shared_device=OTHER_GROUP, role=Role.PREFILL),
             ]
-            group = SglangGroup({httpx.URL(spec.url).host: spec for spec in cfg.engines})
             await self.assert_refused_before_measuring(
-                cfg, group, f"{e1.iid}: no decode engine in shared_device group gpu-1"
+                cfg, f"{e1.iid}: no decode engine in shared_device group gpu-1"
             )
 
 
 class NeighbourPauseTests(unittest.IsolatedAsyncioTestCase):
-    async def load(self, handler, peers, workload=WORKLOAD, **kwargs):
+    async def load(self, handler, peers, workload=WORKLOAD):
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(client.aclose)
+        self.enterContext(
+            patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8)))
+        )
+        self.enterContext(
+            patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=4096))
+        )
         dialect = load_backend("sglang").dialect
-        return NeighbourLoad(client, peers, "m", dialect, 4.0, workload, 1.0, **kwargs)
+        return NeighbourLoad(client, peers, "m", dialect, 4.0, workload, 1.0)
 
     async def test_pause_drains_requests_and_resume_serves_the_new_role(self):
         inflight = {"now": 0}
@@ -289,31 +295,27 @@ class NeighbourPauseTests(unittest.IsolatedAsyncioTestCase):
                 await release.wait()
             finally:
                 inflight["now"] -= 1
-            return httpx.Response(200, json={"usage": {"completion_tokens": body["max_tokens"]}})
+            return completed(body)
 
         load = await self.load(handler, [("q", "http://q", Role.DECODE)])
-        with (
-            patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8))),
-            patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=4096)),
-        ):
-            release.set()
-            await load.start()
-            before = time.monotonic()
-            release.clear()
-            await asyncio.sleep(0.02)
-            pause = asyncio.create_task(load.pause())
-            await asyncio.sleep(0.02)
-            self.assertFalse(pause.done())
-            release.set()
-            await pause
-            self.assertEqual(inflight["now"], 0)
-            sent = len(outputs)
-            await asyncio.sleep(0.3)
-            self.assertEqual(len(outputs), sent)
-            await load.resume({"q": Role.PREFILL})
-            await asyncio.sleep(0.03)
-            after = time.monotonic()
-            evidence = await load.stop()
+        release.set()
+        await load.start()
+        before = time.monotonic()
+        release.clear()
+        await asyncio.sleep(0.02)
+        pause = asyncio.create_task(load.pause())
+        await asyncio.sleep(0.02)
+        self.assertFalse(pause.done())
+        release.set()
+        await pause
+        self.assertEqual(inflight["now"], 0)
+        sent = len(outputs)
+        await asyncio.sleep(0.3)
+        self.assertEqual(len(outputs), sent)
+        await load.resume({"q": Role.PREFILL})
+        await asyncio.sleep(0.03)
+        after = time.monotonic()
+        evidence = await load.stop()
         self.assertEqual(outputs[-1], 1)
         # The paused time is left out of the measured time.
         self.assertGreater(evidence["paused_s"], 0.3)
@@ -330,8 +332,7 @@ class NeighbourPauseTests(unittest.IsolatedAsyncioTestCase):
 
         async def handler(request):
             sends.append((request.url.host, time.monotonic()))
-            body = json.loads(request.content)
-            return httpx.Response(200, json={"usage": {"completion_tokens": body["max_tokens"]}})
+            return completed(json.loads(request.content))
 
         hosts = ("a", "b", "c", "d")
         load = await self.load(
@@ -339,17 +340,13 @@ class NeighbourPauseTests(unittest.IsolatedAsyncioTestCase):
             [(host, f"http://{host}", Role.PREFILL) for host in hosts],
             ColocatedWorkload(10, 10, 32, 32, 4),
         )
-        with (
-            patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8))),
-            patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=4096)),
-        ):
-            await load.start()
-            await load.pause()
-            await asyncio.sleep(0.25)
-            resumed = time.monotonic()
-            await load.resume()
-            await asyncio.sleep(0.15)
-            await load.stop()
+        await load.start()
+        await load.pause()
+        await asyncio.sleep(0.25)
+        resumed = time.monotonic()
+        await load.resume()
+        await asyncio.sleep(0.15)
+        await load.stop()
         first = {}
         for host, at in sends:
             if at >= resumed:
@@ -367,45 +364,17 @@ class NeighbourPauseTests(unittest.IsolatedAsyncioTestCase):
             if len(finished) >= 1:
                 await release.wait()
             finished.append(body["max_tokens"])
-            return httpx.Response(200, json={"usage": {"completion_tokens": body["max_tokens"]}})
+            return completed(body)
 
         load = await self.load(handler, [("p", "http://p", Role.PREFILL)])
-        with (
-            patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8))),
-            patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=4096)),
-        ):
-            await load.start()
-            await asyncio.sleep(0.02)
-            stop = asyncio.create_task(load.stop(drain=True))
-            await asyncio.sleep(0.02)
-            self.assertFalse(stop.done())
-            release.set()
-            await stop
+        await load.start()
+        await asyncio.sleep(0.02)
+        stop = asyncio.create_task(load.stop(drain=True))
+        await asyncio.sleep(0.02)
+        self.assertFalse(stop.done())
+        release.set()
+        await stop
         self.assertGreater(len(finished), 1)
-
-    async def test_peerless_fields_go_on_every_request(self):
-        bodies = []
-
-        async def handler(request):
-            body = json.loads(request.content)
-            bodies.append(body)
-            return httpx.Response(200, json={"usage": {"completion_tokens": body["max_tokens"]}})
-
-        dialect = load_backend("sglang").dialect
-        load = await self.load(
-            handler, [("p", "http://p", Role.PREFILL)], peerless=dialect.peerless_fields
-        )
-        with (
-            patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8))),
-            patch.object(neighbours_probe, "engine_context_limit", AsyncMock(return_value=4096)),
-        ):
-            await load.start()
-            await asyncio.sleep(0.02)
-            evidence = await load.stop()
-        self.assertTrue(evidence["peerless"])
-        self.assertTrue(bodies)
-        self.assertEqual({body["bootstrap_host"] for body in bodies}, {FAKE_BOOTSTRAP_HOST})
-        self.assertEqual(len({body["bootstrap_room"] for body in bodies}), len(bodies))
 
     def test_only_sglang_serves_peerless_requests_and_waits_to_reset_its_cache(self):
         vllm, sglang = load_backend("vllm").dialect, load_backend("sglang").dialect
@@ -482,33 +451,15 @@ class VllmColocatedTests(unittest.IsolatedAsyncioTestCase):
             async def answer(request):
                 if request.url.path == "/health":
                     return httpx.Response(200)
-                seen.append((request.url.path, json.loads(request.content or b"{}")))
-                body = seen[-1][1]
-                return httpx.Response(
-                    200, json={"usage": {"completion_tokens": body["max_tokens"]}}
-                )
+                seen.append((request.url.path, json.loads(request.content)))
+                return completed(seen[-1][1])
 
             async def measured(*args, roles, **kwargs):
                 self.assertIsNone(roles)
                 await asyncio.sleep(0.03)
                 return profile("e0")
 
-            client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
-            with (
-                patch.object(httpx, "AsyncClient", return_value=client),
-                patch.object(neighbours_probe, "make_prompt", AsyncMock(return_value=("p", 8))),
-                patch.object(fleet_probe, "engine_context_limit", AsyncMock(return_value=16384)),
-                patch.object(
-                    neighbours_probe, "engine_context_limit", AsyncMock(return_value=16384)
-                ),
-                patch.object(
-                    fleet_probe,
-                    "read_generation",
-                    AsyncMock(return_value=GenerationEvidence("sha256:" + "a" * 64, {}, 100.0)),
-                ),
-                patch.object(fleet_probe, "profile_instance", side_effect=measured),
-                redirect_stdout(io.StringIO()),
-            ):
+            with colocated_run(answer, measured):
                 self.assertEqual(await fleet_probe.run(cfg, {"e0"}, colocated_workload=WORKLOAD), 0)
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
         load = saved["engines"]["e0"]["colocated_load"]

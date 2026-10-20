@@ -3,6 +3,7 @@ import os
 import runpy
 import tempfile
 import unittest
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -98,18 +99,13 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_round_probes_every_live_consumer_through_another_producer(self):
         self.router.scheduler.eject("e5", "liveness")
-        before = dict(self.router.monitor.requests_sent)
+        before = Counter(self.router.monitor.requests_sent)
         outcomes = await release_round(self.router, ["e5"])
         # The engine table counts the probes as router work on both engines.
-        sent = {
-            iid: self.router.monitor.requests_sent[iid] - before.get(iid, 0)
-            for iid in self.router.monitor.requests_sent
-        }
-        expected = dict.fromkeys(sent, 0)
-        for producer, consumer in self.calls:
-            expected[producer] += 1
-            expected[consumer] += 1
-        self.assertEqual(sent, expected)
+        self.assertEqual(
+            Counter(self.router.monitor.requests_sent) - before,
+            Counter(iid for call in self.calls for iid in call),
+        )
         self.assertEqual(outcomes, dict.fromkeys(["e0", "e1", "e2", "e3", "e4"], "sent"))
         self.assertEqual(
             sorted(consumer for _, consumer in self.calls), ["e0", "e1", "e2", "e3", "e4"]

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
+from narwhal.observability.tools import METRICS_URL_ENV as TOOL_METRICS_URL_ENV
 from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
@@ -35,8 +36,6 @@ CONTROL_METRICS_URL_ENV = "NARWHAL_CONTROL_METRICS_URL"
 CONTROL_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 CONTROL_TARGETS = "prometheus/targets/fleet-control.json"
 CONTROL_TOKEN_FILE = "prometheus/fleet-control-token"
-# narwhal-check and narwhal-profile read the same variable for their listener.
-TOOL_METRICS_URL_ENV = "NARWHAL_TOOL_METRICS_URL"
 TOOL_TARGETS = "prometheus/targets/tools.json"
 CONTROL_ANNOTATIONS = (
     {
@@ -242,6 +241,11 @@ def _write(target: Path, data: bytes) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _write_targets(target: Path, authority: str | None) -> None:
+    targets = [] if authority is None else [{"targets": [authority]}]
+    _write(target, (json.dumps(targets, indent=2) + "\n").encode())
+
+
 def stage_artifacts(
     contract: TargetContract,
     console: str = DEFAULT_CONSOLE_URL,
@@ -269,10 +273,8 @@ def stage_artifacts(
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)
     _write(root / NARWHAL_DASHBOARD, (json.dumps(dashboard, indent=2) + "\n").encode())
-    targets = [] if control is None else [{"targets": [control.authority]}]
-    _write(root / CONTROL_TARGETS, (json.dumps(targets, indent=2) + "\n").encode())
+    _write_targets(root / CONTROL_TARGETS, None if control is None else control.authority)
     # Prometheus reads this token.
     _write(root / CONTROL_TOKEN_FILE, ("" if control is None else control.token).encode())
-    tool_targets = [] if tools is None else [{"targets": [tools]}]
-    _write(root / TOOL_TARGETS, (json.dumps(tool_targets, indent=2) + "\n").encode())
+    _write_targets(root / TOOL_TARGETS, tools)
     write_contract(contract, root / "prometheus" / "targets")

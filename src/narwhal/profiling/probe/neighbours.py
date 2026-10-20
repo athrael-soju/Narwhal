@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,7 +40,7 @@ class NeighbourLoad:
         workload: ColocatedWorkload,
         observation_timeout_s: float | None = None,
         *,
-        peerless: Callable[[], dict[str, Any] | None] | None = None,
+        peerless: bool = False,
     ) -> None:
         self.client = client
         self.peers = peers
@@ -49,12 +49,11 @@ class NeighbourLoad:
         self.chars_per_token = chars_per_token
         self.workload = workload
         self.observation_timeout_s = observation_timeout_s
-        # Request fields that let each neighbour serve its role without a KV peer.
+        # Requests carry fields that let each neighbour serve its role without a KV peer.
         self.peerless = peerless
         self.tasks: list[asyncio.Task[None]] = []
         self.roles = {iid: role for iid, _, role in peers}
         self._index = {iid: index for index, (iid, _, _) in enumerate(peers)}
-        self.counts = {iid: 0 for iid, _, _ in peers}
         self.role_counts = {iid: dict.fromkeys(Role, 0) for iid, _, _ in peers}
         self.errors: dict[str, str] = {}
         self.started = 0.0
@@ -117,8 +116,7 @@ class NeighbourLoad:
         if self.errors:
             await cancel_tasks(self.tasks)
             raise RuntimeError("neighbour load failed during warmup: " + self._error_detail())
-        self.counts = dict.fromkeys(self.counts, 0)
-        self.role_counts = {iid: dict.fromkeys(Role, 0) for iid in self.counts}
+        self.role_counts = {iid: dict.fromkeys(Role, 0) for iid in self.role_counts}
         self.started = time.monotonic()
 
     async def _serve(self, iid: str, url: str) -> None:
@@ -138,8 +136,8 @@ class NeighbourLoad:
                 role = self.roles[iid]
             prompt, output = self._prompts[iid, role]
             extras = self.dialect.cold_probe_extras()
-            if self.peerless is not None:
-                extras.update(self.peerless() or {})
+            if self.peerless:
+                extras.update(self.dialect.peerless_fields() or {})
             try:
                 response = await self.client.post(
                     f"{url}/v1/completions",
@@ -152,7 +150,6 @@ class NeighbourLoad:
                     or result.get("usage", {}).get("completion_tokens") != output
                 ):
                     raise RuntimeError("incomplete neighbour completion")
-                self.counts[iid] += 1
                 self.role_counts[iid][role] += 1
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 self.errors[iid] = str(exc)
@@ -203,26 +200,27 @@ class NeighbourLoad:
     def _error_detail(self) -> str:
         return "; ".join(f"{iid}: {error}" for iid, error in self.errors.items())
 
-    def _measured_s(self, now: float) -> float:
+    def _measured_s(self) -> float:
+        now = time.monotonic()
         paused = self.paused_s + (now - self._paused_at if self._paused_at is not None else 0.0)
         return max(now - self.started - paused, 1e-9)
 
     def evidence(self) -> dict[str, Any]:
         """Return completed traffic, rates and errors for every configured neighbour."""
-        elapsed = self.elapsed or self._measured_s(time.monotonic())
+        elapsed = self.elapsed or self._measured_s()
         counts = {role: sum(served[role] for served in self.role_counts.values()) for role in Role}
         peers: dict[str, dict[str, Any]] = {}
         for iid, _, role in self.peers:
+            by_role = self.role_counts[iid]
+            completed = sum(by_role.values())
             row: dict[str, Any] = {
                 "role": role.value,
-                "completed": self.counts[iid],
-                "rps": self.counts[iid] / elapsed,
+                "completed": completed,
+                "rps": completed / elapsed,
                 "error": self.errors.get(iid),
             }
-            if any(count for served, count in self.role_counts[iid].items() if served is not role):
-                row["completed_by_role"] = {
-                    served.value: count for served, count in self.role_counts[iid].items()
-                }
+            if completed != by_role[role]:
+                row["completed_by_role"] = {served.value: n for served, n in by_role.items()}
             peers[iid] = row
         evidence: dict[str, Any] = {
             "elapsed_s": elapsed,
@@ -236,23 +234,22 @@ class NeighbourLoad:
         }
         if self.paused_s:
             evidence["paused_s"] = self.paused_s
-        if self.peerless is not None:
+        if self.peerless:
             evidence["peerless"] = True
         return evidence
 
     async def stop(self, *, drain: bool = False) -> dict[str, Any]:
         """Stop the load and return its evidence; raise when a peer failed or completed none.
 
-        With `drain`, requests in flight finish before the load stops, because an engine keeps
-        serving a request whose client went away.
+        With `drain`, requests in flight finish before the load stops.
         """
         if drain:
             await self.pause()
-        self.elapsed = self._measured_s(time.monotonic())
+        self.elapsed = self._measured_s()
         await cancel_tasks(self.tasks)
         self._collect_task_errors()
-        for iid, count in self.counts.items():
-            if count == 0:
+        for iid, by_role in self.role_counts.items():
+            if not any(by_role.values()):
                 self.errors.setdefault(iid, "completed 0 requests during measurement")
         if self.errors:
             raise RuntimeError("neighbour load failed: " + self._error_detail())

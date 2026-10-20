@@ -551,9 +551,9 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             for row in document["attempts"]
         }
         text = activity.render()
-        for iid in (spec.iid for spec in self.cfg.engines):
+        for spec in self.cfg.engines:
             self.assertIn(
-                f'narwhal_tool_engine_in_use{{operation="calibration",iid="{iid}"}} 1', text
+                f'narwhal_tool_engine_in_use{{operation="calibration",iid="{spec.iid}"}} 1', text
             )
         self.assertIn(f'narwhal_tool_steps_total{{operation="calibration"}} {len(steps)}', text)
         self.assertIn(f'narwhal_tool_steps_completed{{operation="calibration"}} {len(steps)}', text)
