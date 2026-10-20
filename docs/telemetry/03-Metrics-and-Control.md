@@ -56,8 +56,6 @@ With `--metrics-url` or `NARWHAL_TOOL_METRICS_URL`, `narwhal-check` serves these
 | `narwhal_tool_steps_completed` | Steps completed |
 | `narwhal_tool_steps_total` | Steps planned |
 
-Preflight has 11 steps, one for each gate and one for the profile generation check, and a 12th for the evidence check with `--evidence-out`. Calibration has one step for each group in [sweep 1](../cli/Check.md#sampling-schedule) and one for each round and input length in each later sweep. Profiling has one step for each engine it profiles.
-
 ## Reading outcome reasons
 
 These series split request outcomes and failed attempts by their [journal reason](01-Journal.md#outcome-reasons):

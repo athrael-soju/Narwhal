@@ -38,13 +38,13 @@ Replace `<control-token>` with the service's bearer token. The address needs an 
 
 ### Scraping Narwhal tools
 
-To show which operation keeps an engine busy in the [engine table](05-Dashboard.md#engine-states), Prometheus must scrape `narwhal-check` and `narwhal-profile` while they run. In the shell that runs `make observe` and in each shell that runs a tool, set the address the tools serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) on:
+The [engine table](05-Dashboard.md#engine-states) shows which tool keeps an engine busy when Prometheus scrapes `narwhal-check` and `narwhal-profile`. Set the address they serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) on, in the shell that runs `make observe` and in each shell that runs a tool:
 
 ```bash
 export NARWHAL_TOOL_METRICS_URL=http://127.0.0.1:18030
 ```
 
-The address needs an explicit port, and Prometheus must reach it. Run one tool at a time. A second tool that finds the port in use prints `tool metrics: cannot listen on` with the address and still runs its operation.
+Give the address an explicit port that Prometheus can reach. Run one tool at a time. A second tool finds the port in use, prints `tool metrics: cannot listen on`, and runs with its engines reading Probing.
 
 ## Starting Prometheus and Grafana
 

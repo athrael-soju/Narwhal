@@ -92,7 +92,7 @@ The `fleet-control` job in `tools/observability/prometheus.yml` scrapes the flee
 
 ## Tool scrape job
 
-The `narwhal-tools` job in `tools/observability/prometheus.yml` scrapes the `/metrics` that `narwhal-check` and `narwhal-profile` serve during preflight, first-token calibration and a live sweep. `make observe` writes the target from `NARWHAL_TOOL_METRICS_URL`, or an empty target list when it is unset. The engine table's Probing, Calibrating, Profiling and Preflight states read `narwhal_tool_engine_in_use`. The target is up only during those operations, so keep the target-down alerts on the `engines` and `narwhal-router` jobs.
+The `narwhal-tools` job in `tools/observability/prometheus.yml` scrapes `narwhal-check` and `narwhal-profile` during preflight, first-token calibration and a live sweep, at the address `make observe` reads from `NARWHAL_TOOL_METRICS_URL`. The engine table's Probing, Calibrating, Profiling and Preflight states read its `narwhal_tool_engine_in_use`. The target is down between those operations, so the target-down alerts select only the `engines` and `narwhal-router` jobs.
 
 ## Alert rules
 

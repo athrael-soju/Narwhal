@@ -20,9 +20,9 @@ A live sweep measures engines on separate devices at the same time. Engines in o
 
 ## SGLang pairs
 
-On an SGLang fleet, the sweep measures both roles of each engine and has a peer engine serve the other leg of each request. It needs `engine.connector` `mooncake`, at least two engines in the fleet and each engine's attestation sidecar. Before each engine's prefill, decode and warm prefill sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`. The sample sidecar names each engine's peer in `peer`.
+On an SGLang fleet, the sweep measures each engine in both roles while a peer engine serves the other leg of each request. The fleet needs `engine.connector` `mooncake`, at least two engines and an attestation sidecar for each engine. Before each of an engine's sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`.
 
-The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time, and each engine's peer is the next selected engine. With `--colocated`, each engine's peer comes from its `shared_device.group`, as in [Shared-GPU neighbour traffic](#shared-gpu-neighbour-traffic).
+The selected engines pair up in fleet order, and the pairs run at the same time. With an odd count, the last three engines form a ring in which each engine's peer is the next. A single selected engine pairs with the next engine in the fleet. When any selected engine sets `shared_device`, the engines run one at a time, each paired with the next selected engine, or under `--colocated` with an engine from its [group](#shared-gpu-neighbour-traffic).
 
 ## Selection, refitting, and output
 
@@ -87,13 +87,11 @@ The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-pre
 
 ## Shared-GPU neighbour traffic
 
-With `--colocated`, the sweep measures each target while the other engines in its `shared_device.group` serve paced traffic for their configured roles. Every target needs a `shared_device` group with at least one neighbour. Each neighbour's tokenized input plus output must fit its live context limit.
-
-On an SGLang fleet, each target's peer is the first engine in its group with the other configured role. The group keeps its configured number of prefill and decode engines during each measurement.
+With `--colocated`, each target needs at least one neighbour in its `shared_device.group`, and the sweep measures the target while its neighbours serve paced traffic in their configured roles. On an SGLang fleet, each target pairs with the first engine in its group that has the other configured role, and the group keeps its configured prefill and decode counts while the target measures both roles.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
-| `--colocated` | `false` | Measure each target under traffic from the peers in its `shared_device.group`. | |
+| `--colocated` | `false` | Measure each target under traffic from the neighbours in its `shared_device.group`. | |
 | `--neighbour-prefill-rps RATE` | required with `--colocated` | Offered requests per second per prefill neighbour. | Finite, positive |
 | `--neighbour-decode-rps RATE` | required with `--colocated` | Offered requests per second per decode neighbour. | Finite, positive |
 | `--neighbour-prefill-tokens N` | required with `--colocated` | Input tokens per prefill neighbour request, each asking for one output token. | Positive integer |
@@ -107,7 +105,7 @@ narwhal-profile --fleet fleet.json --colocated \
   --neighbour-decode-output-tokens 32
 ```
 
-The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`. On an SGLang fleet, `colocated_load` also records `paused_s`, the seconds neighbour traffic paused for role switches, and the achieved rates leave out that time. When the target's peer also served the target's configured role, `completed_by_role` records the peer's completions in each role.
+The sample sidecar's `colocated_load` records each neighbour's role, completions, achieved rate and error. On SGLang, the rates leave out `paused_s`, the seconds neighbour traffic paused for role switches, and `completed_by_role` holds the peer's completions in each role.
 
 ## Completion and exit codes
 
@@ -126,7 +124,7 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis
 - a neighbour fails a request or completes zero requests during the target's measurement
-- on SGLang, neighbour requests stay in flight longer than `--observation-timeout-s`, or 300 seconds without the option, after neighbour traffic pauses for a role switch or for the end of a target's measurement
+- on SGLang, neighbour requests still run `--observation-timeout-s` seconds, 300 by default, after neighbour traffic pauses
 - a neighbour's input plus output exceeds the neighbour's context limit
 - the prefill fit exceeds 20% mean error or 50% worst-point error
 - an engine's attestation fails verification, or its process changes during its measurement
