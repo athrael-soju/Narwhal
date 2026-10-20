@@ -361,6 +361,16 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertGreater(start, self.scheduler.slo.ttft_s)
         self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "slot_wait")
 
+    def test_a_seated_leg_counts_the_prefill_queued_ahead_of_it(self):
+        self.prefilling(1, input_len=8_000)
+        leg = self.seat("p1", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        profile = self.scheduler.profiles.get("e0")
+        ahead = prefill_seconds(profile, self.scheduler.monitor.instances["e0"].prefill["p0"])
+        self.assertAlmostEqual(
+            occupancy.ends["e3", "p1"], ahead + prefill_seconds(profile, leg) + 200 * occupancy.step
+        )
+
     def test_a_decode_leg_waiting_during_prefill_holds_one_slot_through_its_prefill(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit - 2, wanted_len=2_000)
