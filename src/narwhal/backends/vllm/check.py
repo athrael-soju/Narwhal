@@ -123,8 +123,9 @@ def result(context: CheckContext, output: str) -> ProbeResult:
     notes = []
     if ipc_peers and peer_release:
         notes.append(
-            "UCX_CUDA_IPC_CACHE is off: peers release a stopped engine's GPU memory, and "
-            "transfers from a restarted or idle-evicted producer map its KV memory per transfer."
+            "UCX_CUDA_IPC_CACHE is off: peers release a stopped engine's GPU memory, "
+            "transfers from a restarted or idle-evicted producer map its KV memory per transfer, "
+            "and transfers and decoding slow as the engine serves until it restarts."
         )
     if not peer_release:
         notes.append(

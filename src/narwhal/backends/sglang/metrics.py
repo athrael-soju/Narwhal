@@ -45,6 +45,11 @@ class SglangMetrics(EngineMetrics):
         "output_tokens": (
             "sum by(iid) (rate(sglang:generation_tokens_total{@sel}[$__rate_interval]))"
         ),
+        # A counter that moves whenever the engine computes prompt tokens or generates output.
+        "processed_tokens": (
+            'sum by(iid) ({__name__=~"sglang:prompt_tokens_total|sglang:generation_tokens_total",'
+            "@sel})"
+        ),
     }
 
     def prefix_cache_hits(self, metrics: str) -> int | None:

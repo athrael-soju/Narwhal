@@ -99,6 +99,8 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
+The engines table State query tests run promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skip without either. CI pulls the image before `make check`. To run the tests locally, pull the image with `docker pull`.
+
 Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 
 1. Inspect devices and artifacts.

@@ -31,6 +31,7 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
+from narwhal.observability.tools import ToolActivity
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
@@ -603,6 +604,38 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             r"(?s)^e3 profile generation unreadable: .*; "
             r"restart its attestation sidecar if it answers HTTP 503$",
         )
+
+    async def test_preflight_activity_reports_live_engines_and_each_gate(self):
+        client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
+        activity = ToolActivity("preflight")
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(preflight, "EngineClient", return_value=client))
+            stack.enter_context(
+                patch.object(preflight, "colocated_restart_risk", new=AsyncMock(return_value=None))
+            )
+            for name, value in (("contract", set()), ("model", set()), ("pace", set())):
+                stack.enter_context(
+                    patch.object(preflight, f"gate_{name}", new=AsyncMock(return_value=value))
+                )
+            stack.enter_context(patch.object(preflight, "gate_tokenize", new=AsyncMock()))
+            stack.enter_context(patch.object(preflight, "gate_profile"))
+            stack.enter_context(
+                patch.object(
+                    preflight, "gate_profile_generation", new=AsyncMock(return_value=set())
+                )
+            )
+            stack.enter_context(patch.object(preflight, "gate_slo"))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            self.assertEqual(
+                await preflight.run(self.cfg, mesh=False, skip_kv=True, activity=activity), 0
+            )
+        text = activity.render()
+        for iid in ("e0", "e3"):
+            self.assertIn(
+                f'narwhal_tool_engine_in_use{{operation="preflight",iid="{iid}"}} 1', text
+            )
+        self.assertIn('narwhal_tool_steps_completed{operation="preflight"} 11', text)
+        self.assertIn('narwhal_tool_steps_total{operation="preflight"} 11', text)
 
     async def test_preflight_result_data_includes_first_token_calibration(self):
         client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())

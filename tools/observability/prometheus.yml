@@ -21,3 +21,8 @@ scrape_configs:
       credentials_file: /etc/prometheus/fleet-control-token
     file_sd_configs:
       - files: ["/etc/prometheus/targets/fleet-control.json"]
+  # Empty unless NARWHAL_TOOL_METRICS_URL is set. Up only while narwhal-check or
+  # narwhal-profile runs an operation that sends requests to engines.
+  - job_name: narwhal-tools
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/tools.json"]

@@ -20,6 +20,9 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - name: Pull the pinned Prometheus image for the State query tests
+        run: |
+          docker pull "$(sed -n 's/^ *image: *\(prom\/prometheus:.*\)$/\1/p' tools/observability/compose.yml)"
       - run: make check VENV_PYTHON=python
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
