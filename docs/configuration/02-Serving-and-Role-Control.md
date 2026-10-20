@@ -46,12 +46,13 @@ The check admits the request outright when the fleet has zero live decode engine
 
 Each request holds one slot. The pool's slot count is the sum of each live decode engine's [decode seats](#engine-seats).
 
-| Request                                                           | Reaches decode                      | Holds a slot                                                                       |
-| ----------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------- |
-| Request resident in decode after its prefill completes            |                                     | From now until its projected last token                                            |
-| SGLang request resident in decode while its prefill runs          | At its predicted prefill completion | From now until its projected last token                                            |
-| Request waiting for a decode slot                                 | Now                                 | From the earliest free slot until its projected last token                         |
-| Request in prefill not resident in decode, or the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token |
+| Request                                                                         | Reaches decode                      | Holds a slot                                                                                                             |
+| ------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Request resident in decode after its prefill completes                          |                                     | From now until its projected last token                                                                                  |
+| SGLang request resident in decode while its prefill runs                        | At its predicted prefill completion | From now until its projected last token                                                                                  |
+| Request waiting for a decode slot after its prefill completes                   | Now                                 | From the earliest free slot until its projected last token                                                               |
+| SGLang request waiting for a decode slot before its prefill starts              | Now                                 | From the earliest free slot until its projected last token, with its predicted prefill completion counted from that slot |
+| Request in prefill with no decode leg placed or waiting, or the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token                                       |
 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
@@ -490,7 +491,7 @@ The worst projected SLO ratio of a split is the largest of its projected TTFT, T
 The decode queueing ratio projects the slots of the [decode admission check](#decode-admission-check) onto the split's decode engines:
 
 ```text
-max over waiting decode requests and requests in prefill not resident in decode:
+max over requests waiting for a decode slot and requests in prefill with no decode leg placed or waiting:
   slot wait / (slo.ttft_s - time since arrival - time until the request reaches decode)
 ```
 

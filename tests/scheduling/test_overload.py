@@ -361,6 +361,22 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertGreater(start, self.scheduler.slo.ttft_s)
         self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "slot_wait")
 
+    def test_a_decode_leg_waiting_during_prefill_holds_one_slot_through_its_prefill(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        # On SGLang the decode leg waits for a seat before its prefill starts.
+        leg = Request("w", 8_000, wanted_len=2_000)
+        self.scheduler.monitor.dispatched("e0", leg)
+        leg.phase = Phase.DECODE
+        self.scheduler.monitor.waiting[leg.rid] = leg
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        _, last, kv = decode_span(leg, prefilled, occupancy.step, lambda r: r.wanted_len)
+        self.assertEqual(occupancy.queued, ((0.0, last, kv),))
+        request = Request("new", 10, wanted_len=1)
+        ready, budget = self.ready(request), self.scheduler.slo.ttft_s
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
+
     def test_a_request_in_prefill_without_a_decode_leg_queues_from_its_prefill_completion(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit - 2, wanted_len=2_000)

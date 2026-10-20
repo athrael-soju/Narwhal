@@ -73,7 +73,7 @@ class DecodeOccupancy:
     # Residents hold their slots from now.
     residents: tuple[DecodeSpan, ...]
     # Holds that take slots in handoff order: waiting decode requests from now,
-    # then requests in prefill and not in decode from their predicted prefill completion.
+    # then requests in prefill without a decode leg from their predicted prefill completion.
     queued: tuple[DecodeSpan, ...]
     # Seconds from now to each queued request's TTFT deadline.
     deadlines: tuple[float, ...]
@@ -170,20 +170,29 @@ def decode_occupancy(
                 done += prefill_seconds(prefill_profile, r)
             prefilled[r.rid] = done
             prefilling.append((done, r))
-    # A decode leg placed while its prefill runs, as with a concurrent KV connector, holds its
-    # slot from now and decodes once that prefill completes, so it takes no slot at handoff.
-    seated = {rid for inst in scheduler.monitor.instances.values() for rid in inst.decode}
+
+    def leg(r: Request, token_s: float) -> DecodeSpan:
+        # A decode leg placed or waiting while its request is in prefill, as with a concurrent
+        # KV connector, holds its slot through that prefill, then decodes.
+        _, last, kv = decode_span(r, prefilled.get(r.rid, 0.0), token_s, estimate)
+        return 0.0, last, kv
+
     residents: list[DecodeSpan] = []
     ends: dict[tuple[str, str], float] = {}
     for inst in engines:
         for rid, r in inst.decode.items():
-            _, last, kv = decode_span(r, prefilled.get(rid, 0.0), steps[inst.iid], estimate)
-            residents.append((0.0, last, kv))
-            ends[inst.iid, rid] = last
-    handoffs = [(0.0, r) for r in scheduler.monitor.waiting.values() if r.phase is Phase.DECODE]
-    handoffs += sorted(
-        ((done, r) for done, r in prefilling if r.rid not in seated), key=lambda row: row[0]
-    )
+            resident = leg(r, steps[inst.iid])
+            residents.append(resident)
+            ends[inst.iid, rid] = resident[1]
+    waiting = [r for r in scheduler.monitor.waiting.values() if r.phase is Phase.DECODE]
+    # A request with a decode leg takes no further slot when its prefill completes.
+    legs = {rid for inst in scheduler.monitor.instances.values() for rid in inst.decode}
+    legs.update(r.rid for r in waiting)
+    handoffs = [(leg(r, step), r) for r in waiting] + [
+        (decode_span(r, done, step, estimate), r)
+        for done, r in sorted(prefilling, key=lambda row: row[0])
+        if r.rid not in legs
+    ]
     now = scheduler._clock()
     return DecodeOccupancy(
         engines,
@@ -191,7 +200,7 @@ def decode_occupancy(
         tokens,
         step,
         tuple(residents),
-        tuple(decode_span(r, ready, step, estimate) for ready, r in handoffs),
+        tuple(hold for hold, _ in handoffs),
         tuple(
             scheduler.slo.ttft_s - (now - r.arrived_at if r.arrived_at is not None else 0.0)
             for _, r in handoffs
