@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/athrael-soju/Narwhal/compare/v0.7.0...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* operator visibility and setup ([#384](https://github.com/athrael-soju/Narwhal/issues/384)) ([3261c0d](https://github.com/athrael-soju/Narwhal/commit/3261c0db09242499ab57ec75108a4ddf8f00737e))
+* reuse still-valid calibrations and profiles ([#373](https://github.com/athrael-soju/Narwhal/issues/373)) ([0181298](https://github.com/athrael-soju/Narwhal/commit/0181298dae294b8eb9ffddd500a4e516564bb023))
+* take prefill capacity back on load surges and fix decode pressure and seat placement ([#364](https://github.com/athrael-soju/Narwhal/issues/364)) ([d4ee7b0](https://github.com/athrael-soju/Narwhal/commit/d4ee7b0d0443fb7ecca4f2ff4348983056535aaa))
+
+
+### Fixes
+
+* ship characterization golden records in the sdist ([#371](https://github.com/athrael-soju/Narwhal/issues/371)) ([5a0ae2e](https://github.com/athrael-soju/Narwhal/commit/5a0ae2e95f4dbb0479f22b8b301c2c68741c2a9a))
+* ship docs walkthroughs in the sdist and widen stage test budgets ([#369](https://github.com/athrael-soju/Narwhal/issues/369)) ([4c08716](https://github.com/athrael-soju/Narwhal/commit/4c087164d10f8e39add958c9ac79e48d7ed3aad9))
+
 ## [0.7.0](https://github.com/athrael-soju/Narwhal/compare/v0.6.0...v0.7.0) (2026-10-12)
 
 
