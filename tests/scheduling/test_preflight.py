@@ -31,6 +31,7 @@ from narwhal.engines.attestation import AttestationDocument, EngineIdentity, mak
 from narwhal.engines.client import EngineClient, EngineError
 from narwhal.engines.stream import parse_event
 from narwhal.engines.validation import pairs_of, validation_pairs
+from narwhal.observability.tools import ToolActivity
 from narwhal.profiling.generation import GenerationEvidence, read_generation
 from narwhal.profiling.store import ProfileStore
 from narwhal.types import Role
@@ -604,7 +605,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             r"restart its attestation sidecar if it answers HTTP 503$",
         )
 
-    async def test_preflight_result_data_includes_first_token_calibration(self):
+    async def _run_without_kv(self, **kwargs):
         client = SimpleNamespace(healthy=AsyncMock(return_value=True), aclose=AsyncMock())
         with ExitStack() as stack:
             stack.enter_context(patch.object(preflight, "EngineClient", return_value=client))
@@ -627,8 +628,22 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(patch.object(preflight, "gate_slo"))
             set_data = stack.enter_context(patch.object(preflight.results, "set_data"))
             output = stack.enter_context(redirect_stdout(io.StringIO()))
-            self.assertEqual(await preflight.run(self.cfg, mesh=False, skip_kv=True), 0)
-        lines = output.getvalue().splitlines()
+            self.assertEqual(await preflight.run(self.cfg, mesh=False, skip_kv=True, **kwargs), 0)
+        return output.getvalue().splitlines(), set_data
+
+    async def test_preflight_activity_reports_live_engines_and_each_gate(self):
+        activity = ToolActivity("preflight")
+        await self._run_without_kv(activity=activity)
+        text = activity.render()
+        for iid in ("e0", "e3"):
+            self.assertIn(
+                f'narwhal_tool_engine_in_use{{operation="preflight",iid="{iid}"}} 1', text
+            )
+        self.assertIn('narwhal_tool_steps_completed{operation="preflight"} 11', text)
+        self.assertIn('narwhal_tool_steps_total{operation="preflight"} 11', text)
+
+    async def test_preflight_result_data_includes_first_token_calibration(self):
+        lines, set_data = await self._run_without_kv()
         start = lines.index("reach")
         self.assertEqual(
             lines[start : start + 6],

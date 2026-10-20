@@ -64,6 +64,7 @@ The engine table and **Engine role history** colour engine states:
 | Maroon       | `#A11D1D` | Blocked                                                |
 | Magenta      | `#9E4AA4` | Switching and Validating                               |
 | Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
+| Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight          |
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
 
@@ -219,6 +220,10 @@ The **State** column shows the most serious state that applies to an engine. The
 | Serving     | Normal operation                                                                                                   | In service     |
 | Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
 | Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting` or `sglang:num_queue_reqs`                      | In service     |
+| Probing     | The engine serves requests from a client other than a router or a Narwhal tool that reports it                     | In service     |
+| Calibrating | `narwhal-check --calibrate-first-token` reports the engine in its tool metrics                                     | In service     |
+| Profiling   | `narwhal-profile` reports the engine in its tool metrics                                                           | In service     |
+| Preflight   | `narwhal-check` preflight reports the engine in its tool metrics                                                   | In service     |
 | Probation   | Placement ranks the engine lower after latency drift                                                               | In service     |
 | Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
 | Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |
@@ -228,5 +233,9 @@ The **State** column shows the most serious state that applies to an engine. The
 | Blocked     | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |
 | Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
 | Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
+
+Probing marks work from another client, such as a direct request or a Narwhal tool that Prometheus does not [scrape](01-Start-and-Verify.md#scraping-narwhal-tools). It appears 8 to 14 seconds after the work starts, or at the next scrape when the engine worked in the previous 23 seconds, and clears 5 to 10 seconds after the work ends. On SGLang 0.5.21, a prefill engine's work ends with its last KV transfer. A request that starts and ends between two of the engine's 5-second scrapes shows only when the engine also worked 8 to 23 seconds earlier.
+
+Probing stays off during an engine's first 23 seconds of scrapes, for 32 to 37 seconds after a router's last request to the engine, and for 37 seconds after a router last held work on it or a scraped tool last reported it. On every engine, it stays off from a router's first scrape after the router starts or stops, 0 to 5 seconds after the change, until 32 to 37 seconds after it. An engine that a scraped tool reports reads Calibrating, Profiling or Preflight, and returns to Serving 0 to 5 seconds after the tool exits.
 
 [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md)

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from narwhal.backends import load as load_backend
 from narwhal.backends import names as backend_names
+from narwhal.observability.tools import METRICS_URL_ENV as TOOL_METRICS_URL_ENV
 from tools.observability.make_targets import TargetContract, metrics_authority, write_contract
 
 BASE = Path(__file__).resolve().parent
@@ -35,6 +36,7 @@ CONTROL_METRICS_URL_ENV = "NARWHAL_CONTROL_METRICS_URL"
 CONTROL_TOKEN_ENV = "NARWHAL_CONTROL_TOKEN"
 CONTROL_TARGETS = "prometheus/targets/fleet-control.json"
 CONTROL_TOKEN_FILE = "prometheus/fleet-control-token"
+TOOL_TARGETS = "prometheus/targets/tools.json"
 CONTROL_ANNOTATIONS = (
     {
         "name": "Fleet control actions",
@@ -107,6 +109,17 @@ def control_target(env: Mapping[str, str]) -> ControlTarget | None:
             f"{CONTROL_METRICS_URL_ENV} requires the control bearer token in {CONTROL_TOKEN_ENV}"
         )
     return ControlTarget(authority, token)
+
+
+def tool_target(env: Mapping[str, str]) -> str | None:
+    """Return the tool metrics origin named by `TOOL_METRICS_URL_ENV`, or None when it is unset."""
+    url = env.get(TOOL_METRICS_URL_ENV, "")
+    if not url:
+        return None
+    try:
+        return metrics_authority(url)
+    except ValueError as exc:
+        raise ValueError(f"{TOOL_METRICS_URL_ENV}: {exc}") from None
 
 
 def _annotation(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -228,10 +241,16 @@ def _write(target: Path, data: bytes) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _write_targets(target: Path, authority: str | None) -> None:
+    targets = [] if authority is None else [{"targets": [authority]}]
+    _write(target, (json.dumps(targets, indent=2) + "\n").encode())
+
+
 def stage_artifacts(
     contract: TargetContract,
     console: str = DEFAULT_CONSOLE_URL,
     control: ControlTarget | None = None,
+    tools: str | None = None,
     root: Path = MOUNTS,
     source: Path = BASE,
 ) -> None:
@@ -254,8 +273,8 @@ def stage_artifacts(
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)
     _write(root / NARWHAL_DASHBOARD, (json.dumps(dashboard, indent=2) + "\n").encode())
-    targets = [] if control is None else [{"targets": [control.authority]}]
-    _write(root / CONTROL_TARGETS, (json.dumps(targets, indent=2) + "\n").encode())
+    _write_targets(root / CONTROL_TARGETS, None if control is None else control.authority)
     # Prometheus reads this token.
     _write(root / CONTROL_TOKEN_FILE, ("" if control is None else control.token).encode())
+    _write_targets(root / TOOL_TARGETS, tools)
     write_contract(contract, root / "prometheus" / "targets")

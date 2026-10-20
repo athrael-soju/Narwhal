@@ -421,9 +421,30 @@ class ReadinessTests(unittest.TestCase):
                 {},
                 stack,
                 self.contract,
-                target_writer=lambda contract, console, control: calls.append(f"targets {console}"),
+                target_writer=lambda contract, console, control, tools: calls.append(
+                    f"targets {console}"
+                ),
             )
         self.assertEqual(calls, ["listeners", "targets http://127.0.0.1:18020/console", "up"])
+
+    def test_start_stages_the_tool_target_from_the_environment(self) -> None:
+        stack = mock.Mock(spec=observe_stack.Stack)
+        writer = mock.Mock()
+        launched = {"prometheus": self.prometheus, "grafana": self.grafana}
+        with (
+            mock.patch.object(observe_cli, "check_listeners"),
+            mock.patch.object(observe_cli, "wait_ready", return_value=launched),
+            mock.patch.object(observe_cli, "wait_collection"),
+        ):
+            observe_cli.start(
+                {"NARWHAL_TOOL_METRICS_URL": "http://127.0.0.1:18030"},
+                stack,
+                self.contract,
+                target_writer=writer,
+            )
+        writer.assert_called_once_with(
+            self.contract, "http://127.0.0.1:18020/console", None, "127.0.0.1:18030"
+        )
 
     def test_start_refuses_an_unsafe_console_url_before_any_change(self) -> None:
         stack = mock.Mock(spec=observe_stack.Stack)

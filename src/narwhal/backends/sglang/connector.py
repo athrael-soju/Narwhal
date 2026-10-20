@@ -8,6 +8,8 @@ from ...engines.connector import PrefillResult, RendezvousConnector
 
 # Fields that pair one request's prefill and decode legs on the transfer backend.
 BOOTSTRAP_FIELDS = ("bootstrap_host", "bootstrap_port", "bootstrap_room")
+# SGLang's fake transfer: a prefill engine drops the KV, and a decode engine decodes without it.
+FAKE_BOOTSTRAP_HOST = "2.2.2.2"
 
 
 class SglangRendezvous(RendezvousConnector):

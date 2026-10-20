@@ -76,7 +76,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--gpu` | The only GPU that `nvidia-smi` lists | Physical GPU UUID. | |
 | `--engine-count` | Template value, `2` in the small templates | Number of engines. | 2 to 8 |
 | `--port-base` | Template ports | Base of the port layout below. | Every port within 1 to 65535 and distinct |
-| `--gpu-memory-utilization` | Template value, `0.35` in the small templates | Per-engine fraction of total GPU memory, passed to vLLM as `--gpu-memory-utilization` and to SGLang as `--mem-fraction-static`. | Above 0 and at most 1 |
+| `--gpu-memory-utilization` | Template value, `0.35` in the small templates | Each engine's fraction of total GPU memory on vLLM, or of the GPU memory free at engine start on SGLang. | Above 0 and at most 1 |
 | `--device-allowance` | Template value, `0.8` in the small templates | Fraction of total GPU memory that bounds the sum of engine fractions and the memory growth during startup. | At least `--engine-count` times `--gpu-memory-utilization`, and at most 1 |
 | `--interface` | `eth0` | Network interface for KV transfer. | An interface with exactly one IPv4 address |
 

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
+from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
@@ -316,9 +317,14 @@ def create_app(
     async def metrics() -> Response:
         return Response(
             content=render(
-                router.state(), router.ttft, router.tpot, router.seat, router.queue_wait
+                router.state(),
+                router.ttft,
+                router.tpot,
+                router.seat,
+                router.queue_wait,
+                router.monitor.requests_sent,
             ),
-            media_type="text/plain; version=0.0.4; charset=utf-8",
+            media_type=CONTENT_TYPE,
         )
 
     @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")

@@ -53,4 +53,4 @@ Without the stop and start hooks, restart the engine through its process manager
 
 On a host shared with other KV-transfer engines, another engine still holds the stopped engine's KV memory. Restart the engine wave, as in [Restarting an engine wave](../03-Restart-Engines.md#restart-an-engine-wave).
 
-To let **Start** succeed without a wave restart, set `UCX_CUDA_IPC_CACHE` to `n` in `runtime.environment` and use UCX 1.22 or later in the engine image. Peers then release a stopped engine's GPU memory. [Peer memory release](../../concepts/03-Failure-and-State.md#peer-memory-release) describes the trade-off.
+To let **Start** succeed without a wave restart, set `UCX_CUDA_IPC_CACHE` to `n` in `runtime.environment` and use UCX 1.22 or later in the engine image. Peers then release a stopped engine's GPU memory, at the cost of [slower transfers and decoding](../../concepts/03-Failure-and-State.md#peer-memory-release) until the engines restart.

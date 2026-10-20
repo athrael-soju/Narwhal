@@ -174,6 +174,7 @@ async def validate_readmission(
             if router.engines.kv.concurrent:
                 # An engine with concurrent legs serves only paired legs; the fabric pairs generate.
                 continue
+            router.monitor.sent(spec.iid)
             try:
                 response = await client.post(
                     f"{spec.url}/v1/completions",
@@ -257,6 +258,7 @@ async def validate_readmission(
         if not await identities_unchanged():
             return outcome
         try:
+            router.monitor.sent(source, target)
             handoff = await router.engines.start_handoff(
                 by_id[source].url,
                 "/v1/completions",

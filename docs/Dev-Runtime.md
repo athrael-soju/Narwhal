@@ -43,6 +43,8 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
+Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--gpu-memory-utilization` until every engine starts.
+
 `--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
 `init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB in the small templates). During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
@@ -50,6 +52,8 @@ Two `init` flags set the GPU memory allocation, and each defaults to its templat
 The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
+
+`runtime.max_num_seqs` caps each engine's running requests. An SGLang template accepts 1 to 256 and defaults to 256. If `up` stops at attestation with `The engine serves at most <n> running requests`, set `runtime.max_num_seqs` to `<n>` and initialize a new `--instance` from the template.
 
 Create a custom template:
 
@@ -122,9 +126,24 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
-1. Install Narwhal and the pinned packages in a fresh virtual environment:
+1. Install the system libraries that Mooncake needs:
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y libibverbs1 ibverbs-providers libnuma1
+    ```
+
+2. Install a CUDA 13 toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2. Export the toolkit root as `CUDA_HOME` in each shell that runs the lifecycle commands, and check that `nvcc` reports release 13 and `lib64/libcudart.so` exists:
+
+    ```bash
+    export CUDA_HOME=/usr/local/cuda  # replace with the CUDA 13 toolkit root
+    "$CUDA_HOME/bin/nvcc" --version
+    ls "$CUDA_HOME/lib64/libcudart.so"
+    ```
+
+3. Install Narwhal and the pinned packages in a fresh virtual environment:
 
     ```bash
     python3.12 -m venv .venv-sglang
@@ -134,13 +153,13 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
       'torch==2.13.0' 'transformers==5.12.1'
     ```
 
-2. Download the checkpoint into the Hugging Face cache:
+4. Download the checkpoint into the Hugging Face cache:
 
     ```bash
     hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17
     ```
 
-3. Export the template and start an instance from it:
+5. Export the template and start an instance from it:
 
     ```bash
     mkdir -p runs
@@ -153,6 +172,8 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev up --instance runs/dev-sglang
     narwhal dev verify --instance runs/dev-sglang
     ```
+
+    Under WSL2, when an engine fails to start, lower `--gpu-memory-utilization` as [Template and GPU allocation](#template-and-gpu-allocation) describes.
 
 ## Inspecting and stopping the instance
 
