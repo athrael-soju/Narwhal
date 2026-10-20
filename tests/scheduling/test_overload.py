@@ -6,7 +6,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy, decode_refusal
+from narwhal.scheduling.prefill import prefill_seconds
+from narwhal.scheduling.scheduler.occupancy import (
+    decode_admits,
+    decode_occupancy,
+    decode_refusal,
+    decode_span,
+)
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -175,6 +181,14 @@ class DecodeAdmissionTests(unittest.TestCase):
             rid = f"p{len(self.scheduler.monitor.instances['e0'].prefill)}"
             self.scheduler.monitor.dispatched("e0", Request(rid, input_len, wanted_len=wanted_len))
 
+    def seat(self, rid, input_len, wanted_len, prefill="e0", decode="e3"):
+        """Place a decode leg while its prefill runs, as the router does on SGLang."""
+        leg = Request(rid, input_len, wanted_len=wanted_len)
+        self.scheduler.monitor.dispatched(prefill, leg)
+        leg.phase = Phase.DECODE
+        self.scheduler.monitor.dispatched(decode, leg)
+        return leg
+
     def ready(self, request):
         prefill = self.scheduler.monitor.instances["e0"]
         return self.scheduler.prefill_admission_price(request, prefill)
@@ -321,6 +335,88 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertFalse(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=budget))
         self.assertTrue(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=ready))
 
+    def test_a_decode_leg_seated_during_prefill_holds_one_slot(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        self.seat("p0", 10, 2_000)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        self.assertEqual((len(occupancy.residents), occupancy.queued), (limit - 1, ()))
+        request = Request("new", 10, wanted_len=1)
+        ready, budget = self.ready(request), self.scheduler.slo.ttft_s
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
+
+    def test_a_seated_leg_holds_its_slot_until_its_prefill_completes_plus_its_decode(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 1, wanted_len=2_000)
+        leg = self.seat("p0", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        self.assertAlmostEqual(occupancy.ends["e3", "p0"], prefilled + 200 * occupancy.step)
+        # A request ready now takes the leg's slot when the leg's decode ends.
+        request = Request("new", 10, wanted_len=1)
+        _, ((start, _, _),) = occupancy.schedule(
+            occupancy.slots, (decode_span(request, 0.0, occupancy.step, lambda r: r.wanted_len),)
+        )
+        self.assertAlmostEqual(start, occupancy.ends["e3", "p0"])
+        self.assertGreater(start, self.scheduler.slo.ttft_s)
+        self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "slot_wait")
+
+    def test_a_seated_leg_counts_the_prefill_queued_ahead_of_it(self):
+        self.prefilling(1, input_len=8_000)
+        leg = self.seat("p1", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        profile = self.scheduler.profiles.get("e0")
+        ahead = prefill_seconds(profile, self.scheduler.monitor.instances["e0"].prefill["p0"])
+        self.assertAlmostEqual(
+            occupancy.ends["e3", "p1"], ahead + prefill_seconds(profile, leg) + 200 * occupancy.step
+        )
+
+    def test_a_decode_leg_waiting_during_prefill_holds_one_slot_through_its_prefill(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        # On SGLang the decode leg waits for a seat before its prefill starts.
+        leg = Request("w", 8_000, wanted_len=2_000)
+        self.scheduler.monitor.dispatched("e0", leg)
+        leg.phase = Phase.DECODE
+        self.scheduler.monitor.waiting[leg.rid] = leg
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        _, last, kv = decode_span(leg, prefilled, occupancy.step, lambda r: r.wanted_len)
+        self.assertEqual(occupancy.queued, ((0.0, last, kv),))
+        request = Request("new", 10, wanted_len=1)
+        ready, budget = self.ready(request), self.scheduler.slo.ttft_s
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
+
+    def test_a_request_in_prefill_without_a_decode_leg_queues_from_its_prefill_completion(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        self.prefilling(1, wanted_len=2_000)
+        p0 = self.scheduler.monitor.instances["e0"].prefill["p0"]
+        estimate = lambda r: r.wanted_len
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), p0)
+        self.assertEqual(len(occupancy.residents), limit - 2)
+        self.assertEqual(occupancy.queued, (decode_span(p0, prefilled, occupancy.step, estimate),))
+        request = Request("new", 10, wanted_len=1)
+        budget = self.scheduler.slo.ttft_s
+        self.assertIsNone(
+            decode_refusal(self.scheduler, request, ready_s=self.ready(request), ttft_s=budget)
+        )
+        self.prefilling(1, wanted_len=2_000)
+        self.assertEqual(
+            decode_refusal(self.scheduler, request, ready_s=self.ready(request), ttft_s=budget),
+            "slot_wait",
+        )
+        # Placed after its prefill completes, the leg holds its slot from now.
+        self.scheduler.monitor.first_token("e0", "p0")
+        p0.phase = Phase.DECODE
+        self.scheduler.monitor.dispatched("e3", p0)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        self.assertEqual(len(occupancy.queued), 1)
+        resident = decode_span(p0, 0.0, occupancy.step, estimate)
+        self.assertEqual(occupancy.ends["e3", "p0"], resident[1])
+        self.assertIn(resident, occupancy.residents)
+
     def test_the_tpot_check_admits_on_any_engine_with_room(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE
         for iid in ("e0", "e3"):
@@ -361,6 +457,41 @@ class DecodeAdmissionTests(unittest.TestCase):
         request = Request("new", 200_000, wanted_len=1)
         self.assertEqual(decode_refusal(self.scheduler, request), "tpot")
         self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=2.0))
+
+    def test_the_tpot_check_counts_a_seated_leg_generating_after_its_prefill(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.router = create_app(fleet(Path(folder.name), ("e0", "e1", "e3"))).state.router
+        self.scheduler = self.router.scheduler
+        self.scheduler.monitor.instances["e0"].role = Role.DECODE
+        for iid in ("e0", "e3"):
+            self.scheduler.profiles.put(
+                replace(
+                    self.scheduler.profiles.get(iid),
+                    kv_capacity_tokens=1_000_000,
+                    decode_max_kv_tokens=1_000_000,
+                )
+            )
+        self.scheduler.profiles.put(replace(self.scheduler.profiles.get("e1"), ttft_b=1e-6))
+        for index in range(2):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"b{index}", 200_000, phase=Phase.DECODE, wanted_len=2_000)
+            )
+        legs = [
+            Request(f"a{index}", 150_000, phase=Phase.DECODE, wanted_len=1) for index in range(3)
+        ]
+        for leg in legs:
+            self.scheduler.monitor.dispatched("e0", leg)
+        request = Request("new", 200_000, wanted_len=1)
+        decoded = decode_occupancy(self.scheduler, request.input_len).ends["e0", "a0"]
+        prefill = prefill_seconds(self.scheduler.profiles.get("e1"), legs[0])
+        start = decoded + prefill / 2
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=start))
+        # The same legs placed while their prefills run generate at `start`.
+        for leg in legs:
+            self.scheduler.monitor.finished("e0", leg.rid)
+            self.seat(leg.rid, leg.input_len, leg.wanted_len, prefill="e1", decode="e0")
+        self.assertEqual(decode_refusal(self.scheduler, request, ready_s=start), "tpot")
 
     def test_admission_reuses_the_controller_estimate_snapshot(self):
         demand = self.router.controller.demand

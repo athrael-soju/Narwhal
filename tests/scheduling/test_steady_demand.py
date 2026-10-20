@@ -284,6 +284,22 @@ class DecodeWaitTests(unittest.TestCase):
                 self.assertEqual(admitted, ratio <= 1.0)
                 self.assertEqual(admitted, wanted_len == 600)
 
+    def test_a_decode_leg_seated_during_prefill_adds_no_decode_wait(self) -> None:
+        fleet = self.fleet
+        for iid in ("e2", "e3", "e4", "e5"):
+            fleet.monitor.dispatched(
+                iid, Request(f"{iid}-resident", 100, phase=Phase.DECODE, wanted_len=1000)
+            )
+        # On SGLang the router places the decode leg while its prefill runs.
+        leg = Request("leg", 100, wanted_len=1000, arrived_at=fleet.now)
+        fleet.monitor.dispatched("e0", leg)
+        leg.phase = Phase.DECODE
+        fleet.monitor.dispatched("e1", leg)
+        snapshot = fleet.controller.scorer.capture(
+            fleet.now, Demand(0.0, 0.0, 0, 0), utilization=0.8, observed_load=(0.0, 0.0)
+        )
+        self.assertEqual(snapshot.score(1).decode_queue_ratio, 0.0)
+
     def run_steps(self, count: int) -> list[dict[str, object]]:
         fleet = self.fleet
         rows = []
