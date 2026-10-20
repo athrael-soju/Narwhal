@@ -43,7 +43,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
-`narwhal_engine_requests_total` counts the requests the router has sent to each engine since it started: the request legs it placed on the engine, and its verification, readmission and peer release probes.
+`narwhal_engine_requests_total` counts the requests the router has sent to each engine since it started, including its verification, readmission and peer release probes.
 
 ### Tool metrics
 
@@ -56,7 +56,7 @@ With `--metrics-url` or `NARWHAL_TOOL_METRICS_URL`, `narwhal-check` serves these
 | `narwhal_tool_steps_completed` | Steps completed |
 | `narwhal_tool_steps_total` | Steps planned |
 
-Preflight plans one step for each gate and one for the profile generation check, 11 in all, plus one for the evidence check with `--evidence-out`. Calibration plans one step for each group that [sweep 1](../cli/Check.md#sampling-schedule) measures, and one for each round and input length in each later sweep. Profiling plans one step for each selected engine and completes the step when it records the engine's profile.
+Preflight has 11 steps, one for each gate and one for the profile generation check, and a 12th for the evidence check with `--evidence-out`. Calibration has one step for each group in [sweep 1](../cli/Check.md#sampling-schedule) and one for each round and input length in each later sweep. Profiling has one step for each engine it profiles.
 
 ## Reading outcome reasons
 

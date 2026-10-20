@@ -220,7 +220,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Serving     | Normal operation                                                                                                   | In service     |
 | Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
 | Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting` or `sglang:num_queue_reqs`                      | In service     |
-| Probing     | The engine served requests that no router sent and no Narwhal tool reports                                         | In service     |
+| Probing     | The engine serves requests from a client other than a router or a Narwhal tool that reports it                     | In service     |
 | Calibrating | `narwhal-check --calibrate-first-token` reports the engine in its tool metrics                                     | In service     |
 | Profiling   | `narwhal-profile` reports the engine in its tool metrics                                                           | In service     |
 | Preflight   | `narwhal-check` preflight reports the engine in its tool metrics                                                   | In service     |
@@ -234,18 +234,10 @@ The **State** column shows the most serious state that applies to an engine. The
 | Unreachable | The engine's metrics endpoint fails to answer Prometheus                                                           | Out of service |
 | Restarting  | The engine is unreachable while a drain holds it                                                                   | Out of service |
 
-An engine reads Probing when all of these hold:
+Probing starts 8 to 14 seconds after the first request from another client and ends 5 to 10 seconds after the last one finishes. On SGLang 0.5.21, a prefill engine's Probing ends 5 to 10 seconds after its last KV transfer finishes. An engine that is idle for a whole 5-second scrape interval reads Serving until it works again. A request that starts and ends between two of the engine's scrapes shows as Probing only when the engine also reported work 8 to 23 seconds ago.
 
-- Prometheus has scraped the engine for at least 23 seconds.
-- The engine reported running requests or processed tokens in the 15 seconds that end 8 seconds ago.
-- The engine's latest scrape shows running requests, or tokens processed since the scrape before.
-- No router sent the engine a request in the last 32 to 37 seconds.
-- In the last 37 seconds, no router held work on the engine and no Narwhal tool reported it.
+An engine can read Probing once Prometheus has scraped it for 23 seconds and 32 to 37 seconds have passed since the latest of these: a router's last request to it, the end of work a router held on it, and the exit of a Narwhal tool that reported it. When a router starts or stops, Probing pauses on every engine from 0 to 5 seconds after the change until 32 to 37 seconds after it.
 
-No engine reads Probing from a router's first scrape after the router starts or stops, 0 to 5 seconds after the change, until 32 to 37 seconds after the change.
-
-Probing starts 8 to 14 seconds after the first request that no router sent, and ends at the engine's second scrape after the last one, 5 to 10 seconds after it. On SGLang 0.5.21, a prefill engine reports running requests until its KV transfers finish, so its Probing ends 5 to 10 seconds after its last transfer. An engine that is idle for a whole 5-second scrape interval reads Serving until it works again. A request shorter than the scrape interval can start and end between two of the engine's scrapes. It then leaves the engine on Serving unless the engine reported other work in the 15 seconds that end 8 seconds ago.
-
-First-token calibration, profiling and preflight send requests to engines directly, so an engine they keep working reads Probing. Calibration's [sweep 1](../cli/Check.md#sampling-schedule) runs one group at a time, so an engine that waits a whole scrape interval for its group reads Serving until its turn. When Prometheus [scrapes the tools](01-Start-and-Verify.md#scraping-narwhal-tools), the engines a tool reports read Calibrating, Profiling or Preflight instead. They return to Serving at Prometheus's first scrape of the tool after it exits, 0 to 5 seconds later.
+An engine busy with first-token calibration, profiling or preflight reads Probing. When Prometheus [scrapes the tools](01-Start-and-Verify.md#scraping-narwhal-tools), the engines a tool reports read Calibrating, Profiling or Preflight instead, and return to Serving 0 to 5 seconds after the tool exits.
 
 [GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md)

@@ -115,7 +115,7 @@ With the CUDA IPC cache off and UCX 1.22 or later in the engine image, a consume
 - At `y`, the UCX default, a stopped peer's GPU memory stays mapped until a wave restart, and transfers from a restarted or idle-evicted producer go through the cached mapping.
 - At `n`, with UCX 1.22 or later, release rounds free that memory, and each transfer from a restarted or idle-evicted producer maps and unmaps the producer's KV memory. Transfers and decoding slow as the engines serve, until the engines restart.
 
-On an eight-engine fleet with the cache off, mean NIXL transfer time per decode engine was 105 to 124 ms after about 4,300 transfers, against 15 to 22 ms after about 3,350 transfers with the cache on. With the cache off, decode engines lost up to 64% of their decode rate.
+On an eight-engine fleet with the cache off, decode engines lost up to 64% of their decode rate, and mean NIXL transfer time per decode engine was 105 to 124 ms after about 4,300 transfers, against 15 to 22 ms after about 3,350 transfers with the cache on.
 
 `launch.peer_release` in a vLLM engine's attestation, and the same value in the image check's [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification), report whether the engine releases a stopped peer's memory. It is `true` for an engine with zero CUDA IPC peers and for an engine with UCX 1.22 or later and the CUDA IPC cache off, and `false` for every other CUDA IPC engine.
 

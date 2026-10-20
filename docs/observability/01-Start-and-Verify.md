@@ -44,7 +44,7 @@ To show which operation keeps an engine busy in the [engine table](05-Dashboard.
 export NARWHAL_TOOL_METRICS_URL=http://127.0.0.1:18030
 ```
 
-The address needs an explicit port, and Prometheus must reach it. Run one tool at a time. A second tool that finds the port in use prints `tool metrics: cannot listen on` with the address and runs without serving metrics. The `narwhal-tools` target is down between runs, and no alert fires for it.
+The address needs an explicit port, and Prometheus must reach it. Run one tool at a time. A second tool that finds the port in use prints `tool metrics: cannot listen on` with the address and still runs its operation.
 
 ## Starting Prometheus and Grafana
 
@@ -90,7 +90,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
 
 The response has one series for the router and one for each configured engine. A value of `1` marks a successful scrape, and `0` marks a failed scrape.
 
-If you set `NARWHAL_CONTROL_METRICS_URL`, check `up{job="fleet-control"}` the same way. If you set `NARWHAL_TOOL_METRICS_URL`, `up{job="narwhal-tools"}` is `1` while a tool runs preflight, calibration or a live sweep.
+If you set `NARWHAL_CONTROL_METRICS_URL`, check `up{job="fleet-control"}` the same way. If you set `NARWHAL_TOOL_METRICS_URL`, `up{job="narwhal-tools"}` is `1` while a tool runs preflight, first-token calibration or a live sweep.
 
 Prometheus `/targets` shows the discovery state and scrape errors for each endpoint.
 

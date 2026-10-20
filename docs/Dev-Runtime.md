@@ -43,7 +43,7 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
-Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine receives the first engine's budget. A fraction that fits on native Ubuntu can then overcommit the GPU. Lower `--gpu-memory-utilization` until every engine starts, and initialize each attempt as a fresh instance in a new `--instance` directory.
+Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Lower `--gpu-memory-utilization` until every engine starts, and initialize each attempt in a new `--instance` directory.
 
 `--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
@@ -53,7 +53,7 @@ The small templates set development SLO targets of 5 seconds for time to first t
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
 
-`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer requests. `up` then stops at attestation and reports how many running requests the engine serves. Lower `runtime.max_num_seqs` to that number in your template, and initialize a fresh instance from it.
+`runtime.max_num_seqs` sets the most requests each engine runs at once. In an SGLang template it ranges from 1 to 256 and defaults to 256. When an SGLang engine can run fewer requests at once than that, `up` stops at attestation with `The engine serves at most <n> running requests`. Lower `runtime.max_num_seqs` to `<n>` in your template, and initialize a new `--instance` directory from it.
 
 Create a custom template:
 
@@ -128,14 +128,14 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
 
-1. Install the libraries that Mooncake's native module links, `libibverbs.so.1`, `libmlx5.so.1` and `libnuma.so.1`:
+1. Install the system libraries that Mooncake needs:
 
     ```bash
     sudo apt-get update
     sudo apt-get install -y libibverbs1 ibverbs-providers libnuma1
     ```
 
-2. Install a CUDA 13 toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2. On a GPU where SGLang compiles its kernels when an engine starts, SGLang needs the toolkit's `bin/nvcc` and `lib64/libcudart.so`, which the CUDA packages that pip installs do not provide. Export the toolkit root in each shell that runs the lifecycle commands, and check that `nvcc` reports release 13:
+2. Install a CUDA 13 toolkit from [NVIDIA's CUDA installation guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/), or from the [CUDA on WSL guide](https://docs.nvidia.com/cuda/wsl-user-guide/) under WSL2. Export the toolkit root as `CUDA_HOME` in each shell that runs the lifecycle commands, and check that `nvcc` reports release 13 and `lib64/libcudart.so` exists:
 
     ```bash
     export CUDA_HOME=/usr/local/cuda  # replace with the CUDA 13 toolkit root
@@ -173,7 +173,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev verify --instance runs/dev-sglang
     ```
 
-    Under WSL2, when an engine fails to start, lower each engine's memory fraction as [Template and GPU allocation](#template-and-gpu-allocation) describes.
+    Under WSL2, when an engine fails to start, lower `--gpu-memory-utilization` as [Template and GPU allocation](#template-and-gpu-allocation) describes.
 
 ## Inspecting and stopping the instance
 
