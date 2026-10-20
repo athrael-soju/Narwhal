@@ -43,7 +43,7 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
 
-Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine receives the budget the first engine receives, and a fraction that fits on native Ubuntu can overcommit the GPU. For SGLang under WSL2, initialize a fresh instance with a lower `--gpu-memory-utilization`, in a new `--instance` directory for each attempt, until every engine starts.
+Under WSL2, each SGLang engine reads the free VRAM as if the other engines held none, so every engine receives the first engine's budget. A fraction that fits on native Ubuntu can then overcommit the GPU. Lower `--gpu-memory-utilization` until every engine starts, and initialize each attempt as a fresh instance in a new `--instance` directory.
 
 `--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
 
@@ -53,7 +53,7 @@ The small templates set development SLO targets of 5 seconds for time to first t
 
 A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
 
-`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer requests than that, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer. `up` then stops at attestation and reports how many running requests the engine serves. Lower `runtime.max_num_seqs` to that number in your template, and initialize a fresh instance from it.
+`runtime.max_num_seqs` sets the most requests each engine runs at once. A vLLM engine receives it as `--max-num-seqs`. An SGLang engine receives it as `--max-running-requests`, from 1 to 256, or 256 when the template omits it. SGLang can serve fewer, for example when the mamba state cache that it sizes from the engine's memory fraction holds fewer requests. `up` then stops at attestation and reports how many running requests the engine serves. Lower `runtime.max_num_seqs` to that number in your template, and initialize a fresh instance from it.
 
 Create a custom template:
 

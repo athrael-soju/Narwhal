@@ -22,7 +22,7 @@ A live sweep measures engines on separate devices at the same time. Engines in o
 
 On an SGLang fleet, the sweep measures both roles of each engine and has a peer engine serve the other leg of each request. It needs `engine.connector` `mooncake`, at least two engines in the fleet and each engine's attestation sidecar. Before each engine's prefill, decode and warm prefill sweeps, the sweep switches the engine and its peer into opposite roles with `POST /pd_role_switch` and empties both caches with `POST /flush_cache`, which waits up to `engine.health_timeout_s` for the engine to finish the requests it holds. The sample sidecar names each engine's peer in `peer`.
 
-The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time. Without `--colocated`, each engine's peer is the next selected engine.
+The sweep pairs the selected engines in fleet order and measures the pairs at the same time, each engine serving as the other's peer. With an odd count, the last three engines form one group in which each engine's peer is the next one. A single selected engine takes the next engine in the fleet as its peer. When any selected engine sets `shared_device`, the sweep measures the selected engines one at a time, and each engine's peer is the next selected engine. With `--colocated`, [Shared-GPU neighbour traffic](#shared-gpu-neighbour-traffic) names each engine's peer.
 
 ## Selection, refitting, and output
 
@@ -40,7 +40,7 @@ These options select engines, choose the mode, and set the output files:
 | `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
-| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | While a live sweep runs, serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics`. Without a value, the command serves no metrics. |
+| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | Serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics` while a live sweep runs, where `URL` is `http://host:port`. When neither is set, the command serves no metrics. |
 
 The mode options depend on each other:
 
@@ -89,7 +89,7 @@ The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-pre
 
 With `--colocated`, the sweep measures each target while the other engines in its `shared_device.group` serve paced traffic for their configured roles. Every target needs a `shared_device` group with at least one neighbour. Each neighbour's tokenized input plus output must fit its live context limit.
 
-On an SGLang fleet, each target's peer is the first engine in its group with the other configured role. While the target measures its other role, the peer takes the target's configured role, so the group keeps its configured role counts. Before neighbour traffic starts, the sweep switches every engine in the group to its configured role. Neighbour traffic pauses while the target and its peer switch roles and empty their caches, and the paused time is left out of the neighbour rates. Each neighbour request carries SGLang's fake transfer address, `bootstrap_host` `2.2.2.2`, so each neighbour serves its own role without a KV transfer and no neighbour request reaches the target.
+On an SGLang fleet, the sweep switches every engine in the group to its configured role before neighbour traffic starts. Each target's peer is the first engine in its group with the other configured role. While the target measures its other role, the peer takes the target's configured role, so the group keeps its configured role counts. Neighbour traffic pauses while the target and its peer switch roles and empty their caches, and the neighbour rates leave out the paused time. Each neighbour request sets `bootstrap_host` to `2.2.2.2`, SGLang's fake bootstrap host, so each neighbour serves its own role without a KV transfer and no neighbour request reaches the target.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -107,7 +107,7 @@ narwhal-profile --fleet fleet.json --colocated \
   --neighbour-decode-output-tokens 32
 ```
 
-The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`. On an SGLang fleet, `colocated_load` also records `paused_s`, the time neighbour traffic paused for role switches, and `peerless` `true`. A neighbour that served a role other than its configured one, as the target's peer does while it takes the target's role, records its completions in each role in `completed_by_role`.
+The sample sidecar records each neighbour's role, completion count, achieved rate and error in `colocated_load`. On an SGLang fleet, `colocated_load` also records `paused_s`, the time neighbour traffic paused for role switches, and `peerless` `true`, which marks neighbour requests served without a KV transfer. A neighbour that also served a role other than its configured one, such as the target's peer, records its completions in each role in `completed_by_role`.
 
 ## Completion and exit codes
 
@@ -126,7 +126,7 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis
 - a neighbour fails a request or completes zero requests during the target's measurement
-- on SGLang, neighbour requests are still in flight `--observation-timeout-s` after neighbour traffic pauses for a role switch or at the end of a target's measurement, 300 seconds without the option
+- on SGLang, neighbour requests stay in flight longer than `--observation-timeout-s`, or 300 seconds without the option, after neighbour traffic pauses for a role switch or for the end of a target's measurement
 - a neighbour's input plus output exceeds the neighbour's context limit
 - the prefill fit exceeds 20% mean error or 50% worst-point error
 - an engine's attestation fails verification, or its process changes during its measurement
