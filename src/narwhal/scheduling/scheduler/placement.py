@@ -53,6 +53,8 @@ class GlobalScheduler:
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
+        # Engine ID to the sequence limit from its verified attestation.
+        self.sequence_limits: dict[str, int] = {}
         # Set when engines change roles on the engine side: a donor must be idle, and the
         # callback applies each change.
         self.switch_requires_idle = False

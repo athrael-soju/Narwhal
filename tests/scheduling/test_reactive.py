@@ -699,12 +699,17 @@ class MixedPressureTests(unittest.TestCase):
     # request maximum feeds. They pass before and after the profiler measures decode up to each
     # engine's sequence limit; that change decides which maximum the guard reads.
 
-    def _decode_overload(self, profiled: int, residents: int) -> None:
-        """Hold `residents` decode streams on each of four decode engines under decode pressure."""
+    def _decode_overload(self, profiled: int, residents: int, limit: int | None = None) -> None:
+        """Hold `residents` decode streams on each of four decode engines under decode pressure.
+
+        `limit` sets every engine's attested sequence limit.
+        """
         fleet = self.fleet
         fleet.monitor.instances["e1"].role = Role.PREFILL
         for iid in fleet.monitor.instances:
             fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=profiled))
+            if limit is not None:
+                fleet.scheduler.sequence_limits[iid] = limit
         for iid in ("e2", "e3", "e4", "e5"):
             for index in range(residents):
                 fleet.monitor.dispatched(iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE))
@@ -747,6 +752,82 @@ class MixedPressureTests(unittest.TestCase):
         self.assertIsNotNone(self.fleet.step())
         self.assertEqual(self.fleet.scheduler.roles._last_decision["result"], "applied")
         self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
+
+    def _overload_snapshot(self):
+        return self.fleet.controller.scorer.capture(
+            self.fleet.now,
+            Demand(0.1, 0.1, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 0.1),
+        )
+
+    def test_a_move_toward_decode_checks_each_engine_up_to_its_sequence_limit(self) -> None:
+        # 81 residents on each of four engines spread to 64.8 over five, past the profiled 64.
+        # An engine runs at most its 64 attested sequences, so the profile covers what it runs.
+        self._decode_overload(64, 81, limit=64)
+        snapshot = self._overload_snapshot()
+        candidate, current, toward_prefill = snapshot.score(1), snapshot.score(2), snapshot.score(3)
+        self.assertEqual(candidate.decode_requests_per_engine, 64.8)
+        self.assertTrue(candidate.decode_profile_covered)
+        self.assertLess(candidate.tpot_ratio, float("inf"))
+        # The current split runs at the same limit. A move toward prefill counts every resident.
+        self.assertEqual(current.decode_requests_per_engine, 81)
+        self.assertTrue(current.decode_profile_covered)
+        self.assertLess(current.tpot_ratio, float("inf"))
+        self.assertFalse(toward_prefill.decode_profile_covered)
+        # The TPOT estimate still prices every resident.
+        self.setUp()
+        self._decode_overload(100, 81)
+        self.assertEqual(self._overload_snapshot().score(1).tpot_ratio, candidate.tpot_ratio)
+
+    def test_the_sequence_limit_check_needs_a_limit_the_profile_measured(self) -> None:
+        for name, limits, profiled_tokens, covered in (
+            ("every engine at its limit", {}, None, True),
+            ("an engine without a limit", {"e3": None}, None, False),
+            ("a limit past the profile", {"e3": 65}, None, False),
+            ("KV tokens at the limit inside the profile", {}, 6_400, True),
+            ("KV tokens at the limit past the profile", {}, 6_399, False),
+        ):
+            with self.subTest(name):
+                self.setUp()
+                self._decode_overload(64, 81, limit=64)
+                fleet = self.fleet
+                for iid, limit in limits.items():
+                    if limit is None:
+                        del fleet.scheduler.sequence_limits[iid]
+                    else:
+                        fleet.scheduler.sequence_limits[iid] = limit
+                if profiled_tokens is not None:
+                    for iid in fleet.monitor.instances:
+                        fleet.profiles.put(
+                            replace(fleet.profiles.get(iid), decode_max_kv_tokens=profiled_tokens)
+                        )
+                candidate = self._overload_snapshot().score(1)
+                # Each resident holds 100 KV tokens, so 64 running hold 6,400.
+                self.assertEqual(candidate.decode_tokens_per_engine, 6_480)
+                self.assertEqual(candidate.decode_profile_covered, covered)
+
+    def test_residents_waiting_past_the_sequence_limit_let_decode_expand(self) -> None:
+        self._decode_overload(64, 81, limit=64)
+        self.assertIsNotNone(self.fleet.step())
+        decision = self.fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["result"], "applied")
+        self.assertEqual(decision["decode_requests_per_engine"], 64.8)
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 5)
+
+    def test_a_move_toward_decode_past_the_limit_needs_a_lower_objective(self) -> None:
+        # Two prefill engines at 0.8 each project 1.6 on one, above the current split's 1.5.
+        self._decode_overload(64, 81, limit=64)
+        self.fleet.pressure[Role.PREFILL] = 1.6
+        for _ in range(6):
+            self.assertIsNone(self.fleet.step())
+            decision = self.fleet.scheduler.roles._last_decision
+            self.assertEqual(decision["prefill"], 1)
+            self.assertEqual(
+                decision["reason"], "projected improvement is below the movement margin"
+            )
+            self.assertLess(decision["objective_delta"], 0)
+        self.assertEqual(len(self.fleet.monitor.pool(Role.DECODE)), 4)
 
     def test_sticky_decode_residents_keep_their_measured_batch_after_role_change(self) -> None:
         fleet = self.fleet

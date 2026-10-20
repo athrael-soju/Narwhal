@@ -208,9 +208,8 @@ class NarwhalRouter:
         self.loop_lag_s = 0.0
         self.sizing_delays = RecentDelays(SIZING_WINDOW_S, clock, min_samples=SIZING_MIN_SAMPLES)
         self.input_lengths = InputLengths(cfg.reactive_window_s, clock)
-        # Engine ID to the sequence limit, the KV producer lease in seconds and the launch
-        # record from its verified attestation.
-        self.sequence_limits: dict[str, int] = {}
+        # Engine ID to the KV producer lease in seconds and the launch record from its verified
+        # attestation. The scheduler holds the attested sequence limits.
         self.kv_leases: dict[str, int] = {}
         self.launches: dict[str, dict[str, Any]] = {}
         self.unsized_offered = 0
@@ -268,6 +267,15 @@ class NarwhalRouter:
         self.monitoring = MonitoringLedger(
             clock, on_event=self.journal.write, on_degraded=self.wake_waiters
         )
+
+    @property
+    def sequence_limits(self) -> dict[str, int]:
+        """Return each engine's sequence limit from its verified attestation."""
+        return self.scheduler.sequence_limits
+
+    @sequence_limits.setter
+    def sequence_limits(self, limits: dict[str, int]) -> None:
+        self.scheduler.sequence_limits = limits
 
     @property
     def failover_blocked(self) -> str:
