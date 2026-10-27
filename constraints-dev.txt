@@ -6,7 +6,7 @@ anyio==4.15.1
 ast-serialize==0.11.2
 backports-tarfile==1.2.0
 build==1.6.1
-certifi==2026.7.22
+certifi==2026.10.18
 cffi==2.1.1
 cfgv==3.5.0
 charset-normalizer==3.5.1
