@@ -24,6 +24,7 @@ class HandoffLegs:
         self.prefill_seconds: float | None = None
         # A concurrent prefill leg runs while the decode leg streams.
         self.task: asyncio.Task[PrefillResult | None] | None = None
+        self._closed = False
 
     async def start(self, leg: PrefillLeg) -> HandoffLegs:
         started = time.monotonic()
@@ -50,6 +51,13 @@ class HandoffLegs:
 
     def first_token_bound(self, limit: float | None) -> float | None:
         return self.kv.first_token_bound(limit)
+
+    def close(self) -> None:
+        """Free what a staged connector exported for this handoff; later calls do nothing."""
+        if self._closed or self.result is None:
+            return
+        self._closed = True
+        self.kv.discard(self.result)
 
     def failure(self) -> BaseException | None:
         task = self.task

@@ -351,7 +351,14 @@ async def _prepare_once(
     # The producer's lease starts when prefill completes.
     bound = handoff_bound(router, prefill.iid)
     expires_at = None if bound is None or state.prefilled_at is None else state.prefilled_at + bound
-    decode = await _place(state, prefill=False, claim=state.reserve, handoff_deadline=expires_at)
+    try:
+        decode = await _place(
+            state, prefill=False, claim=state.reserve, handoff_deadline=expires_at
+        )
+    except BaseException:
+        # No decode leg will consume this handoff.
+        handoff.close()
+        raise
     state.decode_iid = decode.iid
     state.phase = "decode"
     return PreparedAttempt(prefill, decode, handoff, expires_at)
@@ -639,6 +646,8 @@ async def run_decode(
         while True:
             buffered: list[RelayBatch] = []
             size = 0
+            # A retry replaces `prepared` before this attempt's handoff is closed.
+            handoff = prepared.handoff
             attempt = _decode_attempt(state, prepared, endpoint, body, headers)
             try:
                 async for batch in attempt:
@@ -660,7 +669,10 @@ async def run_decode(
                 prepared = await prepare_attempt(state, endpoint, body, headers)
                 continue
             finally:
-                await attempt.aclose()
+                try:
+                    await attempt.aclose()
+                finally:
+                    handoff.close()
             if not streaming:
                 for batch in buffered:
                     yield batch
