@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar
 from uuid import uuid4
 
 import httpx
@@ -18,7 +18,7 @@ from ..types import (
     LEG_STREAM,
     LEG_TIMEOUT,
 )
-from .connector import KvHandoff, PrefillResult
+from .connector import HandoffPhase, HandoffStepError, KvHandoff, PrefillResult
 from .dialect import EngineDialect
 from .handoff import HandoffLegs, prefill_leg
 from .stream import SseEvent, sse_batches, sse_error, sse_events, sse_token_bearing
@@ -26,6 +26,8 @@ from .wire import Dial, WireClient, WireResponse, dial_tcp
 
 if TYPE_CHECKING:
     from ..config import FleetConfig
+
+T = TypeVar("T")
 
 
 class EngineError(RuntimeError):
@@ -136,6 +138,39 @@ async def _bounded(leg: Awaitable[ProbeLeg], limit: float | None, late: str) -> 
         return ProbeLeg(failed=late)
 
 
+class _HandoffCalls:
+    """A staged handoff's engine requests: posts on the data connections, with the credential."""
+
+    def __init__(self, client: EngineClient) -> None:
+        self._client = client
+
+    @staticmethod
+    def _payload(status: int, text: str, read: Callable[[], Any]) -> dict[str, Any]:
+        if status != 200:
+            raise HandoffStepError(status, text)
+        try:
+            payload = read()
+        except ValueError as exc:
+            raise HandoffStepError(502, f"unreadable reply: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise HandoffStepError(502, "reply is not an object")
+        return payload
+
+    async def get(self, url: str, path: str, *, timeout_s: float) -> dict[str, Any]:
+        client = self._client
+        r = await client._control.get(
+            f"{url}{path}", timeout=client._phase_timeout(timeout_s), headers=client._auth(None)
+        )
+        return self._payload(r.status_code, r.text, r.json)
+
+    async def post(
+        self, url: str, path: str, body: dict[str, Any], *, timeout_s: float
+    ) -> dict[str, Any]:
+        client = self._client
+        r = await client._wire.post(f"{url}{path}", body, client._auth(None), timeout_s=timeout_s)
+        return self._payload(r.status_code, r.text, r.json)
+
+
 class EngineClient:
     def __init__(
         self,
@@ -190,6 +225,7 @@ class EngineClient:
         self._pool_timeout = pool_timeout_s
         # A caller-supplied authorization header overrides the engine credential.
         self._engine_api_key = engine_api_key
+        self._calls = _HandoffCalls(self)
 
     def _auth(self, headers: dict[str, str] | None) -> dict[str, str]:
         out = dict(headers) if headers else {}
@@ -324,9 +360,31 @@ class EngineClient:
     ) -> PrefillResult | None:
         """Run one prefill leg and return its descriptor, which a concurrent leg lacks."""
         leg = self._prefill_leg(body, rendezvous)
-        r = await self._post_prefill(url, endpoint, leg, headers, request_id)
-        if self.kv.concurrent:
-            return None
+        if not self.kv.staged:
+            r = await self._post_prefill(url, endpoint, leg, headers, request_id)
+            if self.kv.concurrent:
+                return None
+            return self._prefill_result(r, url, endpoint, request_id)
+        # The prefill deadline covers the claim, the leg and the export.
+        deadline = asyncio.get_running_loop().time() + self._prefill_timeout
+        seat = await self._staged_step(
+            "prefill", url, deadline, lambda _: self._claim(url, "prefill")
+        )
+        try:
+            r = await self._post_prefill(url, endpoint, {**leg, **seat}, headers, request_id)
+            result = self._prefill_result(r, url, endpoint, request_id)
+            return await self._staged_step(
+                "prefill",
+                url,
+                deadline,
+                lambda left: self.kv.export(self._calls, url, seat, result, timeout_s=left),
+            )
+        finally:
+            self.kv.release(url, "prefill", seat)
+
+    def _prefill_result(
+        self, r: WireResponse, url: str, endpoint: str, request_id: str | None
+    ) -> PrefillResult:
         try:
             result = self.kv.prefill_result(
                 r.json(), url=url, endpoint=endpoint, request_id=request_id
@@ -341,6 +399,36 @@ class EngineClient:
                 200,
                 f"{NO_HANDOFF_DETAIL}: invalid {self.kv.name} descriptor: {exc}",
             ) from exc
+
+    def _claim(self, url: str, phase: HandoffPhase) -> Awaitable[dict[str, Any]]:
+        return self.kv.claim(self._calls, url, phase)
+
+    async def _staged_step(
+        self,
+        phase: HandoffPhase,
+        url: str,
+        deadline: float | None,
+        step: Callable[[float], Awaitable[T]],
+    ) -> T:
+        """Run one staged handoff step inside its leg's deadline, as that leg's failure."""
+        left = self._prefill_timeout
+        if deadline is not None:
+            left = deadline - asyncio.get_running_loop().time()
+        try:
+            if left <= 0:
+                raise TimeoutError
+            async with asyncio.timeout(left):
+                return await step(left)
+        except TimeoutError as exc:
+            if phase == "decode":
+                raise
+            raise httpx.ReadTimeout(
+                f"prefill exceeded its {self._prefill_timeout:g}s elapsed deadline"
+            ) from exc
+        except HandoffStepError as exc:
+            # A step the engine fails is a retryable leg failure, whatever status it answered.
+            status = exc.status if exc.status >= 500 else 502
+            raise EngineError(phase, url, status, f"{NO_HANDOFF_DETAIL}: {exc.detail}") from exc
 
     async def start_handoff(
         self,
@@ -378,8 +466,11 @@ class EngineClient:
         )
         task = handoff.task
         if task is None:
-            async for batch in decode:
-                yield batch
+            try:
+                async for batch in decode:
+                    yield batch
+            finally:
+                handoff.close()
             return
         finished = False
         try:
@@ -452,8 +543,6 @@ class EngineClient:
             )
         except (ValueError, TypeError) as exc:
             raise EngineError("decode", url, 502, f"invalid continuation: {exc}") from exc
-        leg, headers = self._tag(leg, headers, request_id)
-
         budget_s = first_token_timeout_s or 0.0
         deadline = asyncio.get_running_loop().time() + budget_s if budget_s > 0 else None
         first = True  # no generated token observed yet
@@ -463,6 +552,26 @@ class EngineClient:
             return None if first and deadline is not None else self._read_timeout
 
         async with AsyncExitStack() as stack:
+            if self.kv.staged:
+                # The first-token deadline covers the claim and the restore.
+                try:
+                    seat = await self._staged_step(
+                        "decode", url, deadline, lambda _: self._claim(url, "decode")
+                    )
+                    stack.callback(self.kv.release, url, "decode", seat)
+                    leg = {**leg, **seat}
+                    if kv_params is not None and kv_params.producer_url != url:
+                        await self._staged_step(
+                            "decode",
+                            url,
+                            deadline,
+                            lambda left: self.kv.restore(
+                                self._calls, url, seat, kv_params, timeout_s=left
+                            ),
+                        )
+                except TimeoutError as exc:
+                    raise EngineError("decode", url, 504, _first_token_detail(budget_s, 0)) from exc
+            leg, headers = self._tag(leg, headers, request_id)
             opening = stack.enter_async_context(
                 self._wire.stream(f"{url}{endpoint}", leg, self._auth(headers), gap=gap)
             )
@@ -559,14 +668,18 @@ class EngineClient:
             prefill = prefills[0]
             if prefill_url is not None and (prefill.failed or prefill.inconclusive):
                 # A producer failure provides no evidence about the consumer.
+                handoff.close()
                 return InferenceProbe(prefill=prefill, decode=ProbeLeg(inconclusive=True))
-            decode = await _bounded(
-                self._probe_decode(
-                    url, kv_params=handoff.result if prefill_url else None, prompt=prompt
-                ),
-                deadline_s,
-                LEG_STREAM,
-            )
+            try:
+                decode = await _bounded(
+                    self._probe_decode(
+                        url, kv_params=handoff.result if prefill_url else None, prompt=prompt
+                    ),
+                    deadline_s,
+                    LEG_STREAM,
+                )
+            finally:
+                handoff.close()
             return InferenceProbe(prefill=prefill, decode=decode)
         try:
             decode = await _bounded(
@@ -593,30 +706,43 @@ class EngineClient:
         rendezvous: dict[str, Any] | None = None,
     ) -> ProbeLeg:
         body = self._prefill_leg({"model": self.model, "prompt": prompt}, rendezvous)
+        seat: dict[str, Any] = {}
         try:
+            if self.kv.staged:
+                seat = await self._claim(url, "prefill")
+                body = {**body, **seat}
             r = await self._control.post(
                 f"{url}{_PROBE_ENDPOINT}",
                 json=body,
                 timeout=self._phase_timeout(self._prefill_timeout),
                 headers=self._auth(None),
             )
+            if r.status_code != 200:
+                return ProbeLeg(failed=_status_class(r.status_code))
+            if self.kv.concurrent:
+                return ProbeLeg()
+            try:
+                result = self.kv.prefill_result(
+                    r.json(), url=url, endpoint=_PROBE_ENDPOINT, request_id=None
+                )
+                if result is None:
+                    raise ValueError("missing handoff parameters")
+            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                # A 200 whose payload resists reading carries no readable handoff.
+                return ProbeLeg(failed=LEG_KV_HANDOFF)
+            if self.kv.staged:
+                result = await self.kv.export(
+                    self._calls, url, seat, result, timeout_s=self._prefill_timeout
+                )
         except httpx.PoolTimeout:
             return ProbeLeg(inconclusive=True)
         except httpx.HTTPError as exc:
             return ProbeLeg(failed=leg_failure_class(exc))
-        if r.status_code != 200:
-            return ProbeLeg(failed=_status_class(r.status_code))
-        if self.kv.concurrent:
-            return ProbeLeg()
-        try:
-            result = self.kv.prefill_result(
-                r.json(), url=url, endpoint=_PROBE_ENDPOINT, request_id=None
-            )
-            if result is None:
-                raise ValueError("missing handoff parameters")
-        except (ValueError, TypeError, KeyError, IndexError, AttributeError):
-            # A 200 whose payload resists reading carries no readable handoff.
+        except HandoffStepError:
             return ProbeLeg(failed=LEG_KV_HANDOFF)
+        finally:
+            if self.kv.staged:
+                self.kv.release(url, "prefill", seat)
         if handoff is not None:
             handoff.append(result)
         return ProbeLeg()
@@ -643,7 +769,15 @@ class EngineClient:
         timeouts = self._control.timeout.as_dict()
         # probe_inference's per-leg deadline bounds the wait for the first token.
         timeouts["read"] = None
+        seat: dict[str, Any] = {}
         try:
+            if self.kv.staged:
+                seat = await self._claim(url, "decode")
+                body = {**body, **seat}
+                if kv_params is not None and kv_params.producer_url != url:
+                    await self.kv.restore(
+                        self._calls, url, seat, kv_params, timeout_s=self._prefill_timeout
+                    )
             async with self._control.stream(
                 "POST",
                 f"{url}{_PROBE_ENDPOINT}",
@@ -669,6 +803,11 @@ class EngineClient:
             return ProbeLeg(inconclusive=True)
         except httpx.HTTPError as exc:
             return ProbeLeg(failed=leg_failure_class(exc))
+        except HandoffStepError:
+            return ProbeLeg(failed=LEG_KV_HANDOFF)
+        finally:
+            if self.kv.staged:
+                self.kv.release(url, "decode", seat)
 
 
 def client_options(cfg: FleetConfig) -> dict[str, Any]:
