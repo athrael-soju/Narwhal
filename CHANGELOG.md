@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.0](https://github.com/athrael-soju/Narwhal/compare/v0.8.0...v0.9.0) (2026-11-14)
+
+
+### Features
+
+* `narwhal dev ask` sends prompts through the fleet and reports latency, throughput and the engines that served each request ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+* `narwhal dev up` sets up and starts a llama.cpp fleet on one Linux or WSL2 workstation, on an NVIDIA GPU or the CPU alone, and `narwhal dev down --remove` stops it and deletes its files ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+* `narwhal dev watch` shows each engine's role and load, latency, throughput and role switches in a live terminal view ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+* llama.cpp engine backend: prefill and decode run on separate llama-server processes, each request's KV cache moves between them through slot files, and the router switches engine roles under load ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+* the small vLLM and SGLang dev templates state GPU memory in MiB and run on GPUs with about 8 GiB and 10 GiB free ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+
+
+### Fixes
+
+* a native engine's identity holds when the host clock is corrected, as under WSL2 ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+
+
+### Documentation
+
+* quick start, live view and llama.cpp engine pages ([7de19ff](https://github.com/athrael-soju/Narwhal/commit/7de19ffdf82df0e2e12c602f92ff918426704cbb))
+
 ## [0.8.0](https://github.com/athrael-soju/Narwhal/compare/v0.7.0...v0.8.0) (2026-10-20)
 
 
