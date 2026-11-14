@@ -60,6 +60,8 @@ class RequestLifecycle:
         self.first_at: float | None = None
         self.last_at: float | None = None
         self.tokens = 0
+        # The output token count the engine's stream reported, without token IDs to count.
+        self.reported_tokens: int | None = None
         self.sized = False
         self.demand_pending = False
         self.demand_observation: ArrivalObservation | None = None
@@ -138,6 +140,7 @@ class RequestLifecycle:
         if self.attempts > 1:
             self.router.retry_attempts += 1
         self.tokens = 0
+        self.reported_tokens = None
         self.first_at = self.last_at = self.prefilled_at = None
         self.prefill_iid = self.decode_iid = None
         self.request.output_len = 0
@@ -239,7 +242,7 @@ class RequestLifecycle:
         # Unread bodies other than invalid ones stay visible as unsized demand.
         self.resolve_demand(retain_unsized=terminal != "invalid")
         self.release()
-        measured = self.tokens if router.engines.dialect.token_ids else None
+        measured = self.tokens if router.engines.dialect.token_ids else self.reported_tokens
         self.outcome.update(error=error, status=status, tokens=measured, terminal=terminal)
         if terminal == "cancelled":
             self.outcome["cancelled"] = True
@@ -270,19 +273,19 @@ class RequestLifecycle:
         prefill_s = None if self.prefilled_at is None else self.prefilled_at - self.arrived
         first_s = None if self.first_at is None else self.first_at - self.arrived
         tpot_s = (
-            (self.last_at - self.prefilled_at) / (self.tokens - 1)
+            (self.last_at - self.prefilled_at) / (measured - 1)
             if measured is not None
             and self.last_at is not None
             and self.prefilled_at is not None
-            and self.tokens > 1
+            and measured > 1
             else None
         )
         decode_tpot_s = (
-            (self.last_at - self.first_at) / (self.tokens - 1)
+            (self.last_at - self.first_at) / (measured - 1)
             if measured is not None
             and self.last_at is not None
             and self.first_at is not None
-            and self.tokens > 1
+            and measured > 1
             else None
         )
         if completed:

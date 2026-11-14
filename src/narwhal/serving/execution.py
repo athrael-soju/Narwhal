@@ -583,6 +583,10 @@ async def _decode_attempt(
                     if sse_finished(event):
                         router.monitor.output_ended(state.rid)
                     state.tokens += n
+                    if not dialect.token_ids and event.data is not None:
+                        reported = dialect.stream_output_tokens(event.data)
+                        if reported is not None:
+                            state.reported_tokens = reported
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n
                     frame = rewrite_sse(event, strip=strip) + "\n\n"

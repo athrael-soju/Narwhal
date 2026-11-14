@@ -44,6 +44,12 @@ class LlamacppDialect(EngineDialect):
     def context_limit(self, payload: dict[str, Any], model: str) -> int | None:
         return context_tokens(payload)
 
+    def stream_output_tokens(self, payload: dict[str, Any]) -> int | None:
+        # The last chunk of every stream carries the server's timings.
+        timings = payload.get("timings")
+        count = timings.get("predicted_n") if isinstance(timings, dict) else None
+        return count if type(count) is int and count >= 0 else None
+
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"ignore_eos": True}
 

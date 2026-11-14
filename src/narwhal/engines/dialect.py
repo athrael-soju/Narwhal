@@ -107,6 +107,12 @@ class EngineDialect(ABC):
             return None
         return tokens
 
+    def stream_output_tokens(self, payload: dict[str, Any]) -> int | None:
+        """The reply's output token count as a stream chunk reports it, for an engine whose
+        chunks carry no token IDs; None for a chunk that reports none.
+        """
+        return None
+
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"min_tokens": tokens, "ignore_eos": True}
 
