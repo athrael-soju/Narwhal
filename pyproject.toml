@@ -43,6 +43,7 @@ dependencies = [
   "msgpack>=1.2.2",
   "pydantic>=2.13.5",
   "pyzmq>=27.2.0",
+  "rich>=14.0.0",
   "uvicorn>=0.52.4",
   "uvloop>=0.22.1; sys_platform != 'win32'",
 ]

@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Any, TextIO
 
 import httpx
+from rich import box
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress_bar import ProgressBar
+from rich.table import Table
+from rich.text import Text
 
 from . import lifecycle
 from .ask import PHASES
@@ -29,7 +36,11 @@ SERVED, TOKENS, FAILED = (
 # Requests the router turned away or timed out before an engine failed them.
 UNSERVED = ("narwhal_refused_total", "narwhal_rejected_total", "narwhal_expired_total")
 COUNTERS = (SERVED, TOKENS, FAILED, *UNSERVED)
-CLEAR = "\x1b[H\x1b[2J"
+# Frames of history behind each trend line.
+TREND_FRAMES = 60
+TICKS = "▁▂▃▄▅▆▇█"
+ROLE_STYLES = {"prefill": "cyan", "decode": "magenta"}
+STATE_STYLES = {"live": "green", "draining": "yellow", "ejected": "red", "quarantined": "red"}
 _SAMPLE = re.compile(r"^(narwhal_[a-z_]+)(?:\{([^}]*)\})?\s+(\S+)$")
 _LABEL = re.compile(r'(\w+)="([^"]*)"')
 Fetch = Callable[[str], tuple[dict[str, Any], str]]
@@ -204,6 +215,139 @@ def render(shown: dict[str, Any], router: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def trend(values: list[float | None]) -> str:
+    """One tick per frame between the lowest and highest value shown; a space where none was
+    read, and a middle tick while every value is the same.
+    """
+    read = [value for value in values if value is not None]
+    low, high = (min(read), max(read)) if read else (0.0, 0.0)
+    middle = TICKS[len(TICKS) // 2 - 1]
+    return "".join(
+        " "
+        if value is None
+        else middle
+        if high <= low
+        else TICKS[int((value - low) / (high - low) * (len(TICKS) - 1) + 0.5)]
+        for value in values
+    )
+
+
+@dataclass(frozen=True)
+class Context:
+    """What the terminal view shows beside a frame."""
+
+    instance: Path
+    router: str
+    model: str | None
+    slots: int | None
+
+
+def _number(value: float | None, unit: str = "") -> str:
+    return "-" if value is None else f"{value:,.1f}{unit}"
+
+
+def panel(
+    shown: dict[str, Any],
+    context: Context,
+    history: list[dict[str, Any]],
+    switched: set[str] | None = None,
+) -> Panel:
+    """The terminal view of one frame; `history` holds the earlier frames, oldest first."""
+    switched = switched or set()
+    counts = {role: sum(e["role"] == role for e in shown["engines"]) for role in ROLE_STYLES}
+    window = shown.get("window_s")
+    heading = Text.assemble(
+        (str(context.instance), "bold"),
+        "   ",
+        (context.router, "blue"),
+        *(("   ", (context.model, "bold")) if context.model else ()),
+    )
+    split = Text.assemble(
+        (f"{counts['prefill']} prefill", ROLE_STYLES["prefill"]),
+        "  ",
+        (f"{counts['decode']} decode", ROLE_STYLES["decode"]),
+        ("" if not context.slots else f"   {context.slots} slots per engine", "dim"),
+        ("" if window is None else f"   figures cover the last {window:.0f} s", "dim"),
+    )
+    # Bars share one scale, the larger of the slots and the busiest engine's requests.
+    scale = max([context.slots or 1, *(engine["requests"] for engine in shown["engines"])])
+    engines = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for name in ("engine", "role", "requests", "state"):
+        engines.add_column(name)
+    for engine in shown["engines"]:
+        role = engine["role"] or "-"
+        style = ROLE_STYLES.get(role, "dim")
+        if engine["iid"] in switched:
+            style = f"bold reverse {style}"
+        load = Table.grid(padding=(0, 1))
+        colour = ROLE_STYLES.get(role, "white")
+        load.add_row(
+            ProgressBar(
+                total=scale,
+                completed=engine["requests"],
+                width=16,
+                complete_style=colour,
+                finished_style=colour,
+            ),
+            Text(str(engine["requests"]), justify="right"),
+        )
+        engines.add_row(
+            engine["iid"],
+            Text(role, style=style),
+            load,
+            Text(engine["state"], style=STATE_STYLES.get(engine["state"], "")),
+        )
+    frames = [*history, shown]
+    figures = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    figures.add_column("")
+    figures.add_column("median", justify="right")
+    figures.add_column("95th percentile", justify="right")
+    figures.add_column("trend", style="green")
+    for label, key in (("time to first token", "ttft_s"), ("time per output token", "tpot_s")):
+        figures.add_row(
+            label,
+            _seconds(shown[key]["p50"]).strip(),
+            _seconds(shown[key]["p95"]).strip(),
+            trend([frame[key]["p50"] for frame in frames]),
+        )
+    for label, key in (
+        ("requests per second", "requests_per_second"),
+        ("output tokens per second", "output_tokens_per_second"),
+    ):
+        figures.add_row(label, _number(shown[key]), "", trend([frame[key] for frame in frames]))
+    totals = Text.assemble(
+        "served ",
+        (f"{shown['served']:,}", "bold green"),
+        "   failed ",
+        (f"{shown['failed']:,}", "bold red" if shown["failed"] else "bold"),
+        "   refused, rejected or expired ",
+        (f"{shown['unserved']:,}", "bold yellow" if shown["unserved"] else "bold"),
+    )
+    switches = Text.assemble("role switches ", (str(shown["role_switches"]), "bold"))
+    for flip in shown["recent_switches"]:
+        switches.append("   ")
+        switches.append(f"{flip['iid']} → {flip['to']}", style=ROLE_STYLES.get(flip["to"], ""))
+    return Panel(
+        Group(heading, split, engines, figures, totals, switches),
+        title="narwhal dev watch",
+        subtitle="Ctrl+C to exit",
+        border_style="blue",
+    )
+
+
+def _context(root: Path, config: dict[str, Any]) -> Context:
+    try:
+        spec = lifecycle.read(root / "template.json")
+    except (OSError, ValueError):
+        spec = {}
+    return Context(
+        instance=root,
+        router=config["router_url"],
+        model=(spec.get("model") or {}).get("served_name"),
+        slots=(spec.get("runtime") or {}).get("slots"),
+    )
+
+
 def http_fetch(url: str) -> tuple[dict[str, Any], str]:
     with httpx.Client(timeout=FETCH_TIMEOUT_S, trust_env=False) as client:
         state = client.get(url + "/narwhal/state")
@@ -244,8 +388,9 @@ def run(
         second = parse(clock(), *fetch(url))
         return view(None if restarted(first, second) else first, second)
     out = out or sys.stdout
+    if out.isatty():
+        return _live(url, _context(root, config), interval, frames, fetch, out, clock, sleep)
     # A file or pipe takes the frames one after another.
-    clear = CLEAR if out.isatty() else "\n"
     window: deque[Sample] = deque()
     shown: dict[str, Any] = {"status": "observed", "engines": []}
     drawn = 0
@@ -263,11 +408,63 @@ def run(
                 text = render(shown, url)
             except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
                 text = f"narwhal dev watch  {url}\nrouter unreachable: {exc}\n"
-            out.write(clear + text)
+            out.write("\n" + text)
             out.flush()
             drawn += 1
             if frames is None or drawn < frames:
                 sleep(interval)
     except KeyboardInterrupt:
         pass
+    return shown
+
+
+def _live(
+    url: str,
+    context: Context,
+    interval: float,
+    frames: int | None,
+    fetch: Fetch,
+    out: TextIO,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> dict:
+    window: deque[Sample] = deque()
+    history: deque[dict[str, Any]] = deque(maxlen=TREND_FRAMES - 1)
+    shown: dict[str, Any] = {"status": "observed", "engines": []}
+    roles: dict[str, str | None] = {}
+    drawn = 0
+    console = Console(file=out, force_terminal=True)
+    # The alternate screen gives the terminal back as it was when the view closes.
+    with Live(console=console, screen=True, auto_refresh=False) as live:
+        try:
+            while frames is None or drawn < frames:
+                try:
+                    sample = parse(clock(), *fetch(url))
+                    if window and restarted(window[-1], sample):
+                        window.clear()
+                        history.clear()
+                    window.append(sample)
+                    while len(window) > 2 and sample.at - window[0].at > WINDOW_S:
+                        window.popleft()
+                    if shown.get("engines"):
+                        history.append(shown)
+                    shown = view(window[0] if len(window) > 1 else None, sample)
+                    now = {engine["iid"]: engine["role"] for engine in shown["engines"]}
+                    switched = {iid for iid, role in now.items() if roles.get(iid, role) != role}
+                    roles = now
+                    live.update(panel(shown, context, list(history), switched), refresh=True)
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                    live.update(
+                        Panel(
+                            Text(f"router unreachable: {exc}", style="red"),
+                            title=f"narwhal dev watch  {url}",
+                            border_style="red",
+                        ),
+                        refresh=True,
+                    )
+                drawn += 1
+                if frames is None or drawn < frames:
+                    sleep(interval)
+        except KeyboardInterrupt:
+            pass
     return shown

@@ -1,6 +1,7 @@
 import io
 import itertools
 import math
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -174,7 +175,7 @@ class WatchTests(DirectInstance):
         )
         text = out.getvalue()
         # A pipe or file takes the frames one after another, with no terminal codes.
-        self.assertEqual((text.count(watch.CLEAR), text.count("narwhal dev watch")), (0, 3))
+        self.assertEqual((text.count("\x1b["), text.count("narwhal dev watch")), (0, 3))
         self.assertIn("router unreachable: refused", text)
         self.assertEqual(naps, [2.0, 2.0])
         # The failed reading took a clock tick, so the two samples are 20 s apart.
@@ -199,14 +200,50 @@ class WatchTests(DirectInstance):
         self.assertEqual((shown["window_s"], shown["requests_per_second"]), (10.0, 1.0))
         self.assertEqual(shown["ttft_s"]["p50"], 0.375)
 
-    def test_a_terminal_is_cleared_for_each_frame(self):
+    def test_a_terminal_gets_the_live_view_and_its_screen_back(self):
         class Terminal(io.StringIO):
             def isatty(self) -> bool:
                 return True
 
         out = Terminal()
-        watch.run(self.root, frames=2, fetch=self.fetch, out=out, sleep=lambda seconds: None)
-        self.assertEqual(out.getvalue().count(watch.CLEAR), 2)
+        shown = watch.run(
+            self.root, frames=2, fetch=self.fetch, out=out, sleep=lambda seconds: None
+        )
+        drawn = out.getvalue()
+        self.assertEqual(shown["status"], "observed")
+        for text in ("narwhal dev watch", "time to first token", "role switches", "Ctrl+C"):
+            self.assertIn(text, drawn)
+        # Entering and leaving the alternate screen.
+        self.assertIn("\x1b[?1049h", drawn)
+        self.assertIn("\x1b[?1049l", drawn)
+
+    def test_the_terminal_view_marks_slots_trends_and_a_fresh_switch(self):
+        frame = {
+            "engines": [
+                {"iid": "n1", "role": "prefill", "requests": 1, "state": "live"},
+                {"iid": "n2", "role": "decode", "requests": 2, "state": "draining"},
+            ],
+            "ttft_s": {"p50": 0.05, "p95": 0.2},
+            "tpot_s": {"p50": None, "p95": None},
+            "requests_per_second": 2.0,
+            "output_tokens_per_second": 80.0,
+            "served": 1200,
+            "failed": 1,
+            "unserved": 0,
+            "role_switches": 1,
+            "recent_switches": [{"iid": "n2", "to": "decode"}],
+            "window_s": 30.0,
+        }
+        earlier = {**frame, "output_tokens_per_second": 0.0}
+        context = watch.Context(Path("runs/dev"), "http://127.0.0.1:18000", "ERNIE-4.5-0.3B", 2)
+        console = watch.Console(width=100, record=True, file=io.StringIO())
+        console.print(watch.panel(frame, context, [earlier], {"n2"}))
+        text = console.export_text()
+        for expected in ("ERNIE-4.5-0.3B", "2 slots", "draining", "1,200", "n2 → decode"):
+            self.assertIn(expected, text)
+        self.assertIn("▁█", text)
+        self.assertEqual(watch.trend([None, 3.0, 3.0]), " ▄▄")
+        self.assertEqual(watch.trend([1.0, 2.0, 3.0]), "▁▅█")
 
     def test_watch_needs_a_launched_instance_and_a_positive_interval(self):
         for interval in (0, -1, math.inf, math.nan):
