@@ -125,10 +125,9 @@ def _main(argv: list[str]) -> int:
             )
             action.add_argument(
                 "--accelerator",
-                default=setup.AUTO,
                 help="engine build to download; auto selects by the host's devices, none keeps "
                 "the model on the CPU, and another value names a build the template pins "
-                "(default: %(default)s)",
+                "(default: auto, or the instance's build)",
             )
             action.add_argument(
                 "--engine-count", type=int, help="engines, 2 to 8 (default: template value, 4)"
@@ -136,7 +135,8 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--port-base",
                 type=int,
-                help="router TCP port; engine ports start at +1 (default: 18000)",
+                help="router TCP port; engine ports start at +1 "
+                "(default: router 18000, engines from 18101)",
             )
         if name == "init":
             action.description = (

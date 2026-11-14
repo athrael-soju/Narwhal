@@ -113,6 +113,44 @@ class SetupTests(DirectInstance):
             ("fast", 4, ["runtime.tar.gz"]),
         )
 
+    def test_an_interrupted_change_returns_the_instance_to_its_settings(self):
+        self.run_setup()
+        files = {name: (self.root / name).read_text() for name in setup.INSTANCE_FILES}
+        # The change stopped after it set the instance's files aside.
+        (self.root / setup.PREVIOUS).write_text(json.dumps(files))
+        (self.root / "instance.json").unlink()
+        (self.root / "template.json").write_text("{}")
+        self.assertEqual(setup.run(self.root, get=self.fetch)["status"], "reused")
+        self.assertEqual(
+            {name: (self.root / name).read_text() for name in setup.INSTANCE_FILES}, files
+        )
+        self.assertFalse((self.root / setup.PREVIOUS).exists())
+
+    def test_a_change_waits_for_a_lifecycle_command_on_the_instance(self):
+        self.run_setup()
+        with (
+            lifecycle.locked(self.root),
+            self.assertRaisesRegex(ValueError, "another lifecycle command owns this instance"),
+        ):
+            setup.run(self.root, get=self.fetch, engine_count=4)
+        self.assertEqual(lifecycle.instance(self.root)["engine_count"], 2)
+
+    def test_a_change_keeps_the_pins_of_the_instance_template(self):
+        self.run_setup()
+        saved = json.loads((self.root / "template.json").read_text())
+        self.spec["slo"] = {**self.spec["slo"], "ttft_ms": 1}
+        self.spec["model"]["sha256"] = "0" * 64
+        result = setup.run(self.root, get=self.fetch, engine_count=4)
+        self.assertEqual((result["status"], result["downloaded"]), ("reconfigured", []))
+        after = json.loads((self.root / "template.json").read_text())
+        self.assertEqual((after["slo"], after["model"]), (saved["slo"], saved["model"]))
+
+    def test_an_engine_count_of_zero_is_refused_on_an_instance(self):
+        self.run_setup()
+        with self.assertRaises(ValueError):
+            setup.run(self.root, get=self.fetch, engine_count=0)
+        self.assertEqual(lifecycle.instance(self.root)["engine_count"], 2)
+
     def test_a_running_instance_keeps_its_settings_until_it_is_stopped(self):
         self.run_setup()
         state = {"run": str(self.root / "run-1"), "phase": "launched", "processes": []}

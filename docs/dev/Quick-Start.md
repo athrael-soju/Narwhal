@@ -184,7 +184,7 @@ narwhal dev down
 | `host memory check failed` | Repeat `setup` with `--engine-count 2`. A `Qwen3.5-0.8B` instance can instead be set up in a new `--instance` directory with the default model. |
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
-| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
 | `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
 | `run dev down before starting another generation` | Run `narwhal dev down`, then `narwhal dev up`. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |

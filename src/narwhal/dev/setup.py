@@ -6,6 +6,7 @@ import copy
 import hashlib
 import http.client
 import json
+import os
 import platform
 import shutil
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from narwhal.deployment.launch_engine.runtime import write_private
 
-from . import template
+from . import lifecycle, template
 from .template import starts_directly
 
 AUTO = "auto"
@@ -26,6 +27,8 @@ MODEL_URL = "https://huggingface.co/{repository}/resolve/{revision}/{filename}"
 FETCH_TIMEOUT_S = 60
 BLOCK = 1024 * 1024
 INSTANCE_FILES = ("template.json", "fleet.json", "instance.json")
+# Holds the instance's files while new settings replace them.
+PREVIOUS = "previous.json"
 Fetch = Callable[[str, Path], None]
 
 
@@ -165,11 +168,19 @@ def _engine(engine: dict, name: str, assets: Path, get: Fetch) -> tuple[Path, li
     return binary, downloaded
 
 
+def _restore(root: Path) -> None:
+    held = root / PREVIOUS
+    for name, content in json.loads(held.read_text()).items():
+        (root / name).unlink(missing_ok=True)
+        write_private(root / name, content)
+    held.unlink()
+
+
 def run(
     root: Path,
     *,
     model: str | None = None,
-    accelerator: str = AUTO,
+    accelerator: str | None = None,
     engine_count: int | None = None,
     port_base: int | None = None,
     get: Fetch = fetch,
@@ -179,9 +190,28 @@ def run(
     if not hasattr(tarfile, "data_filter"):
         raise ValueError("narwhal dev setup requires Python 3.11.4 or later")
     root = root.expanduser().resolve()
+    settings = (model, accelerator, engine_count, port_base, get)
+    if (root / "instance.json").is_file() or (root / PREVIOUS).is_file():
+        # up reads the instance's files under this lock.
+        with lifecycle.locked(root):
+            if (root / PREVIOUS).is_file():
+                # An interrupted change left the instance's files here.
+                _restore(root)
+            return _configure(root, *settings)
+    return _configure(root, *settings)
+
+
+def _configure(
+    root: Path,
+    model: str | None,
+    accelerator: str | None,
+    engine_count: int | None,
+    port_base: int | None,
+    get: Fetch,
+) -> dict:
     installed = templates()
-    previous: dict[str, bytes] = {}
-    kept_ports = None
+    previous: dict[str, str] = {}
+    saved = None
     if (root / "instance.json").is_file():
         existing = json.loads((root / "instance.json").read_text())
         if "engine_build" not in existing:
@@ -190,11 +220,10 @@ def run(
         served = saved["model"]["served_name"].lower()
         # An option left out keeps the instance's value.
         model = model or served
-        accelerator = existing["engine_build"] if accelerator == AUTO else accelerator
-        engine_count = engine_count or existing["engine_count"]
+        accelerator = accelerator or existing["engine_build"]
+        if engine_count is None:
+            engine_count = existing["engine_count"]
         ports = existing["ports"]
-        if port_base is None:
-            kept_ports = ports
         if (
             model == served
             and accelerator == existing["engine_build"]
@@ -207,20 +236,26 @@ def run(
             raise ValueError(
                 f"run narwhal dev down --instance {root} before changing the instance's settings"
             )
-        previous = {name: (root / name).read_bytes() for name in INSTANCE_FILES}
+        previous = {name: (root / name).read_text() for name in INSTANCE_FILES}
+        if model != served:
+            saved = None
     elif root.exists() and any(entry.name != "assets" for entry in root.iterdir()):
         raise ValueError(f"{root} holds other files; name an empty or new instance directory")
     if not installed:
         raise ValueError("no template that starts its engines directly is installed")
-    if model is not None and model not in installed:
+    if saved is None and model is not None and model not in installed:
         raise ValueError(
             f"no installed template serves {model}; choose from {', '.join(installed)}"
         )
-    spec = copy.deepcopy(installed[model or next(iter(installed))])
-    if kept_ports is not None:
-        spec["ports"] = dict(kept_ports)
+    if saved is not None:
+        # The instance's own template carries its pins and ports through a change.
+        spec = saved
+    else:
+        spec = copy.deepcopy(installed[model or next(iter(installed))])
+        if previous and port_base is None:
+            spec["ports"] = dict(ports)
     engine = spec["engine"]
-    build = _build(engine, accelerator)
+    build = _build(engine, accelerator or AUTO)
     assets = root / "assets"
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     assets.mkdir(exist_ok=True)
@@ -230,6 +265,10 @@ def run(
     if _asset(MODEL_URL.format(**pinned), model_file, pinned["sha256"], get):
         downloaded.append(pinned["filename"])
     # The instance's files give way to the new settings and return if a check refuses them.
+    if previous:
+        (root / f"{PREVIOUS}.new").unlink(missing_ok=True)
+        write_private(root / f"{PREVIOUS}.new", json.dumps(previous))
+        os.replace(root / f"{PREVIOUS}.new", root / PREVIOUS)
     for name in previous:
         (root / name).unlink()
     try:
@@ -245,9 +284,10 @@ def run(
             recorded={"engine_build": build},
         )
     except BaseException:
-        for name, content in previous.items():
-            write_private(root / name, content.decode())
+        if previous:
+            _restore(root)
         raise
+    (root / PREVIOUS).unlink(missing_ok=True)
     return {
         "status": "reconfigured" if previous else "initialized",
         "instance": str(root),
