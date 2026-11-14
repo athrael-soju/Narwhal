@@ -4,32 +4,38 @@ description: Options, exit codes and run directories for narwhal dev on one NVID
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. The fleet holds native vLLM or SGLang engines, their attestation sidecars and a router. To set up the host, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. The package installs three templates:
+`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM or SGLang engines on one NVIDIA CUDA GPU, their attestation sidecars and a router. To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of three installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM | 1 prefill, 1 decode | GGUF file |
 | [`small-cuda-sglang-v1.json`](../Dev-Runtime.md#running-sglang-engines) | SGLang with Mooncake | 1 prefill, 1 decode | Checkpoint directory |
 | [`reference-v1.json`](../dev/RTX-5090-Reference.md), for an RTX 5090 | vLLM | 2 prefill, 2 decode | GGUF file |
+| [`direct-qwen35-08b-v1.json`](../dev/Llama-Cpp-Engines.md#templates), the default of `setup` | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
+| [`direct-ernie45-03b-v1.json`](../dev/Llama-Cpp-Engines.md#templates) | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
 
 ## Lifecycle
 
-Run the subcommands with the Python environment that ran `init`:
+Run the subcommands with the Python environment that ran `setup` or `init`:
 
 ```bash
-narwhal dev init
+narwhal dev setup
 narwhal dev up
 narwhal dev verify
+narwhal dev ask "What is the capital of France?"
+narwhal dev watch
 narwhal dev status
 narwhal dev down
 ```
+
+For vLLM or SGLang engines, `narwhal dev init` takes the place of `setup`.
 
 | Subcommand | Operation | Reports |
 | --- | --- | --- |
 | `setup` | Downloads the engine build and model file that a template pins into `assets` under the instance directory, checks their SHA-256 values, and runs the `init` checks for a template that starts its engines directly. | `initialized`, or `reused` |
 | `init` | Checks the model files, runtime packages, GPU, network interface and ports, then writes `template.json`, `instance.json`, `engine-launch.json` and `fleet.json` to the instance directory. | `initialized`, or `reused` |
-| `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. | `launched` |
-| `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. | `ready` |
+| `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, writes it a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) from one short request and starts the router. | `launched` |
+| `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. For llama.cpp engines, sends one routed completion that must return text and checks `/ready`. | `ready` |
 | `ask` | Takes one prompt as its argument, after `--` when the prompt starts with a hyphen. Sends it through the router and prints the reply, its time to first token, its tokens per second and the engine that served each leg. With `--repeat`, sends that many built-in prompts and prints the time to first token and the time per output token at the median and the 95th percentile, the throughput and the count of failed requests. | `answered`, or `completed` |
 | `watch` | Redraws, from the router's `/narwhal/state` and `/metrics`, each engine's role and requests in flight, the time to first token and the time per output token at the median and the 95th percentile, the throughput and the role switches. The times are the router's: arrival to the end of prefill, and the mean time per output token after it, so they differ from the client's view that `ask` reports. Output tokens are counted when a request completes. It runs until interrupted and prints the view in place of a result document. With `--once` or `--format json` it takes two readings one interval apart and prints that frame as its result. | `observed` |
 | `status` | Reads the recorded processes, health routes and saved evidence. | A state from the next table |
@@ -92,7 +98,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--max-tokens` | `128` | Output token limit of each `ask` request. | A positive integer |
 | `--model-name` | The default template's model | Served name of the model `setup` prepares. | A model that an installed template starting its engines directly serves |
 
-`--port-base P` puts the router at `P` and starts the engine HTTP, attestation and KV side-channel ranges at `P+1`, `P+101` and `P+201`, one port per engine. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. The installed templates put the router at 18000 and start the ranges at 18101, 18201 and 5701. `init` and `up` require every port to be free on `127.0.0.1`.
+`--port-base P` puts the router at `P` and starts the engine HTTP, attestation and KV side-channel ranges at `P+1`, `P+101` and `P+201`, one port per engine. A template that starts its engines directly uses the router port and the engine HTTP range alone. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. The installed templates put the router at 18000 and start the ranges at 18101, 18201 and 5701. `init` and `up` require every port to be free on `127.0.0.1`.
 
 `init` also checks the GPU:
 
