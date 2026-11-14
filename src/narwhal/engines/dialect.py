@@ -29,6 +29,8 @@ class EngineDialect(ABC):
     )
     # True when each streamed decode chunk carries its token IDs.
     token_ids: ClassVar[bool] = True
+    # True when `stream_output_tokens` reads a reply's output token count from its stream.
+    reports_output_tokens: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")
@@ -106,6 +108,12 @@ class EngineDialect(ABC):
         ):
             return None
         return tokens
+
+    def stream_output_tokens(self, payload: dict[str, Any]) -> int | None:
+        """The reply's output token count as a stream chunk reports it, for an engine whose
+        chunks carry no token IDs; None for a chunk that reports none.
+        """
+        return None
 
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"min_tokens": tokens, "ignore_eos": True}

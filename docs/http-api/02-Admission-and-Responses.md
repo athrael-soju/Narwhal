@@ -124,6 +124,6 @@ On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true
 
 When the decode request asks for token IDs, every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-The router reports `token_accounting: token_ids` on vLLM and SGLang.
+The router reports `token_accounting: token_ids` on vLLM and SGLang, and `token_accounting: reported` on llama.cpp.
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`.

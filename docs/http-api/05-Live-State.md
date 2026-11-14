@@ -28,7 +28,7 @@ The state document carries these top-level fields:
 | `cancelled`               | Requests whose client disconnected                                                                            |
 | `invalid_requests`        | Requests refused with HTTP `400`, `404`, or `413` before admission                                            |
 | `controller`              | Active role controller, `reactive`                                                                            |
-| `token_accounting`        | `token_ids` when the engines supply token IDs, otherwise `unavailable`                                        |
+| `token_accounting`        | `token_ids` when the engines supply token IDs, `reported` when their streams report each reply's output token count, otherwise `unavailable` |
 | `control`                 | Role-controller mode and decision counts                                                                      |
 | `monitoring`              | Timing and failure state of the engine monitoring loop                                                        |
 | `ha`                      | High-availability state: readiness, standby status, lease, and failover block                                 |
