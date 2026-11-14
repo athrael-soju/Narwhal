@@ -171,7 +171,7 @@ class SetupTests(DirectInstance):
     def test_the_installed_templates_pin_every_build_and_the_cli_passes_its_options(self):
         patch.stopall()
         installed = setup.templates()
-        self.assertEqual(list(installed), ["qwen3.5-0.8b", "ernie-4.5-0.3b"])
+        self.assertEqual(list(installed), ["ernie-4.5-0.3b", "qwen3.5-0.8b"])
         for spec in installed.values():
             self.assertEqual(sorted(spec["engine"]["builds"]), ["cuda", "cuda12", "none"])
             for name, build in spec["engine"]["builds"].items():
