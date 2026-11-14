@@ -7,23 +7,27 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from narwhal.diagnostics.check.profiles import gate_profile_generation
+from narwhal.diagnostics.check.profiles import gate_profile, gate_profile_generation
 from narwhal.diagnostics.check.report import Report
 from narwhal.profiling.generation import profile_generation_problems
 from narwhal.profiling.model import Profile, nominal_profile
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime.lifecycle.identity import allow_profile_recovery
 from narwhal.serving.app import create_app
-from tests.fixtures import fleet
+from tests.fixtures import fleet, profile
 
 DIGEST = "sha256:" + "a" * 64
 REFUSED = "e0 has a nominal profile; engine_contract requires a measured one"
 
 
-def nominal(iid: str) -> Profile:
-    return nominal_profile(
-        iid, prefill_token_s=0.0002, token_interval_s=0.01, kv_capacity_tokens=4096, max_requests=4
-    )
+def nominal(iid: str, **changes) -> Profile:
+    figures = {
+        "prefill_token_s": 0.0002,
+        "token_interval_s": 0.01,
+        "kv_capacity_tokens": 4096,
+        "max_requests": 4,
+    }
+    return nominal_profile(iid, **{**figures, **changes})
 
 
 def unreachable(request: httpx.Request) -> httpx.Response:
@@ -50,10 +54,18 @@ class NominalProfileTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile.max_tokens(0.005), 0)
         self.assertEqual(profile.decode_request_limit(1024), 4)
         self.assertEqual(profile.decode_request_limit(2048), 2)
+        self.assertGreater(profile.decode_rps(0.05, 1024, 64), 0)
+        for figure in ("prefill_token_s", "token_interval_s"):
+            with self.assertRaisesRegex(ValueError, f"profile e0: {figure} must be positive"):
+                nominal("e0", **{figure: 0})
 
     def test_the_store_keeps_the_flag_and_rejects_a_bound_or_malformed_one(self):
-        loaded = ProfileStore(self.cfg.profiles_path).get("e0")
-        self.assertEqual(loaded, nominal("e0"))
+        self.store.put(profile("e3"))
+        loaded = ProfileStore(self.cfg.profiles_path)
+        self.assertEqual(loaded.get("e0"), nominal("e0"))
+        self.assertEqual(loaded.get("e3"), profile("e3"))
+        rows = json.loads(self.cfg.profiles_path.read_text())["profiles"]
+        self.assertEqual(["nominal" in row for row in rows], [True, False])
         with self.assertRaisesRegex(ValueError, "a nominal profile carries no generation_digest"):
             replace(nominal("e0"), generation_digest=DIGEST)
         document = json.loads(self.cfg.profiles_path.read_text())
@@ -63,9 +75,12 @@ class NominalProfileTests(unittest.IsolatedAsyncioTestCase):
             ProfileStore(self.cfg.profiles_path)
 
     def test_a_generation_check_passes_a_nominal_profile_and_still_needs_a_profile(self):
-        self.assertEqual(profile_generation_problems(self.store, "e0", DIGEST), [])
+        self.assertEqual(profile_generation_problems(self.store, "e0", DIGEST, contract=False), [])
         self.assertEqual(
-            profile_generation_problems(self.store, "absent", DIGEST),
+            profile_generation_problems(self.store, "e0", DIGEST, contract=True), [REFUSED]
+        )
+        self.assertEqual(
+            profile_generation_problems(self.store, "absent", DIGEST, contract=False),
             ["absent has no loaded profile; reprofile before admission"],
         )
 
@@ -75,15 +90,15 @@ class NominalProfileTests(unittest.IsolatedAsyncioTestCase):
         self.cfg.state_path = self.root / "handoff.json"
         app = create_app(self.cfg, lifecycle_transport=self.transport)
         router = app.state.router
-        self.addAsyncCleanup(router.engines.aclose)
         with patch("narwhal.serving.app.monitor_loop", new=AsyncMock()):
             async with app.router.lifespan_context(app):
                 self.assertTrue(await allow_profile_recovery(router, "e0"))
+        self.store.put(nominal("e3", max_requests=1))
         report = Report()
+        store = gate_profile(self.cfg, report)
         live = {spec.iid for spec in self.cfg.engines}
         self.assertEqual(
-            await gate_profile_generation(self.cfg, self.store, live, report, self.transport),
-            set(),
+            await gate_profile_generation(self.cfg, store, live, report, self.transport), set()
         )
         self.assertEqual(report.failed, [])
 
@@ -94,8 +109,5 @@ class NominalProfileTests(unittest.IsolatedAsyncioTestCase):
             async with app.router.lifespan_context(app):
                 pass
         report = Report()
-        self.assertEqual(
-            await gate_profile_generation(self.cfg, self.store, {"e0"}, report, self.transport),
-            {"e0"},
-        )
-        self.assertEqual(report.failed, [REFUSED])
+        gate_profile(self.cfg, report)
+        self.assertEqual(report.failed, [REFUSED, REFUSED.replace("e0", "e3")])

@@ -39,7 +39,7 @@ The [attested launch digest](../configuration/01-Fleet-Schema.md#attestation) co
 - the hashes of the launcher, the launch record, and the cache-capture hook
 - the `ucx_version` and `peer_release` values from the image check
 
-Preflight, router startup, readmission, and automatic recovery require a fresh profile when an engine's stored profile has missing generation evidence or a digest that differs from the engine's live generation. The error names the engine.
+Preflight, router startup, readmission, and automatic recovery require a fresh profile when an engine's stored measured profile has missing generation evidence or a digest that differs from the engine's live generation. The error names the engine.
 
 If preflight, router startup, or recovery reports `profile has no generation evidence`:
 
@@ -86,13 +86,22 @@ Each profile row has these fields:
 | `colocated_target_role` | string | `prefill` or `decode`, required with `colocated_group`. |
 | `colocated_prefill_engines`, `colocated_decode_engines` | integer | Positive engine counts of the measured role mix, at least two engines in total, required with `colocated_group`. |
 | `colocated_prefill_rps`, `colocated_decode_rps` | number | Nonnegative measured neighbour load in requests per second, required with `colocated_group`. |
-| `nominal` | boolean, optional | `true` for a [nominal profile](#nominal-profiles), which has no `generation_digest`. Default `false`. |
+| `nominal` | boolean, optional | `true` for a [nominal profile](#nominal-profiles), with `generation_digest` unset. Default `false`. |
 
 ### Nominal profiles
 
-A nominal profile states an engine's cost from four figures in place of a sweep: prefill time per prompt token, the decode token interval, the KV capacity in tokens and the largest number of concurrent sequences. Its row sets `nominal` to `true`, `ttft_b` to the prefill time per token, `tpot_intercept` to the decode interval, and both fit errors to `0`.
+A nominal profile states an engine's cost from four figures in place of a sweep. Its row sets `nominal` to `true` and these fields:
 
-Router startup, preflight, readmission and automatic recovery skip the generation check for a nominal profile, so the profile stays valid across engine restarts. A fleet with `engine_contract` refuses a nominal profile and names the engine.
+| Figure | Fields |
+| --- | --- |
+| Prefill time per prompt token, positive | `ttft_b`, with `ttft_a` and `ttft_c` at `0` |
+| Decode token interval, positive | `tpot_intercept`, with `tpot_slope` at `0` |
+| KV capacity in tokens | `kv_capacity_tokens` and `decode_max_kv_tokens`, with `decode_min_kv_tokens` at `1` |
+| Largest number of concurrent sequences | `decode_max_requests`, with `decode_min_requests` at `1` |
+
+Both fit errors are `0`.
+
+Router startup, preflight and automatic recovery pass a nominal profile with no generation check, so the profile stays valid across engine restarts. Preflight reports the stated figures in place of the fit errors. A fleet with `engine_contract` refuses a nominal profile and names the engine.
 
 Profile loading aborts on `true`, `"96"` or `1.5` in an integer field, on `NaN` or `Infinity`, on a field outside the profile fields table, and on a partial set of `cached_` fields.
 

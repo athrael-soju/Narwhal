@@ -92,9 +92,17 @@ def nominal_problem(store: ProfileStore, iid: str) -> str | None:
     return None
 
 
-def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
+def profile_generation_problems(
+    store: ProfileStore, iid: str, live: str, *, contract: bool
+) -> list[str]:
+    """Return why the engine's profiles do not fit its live generation `live`.
+
+    `contract` says whether the fleet declares an engine contract.
+    """
     if not store.profiles_for_engine(iid):
         return [f"{iid} has no loaded profile; reprofile before admission"]
+    if contract and (problem := nominal_problem(store, iid)):
+        return [problem]
     return list(
         dict.fromkeys(
             problem

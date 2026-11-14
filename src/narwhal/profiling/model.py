@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 from typing import Any
 
 from .fitting import cached_features, split_step
@@ -383,6 +383,13 @@ def nominal_profile(
     `prefill_token_s` per prompt token and the decode interval stays `token_interval_s`
     up to `max_requests` sequences and `kv_capacity_tokens` resident tokens.
     """
+    # A zero figure prices the engine as free or as having no decode capacity.
+    for name, value in (
+        ("prefill_token_s", prefill_token_s),
+        ("token_interval_s", token_interval_s),
+    ):
+        if not value > 0:
+            raise ValueError(f"profile {iid}: {name} must be positive")
     return Profile(
         iid=iid,
         ttft_a=0.0,
@@ -399,6 +406,14 @@ def nominal_profile(
         decode_cv_mape=0.0,
         nominal=True,
     )
+
+
+def profile_row(profile: Profile) -> dict[str, Any]:
+    """Return the stored row. A measured row leaves `nominal` out, so earlier releases load it."""
+    row = asdict(profile)
+    if not profile.nominal:
+        del row["nominal"]
+    return row
 
 
 _OPTIONAL_DEFAULTS: dict[str, Any] = {

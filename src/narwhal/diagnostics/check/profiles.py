@@ -56,6 +56,15 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             else:
                 rep.fail(f"{spec.iid} has no profile; run narwhal-profile --fleet <config>")
             continue
+        if cfg.engine_contract is not None and (refused := nominal_problem(store, spec.iid)):
+            rep.fail(refused)
+            continue
+        if p.nominal:
+            rep.ok(
+                f"{spec.iid} nominal profile: prefill {p.ttft_b:.2e} s per token, decode "
+                f"interval {p.tpot_intercept:.4f} s up to {p.decode_max_requests} sequences"
+            )
+            continue
         problems = decode_evidence_problems(
             p,
             max_fit_mape=policy.max_decode_fit_mape,
@@ -95,10 +104,6 @@ async def gate_profile_generation(
     unsafe: set[str] = set()
     for spec in cfg.engines:
         if spec.iid not in live:
-            continue
-        if cfg.engine_contract is not None and (problem := nominal_problem(store, spec.iid)):
-            rep.fail(problem)
-            unsafe.add(spec.iid)
             continue
         profiles = bound_profiles(store, spec.iid)
         if not profiles:

@@ -12,7 +12,7 @@ from typing import Any
 from ...contracts import PROFILES, versioned
 from ...provenance import stamp
 from ..fitting import fit_prefill_samples
-from ..model import CACHED_PROFILE_FIELDS, Profile
+from ..model import CACHED_PROFILE_FIELDS, Profile, profile_row
 from ..store import ProfileStore
 from .instance import prefill_fields
 from .warm import apply_cached_fit
@@ -100,7 +100,7 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
             profile=asdict(updated),
         )
         print(f"  {iid}: prefill median fit MAPE {error:.1%}")
-        profiles.append(asdict(updated))
+        profiles.append(profile_row(updated))
     record["method_version"] = 2
     record["prefill_refit_source"] = str(samples_path)
     profile_document = versioned(PROFILES, {"meta": stamp()["meta"], "profiles": profiles})
