@@ -289,6 +289,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `served_after_retry`       | Completed requests whose final attempt followed a failed one                                  |
 | `attempt_failures`         | Failed attempts as `phase`, `reason`, and `count` rows                                        |
 | `decode_tokens_observed`   | Decode tokens the router observed                                                             |
+| `output_tokens`            | Measured output tokens of completed requests                                                  |
 | `upstream_seconds`         | Total time in engine HTTP calls by phase, across all attempts                                 |
 
 ## Scheduler and controller state

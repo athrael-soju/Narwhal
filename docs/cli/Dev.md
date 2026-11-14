@@ -31,6 +31,7 @@ narwhal dev down
 | `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. | `launched` |
 | `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. | `ready` |
 | `ask` | Takes one prompt as its argument, after `--` when the prompt starts with a hyphen. Sends it through the router and prints the reply, its time to first token, its tokens per second and the engine that served each leg. With `--repeat`, sends that many built-in prompts and prints the time to first token and the time per output token at the median and the 95th percentile, the throughput and the count of failed requests. | `answered`, or `completed` |
+| `watch` | Redraws, from the router's `/narwhal/state` and `/metrics`, each engine's role and requests in flight, the time to first token and the time per output token at the median and the 95th percentile, the throughput and the role switches. The times are the router's: arrival to the end of prefill, and the mean time per output token after it, so they differ from the client's view that `ask` reports. Output tokens are counted when a request completes. It runs until interrupted and prints the view in place of a result document. With `--once` or `--format json` it takes two readings one interval apart and prints that frame as its result. | `observed` |
 | `status` | Reads the recorded processes, health routes and saved evidence. | A state from the next table |
 | `down` | Sends SIGTERM to each recorded process group and SIGKILL to members still running 10 seconds later. | `stopped` |
 
@@ -58,15 +59,15 @@ In text mode, stdout carries the result as one JSON document, and stderr carries
 
 | Outcome | Exit code |
 | --- | :--: |
-| `initialized`, `reused`, `starting`, `launched`, `ready`, `stopped`, `answered`, or `completed` with every request served | `0` |
+| `initialized`, `reused`, `starting`, `launched`, `ready`, `stopped`, `observed`, `answered`, or `completed` with every request served | `0` |
 | `degraded`, a failed `up`, `verify` or `down`, a failed `ask` request, or `completed` with a failed request | `1` |
-| Invalid `ask` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `init` | `2` |
+| Invalid `ask` or `watch` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `init` | `2` |
 
 With `--format json`, the command prints a [versioned command result](../Command-Results.md), and the exit code follows its status. A `degraded` instance exits with code `3`, a failed step or routed check during `up` or `verify` and a failed single `ask` request exit with code `4`, and an `ask --repeat` run with a failed request exits with code `1`.
 
 ## Options
 
-`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup`, `--repeat`, `--concurrency` and `--max-tokens` to `ask`, `--engine-count` and `--port-base` to `setup` and `init`, and the other options to `init`. An omitted `setup` or `init` option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
+`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup`, `--repeat`, `--concurrency` and `--max-tokens` to `ask`, `--interval` and `--once` to `watch`, `--engine-count` and `--port-base` to `setup` and `init`, and the other options to `init`. An omitted `setup` or `init` option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -84,6 +85,8 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--engine-binary` | None | Engine server executable, for a template that starts its engines directly. | An executable file of the build the template pins |
 | `--no-accelerator` | Off | Keeps the model on the CPU, for a template that starts its engines directly. | A flag with no value |
 | `--accelerator` | `auto` | Engine build that `setup` downloads. `auto` selects by the host's devices. | `auto`, `none` for the CPU, or a build the template pins |
+| `--interval` | `1.0` | Seconds between redraws of `watch`. | A positive number |
+| `--once` | Off | Makes `watch` print one frame as its result and exit. | A flag with no value |
 | `--repeat` | None | Number of built-in prompts `ask` sends in place of one prompt. | A positive integer |
 | `--concurrency` | `1` | Requests `ask` keeps in flight with `--repeat`. | A positive integer |
 | `--max-tokens` | `128` | Output token limit of each `ask` request. | A positive integer |
