@@ -195,10 +195,19 @@ def run(
         # up reads the instance's files under this lock.
         with lifecycle.locked(root):
             if (root / PREVIOUS).is_file():
+                _running(root)
                 # An interrupted change left the instance's files here.
                 _restore(root)
             return _configure(root, *settings)
     return _configure(root, *settings)
+
+
+def _running(root: Path) -> None:
+    state = root / "lifecycle.json"
+    if state.is_file() and json.loads(state.read_text()).get("phase") != "stopped":
+        raise ValueError(
+            f"run narwhal dev down --instance {root} before changing the instance's settings"
+        )
 
 
 def _configure(
@@ -220,6 +229,8 @@ def _configure(
         served = saved["model"]["served_name"].lower()
         # An option left out keeps the instance's value.
         model = model or served
+        if accelerator == AUTO:
+            accelerator = _build(saved["engine"], AUTO)
         accelerator = accelerator or existing["engine_build"]
         if engine_count is None:
             engine_count = existing["engine_count"]
@@ -231,11 +242,7 @@ def _configure(
             and (port_base is None or (port_base, port_base + 1) == tuple(ports.values()))
         ):
             return {"status": "reused", "instance": str(root)}
-        state = root / "lifecycle.json"
-        if state.is_file() and json.loads(state.read_text()).get("phase") != "stopped":
-            raise ValueError(
-                f"run narwhal dev down --instance {root} before changing the instance's settings"
-            )
+        _running(root)
         previous = {name: (root / name).read_text() for name in INSTANCE_FILES}
         if model != served:
             saved = None

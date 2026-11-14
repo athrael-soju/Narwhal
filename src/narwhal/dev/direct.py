@@ -238,6 +238,8 @@ def materialize(
 
 def up(root: Path, config: dict) -> dict:
     with lifecycle.locked(root):
+        # setup may have changed the instance since the caller read it.
+        config = lifecycle.instance(root)
         if (root / "lifecycle.json").exists():
             previous = lifecycle._read_state(root)
             if previous.get("phase") != "stopped":
@@ -250,9 +252,13 @@ def up(root: Path, config: dict) -> dict:
         _model(spec, Path(config["model_path"]))
         _check_free_ports(_ports(spec, config["engine_count"])[1], HOST)
         # The last run's logs stay for a look after a restart; earlier runs leave.
-        kept = previous.get("run") if (root / "lifecycle.json").exists() else None
+        kept = Path(previous["run"]).name if (root / "lifecycle.json").exists() else None
         for earlier in root.glob("run-*"):
-            if earlier.is_dir() and str(earlier) != kept:
+            if earlier.name == kept:
+                continue
+            if earlier.is_symlink():
+                earlier.unlink()
+            elif earlier.is_dir():
                 shutil.rmtree(earlier)
         run = root / f"run-{uuid.uuid4().hex[:12]}"
         run.mkdir(mode=0o700)

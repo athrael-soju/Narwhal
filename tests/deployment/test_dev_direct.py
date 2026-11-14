@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 import random
 import subprocess
 import sys
@@ -209,15 +210,25 @@ class DirectLifecycleTests(DirectInstance):
         self.init()
         other = self.folder / "other"
         other.mkdir()
-        (other / "lifecycle.json").write_text(json.dumps({"phase": "launched"}))
+        alive = {"name": "engine-1", "identity": {"pid": os.getpid()}}
+        launched = {"phase": "launched", "processes": [alive]}
+        (other / "lifecycle.json").write_text(json.dumps(launched))
         lifecycle._started_elsewhere(other, record=True)
         with self.assertRaisesRegex(ValueError, f"a fleet is already up in {other}"):
             lifecycle.up(self.root)
         self.assertFalse((self.root / "lifecycle.json").exists())
         self.assertEqual(lifecycle.up(self.root, alongside=True)["status"], "launched")
         self.stop()
-        # A stopped instance holds no fleet.
-        (other / "lifecycle.json").write_text(json.dumps({"phase": "stopped"}))
+        # A fleet whose processes ended holds nothing, though its record says launched.
+        ended = subprocess.Popen([sys.executable, "-c", ""])
+        ended.wait()
+        dead = {"name": "engine-1", "identity": {"pid": ended.pid}}
+        (other / "lifecycle.json").write_text(json.dumps({**launched, "processes": [dead]}))
+        self.assertFalse(lifecycle._fleet_up(other))
+        # An instance whose lock is held is starting or changing.
+        with lifecycle.locked(other):
+            self.assertTrue(lifecycle._fleet_up(other))
+        (other / "lifecycle.json").write_text(json.dumps({"phase": "stopped", "processes": []}))
         self.assertEqual(lifecycle.up(self.root)["status"], "launched")
         self.stop()
         self.assertEqual(lifecycle._started_elsewhere(other, record=False), [])

@@ -101,6 +101,10 @@ class SetupTests(DirectInstance):
             (result["status"], result["engines"], result["downloaded"]), ("reconfigured", 4, [])
         )
         self.assertEqual(self.fetched, [])
+        # auto names the build the host takes, which is the one in place.
+        self.assertEqual(
+            setup.run(self.root, get=self.fetch, accelerator="auto")["status"], "reused"
+        )
         after = lifecycle.instance(self.root)
         self.assertEqual((after["engine_count"], after["ports"]), (4, before["ports"]))
         self.assertEqual(after["engine_binary"], before["engine_binary"])

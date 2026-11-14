@@ -443,6 +443,7 @@ def _live(
                     if window and restarted(window[-1], sample):
                         window.clear()
                         history.clear()
+                        shown = {"status": "observed", "engines": []}
                     window.append(sample)
                     while len(window) > 2 and sample.at - window[0].at > WINDOW_S:
                         window.popleft()

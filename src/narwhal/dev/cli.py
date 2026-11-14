@@ -266,7 +266,9 @@ def _main(argv: list[str]) -> int:
             except FileNotFoundError:
                 if (root / "instance.json").exists():
                     raise
-                raise FileNotFoundError("no instance here; run narwhal dev up first") from None
+                raise FileNotFoundError(
+                    "no instance here; run narwhal dev up or narwhal dev init"
+                ) from None
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if results.json_mode():
                 raise

@@ -364,7 +364,7 @@ def _started_elsewhere(root: Path, record: bool) -> list[Path]:
                 flags = os.O_RDONLY | os.O_NOFOLLOW
                 with os.fdopen(os.open(entry, flags, dir_fd=directory)) as stream:
                     other = Path(stream.read(4096))
-                up_there = json.loads((other / "lifecycle.json").read_text())["phase"] != "stopped"
+                up_there = _fleet_up(other)
             except (OSError, ValueError, KeyError, TypeError):
                 up_there = False
             if up_there:
@@ -383,6 +383,26 @@ def _started_elsewhere(root: Path, record: bool) -> list[Path]:
         os.close(directory)
 
 
+def _fleet_up(root: Path) -> bool:
+    """Whether a lifecycle command holds the instance, or a recorded process of its fleet runs."""
+    if not root.is_dir():
+        return False
+    if _busy(root):
+        return True
+    state = json.loads((root / "lifecycle.json").read_text())
+    if state["phase"] == "stopped":
+        return False
+    for record in state["processes"]:
+        try:
+            os.kill(record["identity"]["pid"], 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pass
+        return True
+    return False
+
+
 def up(root: Path, alongside: bool = False) -> dict:
     config = instance(root)
     others = _started_elsewhere(root, record=False)
@@ -390,8 +410,7 @@ def up(root: Path, alongside: bool = False) -> dict:
         # A second fleet takes its own share of memory beside the first.
         raise ValueError(
             f"a fleet is already up in {others[0]}; stop it with narwhal dev down --instance "
-            f"{others[0]}, or change it with narwhal dev setup --instance {others[0]}. "
-            "To start this fleet beside it, pass --alongside"
+            f"{others[0]}, or pass --alongside to start this fleet beside it"
         )
     _started_elsewhere(root, record=True)
     if starts_directly(config):
