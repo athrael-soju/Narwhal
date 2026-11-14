@@ -41,28 +41,43 @@ class ContractFixtures:
     attestation: dict[str, Any]
     sequence_limit: int | None
     kv_lease: int | None
-    # The launch fields below stay at their defaults for a backend with no launcher.
+    # Handoff body fields that take a new random value for each request.
+    handoff_random_fields: tuple[str, ...] = ()
+    # A backend with a launcher sets each field in LAUNCH_FIELDS.
     memory_args: list[str] = field(default_factory=list)
     memory_fraction: str = ""
     launch_runtime: dict[str, Any] = field(default_factory=dict)
     # Stdout of the backend's runtime check probe for a launch plan.
-    check_output: Callable[[dict], str] = str
+    check_output: Callable[[dict], str] | None = None
     # Writes the evidence a started container's captures leave in its launch directory.
-    attestation_evidence: Callable[[Path, dict, str], None] = lambda run, plan, log: None
+    attestation_evidence: Callable[[Path, dict, str], None] | None = None
     startup_log: str = ""
     # Distributions an engine image reports to discovery, and the .env fields discovery reads.
     image_packages: dict[str, str] = field(default_factory=dict)
     discovery_settings: dict[str, str] = field(default_factory=dict)
-    # Handoff body fields that take a new random value for each request.
-    handoff_random_fields: tuple[str, ...] = ()
 
 
-def launched() -> list[str]:
+LAUNCH_FIELDS = (
+    "memory_args",
+    "memory_fraction",
+    "launch_runtime",
+    "check_output",
+    "attestation_evidence",
+    "startup_log",
+)
+
+
+def with_launcher() -> list[str]:
     return [name for name in names() if load_backend(name).launcher is not None]
 
 
 def fixtures(backend: str) -> ContractFixtures:
-    return importlib.import_module(f"tests.backends.fixtures.{backend}").FIXTURES
+    found = importlib.import_module(f"tests.backends.fixtures.{backend}").FIXTURES
+    if load_backend(backend).launcher is not None:
+        unset = [name for name in LAUNCH_FIELDS if not getattr(found, name)]
+        if unset:
+            raise TypeError(f"{backend} fixtures leave {', '.join(unset)} unset")
+    return found
 
 
 CONTAINER_ID = "c" * 64
