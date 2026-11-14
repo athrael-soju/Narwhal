@@ -111,6 +111,7 @@ class ServingOut(BaseModel):
     served_after_retry: int = 0
     attempt_failures: list[AttemptFailuresOut] = Field(default_factory=list)
     decode_tokens_observed: int = 0
+    output_tokens: int = 0
     upstream_seconds: dict[str, float] = Field(default_factory=dict)
 
 

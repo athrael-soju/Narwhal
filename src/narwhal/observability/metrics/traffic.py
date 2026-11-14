@@ -56,6 +56,7 @@ def render_admission(state: dict) -> list[str]:
         ("retry_denied", "Retries denied by the shared retry quota"),
         ("served_after_retry", "Requests completed by an attempt after the first"),
         ("decode_tokens_observed", "Exact decode tokens read across all attempts when supported"),
+        ("output_tokens", "Measured output tokens of completed requests"),
     ):
         out += metric_lines(
             f"narwhal_{field_name}_total", help_text, "counter", [({}, serving.get(field_name, 0))]

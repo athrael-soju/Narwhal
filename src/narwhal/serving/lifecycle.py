@@ -291,6 +291,7 @@ class RequestLifecycle:
         if completed:
             router.retry_budget.succeeded()
             if measured is not None:
+                router.output_tokens += measured
                 router.controller.saw_completion(req.input_len, req.wanted_len, measured)
         ttft_ok = completed and prefill_s is not None and prefill_s <= router.cfg.slo.ttft_s
         tpot_ok = (

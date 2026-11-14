@@ -12,7 +12,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from . import ask, lifecycle, setup, template
+from . import ask, lifecycle, setup, template, watch
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,6 +74,9 @@ def _main(argv: list[str]) -> int:
         "ask": "Send one prompt through a launched instance's router and report the reply, its "
         "time to first token, its tokens per second and the engines that served it; or send "
         "--repeat built-in prompts at --concurrency and report the spread.",
+        "watch": "Redraw each engine's role and requests in flight, the time to first token and "
+        "time per output token at the median and the 95th percentile, the throughput and the "
+        "role switches of a launched instance, from the router's state and metrics.",
         "down": "Stop an instance's recorded native process groups after validating their "
         "identities; retain logs and measurements and report stopped.",
     }
@@ -86,6 +89,16 @@ def _main(argv: list[str]) -> int:
             default=Path("runs/dev"),
             help="private instance directory (default: %(default)s)",
         )
+        if name == "watch":
+            action.add_argument(
+                "--interval",
+                type=float,
+                default=1.0,
+                help="seconds between redraws (default: %(default)s)",
+            )
+            action.add_argument(
+                "--once", action="store_true", help="print one frame as the result and exit"
+            )
         if name == "ask":
             action.add_argument("prompt", nargs="?", help="one prompt to send")
             action.add_argument(
@@ -235,6 +248,14 @@ def _main(argv: list[str]) -> int:
                 engine_count=args.engine_count,
                 port_base=args.port_base,
             )
+        elif args.action == "watch":
+            # A result document describes one frame, so a JSON result takes a single reading.
+            once = args.once or results.json_mode()
+            result = watch.run(root, interval=args.interval, once=once)
+            results.set_data(result)
+            if once:
+                print(json.dumps(result, indent=2))
+            return 0
         elif args.action == "ask":
             result = ask.run(
                 root,
