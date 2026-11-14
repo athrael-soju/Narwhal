@@ -2,6 +2,7 @@ import copy
 import hashlib
 import http.client
 import io
+import json
 import shutil
 import tarfile
 from pathlib import Path
@@ -50,7 +51,7 @@ class SetupTests(DirectInstance):
             },
         }
         for patched in (
-            patch.object(setup, "templates", return_value={"model": self.spec}),
+            patch.object(setup, "templates", return_value={"qwen3.5-0.8b": self.spec}),
             patch.object(setup.platform, "machine", return_value=MACHINE),
         ):
             patched.start()
@@ -85,16 +86,58 @@ class SetupTests(DirectInstance):
         self.assertEqual(instance["model_path"], str(assets / "model.gguf"))
         self.assertIs(instance["accelerated"], False)
         self.assertEqual(setup.run(self.root, get=self.fetch)["status"], "reused")
-        self.assertEqual(len(self.fetched), 2)
-        self.assertEqual(lifecycle.instance(self.root)["engine_build"], "none")
-        with self.assertRaisesRegex(ValueError, "conflicts with --model, --accelerator; create"):
-            setup.run(self.root, get=self.fetch, model="another", accelerator="fast")
-        self.assertEqual(
-            setup.run(self.root, get=self.fetch, model="qwen3.5-0.8b", accelerator="none")[
-                "status"
-            ],
-            "reused",
+        same = setup.run(
+            self.root, get=self.fetch, model="qwen3.5-0.8b", accelerator="none", engine_count=2
         )
+        self.assertEqual(same["status"], "reused")
+        self.assertEqual(len(self.fetched), 2)
+
+    def test_setup_changes_a_stopped_instance_in_place_and_keeps_its_downloads(self):
+        self.run_setup()
+        before = lifecycle.instance(self.root)
+        self.fetched.clear()
+        result = setup.run(self.root, get=self.fetch, engine_count=4)
+        self.assertEqual(
+            (result["status"], result["engines"], result["downloaded"]), ("reconfigured", 4, [])
+        )
+        self.assertEqual(self.fetched, [])
+        after = lifecycle.instance(self.root)
+        self.assertEqual((after["engine_count"], after["ports"]), (4, before["ports"]))
+        self.assertEqual(after["engine_binary"], before["engine_binary"])
+        self.assertEqual(len(json.loads((self.root / "fleet.json").read_text())["engines"]), 4)
+        # Another build downloads its own archive and leaves the model file in place.
+        (self.folder / "device").touch()
+        result = setup.run(self.root, get=self.fetch, accelerator="fast")
+        self.assertEqual(
+            (result["engine_build"], result["engines"], result["downloaded"]),
+            ("fast", 4, ["runtime.tar.gz"]),
+        )
+
+    def test_a_running_instance_keeps_its_settings_until_it_is_stopped(self):
+        self.run_setup()
+        state = {"run": str(self.root / "run-1"), "phase": "launched", "processes": []}
+        lifecycle.write(self.root / "lifecycle.json", state)
+        with self.assertRaisesRegex(ValueError, "run narwhal dev down --instance .* before"):
+            setup.run(self.root, get=self.fetch, engine_count=4)
+        self.assertEqual(lifecycle.instance(self.root)["engine_count"], 2)
+        lifecycle.write(self.root / "lifecycle.json", {**state, "phase": "stopped"})
+        self.assertEqual(
+            setup.run(self.root, get=self.fetch, engine_count=4)["status"], "reconfigured"
+        )
+
+    def test_settings_a_check_refuses_leave_the_instance_as_it_was(self):
+        self.run_setup()
+        files = {name: (self.root / name).read_text() for name in setup.INSTANCE_FILES}
+        for settings, message in (
+            ({"engine_count": 9}, "requires 2 to 8 engines"),
+            ({"model": "other"}, "no installed template serves other"),
+            ({"accelerator": "other"}, "pins no other engine build"),
+        ):
+            with self.subTest(settings=settings), self.assertRaisesRegex(ValueError, message):
+                setup.run(self.root, get=self.fetch, **settings)
+            self.assertEqual(
+                {name: (self.root / name).read_text() for name in setup.INSTANCE_FILES}, files
+            )
 
     def test_a_detected_device_selects_its_build_and_links_the_runtime_libraries(self):
         self.assertEqual(setup._build(self.spec["engine"], setup.AUTO), "none")
@@ -133,7 +176,7 @@ class SetupTests(DirectInstance):
         escaped = archive(self.remote / "bad.tar.gz", {"../outside": b"x"})
         spec["engine"]["builds"]["none"][MACHINE] = [{"name": "bad.tar.gz", "sha256": escaped}]
         with (
-            patch.object(setup, "templates", return_value={"model": spec}),
+            patch.object(setup, "templates", return_value={"qwen3.5-0.8b": spec}),
             self.assertRaisesRegex(ValueError, "bad.tar.gz cannot be unpacked"),
         ):
             self.run_setup()
