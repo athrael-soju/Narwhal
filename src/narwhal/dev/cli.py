@@ -12,7 +12,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from . import lifecycle, setup, template
+from . import ask, lifecycle, setup, template
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,6 +71,9 @@ def _main(argv: list[str]) -> int:
         "arithmetic response; retain metrics and evidence before reporting ready.",
         "status": "Inspect an initialized instance's recorded processes and HTTP health; "
         "report launched or verified ready, retaining verification failures as degraded.",
+        "ask": "Send one prompt through a launched instance's router and report the reply, its "
+        "time to first token, its tokens per second and the engines that served it; or send "
+        "--repeat built-in prompts at --concurrency and report the spread.",
         "down": "Stop an instance's recorded native process groups after validating their "
         "identities; retain logs and measurements and report stopped.",
     }
@@ -83,6 +86,23 @@ def _main(argv: list[str]) -> int:
             default=Path("runs/dev"),
             help="private instance directory (default: %(default)s)",
         )
+        if name == "ask":
+            action.add_argument("prompt", nargs="?", help="one prompt to send")
+            action.add_argument(
+                "--repeat", type=int, help="send this many built-in prompts in place of one prompt"
+            )
+            action.add_argument(
+                "--concurrency",
+                type=int,
+                default=1,
+                help="requests in flight at once with --repeat (default: %(default)s)",
+            )
+            action.add_argument(
+                "--max-tokens",
+                type=int,
+                default=128,
+                help="output token limit of each request (default: %(default)s)",
+            )
         if name == "setup":
             action.add_argument(
                 "--model-name",
@@ -167,6 +187,11 @@ def _main(argv: list[str]) -> int:
                 help="keep the model on the CPU, for a template that starts its engines directly",
             )
     args = parser.parse_args(argv)
+    if args.command == "dev" and args.action == "ask":
+        if (args.prompt is None) == (args.repeat is None):
+            parser.error("dev ask takes one prompt, or --repeat for the built-in prompts")
+        if min(1 if args.repeat is None else args.repeat, args.concurrency, args.max_tokens) < 1:
+            parser.error("--repeat, --concurrency and --max-tokens must be positive")
     if args.command == "config":
         return config_cli.run(args)
     if args.command == "diagnostics":
@@ -210,6 +235,14 @@ def _main(argv: list[str]) -> int:
                 engine_count=args.engine_count,
                 port_base=args.port_base,
             )
+        elif args.action == "ask":
+            result = ask.run(
+                root,
+                prompt=args.prompt,
+                repeat=args.repeat,
+                concurrency=args.concurrency,
+                max_tokens=args.max_tokens,
+            )
         else:
             operation = {
                 "up": lifecycle.up,
@@ -222,8 +255,12 @@ def _main(argv: list[str]) -> int:
         if result["status"] == "degraded":
             results.set_status("degraded")
             results.record_error("instance_degraded", "Development instance requires recovery")
+        failed = args.action == "ask" and result.get("failed")
+        if failed:
+            results.set_status("failed_gate")
+            results.record_error("gate_failed", f"{failed} of {result['requests']} requests failed")
         print(json.dumps(result, indent=2))
-        return 1 if result["status"] == "degraded" else 0
+        return 1 if failed or result["status"] == "degraded" else 0
     except metadata.PackageNotFoundError as exc:
         results.record_error("runtime_package_missing", str(exc), stage="runtime-package")
         return failure("narwhal", f"{context}: load runtime package", exc, 2)

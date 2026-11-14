@@ -61,6 +61,11 @@
     "memory_mib": 1200,
     "extra_args": []
   },
+  "request": {
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
   "allocation": {
     "engine_count": 4
   },
