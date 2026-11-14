@@ -12,13 +12,13 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 | --- | --- | --- | --- | --- |
 | Download | 0.3 GB | 1.0 GB | 0.6 GB | 1.3 GB |
 | Disk after setup | 0.3 GB | 2.1 GB | 0.6 GB | 2.3 GB |
-| Memory with four engines | 1.5 GB of host memory | 4.4 GB of GPU memory | 2.4 GB of host memory | 5.5 GB of GPU memory |
-| Available host memory `setup` requires for four engines | 1.8 GB | No check | 2.8 GB | No check |
+| Memory four engines use | 1.5 GB of host memory | 4.4 GB of GPU memory | 2.4 GB of host memory | 5.5 GB of GPU memory |
+| Available host memory `setup` requires for four engines | 1,800 MiB | No check | 2,800 MiB | No check |
 | `setup`, downloads included, on a fast connection | 4 s | 16 s | 5 s | 8 to 26 s |
 | First `up` after `setup` | 2 s | 24 s | 3 s | 62 s |
 | Later `up` | 2 s | 4 s | 3 s | 5 s |
 
-ERNIE-4.5-0.3B is the default model. Every figure was measured on Linux hosts, the GPU columns on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for Qwen3.5-0.8B.
+ERNIE-4.5-0.3B is the default model. Every figure was measured on Linux hosts, the GPU columns on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, a few megabytes for ERNIE-4.5-0.3B and up to 0.5 GB for Qwen3.5-0.8B.
 
 The host needs:
 
@@ -119,6 +119,8 @@ curl -s http://127.0.0.1:18000/v1/chat/completions \
   -d '{"model": "ERNIE-4.5-0.3B", "messages": [{"role": "user", "content": "Say hello."}]}'
 ```
 
+For `Qwen3.5-0.8B`, add `"chat_template_kwargs": {"enable_thinking": false}` to the body, as `ask` does, to turn that model's reasoning output off.
+
 ## Sending many prompts and watching the fleet
 
 In a second shell, change to the same directory, activate the same virtual environment and open the live view, which runs until you press Ctrl+C:
@@ -152,7 +154,7 @@ When the prompts finish, `ask` prints their latency spread and throughput:
 }
 ```
 
-The run took 91 seconds on the measured CPU host and 78 seconds on the GPU.
+This output is from the measured CPU host, where the run took 91 seconds. On the measured GPU host it took 78 seconds.
 
 ## Stopping
 
@@ -167,7 +169,7 @@ narwhal dev down
 | Message | Action |
 | --- | --- |
 | `port 18000 is unavailable on 127.0.0.1` from `setup` | Repeat `setup` with `--port-base` and a free port that has four free ports after it. The downloaded files are kept. |
-| `host memory check failed` | Repeat `setup` with `--engine-count 2`. |
+| `host memory check failed` | Repeat `setup` with `--engine-count 2`. A `Qwen3.5-0.8B` instance can instead be set up in a new `--instance` directory with the default model. |
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |

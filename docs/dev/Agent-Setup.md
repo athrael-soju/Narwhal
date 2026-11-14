@@ -63,7 +63,7 @@ To use the CPU on a host with a GPU, add `--accelerator none`.
 narwhal dev up --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "launched"`, usually within seconds, and about a minute for the first start of the CUDA 12 build. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
+Expected: exit code `0` and `"status": "launched"`, usually within seconds, and about half a minute for the first start of the CUDA 12 build. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
 
 | Result | Action |
 | --- | --- |
@@ -104,7 +104,7 @@ narwhal dev ask --instance runs/dev --repeat 2000 --concurrency 8 --max-tokens 2
 narwhal dev watch --instance runs/dev --once
 ```
 
-Expected on most hosts: `role_switches` at least `1`. The run took about a minute and a half on the measured hosts, so give the command a ten-minute limit. A result of `0` is not a failure.
+Expected on most hosts: `role_switches` at least `1`. A result of `0` also passes. The run took 78 to 91 seconds on the measured hosts, so give the command a ten-minute limit.
 
 ## 8. Stop
 
