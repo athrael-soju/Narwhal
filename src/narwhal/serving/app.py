@@ -22,7 +22,12 @@ from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
-from ..profiling.generation import generation_problem, read_generation
+from ..profiling.generation import (
+    bound_profiles,
+    generation_problem,
+    nominal_problem,
+    read_generation,
+)
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
@@ -141,7 +146,12 @@ def create_app(
             )
         generation_failures = []
         for spec in cfg.engines:
-            profiles = router.profiles.profiles_for_engine(spec.iid)
+            if cfg.engine_contract is not None and (
+                problem := nominal_problem(router.profiles, spec.iid)
+            ):
+                generation_failures.append(problem)
+                continue
+            profiles = bound_profiles(router.profiles, spec.iid)
             if not profiles:
                 continue
             try:

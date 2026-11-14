@@ -7,7 +7,12 @@ import httpx
 
 from ...config import EngineSpec, FleetConfig
 from ...engines.attestation import fetch_spec_identity, verify_attestation
-from ...profiling.generation import binding_digest, profile_generation_problems, read_generation
+from ...profiling.generation import (
+    binding_digest,
+    bound_profiles,
+    profile_generation_problems,
+    read_generation,
+)
 from .manager import LifecycleManager
 
 if TYPE_CHECKING:
@@ -142,10 +147,13 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             return False
         spec = next(spec for spec in router.cfg.engines if spec.iid == iid)
         try:
-            generation = await read_generation(
-                router.cfg, spec, transport=router.lifecycle_transport
-            )
-            problems = profile_generation_problems(router.profiles, iid, generation.digest)
+            live = ""
+            if bound_profiles(router.profiles, iid):
+                generation = await read_generation(
+                    router.cfg, spec, transport=router.lifecycle_transport
+                )
+                live = generation.digest
+            problems = profile_generation_problems(router.profiles, iid, live)
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             problems = [
                 f"{iid} profile generation unreadable: {type(exc).__name__}; "

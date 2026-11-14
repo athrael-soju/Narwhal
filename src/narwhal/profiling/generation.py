@@ -10,6 +10,7 @@ from ..contracts import canonical_digest
 from ..engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
 
 if TYPE_CHECKING:
+    from .model import Profile
     from .store import ProfileStore
 
 
@@ -79,14 +80,25 @@ def generation_problem(iid: str, saved: str | None, live: str) -> str | None:
     return None
 
 
+def bound_profiles(store: ProfileStore, iid: str) -> tuple[Profile, ...]:
+    """Return the engine's profiles that a generation check applies to."""
+    return tuple(profile for profile in store.profiles_for_engine(iid) if not profile.nominal)
+
+
+def nominal_problem(store: ProfileStore, iid: str) -> str | None:
+    """A fleet with an engine contract admits measured profiles only."""
+    if any(profile.nominal for profile in store.profiles_for_engine(iid)):
+        return f"{iid} has a nominal profile; engine_contract requires a measured one"
+    return None
+
+
 def profile_generation_problems(store: ProfileStore, iid: str, live: str) -> list[str]:
-    profiles = store.profiles_for_engine(iid)
-    if not profiles:
+    if not store.profiles_for_engine(iid):
         return [f"{iid} has no loaded profile; reprofile before admission"]
     return list(
         dict.fromkeys(
             problem
-            for profile in profiles
+            for profile in bound_profiles(store, iid)
             if (problem := generation_problem(iid, profile.generation_digest, live)) is not None
         )
     )

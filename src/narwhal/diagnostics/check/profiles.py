@@ -3,7 +3,12 @@ from __future__ import annotations
 import httpx
 
 from ...config import FleetConfig
-from ...profiling.generation import generation_problem, read_generation
+from ...profiling.generation import (
+    bound_profiles,
+    generation_problem,
+    nominal_problem,
+    read_generation,
+)
 from ...profiling.model import decode_evidence_problems
 from ...profiling.store import ProfileStore
 from ...types import Role
@@ -89,8 +94,14 @@ async def gate_profile_generation(
 ) -> set[str]:
     unsafe: set[str] = set()
     for spec in cfg.engines:
-        profiles = store.profiles_for_engine(spec.iid)
-        if not profiles or spec.iid not in live:
+        if spec.iid not in live:
+            continue
+        if cfg.engine_contract is not None and (problem := nominal_problem(store, spec.iid)):
+            rep.fail(problem)
+            unsafe.add(spec.iid)
+            continue
+        profiles = bound_profiles(store, spec.iid)
+        if not profiles:
             continue
         try:
             generation = await read_generation(cfg, spec, transport=transport)
