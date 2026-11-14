@@ -292,10 +292,14 @@ class EngineClient:
                     rendered = await self._tokenize_call(
                         url, dialect.render_path, dialect.render_request(model, body), timeout_s
                     )
-                    prompt = dialect.render_response(rendered)
+                    prompt = (
+                        dialect.render_response(rendered) if isinstance(rendered, dict) else None
+                    )
                     if prompt is None:
-                        raise EngineError("tokenize", url, 502, "response has no rendered prompt")
-                    request = dialect.rendered_tokenize_request(model, prompt)
+                        raise EngineError(
+                            "tokenize", url, 502, f"{dialect.render_path} gave no rendered prompt"
+                        )
+                    request = dialect.rendered_tokenize_request(model, prompt, body)
                 else:
                     request = dialect.tokenize_request(model, body)
                 payload = await self._tokenize_call(url, dialect.tokenize_path, request, timeout_s)
@@ -318,22 +322,19 @@ class EngineClient:
             if strict:
                 raise EngineError("tokenize", url, 502, "response has no valid token count")
             return None
-        token_ids = self.dialect.tokenize_token_ids(payload)
+        token_ids = dialect.tokenize_token_ids(payload)
         return Tokenization(count, None if token_ids is None else tuple(token_ids))
 
     async def _tokenize_call(
         self, url: str, path: str, request: dict[str, Any], timeout_s: float
-    ) -> dict[str, Any]:
+    ) -> Any:
         r = await self._wire.post(f"{url}{path}", request, self._auth(None), timeout_s=timeout_s)
         if r.status_code != 200:
             raise EngineError("tokenize", url, r.status_code, r.text[:200])
         try:
-            payload = r.json()
+            return r.json()
         except ValueError:
             raise EngineError("tokenize", url, 502, "invalid JSON response") from None
-        if not isinstance(payload, dict):
-            raise EngineError("tokenize", url, 502, "invalid JSON response")
-        return payload
 
     def _prefill_leg(
         self, body: dict[str, Any], rendezvous: dict[str, Any] | None = None

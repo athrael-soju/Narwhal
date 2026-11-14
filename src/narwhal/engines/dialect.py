@@ -38,6 +38,8 @@ class EngineDialect(ABC):
     reserved_fields: ClassVar[tuple[str, ...]] = ()
     # Chat template fields the tokenize route needs to count the engine's render.
     tokenize_passthrough: ClassVar[tuple[str, ...]] = ()
+    # Chat template fields the render route takes.
+    render_passthrough: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
@@ -68,7 +70,7 @@ class EngineDialect(ABC):
 
     def render_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": model, "messages": body["messages"]}
-        for field_name in self.tokenize_passthrough:
+        for field_name in self.render_passthrough:
             if field_name in body:
                 payload[field_name] = body[field_name]
         return payload
@@ -77,8 +79,12 @@ class EngineDialect(ABC):
         prompt = payload.get("prompt")
         return prompt if isinstance(prompt, str) else None
 
-    def rendered_tokenize_request(self, model: str | None, prompt: str) -> dict[str, Any]:
-        """The tokenize request for a rendered chat prompt, which carries its own special tokens."""
+    def rendered_tokenize_request(
+        self, model: str | None, prompt: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The tokenize request that counts `prompt`, the render of the chat request `body`,
+        as the engine counts that request.
+        """
         return {"model": model, "prompt": prompt, "add_special_tokens": False}
 
     def tokenize_response(self, payload: dict[str, Any]) -> int | None:
