@@ -79,6 +79,8 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--gpu-memory-utilization` | Template value, `0.35` in the small templates | Each engine's fraction of total GPU memory on vLLM, or of the GPU memory free at engine start on SGLang. | Above 0 and at most 1 |
 | `--device-allowance` | Template value, `0.8` in the small templates | Fraction of total GPU memory that bounds the sum of engine fractions and the memory growth during startup. | At least `--engine-count` times `--gpu-memory-utilization`, and at most 1 |
 | `--interface` | `eth0` | Network interface for KV transfer. | An interface with exactly one IPv4 address |
+| `--engine-binary` | None | Engine server executable, for a template that starts its engines directly. | An executable file of the build the template pins |
+| `--no-accelerator` | Off | Keeps the model on the CPU, for a template that starts its engines directly. | A flag with no value |
 
 `--port-base P` puts the router at `P` and starts the engine HTTP, attestation and KV side-channel ranges at `P+1`, `P+101` and `P+201`, one port per engine. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. The installed templates put the router at 18000 and start the ranges at 18101, 18201 and 5701. `init` and `up` require every port to be free on `127.0.0.1`.
 

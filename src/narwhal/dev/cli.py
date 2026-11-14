@@ -131,6 +131,17 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"
             )
+            action.add_argument(
+                "--engine-binary",
+                type=Path,
+                help="engine server executable, for a template that starts its engines directly",
+            )
+            action.add_argument(
+                "--no-accelerator",
+                action="store_true",
+                default=None,
+                help="keep the model on the CPU, for a template that starts its engines directly",
+            )
     args = parser.parse_args(argv)
     if args.command == "config":
         return config_cli.run(args)
@@ -163,6 +174,8 @@ def _main(argv: list[str]) -> int:
                 port_base=args.port_base,
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 device_allowance=args.device_allowance,
+                engine_binary=args.engine_binary,
+                accelerated=False if args.no_accelerator else None,
             )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
         else:

@@ -139,6 +139,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def starts_directly(value: dict) -> bool:
+    """Whether a template or instance starts its engines as plain processes."""
+    return value.get("start") == "direct"
+
+
 def check_instance_ports(value: dict, root: Path) -> None:
     ports = value.get("ports")
     missing = sorted(set(_PORT_RANGE_OFFSETS) - set(ports)) if isinstance(ports, dict) else []
@@ -174,6 +179,8 @@ def materialize(
     port_base: int | None = None,
     gpu_memory_utilization: float | None = None,
     device_allowance: float | None = None,
+    engine_binary: Path | None = None,
+    accelerated: bool | None = None,
 ) -> Path:
     output = output.expanduser().resolve()
     existing = None
@@ -182,12 +189,48 @@ def materialize(
         existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
-        check_instance_ports(existing, output)
+        if not starts_directly(existing):
+            check_instance_ports(existing, output)
         saved = json.loads((output / "template.json").read_text())
     source = template if template is not None else saved
     spec = copy.deepcopy(source if source is not None else default_template())
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
         raise ValueError("Narwhal dev template requires schema version 1")
+    if existing is not None and starts_directly(existing) != starts_directly(spec):
+        raise ValueError(
+            f"existing instance {output} starts its engines another way than this template; "
+            "create a fresh instance with narwhal dev init --instance <new-directory>"
+        )
+    if starts_directly(spec):
+        from . import direct
+
+        refused = [
+            flag
+            for flag, value in (
+                ("--model-dir", model_dir),
+                ("--gpu", gpu_uuid),
+                ("--interface", fabric_interface),
+                ("--gpu-memory-utilization", gpu_memory_utilization),
+                ("--device-allowance", device_allowance),
+            )
+            if value is not None
+        ]
+        if refused:
+            raise ValueError(f"this template takes no {', '.join(refused)}")
+        return direct.materialize(
+            output,
+            spec,
+            existing=existing,
+            saved=saved,
+            engine_binary=engine_binary,
+            model_path=model_path,
+            engine_count=engine_count,
+            port_base=port_base,
+            accelerated=accelerated,
+            template_given=template is not None,
+        )
+    if engine_binary is not None or accelerated is not None:
+        raise ValueError("this template takes no --engine-binary or --no-accelerator")
     allocation = {
         "engine_count": engine_count,
         "gpu_memory_utilization": gpu_memory_utilization,

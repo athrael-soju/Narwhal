@@ -33,6 +33,7 @@ from .template import (
     _sha256,
     check_instance_ports,
     model_files,
+    starts_directly,
 )
 
 
@@ -122,7 +123,8 @@ def instance(root: Path) -> dict:
     value = read(root / "instance.json")
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
-    check_instance_ports(value, root)
+    if not starts_directly(value):
+        check_instance_ports(value, root)
     expected = Path(value["python_executable"])
     current = Path(sys.executable)
     if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):
@@ -168,11 +170,14 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
+    return _spawn_command(root, state, [sys.executable, "-m", module, *args], name, env)
+
+
+def _spawn_command(root: Path, state: dict, command: list[str], name: str, env: dict) -> dict:
     run = Path(state["run"])
-    command = [sys.executable, "-m", module, *args]
     write(run / f"{name}.command.json", {"argv": command})
     with (run / f"{name}.log").open("w") as output:
-        child = subprocess.Popen(  # noqa: S603 - installed modules and explicit argv
+        child = subprocess.Popen(  # noqa: S603 - explicit argv from installed code
             command,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -335,6 +340,10 @@ def _stop(root: Path, state: dict) -> None:
 
 def up(root: Path) -> dict:
     config = instance(root)
+    if starts_directly(config):
+        from . import direct
+
+        return direct.up(root, config)
     with locked(root):
         if (root / "lifecycle.json").exists():
             previous = _read_state(root)
@@ -480,6 +489,10 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
 
 def verify(root: Path) -> dict:
     config = instance(root)
+    if starts_directly(config):
+        from . import direct
+
+        return direct.verify(root, config)
     with locked(root):
         state = _read_state(root)
         if state.get("phase") not in {"launched", "ready", "degraded"}:
@@ -603,9 +616,12 @@ def status(root: Path) -> dict:
     problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
     if state.get("failure") and not state.get("verification_failure"):
         problems.append(state["failure"]["message"])
-    if len(live) != 2 * config["engine_count"] + 1:
+    direct = starts_directly(config)
+    if len(live) != (1 if direct else 2) * config["engine_count"] + 1:
         problems.append(
-            "owned process count differs from the configured engines, sidecars and router"
+            "owned process count differs from the configured engines and router"
+            if direct
+            else "owned process count differs from the configured engines, sidecars and router"
         )
     fleet_path = run / "fleet.json"
     if not fleet_path.exists():
@@ -634,7 +650,8 @@ def status(root: Path) -> dict:
     failure = state.get("verification_failure")
     if failure:
         problems.append(f"verification failed: {failure['reason']}")
-    if evidence := state.get("verification"):
+    evidence = state.get("verification")
+    if evidence and not direct:
         problems.extend(
             asyncio.run(
                 verify_directed_kv_evidence(

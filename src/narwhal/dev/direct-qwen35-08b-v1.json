@@ -1,0 +1,66 @@
+{
+  "schema": "narwhal.dev-template",
+  "schema_version": 1,
+  "name": "direct-qwen35-08b-q4",
+  "start": "direct",
+  "model": {
+    "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+    "revision": "e524882462b3f2a9fe83be967c654c4322abb2f6",
+    "filename": "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+    "served_name": "Qwen3.5-0.8B"
+  },
+  "runtime": {
+    "backend": "llamacpp",
+    "build": 12365,
+    "context_tokens": 4096,
+    "slots": 2,
+    "memory_mib": 1200,
+    "extra_args": []
+  },
+  "allocation": {
+    "engine_count": 4
+  },
+  "ports": {
+    "router": 18000,
+    "engine_first": 18101
+  },
+  "slo": {
+    "ttft_s": 5.0,
+    "tpot_s": 0.5
+  },
+  "controller": {
+    "monitor_interval_s": 0.1,
+    "monitor_failure_limit": 5,
+    "advisory": false,
+    "min_prefill": 1,
+    "min_decode": 1,
+    "flip_history": 1000,
+    "thresholds": {
+      "expand": 1.0,
+      "shrink": 0.5,
+      "cooldown_s": 10.0,
+      "dwell_s": 0.0,
+      "sustained_intervals": 3,
+      "panic_ratio": 0.0,
+      "flip_resident_guard": 0
+    },
+    "reactive": {
+      "window_s": 30.0,
+      "confirmations": 2,
+      "utilization": 0.8,
+      "min_arrivals": 10,
+      "demand_floor": 0.2,
+      "movement_margin": 0.05,
+      "step_s": 0.25,
+      "evidence_span_s": 15.0,
+      "evidence_max_span_s": 30.0,
+      "evidence_min_arrivals": 10,
+      "demand_rise_tolerance": 0.25,
+      "decode_correction_min": 0.5,
+      "decode_correction_max": 2.0,
+      "decode_correction_alpha": 0.2,
+      "decode_correction_min_samples": 8
+    }
+  }
+}
