@@ -114,7 +114,10 @@ def _main(argv: list[str]) -> int:
         if name == "ask":
             action.add_argument("prompt", nargs="?", help="one prompt to send")
             action.add_argument(
-                "--repeat", type=int, help="send this many built-in prompts in place of one prompt"
+                "--repeat",
+                type=int,
+                help="send this many requests, of the prompt when one is given and of the "
+                "built-in prompts otherwise",
             )
             action.add_argument(
                 "--concurrency",
@@ -234,8 +237,8 @@ def _main(argv: list[str]) -> int:
     if watching and not (math.isfinite(args.interval) and args.interval > 0):
         parser.error("--interval must be a positive number")
     if args.command == "dev" and args.action == "ask":
-        if (args.prompt is None) == (args.repeat is None):
-            parser.error("dev ask takes one prompt, or --repeat for the built-in prompts")
+        if args.prompt is None and args.repeat is None:
+            parser.error("dev ask takes a prompt, --repeat for the built-in prompts, or both")
         if min(1 if args.repeat is None else args.repeat, args.concurrency, args.max_tokens) < 1:
             parser.error("--repeat, --concurrency and --max-tokens must be positive")
     if args.command == "config":

@@ -129,8 +129,13 @@ def percentile(values: list[float], fraction: float) -> float | None:
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
+def _round(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
 def _spread(values: list[float]) -> dict[str, float | None]:
-    return {"p50": percentile(values, 0.5), "p95": percentile(values, 0.95)}
+    # Four places keep a tenth of a millisecond.
+    return {"p50": _round(percentile(values, 0.5), 4), "p95": _round(percentile(values, 0.95), 4)}
 
 
 def _rows(journal: Path) -> list[dict]:
@@ -196,8 +201,8 @@ def run(
     max_tokens: int = 128,
     transport: Any = None,
 ) -> dict:
-    if (prompt is None) == (repeat is None):
-        raise ValueError("give one prompt, or --repeat for the built-in prompts")
+    if prompt is None and repeat is None:
+        raise ValueError("give a prompt, --repeat for the built-in prompts, or both")
     if (repeat is not None and repeat < 1) or concurrency < 1 or max_tokens < 1:
         raise ValueError("--repeat, --concurrency and --max-tokens must be positive")
     config = lifecycle.instance(root)
@@ -210,21 +215,22 @@ def run(
     model = lifecycle.read(run_directory / "fleet.json")["model"]
     extra = lifecycle.read(root / "template.json").get("request", {})
     url = config["router_url"]
-    prompts = (
-        [prompt] if prompt is not None else [PROMPTS[i % len(PROMPTS)] for i in range(repeat or 0)]
-    )
+    if repeat is None:
+        prompts = [prompt or ""]
+    else:
+        prompts = [prompt or PROMPTS[i % len(PROMPTS)] for i in range(repeat)]
     bodies = [_body(model, text, max_tokens, extra) for text in prompts]
     answers, seconds = asyncio.run(_many(url, bodies, concurrency, transport))
-    if prompt is not None:
+    if repeat is None:
         answer = answers[0]
         if not answer.ok:
             raise lifecycle.LifecycleOperationError(f"the request failed: {answer.error}")
         return {
             "status": "answered",
             "reply": answer.text,
-            "ttft_s": answer.ttft_s,
+            "ttft_s": _round(answer.ttft_s, 4),
             "output_tokens": answer.output_tokens,
-            "tokens_per_second": None if not answer.tpot_s else 1 / answer.tpot_s,
+            "tokens_per_second": _round(None if not answer.tpot_s else 1 / answer.tpot_s, 1),
             "engines": _legs(run_directory / "journal.jsonl", answer.request_id),
         }
     served = [answer for answer in answers if answer.ok]
@@ -235,12 +241,14 @@ def run(
         "requests": len(answers),
         "failed": failed,
         "concurrency": concurrency,
-        "seconds": seconds,
+        "seconds": round(seconds, 2),
         "ttft_s": _spread([a.ttft_s for a in served if a.ttft_s is not None]),
         "tpot_s": _spread([a.tpot_s for a in served if a.tpot_s is not None]),
-        "requests_per_second": len(served) / seconds if seconds > 0 else None,
+        "requests_per_second": _round(len(served) / seconds if seconds > 0 else None, 1),
         # Over the replies that reported a token count.
-        "output_tokens_per_second": sum(counts) / seconds if counts and seconds > 0 else None,
+        "output_tokens_per_second": _round(
+            sum(counts) / seconds if counts and seconds > 0 else None, 1
+        ),
         "replies_without_token_count": len(served) - len(counts),
         **({"errors": sorted({a.error for a in answers if not a.ok})[:5]} if failed else {}),
     }

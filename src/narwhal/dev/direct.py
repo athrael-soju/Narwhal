@@ -249,6 +249,11 @@ def up(root: Path, config: dict) -> dict:
             raise ValueError("engine binary changed after dev init")
         _model(spec, Path(config["model_path"]))
         _check_free_ports(_ports(spec, config["engine_count"])[1], HOST)
+        # The last run's logs stay for a look after a restart; earlier runs leave.
+        kept = previous.get("run") if (root / "lifecycle.json").exists() else None
+        for earlier in root.glob("run-*"):
+            if earlier.is_dir() and str(earlier) != kept:
+                shutil.rmtree(earlier)
         run = root / f"run-{uuid.uuid4().hex[:12]}"
         run.mkdir(mode=0o700)
         state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}

@@ -141,6 +141,15 @@ class AskTests(DirectInstance):
             arguments = ["dev", "ask", "--instance", str(self.root), "--repeat", "14"]
             self.assertEqual(cli._main(arguments), 1)
 
+    def test_repeat_sends_the_given_prompt_and_rounds_its_figures(self):
+        result = self.ask(prompt="Name a colour.", repeat=3)
+        self.assertEqual((result["status"], result["requests"]), ("completed", 3))
+        self.assertEqual(
+            [body["messages"][0]["content"] for body in self.bodies], ["Name a colour."] * 3
+        )
+        for value in (result["seconds"], result["ttft_s"]["p50"], result["requests_per_second"]):
+            self.assertEqual(value, round(value, 4))
+
     def test_replies_with_no_token_count_give_no_token_throughput(self):
         self.replies = [chat_stream(["x"], None) for _ in range(3)]
         result = self.ask(repeat=3)
@@ -157,8 +166,7 @@ class AskTests(DirectInstance):
 
     def test_ask_needs_a_launched_instance_and_one_kind_of_request(self):
         for settings, message in (
-            ({}, "give one prompt, or --repeat"),
-            ({"prompt": "x", "repeat": 2}, "give one prompt, or --repeat"),
+            ({}, "give a prompt, --repeat for the built-in prompts, or both"),
             ({"repeat": 0}, "must be positive"),
             ({"prompt": "x", "max_tokens": 0}, "must be positive"),
         ):
@@ -171,7 +179,6 @@ class AskTests(DirectInstance):
             self.ask(prompt="x")
         for arguments in (
             [],
-            ["x", "--repeat", "2"],
             ["--repeat", "0"],
             ["x", "--max-tokens", "0"],
         ):

@@ -188,6 +188,16 @@ class DirectInitTests(DirectInstance):
 
 
 class DirectLifecycleTests(DirectInstance):
+    def test_up_keeps_only_the_last_run_beside_the_new_one(self):
+        self.init()
+        runs = []
+        for _ in range(3):
+            runs.append(Path(lifecycle.up(self.root)["run"]))
+            self.stop()
+        self.assertEqual(
+            sorted(self.root.glob("run-*")), sorted(runs[1:]), "the first run was removed"
+        )
+
     def test_remove_stops_the_fleet_and_deletes_the_instance(self):
         self.init()
         lifecycle.up(self.root)
