@@ -3,7 +3,6 @@
   "schema_version": 1,
   "name": "direct-qwen35-08b-q4",
   "start": "direct",
-  "setup_default": true,
   "model": {
     "repository": "unsloth/Qwen3.5-0.8B-GGUF",
     "revision": "e524882462b3f2a9fe83be967c654c4322abb2f6",

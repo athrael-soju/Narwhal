@@ -12,8 +12,8 @@ Narwhal installs two templates that start llama.cpp engines:
 
 | Template | Model | Engines | Host memory `setup` and `init` require for each engine on the CPU |
 | --- | --- | --- | --- |
-| `direct-qwen35-08b-v1.json`, the default of `setup` | Qwen3.5-0.8B Q4_K_M GGUF | 4 | 700 MiB |
-| `direct-ernie45-03b-v1.json` | ERNIE-4.5-0.3B Q4_K_M GGUF | 4 | 450 MiB |
+| `direct-ernie45-03b-v1.json`, the default of `setup` | ERNIE-4.5-0.3B Q4_K_M GGUF | 4 | 450 MiB |
+| `direct-qwen35-08b-v1.json` | Qwen3.5-0.8B Q4_K_M GGUF | 4 | 700 MiB |
 
 `narwhal dev setup --model-name` selects one by the model it serves. `narwhal dev init --template PATH --engine-binary PATH --model PATH` initializes an instance from files already on the host.
 
@@ -32,7 +32,7 @@ Narwhal installs two templates that start llama.cpp engines:
 | `runtime.context_tokens` | Context tokens of each slot. |
 | `runtime.memory_mib` | Available host memory required for each engine by `setup` with the `none` build and by `init` with `--no-accelerator`. |
 | `runtime.extra_args` | Further `llama-server` arguments. |
-| `request` | Optional fields `narwhal dev ask` adds to each request body. |
+| `request` | Optional fields `narwhal dev ask` adds to each request body. The Qwen3.5-0.8B template turns that model's reasoning output off. |
 | `allocation.engine_count`, `ports`, `slo`, `controller` | The engine count, the router and first engine port, and the router's [SLO and role-control settings](../configuration/02-Serving-and-Role-Control.md). |
 | `serving` | Optional [serving settings](../configuration/02-Serving-and-Role-Control.md#request-admission-and-bounded-serving) of the fleet. The installed templates set `admission` to `open`. |
 

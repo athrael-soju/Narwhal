@@ -8,16 +8,17 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 
 ## Requirements
 
-| | Qwen3.5-0.8B on the CPU | ERNIE-4.5-0.3B on the CPU | Qwen3.5-0.8B on a GPU |
-| --- | --- | --- | --- |
-| Download | 0.6 GB | 0.3 GB | 1.3 GB |
-| Disk after setup | 0.6 GB | 0.3 GB | 2.3 GB |
-| Memory with four engines | 2.4 GB of host memory | 1.5 GB of host memory | 5.5 GB of GPU memory |
-| Available host memory `setup` requires for four engines | 2.8 GB | 1.8 GB | No check |
-| `setup`, downloads included, on a fast connection | 5 s | 4 s | 8 to 26 s |
-| `up` | 3 s | 2 s | 62 s for the first `up` after `setup`, 5 s after that |
+| | ERNIE-4.5-0.3B on the CPU | ERNIE-4.5-0.3B on a GPU | Qwen3.5-0.8B on the CPU | Qwen3.5-0.8B on a GPU |
+| --- | --- | --- | --- | --- |
+| Download | 0.3 GB | 1.0 GB | 0.6 GB | 1.3 GB |
+| Disk after setup | 0.3 GB | 2.1 GB | 0.6 GB | 2.3 GB |
+| Memory with four engines | 1.5 GB of host memory | 4.4 GB of GPU memory | 2.4 GB of host memory | 5.5 GB of GPU memory |
+| Available host memory `setup` requires for four engines | 1.8 GB | No check | 2.8 GB | No check |
+| `setup`, downloads included, on a fast connection | 4 s | 16 s | 5 s | 8 to 26 s |
+| First `up` after `setup` | 2 s | 24 s | 3 s | 62 s |
+| Later `up` | 2 s | 4 s | 3 s | 5 s |
 
-Qwen3.5-0.8B is the default model. Every figure was measured on Linux hosts, the GPU column on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for the default model.
+ERNIE-4.5-0.3B is the default model. Every figure was measured on Linux hosts, the GPU columns on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for Qwen3.5-0.8B.
 
 The host needs:
 
@@ -51,11 +52,11 @@ narwhal dev setup
 {
   "status": "initialized",
   "instance": "/home/you/runs/dev",
-  "model": "Qwen3.5-0.8B",
+  "model": "ERNIE-4.5-0.3B",
   "engine_build": "none",
   "downloaded": [
     "llama-b12365-bin-ubuntu-x64.tar.gz",
-    "Qwen3.5-0.8B-Q4_K_M.gguf"
+    "ERNIE-4.5-0.3B-PT-Q4_K_M.gguf"
   ]
 }
 ```
@@ -64,7 +65,7 @@ narwhal dev setup
 
 | To change | Pass |
 | --- | --- |
-| The model | `--model-name ERNIE-4.5-0.3B` |
+| The model | `--model-name Qwen3.5-0.8B` |
 | The engine build | `--accelerator none` for the CPU, or `--accelerator cuda` for the CUDA 13.5 build, for a driver with CUDA 13.5 support |
 | The number of engines, two to eight | `--engine-count 2` |
 | The ports, when 18000 or 18101 to 18104 are taken | `--port-base 19000` |
@@ -97,10 +98,10 @@ narwhal dev ask "What is the capital of France?"
 ```json
 {
   "status": "answered",
-  "reply": "The capital of France is **Paris**.\n\nLocated in the west of the country, it sits on the banks of the Seine River and serves as the seat of the French government, the executive branch of the state, and the head of the national army.",
-  "ttft_s": 0.118,
-  "output_tokens": 52,
-  "tokens_per_second": 105.8,
+  "reply": "The capital of France is Paris. \n\nFrance is known for its rich culture, historical landmarks, and vibrant culture. Paris is the economic, cultural, and political center of France.",
+  "ttft_s": 0.033,
+  "output_tokens": 41,
+  "tokens_per_second": 292.2,
   "engines": {
     "prefill": "n1",
     "decode": "n3"
@@ -108,15 +109,14 @@ narwhal dev ask "What is the capital of France?"
 }
 ```
 
-`engines` names the engine that computed the prompt and the engine that generated the reply from the handed-over KV cache. Both models have fewer than one billion parameters. Their replies are fluent and often factually wrong, as in this reply, which places Paris in the west of France.
+`engines` names the engine that computed the prompt and the engine that generated the reply from the handed-over KV cache. Both models have fewer than one billion parameters. Their replies are fluent, and their answers to simple factual questions are sometimes wrong.
 
-The router serves the OpenAI completion and chat routes, so most OpenAI clients that use those routes work against it. `ask` adds the template's `request` fields to its requests, which for the default model turn its reasoning output off:
+The router serves the OpenAI completion and chat routes, so most OpenAI clients that use those routes work against it:
 
 ```bash
 curl -s http://127.0.0.1:18000/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model": "Qwen3.5-0.8B", "messages": [{"role": "user", "content": "Say hello."}],
-       "chat_template_kwargs": {"enable_thinking": false}}'
+  -d '{"model": "ERNIE-4.5-0.3B", "messages": [{"role": "user", "content": "Say hello."}]}'
 ```
 
 ## Sending many prompts and watching the fleet
@@ -127,10 +127,10 @@ In a second shell, change to the same directory, activate the same virtual envir
 narwhal dev watch
 ```
 
-In the first shell, send 600 built-in prompts with eight in flight:
+In the first shell, send 2,000 built-in prompts with eight in flight:
 
 ```bash
-narwhal dev ask --repeat 600 --concurrency 8 --max-tokens 200
+narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
 The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. On the measured hosts, the router moved one prefill engine to the decode role within 30 seconds. [Reading the live view](Live-View.md) explains each figure.
@@ -140,17 +140,19 @@ When the prompts finish, `ask` prints their latency spread and throughput:
 ```json
 {
   "status": "completed",
-  "requests": 600,
+  "requests": 2000,
   "failed": 0,
   "concurrency": 8,
-  "seconds": 170.0,
-  "ttft_s": {"p50": 0.393, "p95": 2.553},
-  "tpot_s": {"p50": 0.018, "p95": 0.019},
-  "requests_per_second": 3.5,
-  "output_tokens_per_second": 294.9,
+  "seconds": 91.2,
+  "ttft_s": {"p50": 0.074, "p95": 0.485},
+  "tpot_s": {"p50": 0.005, "p95": 0.006},
+  "requests_per_second": 21.9,
+  "output_tokens_per_second": 876.6,
   "replies_without_token_count": 0
 }
 ```
+
+The run took 91 seconds on the measured CPU host and 78 seconds on the GPU.
 
 ## Stopping
 
@@ -165,7 +167,7 @@ narwhal dev down
 | Message | Action |
 | --- | --- |
 | `port 18000 is unavailable on 127.0.0.1` from `setup` | Repeat `setup` with `--port-base` and a free port that has four free ports after it. The downloaded files are kept. |
-| `host memory check failed` | Repeat `setup` with `--engine-count 2` or `--model-name ERNIE-4.5-0.3B`. |
+| `host memory check failed` | Repeat `setup` with `--engine-count 2`. |
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |

@@ -24,7 +24,7 @@ awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo
 | Python version | `True` |
 | `venv` support | `venv-ok`. Otherwise run `sudo apt install python3-venv`. |
 | Free disk in MiB | At least `1500` for the CPU build, or `4000` for the CUDA 12 build |
-| Available memory in MiB | At least `2800` for the default model with the CPU build, `1800` for `ERNIE-4.5-0.3B`, or half of either with `--engine-count 2`. The GPU build skips this check. |
+| Available memory in MiB | At least `1800` for the default model with the CPU build, `2800` for `Qwen3.5-0.8B`, or half of either with `--engine-count 2`. The GPU build skips this check. |
 
 Under WSL2, keep the virtual environment and the instance directory on the Linux filesystem. A host with Python older than 3.11.4 needs a newer Python before step 2.
 
@@ -51,7 +51,7 @@ Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/
 | --- | --- |
 | Exit code `2`, `port … is unavailable` | Repeat with the same `--instance` and `--port-base` set to a free port that has four free ports after it. The downloaded files are kept. |
 | Exit code `2`, `holds other files` | Repeat with a new `--instance` directory. |
-| Exit code `2`, `host memory check failed` | Repeat with `--engine-count 2`. To change the model, use a new `--instance` with `--model-name ERNIE-4.5-0.3B`. |
+| Exit code `2`, `host memory check failed` | Repeat with `--engine-count 2`. |
 | Exit code `2`, `SHA-256 … differs` | Repeat the command once. It downloads the file again. |
 | A network error | Repeat the command. Verified files are kept. |
 
@@ -100,11 +100,11 @@ Expected from `watch --once`: exit code `0`, `"status": "observed"`, one entry i
 To see a role switch, send long replies and read `role_switches` afterwards:
 
 ```bash
-narwhal dev ask --instance runs/dev --repeat 600 --concurrency 8 --max-tokens 200
+narwhal dev ask --instance runs/dev --repeat 2000 --concurrency 8 --max-tokens 200
 narwhal dev watch --instance runs/dev --once
 ```
 
-Expected on most hosts: `role_switches` at least `1`. The run took about three minutes on the measured host, so give the command a ten-minute limit. A result of `0` is not a failure.
+Expected on most hosts: `role_switches` at least `1`. The run took about a minute and a half on the measured hosts, so give the command a ten-minute limit. A result of `0` is not a failure.
 
 ## 8. Stop
 
@@ -126,4 +126,4 @@ With `--format json` the codes follow [the command result statuses](../Command-R
 
 ## OpenAI-compatible routes
 
-The router serves `POST /v1/completions` and `POST /v1/chat/completions` in the OpenAI format at the URL `up` printed. The `model` field is the template's served name, `Qwen3.5-0.8B` by default. `ask` adds `"chat_template_kwargs": {"enable_thinking": false}` to its requests for that model, and a chat request without it returns the model's reasoning before its reply.
+The router serves `POST /v1/completions` and `POST /v1/chat/completions` in the OpenAI format at the URL `up` printed. The `model` field is the template's served name, `ERNIE-4.5-0.3B` by default. For `Qwen3.5-0.8B`, `ask` adds `"chat_template_kwargs": {"enable_thinking": false}` to its requests, and a chat request without it returns that model's reasoning before its reply.

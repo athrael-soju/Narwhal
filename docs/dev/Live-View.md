@@ -13,15 +13,15 @@ narwhal dev watch  http://127.0.0.1:18000
 engine  role     requests  state
 n1      decode          3  live
 n2      prefill         0  live
-n3      decode          2  live
-n4      decode          3  live
+n3      decode          3  live
+n4      decode          2  live
 
                        median    95th percentile
-time to first token       77ms      217ms
-time per output token     24ms      190ms
+time to first token       62ms      119ms
+time per output token      8ms       66ms
 
-throughput  3.9 requests/s   255.1 output tokens/s
-served 125   failed 0   refused, rejected or expired 0
+throughput  24.7 requests/s   913.4 output tokens/s
+served 972   failed 0   refused, rejected or expired 0
 role switches 1   n1 to decode
 ```
 
@@ -51,7 +51,7 @@ The second line states the window the latency and throughput cover, which grows 
 To load the decode engines, ask for long replies:
 
 ```bash
-narwhal dev ask --repeat 600 --concurrency 8 --max-tokens 200
+narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
 On the measured hosts, a four-engine fleet filled its decode engines, and the router moved one prefill engine to the decode role within 30 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line.

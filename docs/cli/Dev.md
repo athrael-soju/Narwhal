@@ -11,8 +11,8 @@ description: Options, exit codes and run directories for narwhal dev on one work
 | `small-cuda-v1.json`, the default | vLLM | 1 prefill, 1 decode | GGUF file |
 | [`small-cuda-sglang-v1.json`](../Dev-Runtime.md#running-sglang-engines) | SGLang with Mooncake | 1 prefill, 1 decode | Checkpoint directory |
 | [`reference-v1.json`](../dev/RTX-5090-Reference.md), for an RTX 5090 | vLLM | 2 prefill, 2 decode | GGUF file |
-| [`direct-qwen35-08b-v1.json`](../dev/Llama-Cpp-Engines.md#templates), the default of `setup` | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
-| [`direct-ernie45-03b-v1.json`](../dev/Llama-Cpp-Engines.md#templates) | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
+| [`direct-ernie45-03b-v1.json`](../dev/Llama-Cpp-Engines.md#templates), the default of `setup` | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
+| [`direct-qwen35-08b-v1.json`](../dev/Llama-Cpp-Engines.md#templates) | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
 
 ## Lifecycle
 

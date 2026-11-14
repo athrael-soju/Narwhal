@@ -3,6 +3,7 @@
   "schema_version": 1,
   "name": "direct-ernie45-03b-q4",
   "start": "direct",
+  "setup_default": true,
   "model": {
     "repository": "unsloth/ERNIE-4.5-0.3B-PT-GGUF",
     "revision": "32b9743ef4cb56af53d71a6ab4b822d191ccb4fc",
