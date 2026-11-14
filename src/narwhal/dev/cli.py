@@ -12,7 +12,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from . import lifecycle, template
+from . import lifecycle, setup, template
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,6 +59,9 @@ def _main(argv: list[str]) -> int:
     )
     actions = dev.add_subparsers(dest="action", required=True)
     descriptions = {
+        "setup": "Download the pinned engine build and model file into the instance directory, "
+        "verify their checksums and initialize an instance whose engines start directly; "
+        "reports initialized, or reused for an existing instance.",
         "init": "Check pinned model files, native runtime and GPU allocation, then write an "
         "initialized instance, or report reused when explicit settings match an existing "
         "instance. Reuse preserves operator edits.",
@@ -80,6 +83,27 @@ def _main(argv: list[str]) -> int:
             default=Path("runs/dev"),
             help="private instance directory (default: %(default)s)",
         )
+        if name == "setup":
+            action.add_argument(
+                "--model-name",
+                help="served name of the model, among the installed templates that start "
+                "their engines directly (default: the default template's model)",
+            )
+            action.add_argument(
+                "--accelerator",
+                default=setup.AUTO,
+                help="engine build to download; auto selects by the host's devices, none keeps "
+                "the model on the CPU, and another value names a build the template pins "
+                "(default: %(default)s)",
+            )
+            action.add_argument(
+                "--engine-count", type=int, help="engines, 2 to 8 (default: template value, 4)"
+            )
+            action.add_argument(
+                "--port-base",
+                type=int,
+                help="router TCP port; engine ports start at +1 (default: 18000)",
+            )
         if name == "init":
             action.description = (
                 description + " To change settings, select a fresh directory with --instance. "
@@ -153,7 +177,7 @@ def _main(argv: list[str]) -> int:
     for name in ("instance.json", "lifecycle.json", "fleet.json"):
         results.add_artifact(name.removesuffix(".json"), root / name)
     context = f"dev {args.action} {root}"
-    if args.action != "init":
+    if args.action not in ("init", "setup"):
         try:
             lifecycle.instance(root)
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -178,6 +202,14 @@ def _main(argv: list[str]) -> int:
                 accelerated=False if args.no_accelerator else None,
             )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
+        elif args.action == "setup":
+            result = setup.run(
+                root,
+                model=args.model_name.lower() if args.model_name else None,
+                accelerator=args.accelerator,
+                engine_count=args.engine_count,
+                port_base=args.port_base,
+            )
         else:
             operation = {
                 "up": lifecycle.up,
@@ -217,7 +249,7 @@ def _main(argv: list[str]) -> int:
     ) as exc:
         if results.json_mode():
             raise
-        return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
+        return failure("narwhal", context, exc, 2 if args.action in ("init", "setup") else 1)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,8 @@ def materialize(
     port_base: int | None,
     accelerated: bool | None,
     template_given: bool = False,
+    prepared: bool = False,
+    recorded: dict | None = None,
 ) -> Path:
     spec = copy.deepcopy(spec)
     if engine_count is not None:
@@ -193,10 +195,13 @@ def materialize(
         trial = Path(temporary) / "fleet.json"
         trial.write_text(json.dumps(fleet))
         load_fleet(trial)
-    output.mkdir(mode=0o700)
+    output.mkdir(mode=0o700, exist_ok=prepared)
+    written: list[str] = []
     try:
-        write_private(output / "template.json", json.dumps(spec, indent=2) + "\n")
-        write_private(output / "fleet.json", json.dumps(fleet, indent=2) + "\n")
+        for name, document in (("template.json", spec), ("fleet.json", fleet)):
+            write_private(output / name, json.dumps(document, indent=2) + "\n")
+            written.append(name)
+        written.append("instance.json")
         instance = {
             "schema": "narwhal.dev-instance",
             "schema_version": 1,
@@ -211,10 +216,17 @@ def materialize(
             "accelerated": accelerated is not False,
             "narwhal_version": metadata.version("narwhal-inference"),
             "python_executable": sys.executable,
+            # Facts the caller keeps with the instance, such as the engine build it downloaded.
+            **(recorded or {}),
         }
         write_private(output / "instance.json", json.dumps(instance, indent=2) + "\n")
     except BaseException:
-        shutil.rmtree(output, ignore_errors=True)
+        if prepared:
+            # write_private refuses a file that exists, so each of these is this call's own.
+            for name in written:
+                (output / name).unlink(missing_ok=True)
+        else:
+            shutil.rmtree(output, ignore_errors=True)
         raise
     return output
 

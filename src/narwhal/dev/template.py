@@ -181,11 +181,14 @@ def materialize(
     device_allowance: float | None = None,
     engine_binary: Path | None = None,
     accelerated: bool | None = None,
+    prepared: bool = False,
+    recorded: dict | None = None,
 ) -> Path:
     output = output.expanduser().resolve()
     existing = None
     saved = None
-    if output.exists():
+    # A prepared directory holds downloaded files and no instance yet.
+    if output.exists() and not (prepared and not (output / "instance.json").exists()):
         existing = json.loads((output / "instance.json").read_text())
         if existing.get("schema") != "narwhal.dev-instance" or existing.get("schema_version") != 1:
             raise ValueError(f"unsupported instance configuration: {output}")
@@ -228,8 +231,10 @@ def materialize(
             port_base=port_base,
             accelerated=accelerated,
             template_given=template is not None,
+            prepared=prepared,
+            recorded=recorded,
         )
-    if engine_binary is not None or accelerated is not None:
+    if engine_binary is not None or accelerated is not None or prepared:
         raise ValueError("this template takes no --engine-binary or --no-accelerator")
     allocation = {
         "engine_count": engine_count,

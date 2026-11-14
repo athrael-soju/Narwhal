@@ -10,6 +10,48 @@
     "sha256": "9842768d0fa26c6565611161c2d6135e79275a3726141478719cfa191cc670dd",
     "served_name": "ERNIE-4.5-0.3B"
   },
+  "engine": {
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12365/{name}",
+    "binary": "llama-server",
+    "builds": {
+      "none": {
+        "x86_64": [
+          {
+            "name": "llama-b12365-bin-ubuntu-x64.tar.gz",
+            "sha256": "5d4865bdc665591116dbf198cb280f78f992a070cfdfa18822650df04d3303d5"
+          }
+        ]
+      },
+      "cuda": {
+        "detect": [
+          "/proc/driver/nvidia/version",
+          "/usr/lib/wsl/lib/libcuda.so.1"
+        ],
+        "x86_64": [
+          {
+            "name": "llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
+            "sha256": "e43e9a4b64c04303537db1411efd439ee52c4fc2537f9ba99e6759f61ff79fee"
+          },
+          {
+            "name": "cudart-llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
+            "sha256": "2a432b1c164ea552d8cc9ac27c6ad35025ea72b3121931a7b273e0e24f2345cb"
+          }
+        ]
+      },
+      "cuda12": {
+        "x86_64": [
+          {
+            "name": "llama-b12365-bin-ubuntu-cuda-12.8-x64.tar.gz",
+            "sha256": "93f7c63b90463a21cf9bfd721e58064a8788bb05f99316678a136f3e45a0d053"
+          },
+          {
+            "name": "cudart-llama-b12365-bin-ubuntu-cuda-12.8-x64.tar.gz",
+            "sha256": "0b8dedc97adda0c852a89d5de26916c6a582de4c80899d83a0662d3a195a5df8"
+          }
+        ]
+      }
+    }
+  },
   "runtime": {
     "backend": "llamacpp",
     "build": 12365,
