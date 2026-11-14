@@ -69,7 +69,6 @@ narwhal dev setup
 | The engine build | `--accelerator none` for the CPU, or `--accelerator cuda` for the CUDA 13.5 build, for a driver with CUDA 13.5 support |
 | The number of engines, two to eight | `--engine-count 2` |
 | The ports, when 18000 or 18101 to 18104 are taken | `--port-base 19000` |
-| The instance directory | `--instance runs/second` |
 
 A second `setup` on the same directory with the same settings reports `reused` and downloads nothing.
 
@@ -83,7 +82,7 @@ narwhal dev setup --engine-count 8
 narwhal dev up
 ```
 
-To keep two fleets side by side, give the second one its own directory and ports with `--instance runs/second --port-base 19000`, and pass the same `--instance` to every later command for it.
+One fleet runs at a time. `up` on a second instance directory while a fleet is up reports `a fleet is already up in …` and starts nothing, because a second fleet takes its own share of memory beside the first. `narwhal dev up --alongside` starts it anyway.
 
 ## Starting the fleet
 
@@ -185,6 +184,7 @@ narwhal dev down
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
+| `a fleet is already up in …` during `up` | Change the running fleet with `narwhal dev down` and `narwhal dev setup` on its instance, or stop it first. |
 | `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
 | `run dev down before starting another generation` | Run `narwhal dev down`, then `narwhal dev up`. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |

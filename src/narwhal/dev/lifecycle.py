@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
@@ -26,6 +27,7 @@ from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
+from narwhal.engines import host_process
 
 from .template import (
     _check_free_ports,
@@ -338,8 +340,59 @@ def _stop(root: Path, state: dict) -> None:
         raise ValueError("; ".join(errors))
 
 
-def up(root: Path) -> dict:
+def _mark(root: Path) -> str:
+    return f"fleet-{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+
+
+def _started_elsewhere(root: Path, record: bool) -> list[Path]:
+    """The user's other instances with a fleet up, read from the user's record directory.
+
+    Each `up` leaves a mark there naming its instance; a mark whose instance is stopped or
+    gone is removed. With `record`, this instance's mark is written.
+    """
+    try:
+        directory = host_process._records()
+    except (OSError, ValueError):
+        return []
+    try:
+        others = []
+        for entry in os.listdir(directory):
+            if not entry.startswith("fleet-") or entry == _mark(root):
+                continue
+            try:
+                flags = os.O_RDONLY | os.O_NOFOLLOW
+                with os.fdopen(os.open(entry, flags, dir_fd=directory)) as stream:
+                    other = Path(stream.read(4096))
+                up_there = json.loads((other / "lifecycle.json").read_text())["phase"] != "stopped"
+            except (OSError, ValueError, KeyError, TypeError):
+                up_there = False
+            if up_there:
+                others.append(other)
+            else:
+                with contextlib.suppress(OSError):
+                    os.unlink(entry, dir_fd=directory)
+        if record:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+            with os.fdopen(os.open(_mark(root), flags, 0o600, dir_fd=directory), "w") as stream:
+                stream.write(str(root))
+        return sorted(others)
+    except OSError:
+        return []
+    finally:
+        os.close(directory)
+
+
+def up(root: Path, alongside: bool = False) -> dict:
     config = instance(root)
+    others = _started_elsewhere(root, record=False)
+    if others and not alongside:
+        # A second fleet takes its own share of memory beside the first.
+        raise ValueError(
+            f"a fleet is already up in {others[0]}; stop it with narwhal dev down --instance "
+            f"{others[0]}, or change it with narwhal dev setup --instance {others[0]}. "
+            "To start this fleet beside it, pass --alongside"
+        )
+    _started_elsewhere(root, record=True)
     if starts_directly(config):
         from . import direct
 

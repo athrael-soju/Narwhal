@@ -90,6 +90,13 @@ def _main(argv: list[str]) -> int:
             default=Path("runs/dev"),
             help="private instance directory (default: %(default)s)",
         )
+        if name == "up":
+            action.add_argument(
+                "--alongside",
+                action="store_true",
+                help="start this fleet while another instance's fleet is up; each fleet takes "
+                "its own memory",
+            )
         if name == "watch":
             action.add_argument(
                 "--interval",
@@ -282,9 +289,10 @@ def _main(argv: list[str]) -> int:
                 concurrency=args.concurrency,
                 max_tokens=args.max_tokens,
             )
+        elif args.action == "up":
+            result = lifecycle.up(root, alongside=args.alongside)
         else:
             operation = {
-                "up": lifecycle.up,
                 "verify": lifecycle.verify,
                 "status": lifecycle.status,
                 "down": lifecycle.down,

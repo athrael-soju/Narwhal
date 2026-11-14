@@ -188,6 +188,23 @@ class DirectInitTests(DirectInstance):
 
 
 class DirectLifecycleTests(DirectInstance):
+    def test_up_starts_one_fleet_at_a_time_unless_told_otherwise(self):
+        self.init()
+        other = self.folder / "other"
+        other.mkdir()
+        (other / "lifecycle.json").write_text(json.dumps({"phase": "launched"}))
+        lifecycle._started_elsewhere(other, record=True)
+        with self.assertRaisesRegex(ValueError, f"a fleet is already up in {other}"):
+            lifecycle.up(self.root)
+        self.assertFalse((self.root / "lifecycle.json").exists())
+        self.assertEqual(lifecycle.up(self.root, alongside=True)["status"], "launched")
+        self.stop()
+        # A stopped instance holds no fleet.
+        (other / "lifecycle.json").write_text(json.dumps({"phase": "stopped"}))
+        self.assertEqual(lifecycle.up(self.root)["status"], "launched")
+        self.stop()
+        self.assertEqual(lifecycle._started_elsewhere(other, record=False), [])
+
     def test_up_verify_status_and_down_run_the_fleet(self):
         self.init()
         launched = lifecycle.up(self.root)
