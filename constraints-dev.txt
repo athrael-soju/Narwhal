@@ -48,7 +48,7 @@ pydantic==2.13.5
 pydantic-core==2.46.5
 pygments==2.21.0
 pyproject-hooks==1.2.0
-python-discovery==1.6.0
+python-discovery==1.9.5
 pyyaml==6.0.3
 pyzmq==27.2.0
 readme-renderer==46.0
