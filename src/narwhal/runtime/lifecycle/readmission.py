@@ -136,7 +136,7 @@ async def validate_readmission(
                 if spec.iid in engines and (switched := await router.resume_role(spec.iid)):
                     outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, binding_digest(payload)
+                    router.profiles, spec.iid, binding_digest(payload), contract=True
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
@@ -216,7 +216,7 @@ async def validate_readmission(
                 if verify_attestation(payload, contract, live):
                     raise ValueError("attestation changed during validation")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, binding_digest(payload)
+                    router.profiles, spec.iid, binding_digest(payload), contract=True
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)

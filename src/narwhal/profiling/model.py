@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 from typing import Any
 
 from .fitting import cached_features, split_step
@@ -89,6 +89,11 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
         not isinstance(generation, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", generation) is None
     ):
         raise ValueError(f"{where}: generation_digest must be a sha256 digest")
+    nominal = raw.get("nominal", False)
+    if not isinstance(nominal, bool):
+        raise ValueError(f"{where}: nominal must be true or false")
+    if nominal and generation is not None:
+        raise ValueError(f"{where}: a nominal profile carries no generation_digest")
     values: dict[str, float] = {}
     for name in _FLOAT_FIELDS:
         value = raw.get(name, _OPTIONAL_DEFAULTS.get(name))
@@ -207,6 +212,8 @@ class Profile:
     cached_max_prefix_tokens: int | None = None
     cached_min_suffix_tokens: int | None = None
     cached_max_suffix_tokens: int | None = None
+    # Stated rather than measured: bound to no engine process, so generation checks pass it.
+    nominal: bool = False
 
     def __post_init__(self) -> None:
         self.validate()
@@ -362,6 +369,51 @@ class Profile:
         if interval <= 0 or interval > tpot_slo_s:
             return 0.0
         return best / (output_tokens * interval)
+
+
+def nominal_profile(
+    iid: str,
+    *,
+    prefill_token_s: float,
+    token_interval_s: float,
+    kv_capacity_tokens: int,
+    max_requests: int,
+) -> Profile:
+    """Return a profile stated from four engine figures: prefill time grows by
+    `prefill_token_s` per prompt token and the decode interval stays `token_interval_s`
+    up to `max_requests` sequences and `kv_capacity_tokens` resident tokens.
+    """
+    # A zero figure prices the engine as free or as having no decode capacity.
+    for name, value in (
+        ("prefill_token_s", prefill_token_s),
+        ("token_interval_s", token_interval_s),
+    ):
+        if not value > 0:
+            raise ValueError(f"profile {iid}: {name} must be positive")
+    return Profile(
+        iid=iid,
+        ttft_a=0.0,
+        ttft_b=prefill_token_s,
+        ttft_c=0.0,
+        tpot_slope=0.0,
+        tpot_intercept=token_interval_s,
+        kv_capacity_tokens=kv_capacity_tokens,
+        decode_min_requests=1,
+        decode_max_requests=max_requests,
+        decode_min_kv_tokens=1,
+        decode_max_kv_tokens=kv_capacity_tokens,
+        decode_fit_mape=0.0,
+        decode_cv_mape=0.0,
+        nominal=True,
+    )
+
+
+def profile_row(profile: Profile) -> dict[str, Any]:
+    """Return the stored row. A measured row leaves `nominal` out, so earlier releases load it."""
+    row = asdict(profile)
+    if not profile.nominal:
+        del row["nominal"]
+    return row
 
 
 _OPTIONAL_DEFAULTS: dict[str, Any] = {
