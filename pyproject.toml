@@ -70,6 +70,7 @@ narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe.cli:main"
 
 [project.entry-points."narwhal.backends"]
+llamacpp = "narwhal.backends.llamacpp:backend"
 sglang = "narwhal.backends.sglang:backend"
 vllm = "narwhal.backends.vllm:backend"
 
@@ -88,6 +89,7 @@ narwhal = ["py.typed", "fleet.example.json"]
 "narwhal.dev" = ["small-cuda-v1.json", "small-cuda-sglang-v1.json", "reference-v1.json"]
 "narwhal.backends.vllm" = ["icon.png"]
 "narwhal.backends.sglang" = ["icon.png"]
+"narwhal.backends.llamacpp" = ["icon.png"]
 
 [tool.ruff]
 line-length = 100

@@ -160,7 +160,9 @@ def _room_error(payload: dict[str, Any]) -> Reply | None:
 
 
 class VllmWire:
-    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+    def route(
+        self, engine: SimulatedEngine, method: str, path: str, body: bytes, query: str = ""
+    ) -> Reply | None:
         if (method, path) == ("GET", "/version"):
             return Reply(200, body=compact({"version": SIMULATED_VERSION}))
         return None
@@ -206,7 +208,9 @@ class VllmWire:
 
 
 class SglangWire:
-    def route(self, engine: SimulatedEngine, method: str, path: str, body: bytes) -> Reply | None:
+    def route(
+        self, engine: SimulatedEngine, method: str, path: str, body: bytes, query: str = ""
+    ) -> Reply | None:
         if (method, path) == ("GET", "/server_info"):
             state = {"disaggregation_mode": engine.role, "decode_cuda_graph_memory_gb": 0.0}
             return Reply(
@@ -303,7 +307,72 @@ class Rooms:
                 del self.waiting[room]
 
 
-PROTOCOLS = {"sglang": SglangWire(), "vllm": VllmWire()}
+class LlamacppWire:
+    """llama-server's routes: text-only tokenize, a chat render, and slot save and restore."""
+
+    SLOTS = 4
+
+    def __init__(self) -> None:
+        # Slot files live in one directory that every engine shares.
+        self.saved: set[str] = set()
+
+    def route(
+        self, engine: SimulatedEngine, method: str, path: str, body: bytes, query: str = ""
+    ) -> Reply | None:
+        if (method, path) == ("GET", "/props"):
+            return Reply(
+                200,
+                body=compact(
+                    {
+                        "build_info": SIMULATED_VERSION,
+                        "total_slots": self.SLOTS,
+                        "default_generation_settings": {"n_ctx": MAX_MODEL_LEN},
+                    }
+                ),
+            )
+        if method != "POST" or not (
+            path in ("/apply-template", "/tokenize") or path.startswith("/slots/")
+        ):
+            return None
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            return error(400, "request body must be a JSON object", "invalid_request_error")
+        if path == "/apply-template":
+            return Reply(200, body=compact({"prompt": "".join(map(chr, tokenize(payload)))}))
+        if path == "/tokenize":
+            return Reply(200, body=compact({"tokens": tokenize({"prompt": payload["content"]})}))
+        slot, filename = path.removeprefix("/slots/"), payload.get("filename")
+        if not slot.isdigit() or int(slot) >= self.SLOTS or not isinstance(filename, str):
+            return error(400, "Invalid slot ID or filename", "invalid_request_error")
+        if query == "action=save":
+            self.saved.add(filename)
+            return Reply(200, body=compact({"id_slot": int(slot), "filename": filename}))
+        if query == "action=restore" and filename in self.saved:
+            return Reply(200, body=compact({"id_slot": int(slot), "filename": filename}))
+        return error(400, "Unable to restore slot", "invalid_request_error")
+
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
+        return "llamacpp:prompt_tokens_cached_total 0\n"
+
+    def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
+        return headers.get("x-request-id")
+
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        return None
+
+    def decode_error(self, payload: dict[str, Any]) -> Reply | None:
+        return None
+
+    def prefill_fields(
+        self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
+    ) -> dict[str, Any]:
+        return {}
+
+
+PROTOCOLS = {"llamacpp": LlamacppWire(), "sglang": SglangWire(), "vllm": VllmWire()}
 
 
 class SimulatedEngine:
@@ -346,12 +415,12 @@ class SimulatedEngine:
         return self.frames_per_write * self.token_interval_s
 
     async def handle(
-        self, method: str, path: str, headers: Mapping[str, str], body: bytes
+        self, method: str, path: str, headers: Mapping[str, str], body: bytes, query: str = ""
     ) -> Reply:
         route = (method, path)
         if route == ("GET", "/health"):
             return Reply(200)
-        identity = self.wire.route(self, method, path, body)
+        identity = self.wire.route(self, method, path, body, query)
         if identity is not None:
             return identity
         if route == ("GET", "/metrics"):
@@ -527,6 +596,7 @@ class Request(NamedTuple):
     headers: dict[str, str]
     body: bytes
     keep_alive: bool
+    query: str
 
 
 class EngineProtocol(asyncio.Protocol):
@@ -581,13 +651,15 @@ class EngineProtocol(asyncio.Protocol):
         self._body.append(body)
 
     def on_message_complete(self) -> None:
+        url = httptools.parse_url(self._url)
         self.requests.append(
             Request(
                 self.parser.get_method().decode(),
-                httptools.parse_url(self._url).path.decode(),
+                url.path.decode(),
                 self._headers,
                 b"".join(self._body),
                 self._keep_alive,
+                (url.query or b"").decode(),
             )
         )
         if not self.busy:
@@ -600,7 +672,7 @@ class EngineProtocol(asyncio.Protocol):
 
     async def _respond(self, request: Request) -> None:
         reply = await self.engine.handle(
-            request.method, request.path, request.headers, request.body
+            request.method, request.path, request.headers, request.body, request.query
         )
         self.close_after = not request.keep_alive
         if reply.stream is None:

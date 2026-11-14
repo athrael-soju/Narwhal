@@ -1,0 +1,240 @@
+{
+  "inference_probe": {
+    "control": [
+      {
+        "body": {
+          "filename": "<filename 2>"
+        },
+        "engine": "stub-0",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=save"
+      },
+      {
+        "body": {
+          "filename": "<filename 2>"
+        },
+        "engine": "stub-1",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=restore"
+      }
+    ],
+    "decode": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "ignore_eos": true,
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "paired_handoff": {
+    "control": [
+      {
+        "body": {
+          "filename": "<filename 1>"
+        },
+        "engine": "stub-0",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=save"
+      },
+      {
+        "body": {
+          "filename": "<filename 1>"
+        },
+        "engine": "stub-1",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=restore"
+      }
+    ],
+    "decode": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 4,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "placement": [],
+  "serving_chat_stream": {
+    "control": [
+      {
+        "body": {
+          "filename": "<filename 2>"
+        },
+        "engine": "stub-0",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=save"
+      },
+      {
+        "body": {
+          "filename": "<filename 2>"
+        },
+        "engine": "stub-1",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=restore"
+      }
+    ],
+    "decode": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_completion_tokens": 4,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 1,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    }
+  },
+  "serving_completions": {
+    "control": [
+      {
+        "body": null,
+        "engine": "stub-0",
+        "headers": {},
+        "method": "GET",
+        "path": "/props"
+      },
+      {
+        "body": {
+          "filename": "<filename 1>"
+        },
+        "engine": "stub-0",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=save"
+      },
+      {
+        "body": null,
+        "engine": "stub-1",
+        "headers": {},
+        "method": "GET",
+        "path": "/props"
+      },
+      {
+        "body": {
+          "filename": "<filename 1>"
+        },
+        "engine": "stub-1",
+        "headers": {},
+        "method": "POST",
+        "path": "/slots/0?action=restore"
+      }
+    ],
+    "decode": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 4,
+        "model": "stub",
+        "prompt": "contract probe",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "cache_prompt": true,
+        "id_slot": 0,
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  }
+}
