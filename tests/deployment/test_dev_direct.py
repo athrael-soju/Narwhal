@@ -145,7 +145,7 @@ class DirectInitTests(DirectInstance):
         self.spec["runtime"]["slots"] = 2
         with (
             patch.object(direct, "_available_mib", return_value=100),
-            self.assertRaisesRegex(ValueError, "100 MiB available, 2400 MiB required"),
+            self.assertRaisesRegex(ValueError, "100 MiB available, 1400 MiB required"),
         ):
             self.init(accelerated=False)
         self.assertFalse(self.root.exists())

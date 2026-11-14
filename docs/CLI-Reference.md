@@ -28,7 +28,7 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
     ---
 
-    Initialize, launch, verify, and stop a local shared-GPU development fleet.
+    Set up, launch, verify, exercise and stop a local development fleet.
 
 -   [`narwhal-engine`](cli/Engine.md)
 
@@ -77,7 +77,7 @@ These commands add exit codes for specific cases:
 | Command | Exit code | Case | Reference |
 | --- | :--: | --- | --- |
 | `narwhal dev` | `1` | The instance reports `degraded`. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
-| `narwhal dev init` | `2` | An initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
+| `narwhal dev setup`, `narwhal dev init` | `2` | A download or an initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
 | `narwhal-engine prepare` | `2` | Preparation fails. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-engine` | `1` | An output artifact already exists. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-check` | `1` | `narwhal-check` skips a gate with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |
