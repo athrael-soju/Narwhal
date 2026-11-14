@@ -411,10 +411,10 @@ def materialize(
             )
         # The launch records carry each budget as a fraction of this GPU's memory. Each
         # fraction rounds up, so the allowance also covers the engines' rounded fractions.
-        engine = _fraction(needs["engine_memory_mib"], memory["total_mib"])
-        covering = float((Decimal(str(engine)) * count).quantize(Decimal("0.0001")))
+        share = _fraction(needs["engine_memory_mib"], memory["total_mib"])
+        covering = float((Decimal(str(share)) * count).quantize(Decimal("0.0001")))
         needs.update(
-            gpu_memory_utilization=engine,
+            gpu_memory_utilization=share,
             device_allowance=max(
                 _fraction(needs["device_memory_mib"], memory["total_mib"]), covering
             ),
