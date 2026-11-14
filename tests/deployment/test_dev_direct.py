@@ -188,6 +188,13 @@ class DirectInitTests(DirectInstance):
 
 
 class DirectLifecycleTests(DirectInstance):
+    def test_remove_stops_the_fleet_and_deletes_the_instance(self):
+        self.init()
+        lifecycle.up(self.root)
+        self.addCleanup(lambda: self.root.exists() and self.stop())
+        self.assertEqual(lifecycle.remove(self.root)["status"], "removed")
+        self.assertFalse(self.root.exists())
+
     def test_up_starts_one_fleet_at_a_time_unless_told_otherwise(self):
         self.init()
         other = self.folder / "other"

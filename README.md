@@ -102,15 +102,14 @@ The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest
 Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.3 GB with the CPU build of the engine and 1.0 GB with the CUDA 12 build.
 
 ```bash
-narwhal dev setup
 narwhal dev up
 narwhal dev ask "What is the capital of France?"
 narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 narwhal dev watch
-narwhal dev down
+narwhal dev down --remove
 ```
 
-`ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
+`up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
 
 Narwhal dev also runs vLLM and SGLang engines on one NVIDIA GPU with `narwhal dev init`, with the attestation, profiling and KV transfer checks a deployed fleet uses.
 

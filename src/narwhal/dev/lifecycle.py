@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -731,3 +732,12 @@ def down(root: Path) -> dict:
         if (root / "lifecycle.json").exists():
             _stop(root, _read_state(root))
     return status(root)
+
+
+def remove(root: Path) -> dict:
+    """Stop the instance's fleet and delete its directory, downloads and logs included."""
+    down(root)
+    if not (root / "instance.json").is_file():
+        raise ValueError(f"{root} holds no instance")
+    shutil.rmtree(root)
+    return {"status": "removed", "instance": str(root)}

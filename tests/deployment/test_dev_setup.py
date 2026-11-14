@@ -268,3 +268,27 @@ class SetupTests(DirectInstance):
             (run.call_args.kwargs["accelerator"], run.call_args.kwargs["model"]),
             ("none", "ernie-4.5-0.3b"),
         )
+
+    def test_up_sets_up_a_missing_instance_and_down_remove_deletes_it(self):
+        prepared = {"status": "initialized", "downloaded": ["model.gguf"]}
+        with (
+            patch.object(setup, "run", return_value=prepared) as run,
+            patch.object(cli.lifecycle, "up", return_value={"status": "launched"}) as up,
+        ):
+            self.assertEqual(
+                cli._main(["dev", "up", "--instance", str(self.root), "--engine-count", "8"]), 0
+            )
+        self.assertEqual(run.call_args.kwargs["engine_count"], 8)
+        self.assertEqual(up.call_args.kwargs["alongside"], False)
+        self.run_setup()
+        with (
+            patch.object(setup, "run") as run,
+            patch.object(cli.lifecycle, "up", return_value={"status": "launched"}),
+        ):
+            self.assertEqual(cli._main(["dev", "up", "--instance", str(self.root)]), 0)
+        run.assert_not_called()
+        with patch.object(cli.lifecycle, "remove", return_value={"status": "removed"}) as remove:
+            self.assertEqual(
+                cli._main(["dev", "down", "--instance", str(self.root), "--remove"]), 0
+            )
+        remove.assert_called_once_with(self.root.resolve())

@@ -4,7 +4,7 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 
 # Quick start on one workstation
 
-`narwhal dev setup` downloads a llama.cpp engine build and a small model, and `narwhal dev up` starts four engines and a router on one machine. The engines run on an NVIDIA GPU, or on the CPU when the machine has none. The fleet hands each request's KV cache from a prefill engine to a decode engine and moves engines between the two roles as the load changes.
+`narwhal dev up` downloads a llama.cpp engine build and a small model, then starts four engines and a router on one machine. The engines run on an NVIDIA GPU, or on the CPU when the machine has none. The fleet hands each request's KV cache from a prefill engine to a decode engine and moves engines between the two roles as the load changes.
 
 ## Requirements
 
@@ -40,6 +40,22 @@ python -m pip install narwhal-inference
 
 Run every later command from this directory with the virtual environment active. The instance directory `runs/dev` is relative to it.
 
+## Starting and removing in one command each
+
+```bash
+narwhal dev up
+```
+
+On its first run, `up` sets up the instance in `runs/dev` and then starts the fleet. It takes the options of `setup`, so `narwhal dev up --engine-count 8` changes a stopped fleet to eight engines and starts it.
+
+```bash
+narwhal dev down --remove
+```
+
+`down --remove` stops the fleet and deletes `runs/dev` with its downloads and logs. `python -m pip uninstall narwhal-inference` then removes Narwhal itself.
+
+The sections below take the same steps one at a time.
+
 ## Setting up the instance
 
 ```bash
@@ -74,12 +90,11 @@ A second `setup` on the same directory with the same settings reports `reused` a
 
 ## Changing a setting
 
-To change the number of engines, the model, the engine build or the ports, stop the fleet and run `setup` again with the option. `setup` reports `reconfigured`, keeps the files it has downloaded, and downloads a file only when the new setting needs one. An option left out keeps its value.
+To change the number of engines, the model, the engine build or the ports, stop the fleet and start it with the option. The instance keeps the files it has downloaded and downloads a file only when the new setting needs one. An option left out keeps its value. `setup` with the same option changes the instance without starting it, and reports `reconfigured`.
 
 ```bash
 narwhal dev down
-narwhal dev setup --engine-count 8
-narwhal dev up
+narwhal dev up --engine-count 8
 ```
 
 One fleet runs at a time. `up` on a second instance directory while a fleet is up reports `a fleet is already up in …` and starts nothing, because a second fleet takes its own share of memory beside the first. `narwhal dev up --alongside` starts it anyway.
@@ -173,7 +188,7 @@ This output is from the measured CPU host, where the run took 91 seconds. On the
 narwhal dev down
 ```
 
-`down` stops the engines and the router. The instance directory keeps the downloaded files and, for each run, a `run-…` directory with `engine-N.log`, `router.log`, the request journal and the slot files. `narwhal dev up` starts the fleet again. To remove everything, run `narwhal dev down` and delete `runs/dev`.
+`down` stops the engines and the router. The instance directory keeps the downloaded files and, for each run, a `run-…` directory with `engine-N.log`, `router.log`, the request journal and the slot files. `narwhal dev up` starts the fleet again. `narwhal dev down --remove` also deletes `runs/dev`.
 
 ## Troubleshooting
 
@@ -186,7 +201,7 @@ narwhal dev down
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
 | `a fleet is already up in …` during `up` | Change the running fleet with `narwhal dev down` and `narwhal dev setup` on its instance, or stop it first. |
 | `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
-| `no instance here; run narwhal dev setup first` | Run `narwhal dev setup`, or change to the directory where you ran it. |
+| `no instance here; run narwhal dev up first` | Run `narwhal dev up`, or change to the directory where you ran it. |
 | `the fleet is already up` during `up` | The fleet is running. Use it, or run `narwhal dev down` to stop it. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |
 

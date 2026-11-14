@@ -34,12 +34,12 @@ For vLLM or SGLang engines, `narwhal dev init` takes the place of `setup`.
 | --- | --- | --- |
 | `setup` | Downloads the engine build and model file that a template pins into `assets` under the instance directory, checks their SHA-256 values, and runs the `init` checks for a template that starts its engines directly. On a stopped instance, an option that differs from the instance changes it in place and keeps the downloaded files. | `initialized`, `reconfigured`, or `reused` |
 | `init` | Checks the model files, runtime packages, GPU, network interface and ports, then writes `template.json`, `instance.json`, `engine-launch.json` and `fleet.json` to the instance directory. | `initialized`, or `reused` |
-| `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, writes it a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) from concurrent short requests to every engine and starts the router. While another instance's fleet is up, `up` starts nothing and names that instance; `--alongside` starts the fleet beside it. | `launched` |
+| `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, writes it a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) from concurrent short requests to every engine and starts the router. While another instance's fleet is up, `up` starts nothing and names that instance; `--alongside` starts the fleet beside it. When the instance does not exist, or a `setup` option is given, `up` runs `setup` with those options first. | `launched` |
 | `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. For llama.cpp engines, sends one routed completion that must return text and checks `/ready`. | `ready` |
 | `ask` | Takes one prompt as its argument, after `--` when the prompt starts with a hyphen. Sends it through the router and prints the reply, its time to first token, its tokens per second and the engine that served each leg. With `--repeat`, sends that many built-in prompts and prints the time to first token and the time per output token at the median and the 95th percentile, the throughput and the count of failed requests. | `answered`, or `completed` |
 | `watch` | Redraws, from the router's `/narwhal/state` and `/metrics`, each engine's role and requests in flight, the time to first token and the time per output token at the median and the 95th percentile, the throughput and the role switches. The times are the router's: arrival to the end of prefill, and the mean time per output token after it, so they differ from the client's view that `ask` reports. Output tokens are counted when a request completes. It runs until interrupted and prints the view in place of a result document. With `--once` or `--format json` it takes two readings one interval apart and prints that frame as its result. | `observed` |
 | `status` | Reads the recorded processes, health routes and saved evidence. | A state from the next table |
-| `down` | Sends SIGTERM to each recorded process group and SIGKILL to members still running 10 seconds later. | `stopped` |
+| `down` | Sends SIGTERM to each recorded process group and SIGKILL to members still running 10 seconds later. With `--remove`, then deletes the instance directory with its downloads and logs. | `stopped`, or `removed` |
 
 `status` reports one of these states:
 
@@ -65,7 +65,7 @@ In text mode, stdout carries the result as one JSON document, and stderr carries
 
 | Outcome | Exit code |
 | --- | :--: |
-| `initialized`, `reconfigured`, `reused`, `starting`, `launched`, `ready`, `stopped`, `observed`, `answered`, or `completed` with every request served | `0` |
+| `initialized`, `reconfigured`, `reused`, `starting`, `launched`, `ready`, `stopped`, `removed`, `observed`, `answered`, or `completed` with every request served | `0` |
 | `degraded`, a failed `up`, `verify` or `down`, a failed `ask` request, or `completed` with a failed request | `1` |
 | Invalid `ask` or `watch` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `setup` or `init` | `2` |
 
@@ -73,7 +73,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 
 ## Options
 
-`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup`, `--repeat`, `--concurrency` and `--max-tokens` to `ask`, `--alongside` to `up`, `--interval` and `--once` to `watch`, `--engine-count` and `--port-base` to `setup` and `init`, and the other options to `init`. An omitted `setup` or `init` option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
+`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup` and `up`, `--repeat`, `--concurrency` and `--max-tokens` to `ask`, `--alongside` to `up`, `--remove` to `down`, `--interval` and `--once` to `watch`, `--engine-count` and `--port-base` to `setup`, `up` and `init`, and the other options to `init`. An omitted `setup` or `init` option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -84,6 +84,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--model-dir` | The template's pinned tokenizer snapshot in the Hugging Face cache | Directory with the tokenizer files and `config.json`. | Matches the template's checksums |
 | `--gpu` | The only GPU that `nvidia-smi` lists | Physical GPU UUID. | |
 | `--alongside` | Off | Starts the fleet while another instance's fleet is up. Each fleet takes its own memory. | Flag |
+| `--remove` | Off | Deletes the instance directory after `down` stops its fleet. | Flag |
 | `--engine-count` | Template value, `2` in the small templates and `4` in the llama.cpp templates | Number of engines. | 2 to 8 |
 | `--port-base` | Template ports | Base of the port layout below. | Every port within 1 to 65535 and distinct |
 | `--engine-memory-mib` | Template value, `2867` in the small templates | Each engine's GPU memory in MiB, which `init` converts to a fraction of the GPU it finds. On SGLang it is an upper bound, since the engine applies the fraction to the memory free at its start. | A positive integer |

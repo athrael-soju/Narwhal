@@ -66,7 +66,8 @@ def _main(argv: list[str]) -> int:
         "init": "Check pinned model files, native runtime and GPU allocation, then write an "
         "initialized instance, or report reused when explicit settings match an existing "
         "instance. Reuse preserves operator edits.",
-        "up": "Start an instance's engines and its router; reports launched. An instance from "
+        "up": "Start an instance's engines and its router; reports launched. Sets up the "
+        "instance first when it does not exist or when a setup option is given. An instance from "
         "init also captures attestations and profiles role splits, and requires the pinned "
         "native runtime and GPU.",
         "verify": "Check a launched instance's profiles and a routed arithmetic response, and "
@@ -81,7 +82,8 @@ def _main(argv: list[str]) -> int:
         "time per output token at the median and the 95th percentile, the throughput and the "
         "role switches of a launched instance, from the router's state and metrics.",
         "down": "Stop an instance's recorded native process groups after validating their "
-        "identities; retain logs and measurements and report stopped.",
+        "identities; retain logs and measurements and report stopped, or with --remove delete "
+        "the instance directory and report removed.",
     }
     for name, description in descriptions.items():
         action = actions.add_parser(name, help=description, description=description)
@@ -126,7 +128,13 @@ def _main(argv: list[str]) -> int:
                 default=128,
                 help="output token limit of each request (default: %(default)s)",
             )
-        if name == "setup":
+        if name == "down":
+            action.add_argument(
+                "--remove",
+                action="store_true",
+                help="after stopping, delete the instance directory with its downloads and logs",
+            )
+        if name in ("setup", "up"):
             action.add_argument(
                 "--model-name",
                 help="served name of the model, among the installed templates that start "
@@ -240,14 +248,22 @@ def _main(argv: list[str]) -> int:
     for name in ("instance.json", "lifecycle.json", "fleet.json"):
         results.add_artifact(name.removesuffix(".json"), root / name)
     context = f"dev {args.action} {root}"
-    if args.action not in ("init", "setup"):
+    # up sets up an instance that does not exist yet, or one whose settings it names.
+    setting_up = args.action == "up" and (
+        not (root / "instance.json").exists()
+        or any(
+            value is not None
+            for value in (args.model_name, args.accelerator, args.engine_count, args.port_base)
+        )
+    )
+    if args.action not in ("init", "setup") and not setting_up:
         try:
             try:
                 lifecycle.instance(root)
             except FileNotFoundError:
                 if (root / "instance.json").exists():
                     raise
-                raise FileNotFoundError("no instance here; run narwhal dev setup first") from None
+                raise FileNotFoundError("no instance here; run narwhal dev up first") from None
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if results.json_mode():
                 raise
@@ -272,7 +288,7 @@ def _main(argv: list[str]) -> int:
                 device_memory_mib=args.device_memory_mib,
             )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
-        elif args.action == "setup":
+        elif args.action == "setup" or setting_up:
             result = setup.run(
                 root,
                 model=args.model_name.lower() if args.model_name else None,
@@ -280,6 +296,11 @@ def _main(argv: list[str]) -> int:
                 engine_count=args.engine_count,
                 port_base=args.port_base,
             )
+            if args.action == "up":
+                prepared: dict = result
+                result = lifecycle.up(root, alongside=args.alongside)
+                result["setup"] = prepared["status"]
+                result["downloaded"] = prepared.get("downloaded", [])
         elif args.action == "watch":
             # A result document describes one frame, so a JSON result takes a single reading.
             once = args.once or results.json_mode()
@@ -298,6 +319,8 @@ def _main(argv: list[str]) -> int:
             )
         elif args.action == "up":
             result = lifecycle.up(root, alongside=args.alongside)
+        elif args.action == "down" and args.remove:
+            result = lifecycle.remove(root)
         else:
             operation = {
                 "verify": lifecycle.verify,
