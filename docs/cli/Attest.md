@@ -44,7 +44,7 @@ At startup, the sidecar reads the engine's identity. It exits with status 1 when
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
 
-The router and `narwhal-check` read an SGLang engine's process start from `/v1/process`.
+The router and `narwhal-check` read an SGLang engine's process start from `/v1/process`. With `--engine-pid`, the start is the process's start ticks added to the boot time the host reported when a Narwhal process of that user first read it in the boot, recorded under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`, so both read one record.
 
 ## Residency
 

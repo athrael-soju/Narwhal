@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from importlib import metadata
 
 from .observability.tools import METRICS_URL_ENV, listen_address
 
 
+def _commit() -> str:
+    """The Git commit pip recorded for an install from a repository, as ` (abc12345)`."""
+    try:
+        recorded = metadata.distribution("narwhal-inference").read_text("direct_url.json")
+        commit = json.loads(recorded or "{}").get("vcs_info", {}).get("commit_id")
+    except (metadata.PackageNotFoundError, OSError, ValueError, AttributeError):
+        return ""
+    return f" ({commit[:8]})" if isinstance(commit, str) and commit else ""
+
+
 def add_version_argument(parser: argparse.ArgumentParser) -> None:
     """Add `--version`, reporting this environment's narwhal-inference distribution version."""
     try:
         version = metadata.version("narwhal-inference")
+        version += _commit()
     except metadata.PackageNotFoundError:
         version = "unknown (distribution metadata unavailable)"
     parser.add_argument(

@@ -63,7 +63,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
     </tr>
     <tr>
       <td>Development mode</td>
-      <td>Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2</td>
+      <td>Runs two to eight engines on one workstation under Ubuntu or WSL2, on a GPU or the CPU</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Narwhal%20dev-0f766e" alt="Narwhal dev documentation"></a></td>
     </tr>
   </tbody>
@@ -97,22 +97,25 @@ narwhal --help
 
 The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. To verify the installation, follow [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/). For each command's options, use the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/).
 
-## Trying it on one GPU
+## Trying it on one workstation
 
-Narwhal dev runs a local NVIDIA CUDA fleet on Ubuntu, either directly or under WSL2.
+Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.3 GB with the CPU build of the engine and 1.0 GB with the CUDA 12 build.
 
 ```bash
-narwhal dev init
 narwhal dev up
-narwhal dev verify
-narwhal dev status
-narwhal dev down
+narwhal dev ask "What is the capital of France?"
+narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
+narwhal dev watch
+narwhal dev down --remove
 ```
 
-The default template starts two vLLM engines and the SGLang template starts two SGLang engines, each on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The RTX 5090 reference template starts four vLLM engines on an RTX 5090.
+`up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
+
+Narwhal dev also runs vLLM and SGLang engines on one NVIDIA GPU with `narwhal dev init`, with the attestation, profiling and KV transfer checks a deployed fleet uses.
 
 <p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Installed%20template-0f766e" alt="Installed template documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Quick%20start-0f766e" alt="Quick start documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-vLLM%20and%20SGLang%20templates-0f766e" alt="vLLM and SGLang template documentation"></a>
   <a href="https://athrael-soju.github.io/Narwhal/dev/RTX-5090-Reference/"><img src="https://img.shields.io/badge/docs-RTX%205090%20reference-0f766e" alt="RTX 5090 reference documentation"></a>
 </p>
 

@@ -146,7 +146,7 @@ def _environment(run: Path, plan: dict) -> dict[str, str]:
 def _ports_free(selected: list[tuple[Path, dict]]) -> None:
     for run, plan in selected:
         backend = engine_backend(plan.get("engine"))
-        engine = backend.launcher()
+        engine = backend.engine_launcher()
         endpoint = urlsplit(plan["endpoint"])
         host, port = endpoint.hostname, endpoint.port
         assert host is not None and port is not None

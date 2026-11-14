@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -26,6 +28,7 @@ from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV
 from narwhal.deployment.launch_engine.start import READY_SECONDS, gpu_memory
 from narwhal.diagnostics.check.evidence import verify_directed_kv_evidence
+from narwhal.engines import host_process
 
 from .template import (
     _check_free_ports,
@@ -33,6 +36,7 @@ from .template import (
     _sha256,
     check_instance_ports,
     model_files,
+    starts_directly,
 )
 
 
@@ -122,7 +126,8 @@ def instance(root: Path) -> dict:
     value = read(root / "instance.json")
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
-    check_instance_ports(value, root)
+    if not starts_directly(value):
+        check_instance_ports(value, root)
     expected = Path(value["python_executable"])
     current = Path(sys.executable)
     if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):
@@ -168,11 +173,14 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
 
 
 def _spawn(root: Path, state: dict, module: str, args: list[str], name: str, env: dict) -> dict:
+    return _spawn_command(root, state, [sys.executable, "-m", module, *args], name, env)
+
+
+def _spawn_command(root: Path, state: dict, command: list[str], name: str, env: dict) -> dict:
     run = Path(state["run"])
-    command = [sys.executable, "-m", module, *args]
     write(run / f"{name}.command.json", {"argv": command})
     with (run / f"{name}.log").open("w") as output:
-        child = subprocess.Popen(  # noqa: S603 - installed modules and explicit argv
+        child = subprocess.Popen(  # noqa: S603 - explicit argv from installed code
             command,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -333,13 +341,87 @@ def _stop(root: Path, state: dict) -> None:
         raise ValueError("; ".join(errors))
 
 
-def up(root: Path) -> dict:
+def _mark(root: Path) -> str:
+    return f"fleet-{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+
+
+def _started_elsewhere(root: Path, record: bool) -> list[Path]:
+    """The user's other instances with a fleet up, read from the user's record directory.
+
+    Each `up` leaves a mark there naming its instance; a mark whose instance is stopped or
+    gone is removed. With `record`, this instance's mark is written.
+    """
+    try:
+        directory = host_process._records()
+    except (OSError, ValueError):
+        return []
+    try:
+        others = []
+        for entry in os.listdir(directory):
+            if not entry.startswith("fleet-") or entry == _mark(root):
+                continue
+            try:
+                flags = os.O_RDONLY | os.O_NOFOLLOW
+                with os.fdopen(os.open(entry, flags, dir_fd=directory)) as stream:
+                    other = Path(stream.read(4096))
+                up_there = _fleet_up(other)
+            except (OSError, ValueError, KeyError, TypeError):
+                up_there = False
+            if up_there:
+                others.append(other)
+            else:
+                with contextlib.suppress(OSError):
+                    os.unlink(entry, dir_fd=directory)
+        if record:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+            with os.fdopen(os.open(_mark(root), flags, 0o600, dir_fd=directory), "w") as stream:
+                stream.write(str(root))
+        return sorted(others)
+    except OSError:
+        return []
+    finally:
+        os.close(directory)
+
+
+def _fleet_up(root: Path) -> bool:
+    """Whether a lifecycle command holds the instance, or a recorded process of its fleet runs."""
+    if not root.is_dir():
+        return False
+    if _busy(root):
+        return True
+    state = json.loads((root / "lifecycle.json").read_text())
+    if state["phase"] == "stopped":
+        return False
+    for record in state["processes"]:
+        try:
+            os.kill(record["identity"]["pid"], 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pass
+        return True
+    return False
+
+
+def up(root: Path, alongside: bool = False) -> dict:
     config = instance(root)
+    others = _started_elsewhere(root, record=False)
+    if others and not alongside:
+        # A second fleet takes its own share of memory beside the first.
+        raise ValueError(
+            f"a fleet is already up in {others[0]}; stop it with narwhal dev down --instance "
+            f"{others[0]}, or pass --alongside to start this fleet beside it"
+        )
+    _started_elsewhere(root, record=True)
+    if starts_directly(config):
+        from . import direct
+
+        return direct.up(root, config)
     with locked(root):
         if (root / "lifecycle.json").exists():
             previous = _read_state(root)
             if previous.get("phase") != "stopped":
-                raise ValueError("run dev down before starting another generation")
+                raise ValueError("the fleet is already up; run narwhal dev down to stop it")
         spec = read(root / "template.json")
         launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
         for path, expected in model_files(spec["model"], Path(config["model_path"])).items():
@@ -480,6 +562,10 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
 
 def verify(root: Path) -> dict:
     config = instance(root)
+    if starts_directly(config):
+        from . import direct
+
+        return direct.verify(root, config)
     with locked(root):
         state = _read_state(root)
         if state.get("phase") not in {"launched", "ready", "degraded"}:
@@ -603,9 +689,12 @@ def status(root: Path) -> dict:
     problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
     if state.get("failure") and not state.get("verification_failure"):
         problems.append(state["failure"]["message"])
-    if len(live) != 2 * config["engine_count"] + 1:
+    direct = starts_directly(config)
+    if len(live) != (1 if direct else 2) * config["engine_count"] + 1:
         problems.append(
-            "owned process count differs from the configured engines, sidecars and router"
+            "owned process count differs from the configured engines and router"
+            if direct
+            else "owned process count differs from the configured engines, sidecars and router"
         )
     fleet_path = run / "fleet.json"
     if not fleet_path.exists():
@@ -634,7 +723,8 @@ def status(root: Path) -> dict:
     failure = state.get("verification_failure")
     if failure:
         problems.append(f"verification failed: {failure['reason']}")
-    if evidence := state.get("verification"):
+    evidence = state.get("verification")
+    if evidence and not direct:
         problems.extend(
             asyncio.run(
                 verify_directed_kv_evidence(
@@ -661,3 +751,12 @@ def down(root: Path) -> dict:
         if (root / "lifecycle.json").exists():
             _stop(root, _read_state(root))
     return status(root)
+
+
+def remove(root: Path) -> dict:
+    """Stop the instance's fleet and delete its directory, downloads and logs included."""
+    down(root)
+    if not (root / "instance.json").is_file():
+        raise ValueError(f"{root} holds no instance")
+    shutil.rmtree(root)
+    return {"status": "removed", "instance": str(root)}

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, NoReturn
 
 from ..contracts import PROFILES, validate_document, versioned
 from ..provenance import stamp
 from ..types import Role
-from .model import _FIELD_NAMES, _REQUIRED_FIELDS, Profile
+from .model import _FIELD_NAMES, _REQUIRED_FIELDS, Profile, profile_row
 
 
 def _reject_constant(name: str) -> NoReturn:
@@ -168,7 +167,7 @@ class ProfileStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         profiles = [*self._by_id.values(), *self._by_mix.values()]
         rows = [
-            asdict(profile)
+            profile_row(profile)
             for profile in sorted(
                 profiles,
                 key=lambda p: (
@@ -188,7 +187,7 @@ class ProfileStore:
         return (*self._by_id.values(), *self._by_mix.values())
 
     def profiles_for_engine(self, iid: str) -> tuple[Profile, ...]:
-        """Return every measured variant that could be selected for an engine."""
+        """Return every variant that could be selected for an engine."""
         return tuple(profile for profile in self.all_profiles() if profile.iid == iid)
 
     def engine_set_diff(self, iids: Iterable[str]) -> tuple[list[str], list[str]]:

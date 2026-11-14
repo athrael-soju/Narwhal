@@ -1,12 +1,12 @@
 ---
-description: Narwhal dev runs several vLLM or SGLang engines with prefill and decode role swaps on one NVIDIA CUDA GPU under Ubuntu or WSL2.
+description: Narwhal dev runs several vLLM, SGLang or llama.cpp engines with prefill and decode role swaps on one workstation under Ubuntu or WSL2.
 ---
 
 # Narwhal dev
 
-Narwhal dev runs two to eight independent vLLM or SGLang engines and a router on one NVIDIA CUDA GPU, on Ubuntu natively or under WSL2. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page covers vLLM and SGLang engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
-A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three:
+A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three for vLLM and SGLang, and two for [llama.cpp engines](dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Backend and KV transfer | Model | Engines |
 | --- | --- | --- | --- |
@@ -14,7 +14,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on an NVIDIA GPU whose free VRAM is at least 80% of its total plus 512 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,680 MiB of free VRAM and the SGLang template about 10,240 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -41,13 +41,17 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 ## Template and GPU allocation
 
-Two `init` flags set the GPU memory allocation, and each defaults to its template value. `--gpu-memory-utilization` sets `allocation.gpu_memory_utilization`, each engine's memory fraction, which the small templates set to `0.35`. A vLLM engine receives it as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so the second engine receives a smaller budget than the first.
+A template states the GPU memory of its engines in MiB or as fractions of the GPU.
 
-Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--gpu-memory-utilization` until every engine starts.
+The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `7168` in the vLLM template, whose engines each take about 450 MiB in addition to `engine_memory_mib`, and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to it. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.088` and `0.2199` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
 
-`--device-allowance` sets `allocation.device_allowance`, the cap on the sum of the engine fractions and on whole-device memory growth during startup. The small templates set it to `0.8`.
+The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
-`init` requires free VRAM of at least the device allowance times total VRAM plus the template's `gpu.reserve_mib` (512 MiB in the small templates). During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
+A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first.
+
+Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
+
+`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,680 MiB for the small vLLM template and about 10,240 MiB for the small SGLang template. During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
 
 The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
@@ -173,7 +177,7 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     narwhal dev verify --instance runs/dev-sglang
     ```
 
-    Under WSL2, when an engine fails to start, lower `--gpu-memory-utilization` as [Template and GPU allocation](#template-and-gpu-allocation) describes.
+    Under WSL2, when an engine fails to start, lower `--engine-memory-mib` as [Template and GPU allocation](#template-and-gpu-allocation) describes.
 
 ## Inspecting and stopping the instance
 

@@ -103,7 +103,8 @@ Example ready line:
 | Flag | Default | Meaning |
 | --- | :---: | --- |
 | `--iid` | required | Engine ID |
-| `--backend` | `vllm` | Engine protocol, `vllm` or `sglang` |
+| `--backend` | `vllm` | Engine protocol, `vllm`, `sglang` or `llamacpp` |
+| `--state-dir` | None | Directory that `llamacpp` engines in separate processes share for saved slot files |
 | `--host` | `127.0.0.1` | Listen address |
 | `--port` | `0`, a free port | Listen port |
 | `--token-interval` | `0.02` | Seconds between tokens of one stream |
