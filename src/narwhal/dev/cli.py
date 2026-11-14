@@ -85,16 +85,16 @@ def _main(argv: list[str]) -> int:
         )
         if name == "setup":
             action.add_argument(
-                "--model",
-                choices=list(setup.templates()),
-                help="model the fleet serves (default: the first choice)",
+                "--model-name",
+                help="served name of the model, among the installed templates that start "
+                "their engines directly (default: the default template's model)",
             )
             action.add_argument(
                 "--accelerator",
-                choices=[setup.AUTO, *setup.builds()],
                 default=setup.AUTO,
-                help="engine build to download; auto selects by the host's devices, and none "
-                "keeps the model on the CPU (default: %(default)s)",
+                help="engine build to download; auto selects by the host's devices, none keeps "
+                "the model on the CPU, and another value names a build the template pins "
+                "(default: %(default)s)",
             )
             action.add_argument(
                 "--engine-count", type=int, help="engines, 2 to 8 (default: template value, 4)"
@@ -205,7 +205,7 @@ def _main(argv: list[str]) -> int:
         elif args.action == "setup":
             result = setup.run(
                 root,
-                model=args.model,
+                model=args.model_name.lower() if args.model_name else None,
                 accelerator=args.accelerator,
                 engine_count=args.engine_count,
                 port_base=args.port_base,

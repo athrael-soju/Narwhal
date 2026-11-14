@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import platform
+import shutil
 import sys
 import tarfile
 import urllib.request
@@ -31,13 +33,13 @@ def templates() -> dict[str, dict]:
     for entry in resources.files("narwhal.dev").iterdir():
         if entry.name.endswith(".json"):
             document = json.loads(entry.read_text())
-            if document.get("schema") == "narwhal.dev-template" and starts_directly(document):
+            if (
+                document.get("schema") == "narwhal.dev-template"
+                and starts_directly(document)
+                and "engine" in document
+            ):
                 found[document["model"]["served_name"].lower()] = document
     return dict(sorted(found.items(), key=lambda item: (not item[1].get("setup_default"), item[0])))
-
-
-def builds() -> list[str]:
-    return sorted({name for spec in templates().values() for name in spec["engine"]["builds"]})
 
 
 def _sha256(path: Path) -> str:
@@ -50,11 +52,17 @@ def _sha256(path: Path) -> str:
 
 def fetch(url: str, path: Path) -> None:
     """Download `url` to `path`, reporting progress on stderr."""
-    request = urllib.request.Request(url, headers={"User-Agent": "narwhal-dev-setup"})  # noqa: S310
+    if not url.startswith("https://"):
+        raise ValueError(f"setup downloads over https only: {url}")
+    request = urllib.request.Request(  # noqa: S310 - https only, checked above
+        url, headers={"User-Agent": "narwhal-dev-setup"}
+    )
     partial = path.with_name(path.name + ".part")
     try:
         with (
-            urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_S) as response,  # noqa: S310
+            urllib.request.urlopen(  # noqa: S310 - https only, checked above
+                request, timeout=FETCH_TIMEOUT_S
+            ) as response,
             partial.open("wb") as output,
         ):
             total = int(response.headers.get("Content-Length") or 0)
@@ -75,7 +83,10 @@ def _asset(url: str, path: Path, sha256: str, get: Fetch) -> bool:
     if path.is_file() and _sha256(path) == sha256:
         return False
     print(f"downloading {path.name}", file=sys.stderr)
-    get(url, path)
+    try:
+        get(url, path)
+    except http.client.HTTPException as exc:
+        raise OSError(f"download of {path.name} failed: {exc!r}") from exc
     found = _sha256(path)
     if found != sha256:
         path.unlink()
@@ -91,9 +102,11 @@ def _build(engine: dict, accelerator: str) -> str:
             for name, build in known.items()
             if any(Path(path).exists() for path in build.get("detect", []))
         ]
-        return detected[0] if detected else NO_ACCELERATOR
+        accelerator = detected[0] if detected else NO_ACCELERATOR
     if accelerator not in known:
-        raise ValueError(f"the template pins no {accelerator} engine build")
+        raise ValueError(
+            f"the template pins no {accelerator} engine build; it pins {', '.join(sorted(known))}"
+        )
     return accelerator
 
 
@@ -116,11 +129,20 @@ def _engine(engine: dict, name: str, assets: Path, get: Fetch) -> tuple[Path, li
     marker = target / ".extracted"
     expected = json.dumps([archive["sha256"] for archive in archives])
     if not marker.is_file() or marker.read_text() != expected:
+        # A tree from an interrupted run or from other archives never mixes with this one.
+        staging = assets / f"engine-{name}.partial"
+        for stale in (target, staging):
+            shutil.rmtree(stale, ignore_errors=True)
         for archive in archives:
-            with tarfile.open(assets / archive["name"]) as bundle:
-                # The data filter refuses members that leave the target or carry device nodes.
-                bundle.extractall(target, filter="data")
-        marker.write_text(expected)
+            try:
+                with tarfile.open(assets / archive["name"]) as bundle:
+                    # The data filter refuses members that leave the target or carry device
+                    # nodes.
+                    bundle.extractall(staging, filter="data")
+            except tarfile.TarError as exc:
+                raise ValueError(f"{archive['name']} cannot be unpacked: {exc}") from exc
+        (staging / ".extracted").write_text(expected)
+        staging.rename(target)
     binaries = [path for path in target.rglob(engine["binary"]) if path.is_file()]
     if len(binaries) != 1:
         raise ValueError(
@@ -128,9 +150,13 @@ def _engine(engine: dict, name: str, assets: Path, get: Fetch) -> tuple[Path, li
         )
     binary = binaries[0]
     # A runtime archive unpacks its shared libraries beside the build's directory.
-    for library in target.rglob("*.so*"):
+    for library in sorted(target.rglob("*.so*")):
         beside = binary.parent / library.name
-        if library.parent != binary.parent and not beside.exists():
+        if (
+            library.is_file()
+            and library.parent != binary.parent
+            and not (beside.is_symlink() or beside.exists())
+        ):
             beside.symlink_to(library)
     return binary, downloaded
 
@@ -146,17 +172,39 @@ def run(
 ) -> dict:
     if not sys.platform.startswith("linux"):
         raise ValueError("narwhal dev setup runs on Linux, and on Windows under WSL2")
+    if not hasattr(tarfile, "data_filter"):
+        raise ValueError("narwhal dev setup requires Python 3.11.4 or later")
+    root = root.expanduser().resolve()
     installed = templates()
     if (root / "instance.json").is_file():
+        existing = json.loads((root / "instance.json").read_text())
+        if not starts_directly(existing):
+            raise ValueError(f"existing instance {root} was initialized by narwhal dev init")
         saved = json.loads((root / "template.json").read_text())
-        served = saved.get("model", {}).get("served_name", "").lower()
-        if model is not None and model != served:
+        served = saved["model"]["served_name"].lower()
+        conflicts = [
+            flag
+            for flag, changed in (
+                ("--model", model not in (None, served)),
+                ("--accelerator", accelerator not in (AUTO, existing.get("engine_build"))),
+            )
+            if changed
+        ]
+        if conflicts:
             raise ValueError(
-                f"existing instance {root} serves {served}; create a fresh instance with "
-                "narwhal dev setup --instance <new-directory>"
+                f"existing instance {root} conflicts with {', '.join(conflicts)}; create a "
+                "fresh instance with narwhal dev setup --instance <new-directory>"
             )
         template.materialize(root, engine_count=engine_count, port_base=port_base)
         return {"status": "reused", "instance": str(root)}
+    if root.exists() and any(entry.name != "assets" for entry in root.iterdir()):
+        raise ValueError(f"{root} holds other files; name an empty or new instance directory")
+    if not installed:
+        raise ValueError("no template that starts its engines directly is installed")
+    if model is not None and model not in installed:
+        raise ValueError(
+            f"no installed template serves {model}; choose from {', '.join(installed)}"
+        )
     spec = installed[model or next(iter(installed))]
     engine = spec["engine"]
     build = _build(engine, accelerator)
@@ -177,6 +225,7 @@ def run(
         port_base=port_base,
         accelerated=build != NO_ACCELERATOR,
         prepared=True,
+        recorded={"engine_build": build},
     )
     return {
         "status": "initialized",

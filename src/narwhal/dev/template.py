@@ -182,6 +182,7 @@ def materialize(
     engine_binary: Path | None = None,
     accelerated: bool | None = None,
     prepared: bool = False,
+    recorded: dict | None = None,
 ) -> Path:
     output = output.expanduser().resolve()
     existing = None
@@ -231,8 +232,9 @@ def materialize(
             accelerated=accelerated,
             template_given=template is not None,
             prepared=prepared,
+            recorded=recorded,
         )
-    if engine_binary is not None or accelerated is not None:
+    if engine_binary is not None or accelerated is not None or prepared:
         raise ValueError("this template takes no --engine-binary or --no-accelerator")
     allocation = {
         "engine_count": engine_count,
