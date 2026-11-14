@@ -99,7 +99,7 @@ The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest
 
 ## Trying it on one workstation
 
-Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.6 GB with the CPU build of the engine.
+Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.6 GB with the CPU build of the engine and 1.3 GB with the CUDA build.
 
 ```bash
 narwhal dev setup

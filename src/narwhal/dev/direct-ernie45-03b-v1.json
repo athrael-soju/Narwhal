@@ -22,23 +22,11 @@
           }
         ]
       },
-      "cuda": {
+      "cuda12": {
         "detect": [
           "/proc/driver/nvidia/version",
           "/usr/lib/wsl/lib/libcuda.so.1"
         ],
-        "x86_64": [
-          {
-            "name": "llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
-            "sha256": "e43e9a4b64c04303537db1411efd439ee52c4fc2537f9ba99e6759f61ff79fee"
-          },
-          {
-            "name": "cudart-llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
-            "sha256": "2a432b1c164ea552d8cc9ac27c6ad35025ea72b3121931a7b273e0e24f2345cb"
-          }
-        ]
-      },
-      "cuda12": {
         "x86_64": [
           {
             "name": "llama-b12365-bin-ubuntu-cuda-12.8-x64.tar.gz",
@@ -47,6 +35,18 @@
           {
             "name": "cudart-llama-b12365-bin-ubuntu-cuda-12.8-x64.tar.gz",
             "sha256": "0b8dedc97adda0c852a89d5de26916c6a582de4c80899d83a0662d3a195a5df8"
+          }
+        ]
+      },
+      "cuda": {
+        "x86_64": [
+          {
+            "name": "llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
+            "sha256": "e43e9a4b64c04303537db1411efd439ee52c4fc2537f9ba99e6759f61ff79fee"
+          },
+          {
+            "name": "cudart-llama-b12365-bin-ubuntu-cuda-13.5-x64.tar.gz",
+            "sha256": "2a432b1c164ea552d8cc9ac27c6ad35025ea72b3121931a7b273e0e24f2345cb"
           }
         ]
       }

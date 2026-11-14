@@ -10,6 +10,8 @@ import sys
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -19,7 +21,7 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.loading import load as load_fleet
-from narwhal.deployment.direct_start import DirectEngine, DirectStart
+from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures
 from narwhal.deployment.launch_engine.runtime import write_private
 from narwhal.deployment.launch_engine.start import READY_SECONDS
 from narwhal.profiling.model import nominal_profile
@@ -304,21 +306,16 @@ def _launch(
     for engine, record in zip(fleet["engines"], records, strict=True):
         lifecycle._wait(engine["url"] + "/health", record["identity"], READY_SECONDS)
     store = ProfileStore(run / "profiles.json")
-    endpoint, body = start.probe(fleet["model"])
-    with httpx.Client(timeout=PROBE_TIMEOUT_S, trust_env=False) as client:
-        for engine in fleet["engines"]:
-            reply = client.post(engine["url"] + endpoint, json=body)
-            reply.raise_for_status()
-            figures = start.figures(reply.json(), spec["runtime"])
-            store.put(
-                nominal_profile(
-                    engine["iid"],
-                    prefill_token_s=figures.prefill_token_s,
-                    token_interval_s=figures.token_interval_s,
-                    kv_capacity_tokens=figures.kv_capacity_tokens,
-                    max_requests=figures.max_requests,
-                )
+    for iid, figures in _measure(start, fleet, spec["runtime"]).items():
+        store.put(
+            nominal_profile(
+                iid,
+                prefill_token_s=figures.prefill_token_s,
+                token_interval_s=figures.token_interval_s,
+                kv_capacity_tokens=figures.kv_capacity_tokens,
+                max_requests=figures.max_requests,
             )
+        )
     router = urlsplit(config["router_url"])
     record = lifecycle._spawn(
         root,
@@ -339,6 +336,41 @@ def _launch(
     )
     lifecycle._wait(config["router_url"] + "/health", record["identity"])
     lifecycle._wait(config["router_url"] + "/ready", record["identity"], int(READY_TIMEOUT_S))
+
+
+def _measure(start: DirectStart, fleet: dict, runtime: dict) -> dict[str, NominalFigures]:
+    """Each engine's figures with every engine serving its full number of requests.
+
+    The engines share one device, so an engine measured alone reports a speed it loses as
+    soon as its neighbours serve.
+    """
+    endpoint, body = start.probe(fleet["model"])
+    each = start.probe_requests(runtime)
+    engines = [engine for engine in fleet["engines"] for _ in range(each)]
+
+    def one(engine: dict) -> NominalFigures:
+        reply = client.post(engine["url"] + endpoint, json=body)
+        reply.raise_for_status()
+        return start.figures(reply.json(), runtime)
+
+    with (
+        httpx.Client(
+            timeout=PROBE_TIMEOUT_S,
+            trust_env=False,
+            limits=httpx.Limits(max_connections=len(engines)),
+        ) as client,
+        ThreadPoolExecutor(max_workers=len(engines)) as pool,
+    ):
+        measured = list(pool.map(one, engines))
+    figures = {}
+    for index, engine in enumerate(fleet["engines"]):
+        own = measured[index * each : (index + 1) * each]
+        figures[engine["iid"]] = replace(
+            own[0],
+            prefill_token_s=sum(f.prefill_token_s for f in own) / each,
+            token_interval_s=sum(f.token_interval_s for f in own) / each,
+        )
+    return figures
 
 
 def verify(root: Path, config: dict) -> dict:

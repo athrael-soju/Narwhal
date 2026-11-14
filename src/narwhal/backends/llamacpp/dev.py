@@ -97,6 +97,9 @@ class LlamacppDirect(DirectStart):
         }
         return "/v1/completions", body
 
+    def probe_requests(self, runtime: dict[str, Any]) -> int:
+        return int(runtime["slots"])
+
     def figures(self, reply: dict[str, Any], runtime: dict[str, Any]) -> NominalFigures:
         timings = reply.get("timings")
         return NominalFigures(

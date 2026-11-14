@@ -5,6 +5,8 @@ import random
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -212,6 +214,46 @@ class DirectLifecycleTests(DirectInstance):
     def stop(self):
         if json.loads((self.root / "lifecycle.json").read_text())["phase"] != "stopped":
             lifecycle.down(self.root)
+
+    def test_every_engine_is_measured_while_all_of_them_serve(self):
+        inflight = peak = 0
+        lock = threading.Lock()
+        seen: list[str] = []
+
+        class Loaded(Simulated):
+            def probe_requests(self, runtime):
+                return 2
+
+            def figures(self, reply, runtime):
+                # The second reply of each engine reports twice the first one's times.
+                factor = 1 + (reply["id"] % 2)
+                return NominalFigures(0.001 * factor, 0.01 * factor, 8192, 2)
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            nonlocal inflight, peak
+            with lock:
+                inflight += 1
+                peak = max(peak, inflight)
+                seen.append(str(request.url))
+                number = len(seen)
+            time.sleep(0.05)
+            with lock:
+                inflight -= 1
+            return httpx.Response(200, json={"id": number})
+
+        fleet = {"model": "m", "engines": [{"iid": f"n{i}", "url": f"http://e{i}"} for i in (1, 2)]}
+        client = httpx.Client(transport=httpx.MockTransport(handle))
+        with patch.object(direct.httpx, "Client", return_value=client):
+            figures = direct._measure(Loaded(), fleet, self.spec["runtime"])
+        self.assertEqual(peak, 4)
+        self.assertEqual(
+            sorted(seen), sorted(["http://e1/v1/completions", "http://e2/v1/completions"] * 2)
+        )
+        self.assertEqual(set(figures), {"n1", "n2"})
+        for measured in figures.values():
+            self.assertAlmostEqual(measured.prefill_token_s, 0.0015)
+            self.assertAlmostEqual(measured.token_interval_s, 0.015)
+        self.assertEqual(LlamacppDirect().probe_requests({"slots": 3}), 3)
 
     def test_an_engine_that_exits_fails_up_and_stops_the_engine_that_started(self):
         self.init()
