@@ -43,8 +43,8 @@
   },
   "allocation": {
     "engine_count": 2,
-    "device_allowance": 0.8,
-    "gpu_memory_utilization": 0.35
+    "engine_memory_mib": 2867,
+    "device_memory_mib": 6553
   },
   "ports": {
     "router": 18000,
