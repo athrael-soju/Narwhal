@@ -149,9 +149,11 @@ def materialize(
             if changed
         ]
         if conflicts:
+            # setup records the engine build it downloaded; init records none.
+            command = "setup" if "engine_build" in existing else "init"
             raise ValueError(
                 f"existing instance {output} conflicts with {', '.join(conflicts)}; "
-                "create a fresh instance with narwhal dev init --instance <new-directory> "
+                f"create a fresh instance with narwhal dev {command} --instance <new-directory> "
                 "and the requested settings"
             )
         return output

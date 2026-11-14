@@ -32,7 +32,7 @@ For vLLM or SGLang engines, `narwhal dev init` takes the place of `setup`.
 
 | Subcommand | Operation | Reports |
 | --- | --- | --- |
-| `setup` | Downloads the engine build and model file that a template pins into `assets` under the instance directory, checks their SHA-256 values, and runs the `init` checks for a template that starts its engines directly. | `initialized`, or `reused` |
+| `setup` | Downloads the engine build and model file that a template pins into `assets` under the instance directory, checks their SHA-256 values, and runs the `init` checks for a template that starts its engines directly. On a stopped instance, an option that differs from the instance changes it in place and keeps the downloaded files. | `initialized`, `reconfigured`, or `reused` |
 | `init` | Checks the model files, runtime packages, GPU, network interface and ports, then writes `template.json`, `instance.json`, `engine-launch.json` and `fleet.json` to the instance directory. | `initialized`, or `reused` |
 | `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. For llama.cpp engines, starts each engine process, writes it a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) from concurrent short requests to every engine and starts the router. | `launched` |
 | `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. For llama.cpp engines, sends one routed completion that must return text and checks `/ready`. | `ready` |
@@ -65,7 +65,7 @@ In text mode, stdout carries the result as one JSON document, and stderr carries
 
 | Outcome | Exit code |
 | --- | :--: |
-| `initialized`, `reused`, `starting`, `launched`, `ready`, `stopped`, `observed`, `answered`, or `completed` with every request served | `0` |
+| `initialized`, `reconfigured`, `reused`, `starting`, `launched`, `ready`, `stopped`, `observed`, `answered`, or `completed` with every request served | `0` |
 | `degraded`, a failed `up`, `verify` or `down`, a failed `ask` request, or `completed` with a failed request | `1` |
 | Invalid `ask` or `watch` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `setup` or `init` | `2` |
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import http.client
 import json
@@ -14,6 +15,8 @@ from collections.abc import Callable
 from importlib import resources
 from pathlib import Path
 
+from narwhal.deployment.launch_engine.runtime import write_private
+
 from . import template
 from .template import starts_directly
 
@@ -22,6 +25,7 @@ NO_ACCELERATOR = "none"
 MODEL_URL = "https://huggingface.co/{repository}/resolve/{revision}/{filename}"
 FETCH_TIMEOUT_S = 60
 BLOCK = 1024 * 1024
+INSTANCE_FILES = ("template.json", "fleet.json", "instance.json")
 Fetch = Callable[[str, Path], None]
 
 
@@ -176,28 +180,35 @@ def run(
         raise ValueError("narwhal dev setup requires Python 3.11.4 or later")
     root = root.expanduser().resolve()
     installed = templates()
+    previous: dict[str, bytes] = {}
+    kept_ports = None
     if (root / "instance.json").is_file():
         existing = json.loads((root / "instance.json").read_text())
-        if not starts_directly(existing):
+        if "engine_build" not in existing:
             raise ValueError(f"existing instance {root} was initialized by narwhal dev init")
         saved = json.loads((root / "template.json").read_text())
         served = saved["model"]["served_name"].lower()
-        conflicts = [
-            flag
-            for flag, changed in (
-                ("--model", model not in (None, served)),
-                ("--accelerator", accelerator not in (AUTO, existing.get("engine_build"))),
-            )
-            if changed
-        ]
-        if conflicts:
+        # An option left out keeps the instance's value.
+        model = model or served
+        accelerator = existing["engine_build"] if accelerator == AUTO else accelerator
+        engine_count = engine_count or existing["engine_count"]
+        ports = existing["ports"]
+        if port_base is None:
+            kept_ports = ports
+        if (
+            model == served
+            and accelerator == existing["engine_build"]
+            and engine_count == existing["engine_count"]
+            and (port_base is None or (port_base, port_base + 1) == tuple(ports.values()))
+        ):
+            return {"status": "reused", "instance": str(root)}
+        state = root / "lifecycle.json"
+        if state.is_file() and json.loads(state.read_text()).get("phase") != "stopped":
             raise ValueError(
-                f"existing instance {root} conflicts with {', '.join(conflicts)}; create a "
-                "fresh instance with narwhal dev setup --instance <new-directory>"
+                f"run narwhal dev down --instance {root} before changing the instance's settings"
             )
-        template.materialize(root, engine_count=engine_count, port_base=port_base)
-        return {"status": "reused", "instance": str(root)}
-    if root.exists() and any(entry.name != "assets" for entry in root.iterdir()):
+        previous = {name: (root / name).read_bytes() for name in INSTANCE_FILES}
+    elif root.exists() and any(entry.name != "assets" for entry in root.iterdir()):
         raise ValueError(f"{root} holds other files; name an empty or new instance directory")
     if not installed:
         raise ValueError("no template that starts its engines directly is installed")
@@ -205,7 +216,9 @@ def run(
         raise ValueError(
             f"no installed template serves {model}; choose from {', '.join(installed)}"
         )
-    spec = installed[model or next(iter(installed))]
+    spec = copy.deepcopy(installed[model or next(iter(installed))])
+    if kept_ports is not None:
+        spec["ports"] = dict(kept_ports)
     engine = spec["engine"]
     build = _build(engine, accelerator)
     assets = root / "assets"
@@ -216,21 +229,30 @@ def run(
     model_file = assets / pinned["filename"]
     if _asset(MODEL_URL.format(**pinned), model_file, pinned["sha256"], get):
         downloaded.append(pinned["filename"])
-    template.materialize(
-        root,
-        template=spec,
-        engine_binary=binary,
-        model_path=model_file,
-        engine_count=engine_count,
-        port_base=port_base,
-        accelerated=build != NO_ACCELERATOR,
-        prepared=True,
-        recorded={"engine_build": build},
-    )
+    # The instance's files give way to the new settings and return if a check refuses them.
+    for name in previous:
+        (root / name).unlink()
+    try:
+        template.materialize(
+            root,
+            template=spec,
+            engine_binary=binary,
+            model_path=model_file,
+            engine_count=engine_count,
+            port_base=port_base,
+            accelerated=build != NO_ACCELERATOR,
+            prepared=True,
+            recorded={"engine_build": build},
+        )
+    except BaseException:
+        for name, content in previous.items():
+            write_private(root / name, content.decode())
+        raise
     return {
-        "status": "initialized",
+        "status": "reconfigured" if previous else "initialized",
         "instance": str(root),
         "model": pinned["served_name"],
         "engine_build": build,
+        "engines": spec["allocation"]["engine_count"] if engine_count is None else engine_count,
         "downloaded": downloaded,
     }

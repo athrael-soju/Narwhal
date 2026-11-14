@@ -45,13 +45,14 @@ Expected: `narwhal-inference <version>` and exit code `0`. Keep the virtual envi
 narwhal dev setup --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/dev` already holds an instance. An `initialized` result's `engine_build` is `cuda12` on a host with an NVIDIA driver and `none` otherwise.
+Expected: exit code `0` and `"status": "initialized"`, `"reused"` when `runs/dev` already holds an instance with these settings, or `"reconfigured"` when an option changed a stopped instance. An `initialized` result's `engine_build` is `cuda12` on a host with an NVIDIA driver and `none` otherwise.
 
 | Result | Action |
 | --- | --- |
 | Exit code `2`, `port … is unavailable` | Repeat with the same `--instance` and `--port-base` set to a free port that has four free ports after it. The downloaded files are kept. |
 | Exit code `2`, `holds other files` | Repeat with a new `--instance` directory. |
 | Exit code `2`, `host memory check failed` | Repeat with `--engine-count 2`. |
+| Exit code `2`, `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down --instance runs/dev`, then repeat. |
 | Exit code `2`, `SHA-256 … differs` | Repeat the command once. It downloads the file again. |
 | A network error | Repeat the command. Verified files are kept. |
 

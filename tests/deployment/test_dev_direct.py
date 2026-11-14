@@ -162,7 +162,9 @@ class DirectInitTests(DirectInstance):
         self.assertEqual(template.materialize(self.root), self.root)
         self.init(port_base=base)
         with self.assertRaisesRegex(
-            ValueError, "conflicts with --engine-count, --port-base, --no-accelerator"
+            ValueError,
+            "conflicts with --engine-count, --port-base, --no-accelerator; "
+            "create a fresh instance with narwhal dev init",
         ):
             self.init(engine_count=4, port_base=base + 10, accelerated=False)
         self.assertEqual((self.root / "instance.json").read_text(), before)

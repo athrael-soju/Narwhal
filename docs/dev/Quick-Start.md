@@ -71,7 +71,19 @@ narwhal dev setup
 | The ports, when 18000 or 18101 to 18104 are taken | `--port-base 19000` |
 | The instance directory | `--instance runs/second` |
 
-A second `setup` on the same directory reports `reused` and downloads nothing. To change a setting, name a new directory with `--instance`, which downloads the files again.
+A second `setup` on the same directory with the same settings reports `reused` and downloads nothing.
+
+## Changing a setting
+
+To change the number of engines, the model, the engine build or the ports, stop the fleet and run `setup` again with the option. `setup` reports `reconfigured`, keeps the files it has downloaded, and downloads a file only when the new setting needs one. An option left out keeps its value.
+
+```bash
+narwhal dev down
+narwhal dev setup --engine-count 8
+narwhal dev up
+```
+
+To keep two fleets side by side, give the second one its own directory and ports with `--instance runs/second --port-base 19000`, and pass the same `--instance` to every later command for it.
 
 ## Starting the fleet
 
@@ -173,6 +185,7 @@ narwhal dev down
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |
+| `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
 | `run dev down before starting another generation` | Run `narwhal dev down`, then `narwhal dev up`. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |
 
