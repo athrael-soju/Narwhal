@@ -54,7 +54,7 @@ To load the decode engines, ask for long replies:
 narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
-On the measured hosts, a four-engine fleet filled its decode engines, and the router moved one prefill engine to the decode role within 30 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line.
+On the measured hosts, a four-engine fleet filled its decode engines, and in most runs the router moved one prefill engine to the decode role within 30 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line. With `--concurrency 16` on a measured GPU host the router kept two prefill and two decode engines, because that load exceeds the decode capacity the engines' profiles cover.
 
 With the installed templates, the router decides a switch from the load of the last 30 seconds and needs ten arrivals in that window, so a short burst leaves the roles unchanged.
 

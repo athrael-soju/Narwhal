@@ -18,7 +18,7 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 | First `up` after `setup` | 2 s | 24 s | 3 s | 62 s |
 | Later `up` | 2 s | 4 s | 3 s | 5 s |
 
-ERNIE-4.5-0.3B is the default model. Every figure was measured on Linux hosts, the GPU columns on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, a few megabytes for ERNIE-4.5-0.3B and up to 0.5 GB for Qwen3.5-0.8B.
+ERNIE-4.5-0.3B is the default model. Every figure was measured on Linux hosts, the GPU columns on an NVIDIA GPU with the CUDA 12 build of the engine. The same steps ran under WSL2 on the CPU and on an NVIDIA GPU. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, a few megabytes for ERNIE-4.5-0.3B and up to 0.5 GB for Qwen3.5-0.8B.
 
 The host needs:
 
@@ -135,7 +135,7 @@ In the first shell, send 2,000 built-in prompts with eight in flight:
 narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
-The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. On the measured hosts, the router moved one prefill engine to the decode role within 30 seconds. [Reading the live view](Live-View.md) explains each figure.
+The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. In most runs on the measured hosts, the router moved one prefill engine to the decode role within 30 seconds. [Reading the live view](Live-View.md) explains each figure.
 
 When the prompts finish, `ask` prints their latency spread and throughput:
 
