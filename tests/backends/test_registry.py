@@ -36,7 +36,8 @@ class RegistryTests(unittest.TestCase):
                 self.assertIsInstance(backend.kv_events, KvEventDecoder)
                 self.assertIsInstance(backend.metrics, EngineMetrics)
                 self.assertIsInstance(backend.fabric, FabricLifecycle)
-                self.assertIsInstance(backend.launcher(), EngineLauncher)
+                if backend.launcher is not None:
+                    self.assertIsInstance(backend.launcher(), EngineLauncher)
                 self.assertIsInstance(backend.role_switch, RoleSwitcher)
 
     def test_unknown_backend_and_connector_are_refused(self):

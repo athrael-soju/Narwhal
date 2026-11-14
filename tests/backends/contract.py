@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
+from narwhal.backends import names
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.backend import EngineLauncher, cache_capture
 from narwhal.deployment.launch_engine.plan import load, prepare
@@ -39,19 +41,24 @@ class ContractFixtures:
     attestation: dict[str, Any]
     sequence_limit: int | None
     kv_lease: int | None
-    memory_args: list[str]
-    memory_fraction: str
-    launch_runtime: dict[str, Any]
+    # The launch fields below stay at their defaults for a backend with no launcher.
+    memory_args: list[str] = field(default_factory=list)
+    memory_fraction: str = ""
+    launch_runtime: dict[str, Any] = field(default_factory=dict)
     # Stdout of the backend's runtime check probe for a launch plan.
-    check_output: Callable[[dict], str]
+    check_output: Callable[[dict], str] = str
     # Writes the evidence a started container's captures leave in its launch directory.
-    attestation_evidence: Callable[[Path, dict, str], None]
-    startup_log: str
+    attestation_evidence: Callable[[Path, dict, str], None] = lambda run, plan, log: None
+    startup_log: str = ""
     # Distributions an engine image reports to discovery, and the .env fields discovery reads.
     image_packages: dict[str, str] = field(default_factory=dict)
     discovery_settings: dict[str, str] = field(default_factory=dict)
     # Handoff body fields that take a new random value for each request.
     handoff_random_fields: tuple[str, ...] = ()
+
+
+def launched() -> list[str]:
+    return [name for name in names() if load_backend(name).launcher is not None]
 
 
 def fixtures(backend: str) -> ContractFixtures:

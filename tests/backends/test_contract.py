@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import dataclasses
+import functools
 import io
 import itertools
 import json
@@ -49,6 +50,7 @@ from tools.measurement import simulated_engine as sim
 
 PROMPT = "contract probe"
 CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
+NO_LAUNCHER = "the backend has no engine launcher"
 LAUNCH = {"bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600}}
 
 
@@ -65,6 +67,11 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         await engine.start()
         self.addAsyncCleanup(engine.close)
         return engine
+
+    def launcher(self) -> EngineLauncher:
+        if self.backend.launcher is None:
+            self.skipTest(NO_LAUNCHER)
+        return self.backend.launcher()
 
     def client(self, kv) -> EngineClient:
         client = EngineClient(kv=kv, dialect=self.backend.dialect, model="m")
@@ -270,7 +277,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 fabric.check_engine_bind("127.0.0.1", held.getsockname()[1])
 
     def test_launcher_offline_surface(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher(), self.fixtures
         self.assertIsInstance(launcher, EngineLauncher)
         self.assertTrue(launcher.runtime_script.is_file())
         capture = cache_capture(launcher)
@@ -288,7 +295,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(launcher.memory_fraction([]))
 
     def test_extra_args_reject_every_flag_a_neutral_setting_maps(self):
-        launcher, runtime = self.backend.launcher(), self.fixtures.launch_runtime
+        launcher, runtime = self.launcher(), self.fixtures.launch_runtime
         flags = mapped_flags(launcher.launch_settings)
         self.assertLessEqual(
             {"context_length", "max_sequences", "tokenizer", "prefix_caching", "kv_events"},
@@ -302,7 +309,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                         launcher.validate_runtime(record)
 
     def test_launcher_discovers_a_valid_runtime_for_each_connector(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher(), self.fixtures
         self.assertTrue(
             all(re.fullmatch(launcher.image_packages, name) for name in fixture.image_packages)
         )
@@ -328,7 +335,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(launcher.sequence_limit(runtime), 0)
 
     def test_launcher_rejects_invalid_discovery_settings(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher(), self.fixtures
         observed = {"packages": fixture.image_packages, "image_environment": {}}
         for name, value, message in (
             ("MODEL_DTYPE", "float32", "set MODEL_DTYPE to bfloat16 or float16 in .env"),
@@ -384,6 +391,8 @@ class BackendFlows(unittest.TestCase):
 
     def setUp(self):
         self.backend = load(self.name)
+        if self.backend.launcher is None:
+            self.skipTest(NO_LAUNCHER)
         self.launcher = self.backend.launcher()
         self.fixtures = fixtures(self.name)
 
@@ -557,7 +566,6 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.backend = load(self.name)
         self.fixtures = fixtures(self.name)
-        self.launcher = self.backend.launcher()
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
@@ -565,6 +573,12 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
 
     def golden(self, aspect: str, record: object) -> None:
         assert_golden(self, f"contract_{self.name}_{aspect}", random_ids(record), self.replacements)
+
+    @functools.cached_property
+    def launcher(self) -> EngineLauncher:
+        if self.backend.launcher is None:
+            self.skipTest(NO_LAUNCHER)
+        return self.backend.launcher()
 
     def inherited(self) -> contextlib.AbstractContextManager:
         # A native engine inherits the caller's environment; this one holds only an engine key.

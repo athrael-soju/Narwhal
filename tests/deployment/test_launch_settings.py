@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from narwhal.backends import load, names
+from narwhal.backends import load
 from narwhal.deployment.launch_engine.plan import build, option, side_channel_port
 from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV, NAMES
-from tests.backends.contract import fixtures, launch_record
+from tests.backends.contract import fixtures, launch_record, launched
 from tests.deployment.fixtures import launcher_inputs
 from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values
 
@@ -32,7 +32,7 @@ class NeutralSettingsTests(unittest.TestCase):
         return plan
 
     def test_every_backend_declares_each_neutral_setting(self):
-        for name in names():
+        for name in launched():
             with self.subTest(backend=name):
                 mapping = load(name).launcher().launch_settings
                 self.assertEqual(set(mapping.settings), set(NAMES))
@@ -46,7 +46,7 @@ class NeutralSettingsTests(unittest.TestCase):
                     self.assertTrue(declared, setting)
 
     def test_neutral_fields_render_as_each_backend_flags(self):
-        for name in names():
+        for name in launched():
             mapping = load(name).launcher().launch_settings.settings
             with self.subTest(backend=name):
                 args = self.built(name, NEUTRAL)["args"]
@@ -61,7 +61,7 @@ class NeutralSettingsTests(unittest.TestCase):
                     self.assertIn(flag, off["args"])
 
     def test_a_launch_turns_off_cache_events_with_prefix_caching_on(self):
-        for name in names():
+        for name in launched():
             mapping = load(name).launcher().launch_settings
             with self.subTest(backend=name):
                 on = self.built(name, {})
@@ -78,7 +78,7 @@ class NeutralSettingsTests(unittest.TestCase):
                     self.assertEqual(option(plan["args"], off[0]), off[1])
 
     def test_extra_args_reject_a_flag_a_neutral_setting_maps(self):
-        for name in names():
+        for name in launched():
             mapping = load(name).launcher().launch_settings.settings
             flag = str(mapping["context_length"].flag)
             for changes in ({}, {"context_length": 1024}):
