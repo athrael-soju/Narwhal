@@ -3,7 +3,7 @@
     "control": [
       {
         "body": {
-          "filename": "<filename 2>"
+          "filename": "<filename 1>"
         },
         "engine": "stub-0",
         "headers": {},
@@ -12,7 +12,7 @@
       },
       {
         "body": {
-          "filename": "<filename 2>"
+          "filename": "<filename 1>"
         },
         "engine": "stub-1",
         "headers": {},
@@ -107,7 +107,7 @@
     "control": [
       {
         "body": {
-          "filename": "<filename 2>"
+          "filename": "<filename 1>"
         },
         "engine": "stub-0",
         "headers": {},
@@ -116,7 +116,7 @@
       },
       {
         "body": {
-          "filename": "<filename 2>"
+          "filename": "<filename 1>"
         },
         "engine": "stub-1",
         "headers": {},

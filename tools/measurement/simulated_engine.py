@@ -343,15 +343,21 @@ class LlamacppWire:
         if path == "/apply-template":
             return Reply(200, body=compact({"prompt": "".join(map(chr, tokenize(payload)))}))
         if path == "/tokenize":
-            return Reply(200, body=compact({"tokens": tokenize({"prompt": payload["content"]})}))
+            return Reply(
+                200, body=compact({"tokens": tokenize({"prompt": payload.get("content", "")})})
+            )
         slot, filename = path.removeprefix("/slots/"), payload.get("filename")
         if not slot.isdigit() or int(slot) >= self.SLOTS or not isinstance(filename, str):
             return error(400, "Invalid slot ID or filename", "invalid_request_error")
         if query == "action=save":
             self.saved.add(filename)
-            return Reply(200, body=compact({"id_slot": int(slot), "filename": filename}))
+            return Reply(
+                200, body=compact({"id_slot": int(slot), "filename": filename, "n_saved": 3})
+            )
         if query == "action=restore" and filename in self.saved:
-            return Reply(200, body=compact({"id_slot": int(slot), "filename": filename}))
+            return Reply(
+                200, body=compact({"id_slot": int(slot), "filename": filename, "n_saved": 3})
+            )
         return error(400, "Unable to restore slot", "invalid_request_error")
 
     def engine_metrics(self, engine: SimulatedEngine) -> str:

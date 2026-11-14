@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from narwhal.backends import load
-from narwhal.backends.llamacpp.connector import FILES_PER_SLOT, SlotFileConnector
+from narwhal.backends.llamacpp.connector import SlotFileConnector
 from narwhal.engines.connector import HandoffStepError, PrefillResult
 
 A, B = "http://a:1", "http://b:1"
@@ -29,7 +29,7 @@ class Calls:
     ) -> dict[str, Any]:
         self.log.append((url, path, body))
         if path in self.failing:
-            raise HandoffStepError(400, "Unable to restore slot")
+            raise HandoffStepError(400, "Unable to use slot")
         return {"n_saved": 5}
 
 
@@ -55,10 +55,11 @@ class SlotFileConnectorTests(unittest.IsolatedAsyncioTestCase):
         waits = [asyncio.create_task(self.kv.claim(self.calls, A, "decode")) for _ in range(3)]
         await asyncio.sleep(0)
         self.assertFalse(any(wait.done() for wait in waits))
+        # The release runs before the cancelled wait's task does.
         waits[0].cancel()
+        self.kv.release(A, "prefill", held[1])
         with self.assertRaises(asyncio.CancelledError):
             await waits[0]
-        self.kv.release(A, "prefill", held[1])
         self.assertEqual(await waits[1], held[1])
         self.kv.release(A, "prefill", held[0])
         # A wait cancelled once a slot is on its way hands the slot to the next leg.
@@ -84,7 +85,7 @@ class SlotFileConnectorTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_producer_saves_its_slot_and_the_consumer_restores_that_file(self):
         seat, result = await self.prefilled()
         filename = result.parameters()["filename"]
-        self.assertEqual(result.parameters(), {"filename": filename, "tokens": 5})
+        self.assertEqual(result.parameters(), {"filename": filename, "file": 0, "tokens": 5})
         self.assertEqual(self.calls.log[-1], (A, "/slots/0?action=save", {"filename": filename}))
         self.kv.release(A, "prefill", seat)
         await self.kv.claim(self.calls, B, "decode")
@@ -92,21 +93,47 @@ class SlotFileConnectorTests(unittest.IsolatedAsyncioTestCase):
         await self.kv.restore(self.calls, B, target, result, timeout_s=1)
         self.assertEqual(self.calls.log[-1], (B, "/slots/1?action=restore", {"filename": filename}))
 
-    async def test_a_slot_cycles_its_files_and_engines_never_share_one(self):
-        names = []
-        for _ in range(FILES_PER_SLOT + 1):
-            seat, result = await self.prefilled()
-            self.kv.release(A, "prefill", seat)
-            names.append(result.parameters()["filename"])
-        self.assertEqual(len(set(names)), FILES_PER_SLOT)
-        self.assertEqual(names[0], names[FILES_PER_SLOT])
-        _, other = await self.prefilled(B)
-        self.assertNotIn(other.parameters()["filename"], names)
+    async def names(self, count: int, url: str = A) -> list[PrefillResult]:
+        results = []
+        for _ in range(count):
+            seat, result = await self.prefilled(url)
+            self.kv.release(url, "prefill", seat)
+            results.append(result)
+        return results
+
+    async def test_a_file_is_held_until_its_handoff_is_discarded(self):
+        first, second = await self.names(2)
+        names = [r.parameters()["filename"] for r in (first, second)]
+        self.assertEqual(len(set(names)), 2)
+        self.kv.discard(first)
+        self.kv.discard(first)
+        [third] = await self.names(1)
+        self.assertEqual(third.parameters()["filename"], names[0])
+        [fourth] = await self.names(1)
+        self.assertNotIn(fourth.parameters()["filename"], names)
+
+    async def test_engines_and_routers_never_share_a_file(self):
+        [mine] = await self.names(1)
+        [peer] = await self.names(1, B)
+        seat = await (other := SlotFileConnector()).claim(self.calls, A, "prefill")
+        unsaved = other.prefill_result({}, url=A, endpoint=ENDPOINT, request_id=None)
+        theirs = await other.export(self.calls, A, seat, unsaved, timeout_s=1)
+        names = {r.parameters()["filename"] for r in (mine, peer, theirs)}
+        self.assertEqual(len(names), 3)
+
+    async def test_a_failed_save_holds_no_file(self):
+        self.calls.failing.add("/slots/0?action=save")
+        with self.assertRaisesRegex(HandoffStepError, "Unable to use slot"):
+            await self.prefilled()
+        self.calls.failing.clear()
+        self.kv.release(A, "prefill", {"id_slot": 0})
+        [saved] = await self.names(1)
+        self.assertEqual(saved.parameters()["file"], 0)
 
     async def test_a_restore_the_engine_refuses_or_cannot_name_fails_the_step(self):
         seat, result = await self.prefilled()
         self.calls.failing.add("/slots/0?action=restore")
-        with self.assertRaisesRegex(HandoffStepError, "Unable to restore slot"):
+        with self.assertRaisesRegex(HandoffStepError, "Unable to use slot"):
             await self.kv.restore(self.calls, B, {"id_slot": 0}, result, timeout_s=1)
         unsaved = self.kv.prefill_result({}, url=A, endpoint=ENDPOINT, request_id=None)
         with self.assertRaisesRegex(HandoffStepError, "names no saved slot file"):
@@ -139,7 +166,7 @@ class LlamacppBackendTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             dialect.tokenize_request("m", {"prompt": [1, 2], "add_special_tokens": False}),
-            {"content": [1, 2], "add_special": False, "parse_special": True},
+            {"content": [1, 2], "add_special": True, "parse_special": True},
         )
         self.assertEqual(
             dialect.rendered_tokenize_request("m", "<|user|>hi", {"messages": []}),

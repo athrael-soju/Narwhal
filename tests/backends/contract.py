@@ -29,8 +29,8 @@ from tools.measurement import simulated_engine as sim
 class ContractFixtures:
     # A metrics scrape and the values the backend's mapping reads from it.
     metrics: str
-    kv_capacity: int
-    cache_block_tokens: int
+    kv_capacity: int | None
+    cache_block_tokens: int | None
     prefix_cache_hits: int
     transfer_totals: tuple[float, float] | None
     # Cache event batches as published, with the event type each one decodes to.

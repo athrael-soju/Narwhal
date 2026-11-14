@@ -16,7 +16,8 @@ class LlamacppDialect(EngineDialect):
     # Stream chunks carry text and no token IDs.
     token_ids = False
     # The connector assigns the slot and keeps prompt caching on for the handoff.
-    reserved_fields = (SEAT_FIELD, "cache_prompt")
+    # n_predict outranks the max_tokens that bounds a prefill leg to one token.
+    reserved_fields = (SEAT_FIELD, "cache_prompt", "n_predict")
 
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
         # The server assigns its own completion ID; the header reaches its access log only.
@@ -27,11 +28,7 @@ class LlamacppDialect(EngineDialect):
 
     def tokenize_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
         # A completion adds BOS and parses special tokens in its prompt; the count matches it.
-        return {
-            "content": body.get("prompt", ""),
-            "add_special": body.get("add_special_tokens", True),
-            "parse_special": True,
-        }
+        return {"content": body.get("prompt", ""), "add_special": True, "parse_special": True}
 
     def rendered_tokenize_request(
         self, model: str | None, prompt: str, body: dict[str, Any]
@@ -51,7 +48,5 @@ class LlamacppDialect(EngineDialect):
         return {"ignore_eos": True}
 
     def cold_probe_extras(self) -> dict[str, Any]:
+        # The server keys its prompt cache by slot content and takes no per-request salt.
         return {}
-
-    def peerless_fields(self) -> dict[str, Any]:
-        return {"cache_prompt": True}

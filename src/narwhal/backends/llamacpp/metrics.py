@@ -22,8 +22,8 @@ class LlamacppMetrics(EngineMetrics):
         # prompt_tokens_total counts computed tokens only; cached ones have their own counter.
         "prefix_hit_ratio": (
             "(sum by(iid) (rate(llamacpp:prompt_tokens_cached_total{@sel}[$__rate_interval])) / "
-            'sum by(iid) (rate({__name__=~"llamacpp:prompt_tokens_total|'
-            'llamacpp:prompt_tokens_cached_total",@sel}[$__rate_interval])))'
+            "(sum by(iid) (rate(llamacpp:prompt_tokens_total{@sel}[$__rate_interval])) + "
+            "sum by(iid) (rate(llamacpp:prompt_tokens_cached_total{@sel}[$__rate_interval]))))"
         ),
         "prompt_tokens": (
             "sum by(iid) (rate(llamacpp:prompt_tokens_total{@sel}[$__rate_interval]))"

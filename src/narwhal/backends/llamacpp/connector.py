@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
@@ -13,19 +14,17 @@ from ...engines.connector import (
     KvConnector,
     PrefillResult,
 )
+from .identity import PROPS_PATH, slot_count
 
 SEAT_FIELD = "id_slot"
 PROPS_TIMEOUT_S = 2.0
-# Saved files each producer slot cycles through. A consumer that restores a file its producer
-# has since overwritten holds another prompt's state, and the server then computes the tokens
-# that differ, so reuse costs time and never a wrong reply.
-FILES_PER_SLOT = 2
 
 
 class SlotFileConnector(KvConnector):
     """Hand KV state over as a slot file: the producer saves its slot and the consumer restores it.
 
-    Every engine of a fleet starts with the same --slot-save-path directory.
+    Every engine of a fleet starts with the same --slot-save-path directory. A producer keeps
+    as many files there as it has had handoffs in flight at once.
     """
 
     name = "slot-file"
@@ -40,7 +39,11 @@ class SlotFileConnector(KvConnector):
         self._free: dict[str, list[int]] = {}
         # Legs waiting for a slot on each engine, first come first served.
         self._waiting: dict[str, list[asyncio.Future[int]]] = {}
-        self._saves: dict[tuple[str, int], int] = {}
+        # File numbers each producer's handoffs hold from `export` until `discard`, so a
+        # consumer never restores a file its producer is rewriting.
+        self._held: dict[str, set[int]] = {}
+        # Routers that share a slot directory write separate files.
+        self._router = secrets.token_hex(4)
 
     def handoff_bound(self, lease_s: int) -> float:
         return float(lease_s)
@@ -79,14 +82,13 @@ class SlotFileConnector(KvConnector):
     async def claim(self, calls: EngineCalls, url: str, phase: HandoffPhase) -> dict[str, Any]:
         free = self._free.get(url)
         if free is None:
-            props = await calls.get(url, "/props", timeout_s=PROPS_TIMEOUT_S)
-            slots = props.get("total_slots")
-            if type(slots) is not int or slots < 1:
-                raise HandoffStepError(502, "/props reports no total_slots")
+            slots = slot_count(await calls.get(url, PROPS_PATH, timeout_s=PROPS_TIMEOUT_S))
+            if slots is None:
+                raise HandoffStepError(502, f"{PROPS_PATH} reports no total_slots")
             free = self._free.setdefault(url, list(range(slots - 1, -1, -1)))
         if free:
             return {SEAT_FIELD: free.pop()}
-        # The leg's deadline cancels the wait.
+        # The caller's deadline cancels the wait.
         turn: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         waiting = self._waiting.setdefault(url, [])
         waiting.append(turn)
@@ -107,11 +109,14 @@ class SlotFileConnector(KvConnector):
         return None
 
     def _hand_on(self, url: str, slot: int) -> None:
-        waiting = self._waiting.get(url)
-        if waiting:
-            waiting.pop(0).set_result(slot)
-        else:
-            self._free[url].append(slot)
+        waiting = self._waiting.get(url, [])
+        while waiting:
+            # A cancelled wait stays listed until its task next runs.
+            turn = waiting.pop(0)
+            if not turn.done():
+                turn.set_result(slot)
+                return
+        self._free[url].append(slot)
 
     async def export(
         self,
@@ -122,15 +127,22 @@ class SlotFileConnector(KvConnector):
         *,
         timeout_s: float,
     ) -> PrefillResult:
-        slot = seat[SEAT_FIELD]
-        turn = self._saves.get((url, slot), 0)
-        self._saves[url, slot] = (turn + 1) % FILES_PER_SLOT
+        held = self._held.setdefault(url, set())
+        number = next(n for n in range(len(held) + 1) if n not in held)
+        held.add(number)
         producer = hashlib.sha256(url.encode()).hexdigest()[:12]
-        filename = f"narwhal-{producer}-{slot}-{turn}.bin"
-        saved = await calls.post(
-            url, f"/slots/{slot}?action=save", {"filename": filename}, timeout_s=timeout_s
-        )
-        descriptor = {"filename": filename, "tokens": saved.get("n_saved")}
+        filename = f"narwhal-{self._router}-{producer}-{number}.bin"
+        try:
+            saved = await calls.post(
+                url,
+                f"/slots/{seat[SEAT_FIELD]}?action=save",
+                {"filename": filename},
+                timeout_s=timeout_s,
+            )
+        except BaseException:
+            held.discard(number)
+            raise
+        descriptor = {"filename": filename, "file": number, "tokens": saved.get("n_saved")}
         return PrefillResult(
             result.connector,
             result.producer_url,
@@ -157,4 +169,11 @@ class SlotFileConnector(KvConnector):
             {"filename": filename},
             timeout_s=timeout_s,
         )
+        return None
+
+    def discard(self, result: PrefillResult) -> None:
+        # The file stays on disk and the producer's next handoff overwrites it.
+        number = result.parameters().get("file")
+        if type(number) is int:
+            self._held.get(result.producer_url, set()).discard(number)
         return None
