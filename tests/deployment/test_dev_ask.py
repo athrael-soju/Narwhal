@@ -50,15 +50,17 @@ class AskTests(DirectInstance):
             {"event": "controller_decision"},
             {"rid": "rid-1", "prefill_iid": "n1", "decode_iid": "n3"},
         ]
+        # A line the router is still writing ends the file.
         (self.run_directory / "journal.jsonl").write_text(
-            "".join(json.dumps(row) + "\n" for row in rows)
+            "[]\n" + "".join(json.dumps(row) + "\n" for row in rows) + '{"rid": "rid-'
         )
+        self.state("degraded")
         result = self.ask(prompt="What is the capital of Japan?", max_tokens=16)
         self.assertEqual(
             (result["status"], result["reply"], result["output_tokens"]), ("answered", "Tokyo", 2)
         )
         self.assertEqual(result["engines"], {"prefill": "n1", "decode": "n3"})
-        self.assertGreaterEqual(result["ttft_s"], 0)
+        self.assertGreater(result["tokens_per_second"], 0)
         [body] = self.bodies
         self.assertEqual(
             body,
@@ -73,21 +75,59 @@ class AskTests(DirectInstance):
         )
 
     def test_the_client_times_the_first_output_and_the_interval_between_tokens(self):
-        ticks = itertools.count(step=0.5)
+        def timed(reply: httpx.Response, start: float = 0.0) -> ask.Answer:
+            ticks = itertools.count(start, 0.5)
 
-        async def timed() -> ask.Answer:
-            transport = httpx.MockTransport(lambda request: chat_stream(["a", "b", "c"], 5))
-            async with httpx.AsyncClient(transport=transport) as client:
-                return await ask.ask(client, "http://router", {}, clock=lambda: next(ticks))
+            async def one() -> ask.Answer:
+                transport = httpx.MockTransport(lambda request: reply)
+                async with httpx.AsyncClient(transport=transport) as client:
+                    return await ask.ask(client, "http://router", {}, clock=lambda: next(ticks))
 
-        answer = asyncio.run(timed())
+            return asyncio.run(one())
+
         # The clock reads 0 at the start, then 0.5, 1.0 and 1.5 at the three chunks of text.
+        answer = timed(chat_stream(["a", "b", "c"], 5))
         self.assertEqual((answer.ttft_s, answer.tpot_s, answer.output_tokens), (0.5, 0.25, 5))
         self.assertEqual(answer.text, "abc")
+        # A first chunk at clock zero still marks the first token.
+        self.assertEqual(timed(chat_stream(["a", "b", "c"], 5), start=-0.5).tpot_s, 0.25)
+        one_chunk = timed(chat_stream(["abc"], 5))
+        self.assertEqual((one_chunk.ttft_s, one_chunk.tpot_s), (0.5, None))
+        self.assertIsNone(timed(chat_stream(["a", "b"], None)).tpot_s)
+
+    def test_a_broken_stream_is_a_failed_request(self):
+        def answer(text: str) -> ask.Answer:
+            async def one() -> ask.Answer:
+                reply = httpx.Response(200, text=text, headers={"x-request-id": "r"})
+                transport = httpx.MockTransport(lambda request: reply)
+                async with httpx.AsyncClient(transport=transport) as client:
+                    return await ask.ask(client, "http://router", {})
+
+            return asyncio.run(one())
+
+        refused = answer('data: {"error": {"message": "engine failed"}}\n\n')
+        self.assertEqual((refused.ok, refused.error), (False, '{"message": "engine failed"}'))
+        torn = answer('data: {"choices": [{"delta": {"content": "a"\n\n')
+        self.assertFalse(torn.ok)
+        self.assertIn("JSONDecodeError", torn.error)
+        odd = answer('data: {"choices": [3, {"delta": 4}, {"delta": {"content": "x"}}]}\n\n')
+        self.assertEqual((odd.ok, odd.text), (True, "x"))
 
     def test_many_prompts_report_the_spread_the_throughput_and_the_failures(self):
         self.replies = [httpx.Response(503, text="busy"), chat_stream(["x"], None)]
-        result = self.ask(repeat=14, concurrency=4)
+        inflight = peak = 0
+
+        async def handle(request: httpx.Request) -> httpx.Response:
+            nonlocal inflight, peak
+            inflight += 1
+            peak = max(peak, inflight)
+            await asyncio.sleep(0.01)
+            inflight -= 1
+            return self.handle(request)
+
+        result = ask.run(self.root, transport=httpx.MockTransport(handle), repeat=14, concurrency=4)
+        self.assertEqual(peak, 4)
+        self.assertEqual(result["replies_without_token_count"], 1)
         self.assertEqual(
             (result["status"], result["requests"], result["failed"], result["concurrency"]),
             ("completed", 14, 1, 4),
@@ -100,6 +140,14 @@ class AskTests(DirectInstance):
         with patch.object(ask, "run", return_value=result):
             arguments = ["dev", "ask", "--instance", str(self.root), "--repeat", "14"]
             self.assertEqual(cli._main(arguments), 1)
+
+    def test_replies_with_no_token_count_give_no_token_throughput(self):
+        self.replies = [chat_stream(["x"], None) for _ in range(3)]
+        result = self.ask(repeat=3)
+        self.assertEqual(
+            (result["output_tokens_per_second"], result["replies_without_token_count"]), (None, 3)
+        )
+        self.assertEqual(result["tpot_s"], {"p50": None, "p95": None})
 
     def test_the_spread_uses_nearest_rank_percentiles(self):
         values = [float(value) for value in range(1, 21)]
@@ -117,11 +165,28 @@ class AskTests(DirectInstance):
             with self.subTest(settings=settings), self.assertRaisesRegex(ValueError, message):
                 self.ask(**settings)
         self.state("stopped")
-        with self.assertRaisesRegex(ValueError, "requires a launched instance"):
+        with self.assertRaisesRegex(
+            ValueError, "requires a launched instance; this one is stopped"
+        ):
             self.ask(prompt="x")
+        for arguments in (
+            [],
+            ["x", "--repeat", "2"],
+            ["--repeat", "0"],
+            ["x", "--max-tokens", "0"],
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(SystemExit) as stopped:
+                cli._main(["dev", "ask", "--instance", str(self.folder / "absent"), *arguments])
+            self.assertEqual(stopped.exception.code, 2)
 
     def test_a_failed_single_request_fails_the_command(self):
         self.replies = [httpx.Response(429, text="refused")]
         with self.assertRaisesRegex(lifecycle.LifecycleOperationError, "HTTP 429: refused"):
             self.ask(prompt="x")
-        self.assertEqual(ask._legs(Path("/nonexistent"), None), {"prefill": None, "decode": None})
+
+    def test_a_request_with_no_journal_row_names_no_engine(self):
+        with patch.object(ask, "JOURNAL_WAIT_S", 0.0):
+            for rid in (None, "rid-9"):
+                self.assertEqual(
+                    ask._legs(Path("/nonexistent"), rid), {"prefill": None, "decode": None}
+                )

@@ -187,6 +187,11 @@ def _main(argv: list[str]) -> int:
                 help="keep the model on the CPU, for a template that starts its engines directly",
             )
     args = parser.parse_args(argv)
+    if args.command == "dev" and args.action == "ask":
+        if (args.prompt is None) == (args.repeat is None):
+            parser.error("dev ask takes one prompt, or --repeat for the built-in prompts")
+        if min(1 if args.repeat is None else args.repeat, args.concurrency, args.max_tokens) < 1:
+            parser.error("--repeat, --concurrency and --max-tokens must be positive")
     if args.command == "config":
         return config_cli.run(args)
     if args.command == "diagnostics":
@@ -250,15 +255,12 @@ def _main(argv: list[str]) -> int:
         if result["status"] == "degraded":
             results.set_status("degraded")
             results.record_error("instance_degraded", "Development instance requires recovery")
-        if args.action == "ask" and result.get("failed"):
-            results.set_status("degraded")
-            results.record_error(
-                "requests_failed", f"{result['failed']} of {result['requests']} requests failed"
-            )
-            print(json.dumps(result, indent=2))
-            return 1
+        failed = args.action == "ask" and result.get("failed")
+        if failed:
+            results.set_status("failed_gate")
+            results.record_error("gate_failed", f"{failed} of {result['requests']} requests failed")
         print(json.dumps(result, indent=2))
-        return 1 if result["status"] == "degraded" else 0
+        return 1 if failed or result["status"] == "degraded" else 0
     except metadata.PackageNotFoundError as exc:
         results.record_error("runtime_package_missing", str(exc), stage="runtime-package")
         return failure("narwhal", f"{context}: load runtime package", exc, 2)

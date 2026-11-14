@@ -17,6 +17,9 @@ from . import lifecycle
 REQUEST_TIMEOUT_S = 300.0
 # The journal row of a request is written when its stream ends.
 JOURNAL_WAIT_S = 2.0
+# A request's row is among the last the journal holds.
+JOURNAL_TAIL_BYTES = 1 << 20
+PHASES = ("launched", "ready", "degraded")
 PROMPTS = (
     "What is the capital of Japan?",
     "Explain in one sentence why the sky is blue.",
@@ -40,7 +43,7 @@ class Answer:
     error: str = ""
     request_id: str | None = None
     ttft_s: float | None = None
-    # Seconds between output tokens after the first.
+    # Seconds per output token after the first chunk of output, which counts as one token.
     tpot_s: float | None = None
     output_tokens: int | None = None
     seconds: float = 0.0
@@ -60,8 +63,11 @@ def _body(model: str, prompt: str, max_tokens: int, extra: dict[str, Any]) -> di
 def _piece(chunk: dict[str, Any]) -> tuple[str, bool]:
     """A stream chunk's reply text, and whether it carries output of any kind."""
     text, output = "", False
-    for choice in chunk.get("choices") or []:
-        delta = choice.get("delta") or {}
+    choices = chunk.get("choices")
+    for choice in choices if isinstance(choices, list) else []:
+        delta = choice.get("delta") if isinstance(choice, dict) else None
+        if not isinstance(delta, dict):
+            continue
         content = delta.get("content")
         if isinstance(content, str):
             text += content
@@ -91,7 +97,8 @@ async def ask(
                 text += piece
                 if output:
                     last = clock()
-                    first = first or last
+                    if first is None:
+                        first = last
                 usage = chunk.get("usage")
                 if isinstance(usage, dict) and type(usage.get("completion_tokens")) is int:
                     tokens = usage["completion_tokens"]
@@ -100,7 +107,7 @@ async def ask(
     ended = clock()
     interval = (
         (last - first) / (tokens - 1)
-        if first is not None and last is not None and tokens and tokens > 1
+        if first is not None and last is not None and last > first and tokens and tokens > 1
         else None
     )
     return Answer(
@@ -126,15 +133,33 @@ def _spread(values: list[float]) -> dict[str, float | None]:
     return {"p50": percentile(values, 0.5), "p95": percentile(values, 0.95)}
 
 
+def _rows(journal: Path) -> list[dict]:
+    """The journal's last rows, newest first; a line still being written is skipped."""
+    try:
+        with journal.open("rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - JOURNAL_TAIL_BYTES))
+            lines = stream.read().decode(errors="replace").splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def _legs(journal: Path, request_id: str | None) -> dict[str, Any]:
     """The engines that served a request, read from its journal row."""
     deadline = time.monotonic() + JOURNAL_WAIT_S
     while request_id is not None:
-        if journal.is_file():
-            for line in reversed(journal.read_text().splitlines()):
-                row = json.loads(line)
-                if row.get("rid") == request_id:
-                    return {"prefill": row.get("prefill_iid"), "decode": row.get("decode_iid")}
+        for row in _rows(journal):
+            if row.get("rid") == request_id:
+                return {"prefill": row.get("prefill_iid"), "decode": row.get("decode_iid")}
         if time.monotonic() >= deadline:
             break
         time.sleep(0.1)
@@ -146,7 +171,11 @@ async def _many(
 ) -> tuple[list[Answer], float]:
     gate = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient(
-        timeout=REQUEST_TIMEOUT_S, trust_env=False, transport=transport
+        timeout=REQUEST_TIMEOUT_S,
+        trust_env=False,
+        transport=transport,
+        # A request waiting for a pooled connection would count that wait in its first token.
+        limits=httpx.Limits(max_connections=concurrency),
     ) as client:
 
         async def one(body: dict[str, Any]) -> Answer:
@@ -173,8 +202,10 @@ def run(
         raise ValueError("--repeat, --concurrency and --max-tokens must be positive")
     config = lifecycle.instance(root)
     state = lifecycle._read_state(root) if (root / "lifecycle.json").exists() else {}
-    if state.get("phase") not in {"launched", "ready"}:
-        raise ValueError("dev ask requires a launched instance; run narwhal dev up")
+    if state.get("phase") not in PHASES:
+        raise ValueError(
+            f"dev ask requires a launched instance; this one is {state.get('phase', 'stopped')}"
+        )
     run_directory = Path(state["run"])
     model = lifecycle.read(run_directory / "fleet.json")["model"]
     extra = lifecycle.read(root / "template.json").get("request", {})
@@ -198,7 +229,7 @@ def run(
         }
     served = [answer for answer in answers if answer.ok]
     failed = len(answers) - len(served)
-    tokens = sum(answer.output_tokens or 0 for answer in served)
+    counts = [answer.output_tokens for answer in served if answer.output_tokens is not None]
     return {
         "status": "completed",
         "requests": len(answers),
@@ -208,6 +239,8 @@ def run(
         "ttft_s": _spread([a.ttft_s for a in served if a.ttft_s is not None]),
         "tpot_s": _spread([a.tpot_s for a in served if a.tpot_s is not None]),
         "requests_per_second": len(served) / seconds if seconds > 0 else None,
-        "output_tokens_per_second": tokens / seconds if seconds > 0 else None,
+        # Over the replies that reported a token count.
+        "output_tokens_per_second": sum(counts) / seconds if counts and seconds > 0 else None,
+        "replies_without_token_count": len(served) - len(counts),
         **({"errors": sorted({a.error for a in answers if not a.ok})[:5]} if failed else {}),
     }
