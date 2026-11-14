@@ -46,7 +46,7 @@
   "allocation": {
     "engine_count": 2,
     "engine_memory_mib": 2867,
-    "device_memory_mib": 6553
+    "device_memory_mib": 7168
   },
   "ports": {
     "router": 18000,

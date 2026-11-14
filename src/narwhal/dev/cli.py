@@ -196,7 +196,7 @@ def _main(argv: list[str]) -> int:
                 "--device-memory-mib",
                 type=int,
                 help="GPU memory all engines may take in MiB, at least --engine-count times "
-                "--engine-memory-mib (default: template value, installed 6553 or 9728)",
+                "--engine-memory-mib (default: template value, installed 7168 or 9728)",
             )
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"

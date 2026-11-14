@@ -14,7 +14,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,070 MiB of free VRAM and the SGLang template about 10,240 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,680 MiB of free VRAM and the SGLang template about 10,240 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -43,7 +43,7 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 A template states the GPU memory of its engines in MiB or as fractions of the GPU.
 
-The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `6553` in the vLLM template and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to `engine_memory_mib`. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.8` on a GPU of 8 GiB, and `0.088` and `0.201` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
+The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `7168` in the vLLM template, whose engines each take about 450 MiB in addition to `engine_memory_mib`, and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to it. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.088` and `0.2199` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
@@ -51,7 +51,7 @@ A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of 
 
 Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
 
-`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,070 MiB for the small vLLM template and about 10,240 MiB for the small SGLang template. During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
+`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,680 MiB for the small vLLM template and about 10,240 MiB for the small SGLang template. During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
 
 The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 

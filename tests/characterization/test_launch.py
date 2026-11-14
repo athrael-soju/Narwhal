@@ -456,7 +456,7 @@ class DevTemplateTests(unittest.TestCase):
         if "product" in gpu:
             gpu["product"] = "fixture-gpu"
         allowance = spec["allocation"].get("device_allowance")
-        # On a GPU of 8,192 MiB the default template's MiB values equal fractions 0.35 and 0.8.
+        # The default template is recorded on a GPU of 8,192 MiB.
         total = (
             8192 - 1
             if allowance is None
