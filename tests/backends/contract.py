@@ -29,8 +29,8 @@ from tools.measurement import simulated_engine as sim
 class ContractFixtures:
     # A metrics scrape and the values the backend's mapping reads from it.
     metrics: str
-    kv_capacity: int
-    cache_block_tokens: int
+    kv_capacity: int | None
+    cache_block_tokens: int | None
     prefix_cache_hits: int
     transfer_totals: tuple[float, float] | None
     # Cache event batches as published, with the event type each one decodes to.
@@ -247,7 +247,7 @@ class Engines:
             {
                 "engine": request.url.host,
                 "method": request.method,
-                "path": request.url.path,
+                "path": request.url.raw_path.decode(),
                 "headers": headers,
                 "body": body,
             }
@@ -266,7 +266,13 @@ class Engines:
     async def reply(
         self, engine: SimpleNamespace, request: httpx.Request, body: Any
     ) -> httpx.Response:
-        route = self.protocol.route(engine, request.method, request.url.path, request.content)
+        route = self.protocol.route(
+            engine,
+            request.method,
+            request.url.path,
+            request.content,
+            request.url.query.decode(),
+        )
         if route is None:
             refused = await self.protocol.admit(engine, body)
             if refused is None and body.get("stream"):
