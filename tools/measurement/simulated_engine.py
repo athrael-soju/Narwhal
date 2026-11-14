@@ -14,6 +14,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import httptools
@@ -315,6 +316,8 @@ class LlamacppWire:
     def __init__(self) -> None:
         # Slot files live in one directory that every engine shares.
         self.saved: set[str] = set()
+        # Engines in separate processes share their slot files through this directory.
+        self.directory: Path | None = None
 
     def route(
         self, engine: SimulatedEngine, method: str, path: str, body: bytes, query: str = ""
@@ -349,12 +352,17 @@ class LlamacppWire:
         slot, filename = path.removeprefix("/slots/"), payload.get("filename")
         if not slot.isdigit() or int(slot) >= self.SLOTS or not isinstance(filename, str):
             return error(400, "Invalid slot ID or filename", "invalid_request_error")
+        shared = None if self.directory is None else self.directory / Path(filename).name
         if query == "action=save":
             self.saved.add(filename)
+            if shared is not None:
+                shared.touch()
             return Reply(
                 200, body=compact({"id_slot": int(slot), "filename": filename, "n_saved": 3})
             )
-        if query == "action=restore" and filename in self.saved:
+        if query == "action=restore" and (
+            filename in self.saved or (shared is not None and shared.is_file())
+        ):
             return Reply(
                 200, body=compact({"id_slot": int(slot), "filename": filename, "n_saved": 3})
             )
@@ -715,6 +723,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     options.add_argument("--token-interval", type=float, default=0.02)
     options.add_argument("--frames-per-write", type=int, default=1)
     options.add_argument("--prefill-seconds", type=float, default=0.005)
+    options.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory that engines in separate processes share for saved slot files",
+    )
     args = options.parse_args(argv)
     if not (
         0 < args.token_interval < math.inf
@@ -736,6 +749,8 @@ async def serve(args: argparse.Namespace) -> int:
         prefill_s=args.prefill_seconds,
         backend=args.backend,
     )
+    if args.state_dir is not None and isinstance(engine.wire, LlamacppWire):
+        engine.wire.directory = args.state_dir
     stop = asyncio.Event()
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
     await engine.start(args.host, args.port)

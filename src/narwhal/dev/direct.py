@@ -1,0 +1,340 @@
+"""A development fleet whose engines start as plain processes and take nominal profiles."""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
+import uuid
+from importlib import metadata
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+from narwhal.backends import load as load_backend
+from narwhal.config.loading import load as load_fleet
+from narwhal.deployment.direct_start import DirectEngine, DirectStart
+from narwhal.deployment.launch_engine.runtime import write_private
+from narwhal.deployment.launch_engine.start import READY_SECONDS
+from narwhal.profiling.model import nominal_profile
+from narwhal.profiling.store import ProfileStore
+
+from . import lifecycle
+from .template import _check_free_ports, _sha256
+
+START = "direct"
+HOST = "127.0.0.1"
+PROBE_TIMEOUT_S = 120.0
+READY_TIMEOUT_S = 60.0
+MAX_THREADS = 8
+VERIFY_BODY = {"prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}
+
+
+def is_direct(value: dict) -> bool:
+    return value.get("start") == START
+
+
+def _direct_start(spec: dict) -> DirectStart:
+    return load_backend(spec["runtime"]["backend"]).direct_start()
+
+
+def _ports(spec: dict, count: int) -> tuple[dict[str, int], set[int]]:
+    if not 2 <= count <= 8:
+        raise ValueError("a development fleet requires 2 to 8 engines")
+    ports = {name: spec["ports"][name] for name in ("router", "engine_first")}
+    router, first = ports["router"], ports["engine_first"]
+    if type(router) is not int or not 1 <= router <= 65535:
+        raise ValueError("router port is invalid")
+    if type(first) is not int or not 1 <= first <= 65536 - count:
+        raise ValueError(f"engine_first cannot fit {count} engine ports")
+    used = {router, *range(first, first + count)}
+    if len(used) != count + 1:
+        raise ValueError(f"template ports collide at {router}")
+    return ports, used
+
+
+def _available_mib() -> int:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) // 1024
+    raise ValueError("/proc/meminfo reports no MemAvailable")
+
+
+def _model(spec: dict, model_path: Path) -> Path:
+    model = spec["model"]
+    path = model_path.expanduser().absolute()
+    if not path.is_file():
+        raise ValueError(f"model path must name the file {model['filename']}")
+    if _sha256(path) != model["sha256"]:
+        raise ValueError("model file SHA-256 differs from the pinned model revision")
+    return path
+
+
+def _binary(path: Path) -> Path:
+    binary = path.expanduser().absolute()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError(f"engine binary must name an executable file: {binary}")
+    return binary
+
+
+def materialize(
+    output: Path,
+    spec: dict,
+    *,
+    existing: dict | None,
+    saved: dict | None,
+    engine_binary: Path | None,
+    model_path: Path | None,
+    engine_count: int | None,
+    port_base: int | None,
+    accelerated: bool | None,
+) -> Path:
+    spec = copy.deepcopy(spec)
+    if engine_count is not None:
+        spec["allocation"]["engine_count"] = engine_count
+    if port_base is not None:
+        spec["ports"].update(router=port_base, engine_first=port_base + 1)
+    count = spec["allocation"]["engine_count"]
+    ports, used = _ports(spec, count)
+    if existing is not None:
+        if not is_direct(existing):
+            raise ValueError(f"existing instance {output} was not initialized from this template")
+        conflicts = [
+            flag
+            for flag, changed in (
+                (
+                    "--engine-binary",
+                    engine_binary is not None
+                    and str(_binary(engine_binary)) != existing["engine_binary"],
+                ),
+                (
+                    "--model",
+                    model_path is not None
+                    and str(model_path.expanduser().absolute()) != existing["model_path"],
+                ),
+                ("--engine-count", count != existing["engine_count"]),
+                ("--port-base", ports != existing["ports"]),
+                ("--no-accelerator", accelerated not in (None, existing["accelerated"])),
+                ("--template", spec != saved),
+            )
+            if changed
+        ]
+        if conflicts:
+            raise ValueError(
+                f"existing instance {output} conflicts with {', '.join(conflicts)}; "
+                "create a fresh instance with narwhal dev init --instance <new-directory> "
+                "and the requested settings"
+            )
+        return output
+    if engine_binary is None or model_path is None:
+        raise ValueError("this template requires --engine-binary and --model")
+    binary = _binary(engine_binary)
+    runtime = spec["runtime"]
+    version = _direct_start(spec).check(binary, runtime)
+    model = _model(spec, model_path)
+    required, available = count * runtime["memory_mib"], _available_mib()
+    if available < required:
+        raise ValueError(f"host memory check failed: {available} MiB free, {required} MiB required")
+    _check_free_ports(used, HOST)
+    fleet: dict[str, Any] = {
+        "schema": "narwhal.fleet",
+        "schema_version": 2,
+        "model": spec["model"]["served_name"],
+        "hardware": {
+            "accelerator": "local",
+            "accelerators_per_engine": 1,
+            "tensor_parallel": 1,
+        },
+        "engines": [
+            {
+                "iid": f"n{index + 1}",
+                "url": f"http://{HOST}:{ports['engine_first'] + index}",
+                "role": "prefill" if index < count // 2 else "decode",
+            }
+            for index in range(count)
+        ],
+        "slo": spec["slo"],
+        "controller": {"min_prefill": 1, "min_decode": 1, **spec["controller"]},
+        "profiles": {"path": str(output / "profiles.json")},
+        "recovery": {"state_path": str(output / "router-state.json")},
+        "engine": {"backend": runtime["backend"], "first_token_timeout_s": 10.0},
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="narwhal-dev-check-") as temporary:
+        trial = Path(temporary) / "fleet.json"
+        trial.write_text(json.dumps(fleet))
+        load_fleet(trial)
+    output.mkdir(mode=0o700)
+    try:
+        write_private(output / "template.json", json.dumps(spec, indent=2) + "\n")
+        write_private(output / "fleet.json", json.dumps(fleet, indent=2) + "\n")
+        instance = {
+            "schema": "narwhal.dev-instance",
+            "schema_version": 1,
+            "start": START,
+            "backend": runtime["backend"],
+            "engine_binary": str(binary),
+            "engine_version": version,
+            "model_path": str(model),
+            "router_url": f"http://{HOST}:{ports['router']}",
+            "ports": ports,
+            "engine_count": count,
+            "accelerated": accelerated is not False,
+            "narwhal_version": metadata.version("narwhal-inference"),
+            "python_executable": sys.executable,
+        }
+        write_private(output / "instance.json", json.dumps(instance, indent=2) + "\n")
+    except BaseException:
+        shutil.rmtree(output, ignore_errors=True)
+        raise
+    return output
+
+
+def up(root: Path, config: dict) -> dict:
+    with lifecycle.locked(root):
+        if (root / "lifecycle.json").exists():
+            previous = lifecycle._read_state(root)
+            if previous.get("phase") != "stopped":
+                raise ValueError("run dev down before starting another generation")
+        spec = lifecycle.read(root / "template.json")
+        start = _direct_start(spec)
+        binary = _binary(Path(config["engine_binary"]))
+        if start.check(binary, spec["runtime"]) != config["engine_version"]:
+            raise ValueError("engine binary changed after dev init")
+        _model(spec, Path(config["model_path"]))
+        _check_free_ports(_ports(spec, config["engine_count"])[1], HOST)
+        run = root / f"run-{uuid.uuid4().hex[:12]}"
+        run.mkdir(mode=0o700)
+        state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
+        lifecycle.write(root / "lifecycle.json", state)
+        try:
+            _launch(root, run, config, spec, state, start, binary)
+        except BaseException as error:
+            state["failure"] = {"message": str(error), "stage": "startup", "context": {}}
+            try:
+                lifecycle._stop(root, state)
+            except (OSError, ValueError) as cleanup_error:
+                state["failure"]["cleanup_error"] = str(cleanup_error)
+                lifecycle.write(root / "lifecycle.json", state)
+            raise
+        state["phase"] = "launched"
+        lifecycle.write(root / "lifecycle.json", state)
+        return {"status": "launched", "run": str(run), "router": config["router_url"]}
+
+
+def _launch(
+    root: Path,
+    run: Path,
+    config: dict,
+    spec: dict,
+    state: dict,
+    start: DirectStart,
+    binary: Path,
+) -> None:
+    fleet = lifecycle.read(root / "fleet.json")
+    fleet["profiles"]["path"] = str(run / "profiles.json")
+    fleet["recovery"] = {"state_path": str(run / "router-state.json")}
+    lifecycle.write(run / "fleet.json", fleet)
+    shared = run / "engine-state"
+    shared.mkdir(mode=0o700)
+    count = config["engine_count"]
+    threads = max(1, min(MAX_THREADS, (os.cpu_count() or 1) // count))
+    environment = {**os.environ, **start.environment(binary)}
+    records = []
+    for index, engine in enumerate(fleet["engines"]):
+        port = urlsplit(engine["url"]).port
+        if port is None:
+            raise ValueError(f"engine url names no port: {engine['url']}")
+        command = start.command(
+            binary,
+            DirectEngine(
+                model=Path(config["model_path"]),
+                served_name=fleet["model"],
+                host=HOST,
+                port=port,
+                runtime=spec["runtime"],
+                shared_dir=shared,
+                accelerated=config["accelerated"],
+                threads=threads,
+            ),
+        )
+        records.append(
+            lifecycle._spawn_command(root, state, command, f"engine-{index + 1}", environment)
+        )
+    for engine, record in zip(fleet["engines"], records, strict=True):
+        lifecycle._wait(engine["url"] + "/health", record["identity"], READY_SECONDS)
+    store = ProfileStore(run / "profiles.json")
+    endpoint, body = start.probe(fleet["model"])
+    with httpx.Client(timeout=PROBE_TIMEOUT_S, trust_env=False) as client:
+        for engine in fleet["engines"]:
+            reply = client.post(engine["url"] + endpoint, json=body)
+            reply.raise_for_status()
+            figures = start.figures(reply.json(), spec["runtime"])
+            store.put(
+                nominal_profile(
+                    engine["iid"],
+                    prefill_token_s=figures.prefill_token_s,
+                    token_interval_s=figures.token_interval_s,
+                    kv_capacity_tokens=figures.kv_capacity_tokens,
+                    max_requests=figures.max_requests,
+                )
+            )
+    router = urlsplit(config["router_url"])
+    record = lifecycle._spawn(
+        root,
+        state,
+        "narwhal.cli",
+        [
+            "--fleet",
+            str(run / "fleet.json"),
+            "--host",
+            str(router.hostname),
+            "--port",
+            str(router.port),
+            "--journal",
+            str(run / "journal.jsonl"),
+        ],
+        "router",
+        dict(os.environ),
+    )
+    lifecycle._wait(config["router_url"] + "/health", record["identity"])
+    lifecycle._wait(config["router_url"] + "/ready", record["identity"], int(READY_TIMEOUT_S))
+
+
+def verify(root: Path, config: dict) -> dict:
+    with lifecycle.locked(root):
+        state = lifecycle._read_state(root)
+        if state["phase"] not in {"launched", "ready"}:
+            raise ValueError("run dev up before verification")
+        run = Path(state["run"])
+        fleet = lifecycle.read(run / "fleet.json")
+        started = time.monotonic()
+        with httpx.Client(timeout=PROBE_TIMEOUT_S, trust_env=False) as client:
+            client.get(config["router_url"] + "/ready").raise_for_status()
+            reply = client.post(
+                config["router_url"] + "/v1/completions",
+                json={"model": fleet["model"], **VERIFY_BODY},
+            )
+            reply.raise_for_status()
+        choices = reply.json().get("choices")
+        text = choices[0].get("text") if isinstance(choices, list) and choices else None
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("the routed request returned no text")
+        evidence = run / "verification"
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        record = {"reply": text, "seconds": time.monotonic() - started, "time": time.time()}
+        lifecycle.write(evidence / "routed.json", record)
+        state.update(phase="ready", verification=str(evidence))
+        lifecycle.write(root / "lifecycle.json", state)
+        return {
+            "status": "ready",
+            "run": str(run),
+            "router": config["router_url"],
+            "reply": text,
+        }
