@@ -110,7 +110,7 @@ narwhal dev watch
 narwhal dev down
 ```
 
-`ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and the engines changing roles under the concurrent requests.
+`ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
 
 Narwhal dev also runs vLLM and SGLang engines on one NVIDIA GPU with `narwhal dev init`, with the attestation, profiling and KV transfer checks a deployed fleet uses.
 
