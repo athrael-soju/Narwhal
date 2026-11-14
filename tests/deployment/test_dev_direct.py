@@ -139,6 +139,7 @@ class DirectInitTests(DirectInstance):
             ({"model_path": Path(__file__)}, "SHA-256 differs from the pinned model revision"),
             ({"engine_count": 9}, "requires 2 to 8 engines"),
             ({"gpu_uuid": "GPU-1"}, "this template takes no --gpu"),
+            ({"engine_memory_mib": 4096}, "this template takes no --engine-memory-mib"),
         ):
             with self.subTest(changes=list(changes)), self.assertRaisesRegex(ValueError, message):
                 self.init(**changes)

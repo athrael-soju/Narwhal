@@ -177,14 +177,26 @@ def _main(argv: list[str]) -> int:
                 type=float,
                 help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
                 "engine-count * fraction <= device-allowance "
-                "(default: template value, installed 0.35)",
+                "(default: template value)",
             )
             action.add_argument(
                 "--device-allowance",
                 type=float,
                 help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
                 "engine fractions; bounds startup memory increase "
-                "(default: template value, installed 0.8)",
+                "(default: template value)",
+            )
+            action.add_argument(
+                "--engine-memory-mib",
+                type=int,
+                help="GPU memory of each engine in MiB, converted to a fraction of the GPU found "
+                "(default: template value, installed 2867)",
+            )
+            action.add_argument(
+                "--device-memory-mib",
+                type=int,
+                help="GPU memory all engines may take in MiB, at least --engine-count times "
+                "--engine-memory-mib (default: template value, installed 7168 or 9728)",
             )
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"
@@ -242,6 +254,8 @@ def _main(argv: list[str]) -> int:
                 device_allowance=args.device_allowance,
                 engine_binary=args.engine_binary,
                 accelerated=False if args.no_accelerator else None,
+                engine_memory_mib=args.engine_memory_mib,
+                device_memory_mib=args.device_memory_mib,
             )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
         elif args.action == "setup":

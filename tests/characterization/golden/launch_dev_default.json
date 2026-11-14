@@ -41,7 +41,7 @@
           "tokenizer": "<root>/model"
         },
         "shared_device": {
-          "device_allowance": 0.8,
+          "device_allowance": 0.875,
           "gpu_memory_utilization": 0.35,
           "gpu_uuid": "GPU-fixture",
           "group": "example-host:GPU-fixture"
@@ -99,7 +99,7 @@
           "tokenizer": "<root>/model"
         },
         "shared_device": {
-          "device_allowance": 0.8,
+          "device_allowance": 0.875,
           "gpu_memory_utilization": 0.35,
           "gpu_uuid": "GPU-fixture",
           "group": "example-host:GPU-fixture"
@@ -165,7 +165,7 @@
         "iid": "n1",
         "role": "prefill",
         "shared_device": {
-          "device_allowance": 0.8,
+          "device_allowance": 0.875,
           "gpu_memory_utilization": 0.35,
           "gpu_uuid": "GPU-fixture",
           "group": "example-host:GPU-fixture"
@@ -177,7 +177,7 @@
         "iid": "n2",
         "role": "decode",
         "shared_device": {
-          "device_allowance": 0.8,
+          "device_allowance": 0.875,
           "gpu_memory_utilization": 0.35,
           "gpu_uuid": "GPU-fixture",
           "group": "example-host:GPU-fixture"

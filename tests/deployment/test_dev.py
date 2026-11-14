@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -144,6 +145,128 @@ class DevTests(unittest.TestCase):
         self.assertEqual([engine["role"] for engine in fleet["engines"]], ["prefill", "decode"])
         self.assertEqual(fleet["hardware"]["accelerator"], "NVIDIA Test GPU")
 
+    def small_spec(self):
+        spec = template.default_template()
+        spec["model"].update(
+            filename=self.gguf.name,
+            sha256=hashlib.sha256(b"synthetic").hexdigest(),
+            tokenizer_sha256={},
+        )
+        spec["runtime"].pop("gguf_plugin_python_sha256", None)
+        return spec
+
+    def small(self, total_mib, used_mib=0, **overrides):
+        self.initialize_with(
+            self.small_spec(),
+            gpu_name="NVIDIA Test GPU",
+            memory={"total_mib": total_mib, "used_mib": used_mib},
+            model_path=self.gguf,
+            **overrides,
+        )
+        launch = lifecycle.read(self.root / "engine-launch.json")
+        return launch["engines"]["engine-1"]["shared_device"]
+
+    def test_the_small_templates_ask_every_gpu_for_the_same_memory(self):
+        # An SGLang engine takes its CUDA graphs and runtime beside the pool its fraction sizes.
+        for name, allowed in (("small-cuda-v1.json", 7168), ("small-cuda-sglang-v1.json", 9728)):
+            self.assertEqual(
+                template._read_template(name)["allocation"],
+                {"engine_count": 2, "engine_memory_mib": 2867, "device_memory_mib": allowed},
+            )
+        # On a GPU of 8,192 MiB the vLLM template's MiB values are fractions 0.35 and 0.875.
+        shared = self.small(8192)
+        self.assertEqual(
+            (shared["gpu_memory_utilization"], shared["device_allowance"]), (0.35, 0.875)
+        )
+        shutil.rmtree(self.root)
+        # A GPU of 32 GiB with 8 GiB in use holds the same two budgets.
+        shared = self.small(32607, used_mib=8000)
+        self.assertEqual(
+            (shared["gpu_memory_utilization"], shared["device_allowance"]), (0.088, 0.2199)
+        )
+        self.assertGreaterEqual(0.088 * 32607, 2867)
+        saved = lifecycle.read(self.root / "template.json")["allocation"]
+        self.assertEqual(
+            saved,
+            {
+                "engine_count": 2,
+                "engine_memory_mib": 2867,
+                "device_memory_mib": 7168,
+                "gpu_memory_utilization": 0.088,
+                "device_allowance": 0.2199,
+            },
+        )
+        fleet = lifecycle.read(self.root / "fleet.json")
+        self.assertEqual(fleet["engines"][0]["shared_device"]["gpu_memory_utilization"], 0.088)
+
+    def test_a_gpu_must_hold_the_memory_the_template_states(self):
+        with self.assertRaisesRegex(ValueError, "6000 MiB free, 7682 MiB required"):
+            self.small(32607, used_mib=26607)
+        with self.assertRaisesRegex(
+            ValueError, "GPU VRAM of 6144 MiB is below the 7168 MiB the engines are allowed"
+        ):
+            self.small(6144)
+        with self.assertRaisesRegex(
+            ValueError, "3 engines of 2867 MiB exceed the 7168 MiB the engines are allowed"
+        ):
+            self.small(32607, engine_count=3)
+        self.assertFalse(self.root.exists())
+        with self.assertRaisesRegex(ValueError, "GPU VRAM of 8192 MiB is below the 9728 MiB"):
+            self.initialize_with(
+                self.sglang_spec(),
+                gpu_name="NVIDIA Test GPU",
+                memory={"total_mib": 8192, "used_mib": 0},
+                model_path=self.model,
+                dev=sglang_dev,
+            )
+
+    def test_the_allowance_covers_the_engines_rounded_fractions(self):
+        # Two fractions of 0.0880 need 0.1760, more than 5734 MiB of this GPU rounds to.
+        shared = self.small(32607, engine_memory_mib=2867, device_memory_mib=5734)
+        self.assertEqual(
+            (shared["gpu_memory_utilization"], shared["device_allowance"]), (0.088, 0.176)
+        )
+
+    def test_init_options_size_the_engines_in_mib_or_as_fractions(self):
+        shared = self.small(32607, engine_memory_mib=4096, device_memory_mib=10000)
+        self.assertEqual(
+            (shared["gpu_memory_utilization"], shared["device_allowance"]), (0.1257, 0.3067)
+        )
+        # A repeated init with the same values reuses the instance, and another value conflicts.
+        self.small(32607, engine_memory_mib=4096, device_memory_mib=10000)
+        with self.assertRaisesRegex(ValueError, "conflicts with --engine-memory-mib"):
+            self.small(32607, engine_memory_mib=2048, device_memory_mib=10000)
+        shutil.rmtree(self.root)
+        shared = self.small(32607, gpu_memory_utilization=0.2, device_allowance=0.5)
+        self.assertEqual((shared["gpu_memory_utilization"], shared["device_allowance"]), (0.2, 0.5))
+        self.assertNotIn(
+            "engine_memory_mib", lifecycle.read(self.root / "template.json")["allocation"]
+        )
+        # The same command a second time reuses the instance, and the other kind conflicts.
+        self.small(32607, gpu_memory_utilization=0.2, device_allowance=0.5)
+        with self.assertRaisesRegex(ValueError, "conflicts with .*--engine-memory-mib"):
+            self.small(32607, engine_memory_mib=2867, device_memory_mib=7168)
+        shutil.rmtree(self.root)
+        for overrides, message in (
+            ({"gpu_memory_utilization": 0.2}, "needs both --gpu-memory-utilization and"),
+            (
+                {"engine_memory_mib": 2000, "device_allowance": 0.5},
+                "by fractions of the GPU or in MiB",
+            ),
+            ({"engine_memory_mib": 0}, "allocation.engine_memory_mib must be a positive integer"),
+        ):
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, message):
+                self.small(32607, **overrides)
+
+    def test_the_reference_template_takes_the_mib_pair_in_place_of_its_fractions(self):
+        self.initialize(engine_memory_mib=3000, device_memory_mib=14000)
+        shared = lifecycle.read(self.root / "engine-launch.json")["engines"]["engine-1"]
+        self.assertEqual(shared["shared_device"]["gpu_memory_utilization"], 0.0921)
+        self.initialize(engine_memory_mib=3000, device_memory_mib=14000)
+        shutil.rmtree(self.root)
+        with self.assertRaisesRegex(ValueError, "needs both --engine-memory-mib and"):
+            self.initialize(engine_memory_mib=3000)
+
     def sglang_spec(self):
         spec = template._read_template("small-cuda-sglang-v1.json")
         (self.model / "model.safetensors").write_bytes(b"weights")
@@ -160,7 +283,7 @@ class DevTests(unittest.TestCase):
         return self.initialize_with(
             spec,
             gpu_name="NVIDIA Test GPU",
-            memory={"total_mib": 8192, "used_mib": 0},
+            memory={"total_mib": 12288, "used_mib": 0},
             model_path=self.model,
             dev=sglang_dev,
         )
