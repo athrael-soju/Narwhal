@@ -33,6 +33,7 @@ from .template import (
     _sha256,
     check_instance_ports,
     model_files,
+    starts_directly,
 )
 
 
@@ -122,18 +123,13 @@ def instance(root: Path) -> dict:
     value = read(root / "instance.json")
     if value.get("schema") != "narwhal.dev-instance" or value.get("schema_version") != 1:
         raise ValueError("instance requires narwhal.dev-instance schema version 1")
-    if not _direct(value):
+    if not starts_directly(value):
         check_instance_ports(value, root)
     expected = Path(value["python_executable"])
     current = Path(sys.executable)
     if expected.parent.resolve() != current.parent.resolve() or not expected.samefile(current):
         raise ValueError("run this instance with the Python environment used by dev init")
     return value
-
-
-def _direct(config: dict) -> bool:
-    # An instance whose engines start as plain processes, with no attestation sidecars.
-    return config.get("start") == "direct"
 
 
 @contextlib.contextmanager
@@ -344,7 +340,7 @@ def _stop(root: Path, state: dict) -> None:
 
 def up(root: Path) -> dict:
     config = instance(root)
-    if _direct(config):
+    if starts_directly(config):
         from . import direct
 
         return direct.up(root, config)
@@ -493,7 +489,7 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
 
 def verify(root: Path) -> dict:
     config = instance(root)
-    if _direct(config):
+    if starts_directly(config):
         from . import direct
 
         return direct.verify(root, config)
@@ -620,7 +616,7 @@ def status(root: Path) -> dict:
     problems.extend(f"{name}: interrupted helper PIDs {pids}" for name, pids in helpers.items())
     if state.get("failure") and not state.get("verification_failure"):
         problems.append(state["failure"]["message"])
-    direct = _direct(config)
+    direct = starts_directly(config)
     if len(live) != (1 if direct else 2) * config["engine_count"] + 1:
         problems.append(
             "owned process count differs from the configured engines and router"

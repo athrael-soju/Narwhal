@@ -28,16 +28,11 @@ from narwhal.profiling.store import ProfileStore
 from . import lifecycle
 from .template import _check_free_ports, _sha256
 
-START = "direct"
 HOST = "127.0.0.1"
 PROBE_TIMEOUT_S = 120.0
 READY_TIMEOUT_S = 60.0
 MAX_THREADS = 8
 VERIFY_BODY = {"prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}
-
-
-def is_direct(value: dict) -> bool:
-    return value.get("start") == START
 
 
 def _direct_start(spec: dict) -> DirectStart:
@@ -59,6 +54,28 @@ def _ports(spec: dict, count: int) -> tuple[dict[str, int], set[int]]:
     return ports, used
 
 
+def _pinned(spec: dict) -> dict:
+    # The sections a flag cannot change.
+    return {name: spec.get(name) for name in ("model", "runtime", "slo", "controller")}
+
+
+def _runtime(spec: dict) -> dict:
+    runtime = spec["runtime"]
+    for name in ("build", "context_tokens", "slots", "memory_mib"):
+        if type(runtime.get(name)) is not int or runtime[name] < 1:
+            raise ValueError(f"template runtime.{name} must be a positive integer")
+    extra = runtime.get("extra_args", [])
+    if not isinstance(extra, list) or not all(isinstance(arg, str) for arg in extra):
+        raise ValueError("template runtime.extra_args must be a list of strings")
+    return runtime
+
+
+def _threads(count: int) -> int:
+    # One CPU stays with the router, which polls every engine.
+    usable = len(os.sched_getaffinity(0)) - 1
+    return max(1, min(MAX_THREADS, usable // count))
+
+
 def _available_mib() -> int:
     for line in Path("/proc/meminfo").read_text().splitlines():
         if line.startswith("MemAvailable:"):
@@ -70,7 +87,7 @@ def _model(spec: dict, model_path: Path) -> Path:
     model = spec["model"]
     path = model_path.expanduser().absolute()
     if not path.is_file():
-        raise ValueError(f"model path must name the file {model['filename']}")
+        raise ValueError(f"model path must name a copy of {model['filename']}")
     if _sha256(path) != model["sha256"]:
         raise ValueError("model file SHA-256 differs from the pinned model revision")
     return path
@@ -94,6 +111,7 @@ def materialize(
     engine_count: int | None,
     port_base: int | None,
     accelerated: bool | None,
+    template_given: bool = False,
 ) -> Path:
     spec = copy.deepcopy(spec)
     if engine_count is not None:
@@ -103,8 +121,6 @@ def materialize(
     count = spec["allocation"]["engine_count"]
     ports, used = _ports(spec, count)
     if existing is not None:
-        if not is_direct(existing):
-            raise ValueError(f"existing instance {output} was not initialized from this template")
         conflicts = [
             flag
             for flag, changed in (
@@ -118,10 +134,13 @@ def materialize(
                     model_path is not None
                     and str(model_path.expanduser().absolute()) != existing["model_path"],
                 ),
-                ("--engine-count", count != existing["engine_count"]),
-                ("--port-base", ports != existing["ports"]),
+                (
+                    "--engine-count",
+                    engine_count is not None and count != existing["engine_count"],
+                ),
+                ("--port-base", port_base is not None and ports != existing["ports"]),
                 ("--no-accelerator", accelerated not in (None, existing["accelerated"])),
-                ("--template", spec != saved),
+                ("--template", template_given and _pinned(spec) != _pinned(saved or {})),
             )
             if changed
         ]
@@ -135,12 +154,16 @@ def materialize(
     if engine_binary is None or model_path is None:
         raise ValueError("this template requires --engine-binary and --model")
     binary = _binary(engine_binary)
-    runtime = spec["runtime"]
+    runtime = _runtime(spec)
     version = _direct_start(spec).check(binary, runtime)
     model = _model(spec, model_path)
+    # With the model on an accelerator its weights are in device memory, which this host
+    # figure does not measure.
     required, available = count * runtime["memory_mib"], _available_mib()
-    if available < required:
-        raise ValueError(f"host memory check failed: {available} MiB free, {required} MiB required")
+    if accelerated is False and available < required:
+        raise ValueError(
+            f"host memory check failed: {available} MiB available, {required} MiB required"
+        )
     _check_free_ports(used, HOST)
     fleet: dict[str, Any] = {
         "schema": "narwhal.fleet",
@@ -160,7 +183,7 @@ def materialize(
             for index in range(count)
         ],
         "slo": spec["slo"],
-        "controller": {"min_prefill": 1, "min_decode": 1, **spec["controller"]},
+        "controller": spec["controller"],
         "profiles": {"path": str(output / "profiles.json")},
         "recovery": {"state_path": str(output / "router-state.json")},
         "engine": {"backend": runtime["backend"], "first_token_timeout_s": 10.0},
@@ -177,7 +200,7 @@ def materialize(
         instance = {
             "schema": "narwhal.dev-instance",
             "schema_version": 1,
-            "start": START,
+            "start": "direct",
             "backend": runtime["backend"],
             "engine_binary": str(binary),
             "engine_version": version,
@@ -241,10 +264,9 @@ def _launch(
     fleet["profiles"]["path"] = str(run / "profiles.json")
     fleet["recovery"] = {"state_path": str(run / "router-state.json")}
     lifecycle.write(run / "fleet.json", fleet)
-    shared = run / "engine-state"
+    shared = run / "slot-files"
     shared.mkdir(mode=0o700)
-    count = config["engine_count"]
-    threads = max(1, min(MAX_THREADS, (os.cpu_count() or 1) // count))
+    threads = _threads(config["engine_count"])
     environment = {**os.environ, **start.environment(binary)}
     records = []
     for index, engine in enumerate(fleet["engines"]):
@@ -310,31 +332,37 @@ def _launch(
 def verify(root: Path, config: dict) -> dict:
     with lifecycle.locked(root):
         state = lifecycle._read_state(root)
-        if state["phase"] not in {"launched", "ready"}:
-            raise ValueError("run dev up before verification")
+        if state["phase"] not in {"launched", "ready", "degraded"}:
+            raise ValueError("dev verify requires a launched instance")
         run = Path(state["run"])
-        fleet = lifecycle.read(run / "fleet.json")
-        started = time.monotonic()
-        with httpx.Client(timeout=PROBE_TIMEOUT_S, trust_env=False) as client:
-            client.get(config["router_url"] + "/ready").raise_for_status()
-            reply = client.post(
-                config["router_url"] + "/v1/completions",
-                json={"model": fleet["model"], **VERIFY_BODY},
-            )
-            reply.raise_for_status()
-        choices = reply.json().get("choices")
-        text = choices[0].get("text") if isinstance(choices, list) and choices else None
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError("the routed request returned no text")
-        evidence = run / "verification"
-        evidence.mkdir(mode=0o700, exist_ok=True)
-        record = {"reply": text, "seconds": time.monotonic() - started, "time": time.time()}
-        lifecycle.write(evidence / "routed.json", record)
+        state["phase"] = "degraded" if state.get("verification_failure") else "launched"
+        state.pop("verification", None)
+        lifecycle.write(root / "lifecycle.json", state)
+        evidence = run / f"verify-{uuid.uuid4().hex[:12]}"
+        evidence.mkdir(mode=0o700)
+        try:
+            fleet = lifecycle.read(run / "fleet.json")
+            started = time.monotonic()
+            with httpx.Client(timeout=PROBE_TIMEOUT_S, trust_env=False) as client:
+                client.get(config["router_url"] + "/ready").raise_for_status()
+                reply = client.post(
+                    config["router_url"] + "/v1/completions",
+                    json={"model": fleet["model"], **VERIFY_BODY},
+                )
+                reply.raise_for_status()
+            choices = reply.json().get("choices")
+            text = choices[0].get("text") if isinstance(choices, list) and choices else None
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("the routed request returned no text")
+            record = {"reply": text, "seconds": time.monotonic() - started, "time": time.time()}
+            lifecycle.write(evidence / "routed.json", record)
+        except BaseException as error:
+            state["verification_failure"] = {"reason": str(error)}
+            state.update(phase="degraded", failed_verification=str(evidence))
+            lifecycle.write(root / "lifecycle.json", state)
+            raise
+        state.pop("verification_failure", None)
+        state.pop("failed_verification", None)
         state.update(phase="ready", verification=str(evidence))
         lifecycle.write(root / "lifecycle.json", state)
-        return {
-            "status": "ready",
-            "run": str(run),
-            "router": config["router_url"],
-            "reply": text,
-        }
+    return {**lifecycle.status(root), "reply": text}

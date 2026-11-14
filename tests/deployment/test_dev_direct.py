@@ -10,8 +10,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from narwhal.backends import load
 from narwhal.backends.llamacpp.dev import PROBE_OUTPUT_TOKENS, LlamacppDirect
+from narwhal.deployment import native_engine
 from narwhal.deployment.direct_start import DirectEngine, DirectStart, NominalFigures
 from narwhal.dev import direct, lifecycle, template
 from narwhal.dev.template import _check_free_ports, _read_template
@@ -25,7 +28,8 @@ VERSION = "version: 1.0.0-dev (build 12365, commit ae93877c8)\nbuilt with a comp
 class Simulated(DirectStart):
     """Starts the simulated engine in place of an engine binary."""
 
-    crash = False
+    # The port of an engine that exits at once.
+    crash: int | None = None
 
     def check(self, binary, runtime):
         return "simulated-1"
@@ -34,7 +38,7 @@ class Simulated(DirectStart):
         return {"PYTHONPATH": str(ROOT)}
 
     def command(self, binary, engine):
-        if self.crash:
+        if self.crash == engine.port:
             return [str(binary), "-c", "raise SystemExit(3)"]
         return [
             str(binary),
@@ -63,7 +67,8 @@ class Simulated(DirectStart):
 
 def free_port_base(count: int) -> int:
     for _ in range(50):
-        base = random.randrange(20000, 50000)
+        # Below the ports the kernel hands to outgoing connections.
+        base = random.randrange(20000, 32000)
         try:
             _check_free_ports(set(range(base, base + count + 2)), "127.0.0.1")
         except ValueError:
@@ -83,9 +88,12 @@ class DirectInstance(unittest.TestCase):
         self.spec["model"]["sha256"] = hashlib.sha256(MODEL_BYTES).hexdigest()
         self.root = self.folder / "instance"
         backend = replace(load("llamacpp"), direct=Simulated)
-        started = patch.object(direct, "load_backend", return_value=backend)
-        started.start()
-        self.addCleanup(started.stop)
+        for patched in (
+            patch.object(direct, "load_backend", return_value=backend),
+            patch.object(direct, "_available_mib", return_value=64000),
+        ):
+            patched.start()
+            self.addCleanup(patched.stop)
 
     def init(self, **changes):
         settings = {
@@ -124,19 +132,25 @@ class DirectInitTests(DirectInstance):
         for changes, message in (
             ({"engine_binary": None}, "requires --engine-binary and --model"),
             ({"engine_binary": self.model}, "engine binary must name an executable file"),
-            ({"model_path": self.folder / "absent.gguf"}, "model path must name the file"),
+            ({"model_path": self.folder / "absent.gguf"}, "model path must name a copy of"),
             ({"model_path": Path(__file__)}, "SHA-256 differs from the pinned model revision"),
             ({"engine_count": 9}, "requires 2 to 8 engines"),
             ({"gpu_uuid": "GPU-1"}, "this template takes no --gpu"),
         ):
             with self.subTest(changes=list(changes)), self.assertRaisesRegex(ValueError, message):
                 self.init(**changes)
+        self.spec["runtime"]["slots"] = 0
+        with self.assertRaisesRegex(ValueError, "runtime.slots must be a positive integer"):
+            self.init()
+        self.spec["runtime"]["slots"] = 2
         with (
             patch.object(direct, "_available_mib", return_value=100),
-            self.assertRaisesRegex(ValueError, "100 MiB free, 2400 MiB required"),
+            self.assertRaisesRegex(ValueError, "100 MiB available, 2400 MiB required"),
         ):
-            self.init()
+            self.init(accelerated=False)
         self.assertFalse(self.root.exists())
+        with patch.object(direct, "_available_mib", return_value=100):
+            self.init()
 
     def test_a_repeated_init_keeps_the_instance_and_names_each_conflict(self):
         self.init(port_base=(base := free_port_base(2)))
@@ -148,10 +162,23 @@ class DirectInitTests(DirectInstance):
         ):
             self.init(engine_count=4, port_base=base + 10, accelerated=False)
         self.assertEqual((self.root / "instance.json").read_text(), before)
+        # A stock template leaves the instance's own engine count and ports alone.
+        self.assertEqual(
+            template.materialize(self.root, template=copy.deepcopy(self.spec)), self.root
+        )
+        changed = copy.deepcopy(self.spec)
+        changed["runtime"]["slots"] = 4
+        with self.assertRaisesRegex(ValueError, "conflicts with --template"):
+            template.materialize(self.root, template=changed)
 
     def test_a_template_that_launches_engines_takes_no_direct_setting(self):
         with self.assertRaisesRegex(ValueError, "takes no --engine-binary or --no-accelerator"):
             template.materialize(self.root, engine_binary=Path(sys.executable))
+
+    def test_an_instance_keeps_the_way_its_engines_start(self):
+        self.init()
+        with self.assertRaisesRegex(ValueError, "starts its engines another way"):
+            template.materialize(self.root, template=template.default_template())
 
 
 class DirectLifecycleTests(DirectInstance):
@@ -186,17 +213,42 @@ class DirectLifecycleTests(DirectInstance):
         if json.loads((self.root / "lifecycle.json").read_text())["phase"] != "stopped":
             lifecycle.down(self.root)
 
-    def test_an_engine_that_exits_fails_up_and_leaves_nothing_running(self):
+    def test_an_engine_that_exits_fails_up_and_stops_the_engine_that_started(self):
         self.init()
+        first = lifecycle.instance(self.root)["ports"]["engine_first"]
         with (
-            patch.object(Simulated, "crash", True),
+            patch.object(Simulated, "crash", first + 1),
             self.assertRaisesRegex(ValueError, "process exited before .* became healthy"),
         ):
             lifecycle.up(self.root)
         state = json.loads((self.root / "lifecycle.json").read_text())
         self.assertEqual(state["phase"], "stopped")
         self.assertIn("became healthy", state["failure"]["message"])
+        self.assertEqual(state["stopped"], ["engine-1"])
+        survivor = state["processes"][0]["identity"]
+        self.assertFalse(native_engine._owns_process(survivor))
+        _check_free_ports({first}, "127.0.0.1")
         self.assertEqual(lifecycle.status(self.root)["status"], "stopped")
+
+    def test_a_failed_verification_and_a_dead_engine_degrade_the_instance(self):
+        self.init()
+        lifecycle.up(self.root)
+        self.addCleanup(self.stop)
+        self.assertEqual(lifecycle.verify(self.root)["status"], "ready")
+        with (
+            patch.object(direct, "VERIFY_BODY", {"prompt": "x", "max_tokens": 0}),
+            self.assertRaises(httpx.HTTPStatusError),
+        ):
+            lifecycle.verify(self.root)
+        status = lifecycle.status(self.root)
+        self.assertEqual(status["status"], "degraded")
+        self.assertIn("verification failed", " ".join(status["problems"]))
+        self.assertEqual(lifecycle.verify(self.root)["status"], "ready")
+        state = json.loads((self.root / "lifecycle.json").read_text())
+        native_engine._terminate(state["processes"][0]["identity"])
+        status = lifecycle.status(self.root)
+        self.assertEqual(status["status"], "degraded")
+        self.assertIn("engine-1 process identity expired", status["problems"])
 
     def test_a_changed_engine_binary_or_model_file_stops_up(self):
         self.init()
@@ -239,7 +291,7 @@ class LlamacppDirectTests(unittest.TestCase):
         )
         self.assertEqual((options["--alias"], options["--port"]), ("m", "18101"))
         self.assertEqual(command[-1], "-v")
-        self.assertNotEqual(options["--n-gpu-layers"], "0")
+        self.assertEqual((options["--n-gpu-layers"], options["--cache-ram"]), ("all", "0"))
         cpu = self.start.command(self.binary, self.engine(accelerated=False))
         self.assertEqual(cpu[cpu.index("--n-gpu-layers") + 1], "0")
 
@@ -261,6 +313,13 @@ class LlamacppDirectTests(unittest.TestCase):
             with reply(stderr, code), self.assertRaisesRegex(ValueError, "reported no llama.cpp"):
                 self.start.check(self.binary, self.runtime)
         with (
+            reply("error while loading shared libraries: libx.so"),
+            self.assertRaisesRegex(
+                ValueError, "no llama.cpp build: error while loading shared libraries: libx.so"
+            ),
+        ):
+            self.start.check(self.binary, self.runtime)
+        with (
             patch.object(subprocess, "run", side_effect=OSError("exec format error")),
             self.assertRaisesRegex(ValueError, "--version failed: exec format error"),
         ):
@@ -269,7 +328,7 @@ class LlamacppDirectTests(unittest.TestCase):
     def test_the_figures_come_from_the_probe_reply_timings(self):
         endpoint, body = self.start.probe("m")
         self.assertEqual((endpoint, body["max_tokens"]), ("/v1/completions", PROBE_OUTPUT_TOKENS))
-        self.assertIs(body["cache_prompt"], False)
+        self.assertEqual((body["cache_prompt"], body["ignore_eos"]), (False, True))
         timings = {"prompt_per_token_ms": 5.0, "predicted_per_token_ms": 12.5}
         self.assertEqual(
             self.start.figures({"timings": timings}, self.runtime),
