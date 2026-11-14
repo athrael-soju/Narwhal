@@ -456,9 +456,9 @@ class DevTemplateTests(unittest.TestCase):
         if "product" in gpu:
             gpu["product"] = "fixture-gpu"
         allowance = spec["allocation"].get("device_allowance")
-        # A template sized in MiB gives the fractions it carried before on a GPU of 8 GiB.
+        # On a GPU of 8,192 MiB the default template's MiB values equal fractions 0.35 and 0.8.
         total = (
-            8191
+            8192 - 1
             if allowance is None
             else max(
                 gpu.get("minimum_total_mib", 0), math.ceil(gpu["reserve_mib"] / (1 - allowance))

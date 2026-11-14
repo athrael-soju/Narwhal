@@ -243,6 +243,8 @@ def materialize(
                 ("--interface", fabric_interface),
                 ("--gpu-memory-utilization", gpu_memory_utilization),
                 ("--device-allowance", device_allowance),
+                ("--engine-memory-mib", engine_memory_mib),
+                ("--device-memory-mib", device_memory_mib),
             )
             if value is not None
         ]
@@ -282,12 +284,13 @@ def materialize(
     for kind, names in (("fractions", _FRACTIONS), ("mib", _MIB)):
         other = _MIB if kind == "fractions" else _FRACTIONS
         # A pair of one kind replaces the template's pair of the other kind.
-        if given[kind] and any(name in spec["allocation"] for name in other) and existing is None:
-            if len(given[kind]) != len(names):
+        if given[kind] and any(name in spec["allocation"] for name in other):
+            if len(given[kind]) == len(names):
+                for name in other:
+                    spec["allocation"].pop(name, None)
+            elif existing is None:
                 flags = " and ".join("--" + name.replace("_", "-") for name in names)
                 raise ValueError(f"this template needs both {flags}")
-            for name in other:
-                spec["allocation"].pop(name, None)
     for field, allocation_value in allocation.items():
         if allocation_value is not None:
             spec["allocation"][field] = allocation_value
@@ -326,13 +329,14 @@ def materialize(
         ):
             conflicts.append("--port-base")
         if template is not None:
-            recorded_spec = copy.deepcopy(saved)
+            requested, recorded_spec = copy.deepcopy(spec), copy.deepcopy(saved)
             if _sized_in_mib(spec):
-                # init wrote the fractions it derived for this GPU beside the template's MiB.
+                # init wrote the fractions it derived for this GPU beside the MiB values.
                 for name in _FRACTIONS:
+                    requested["allocation"].pop(name, None)
                     recorded_spec["allocation"].pop(name, None)
             conflicts.extend(
-                f"--template {field}" for field in _template_differences(spec, recorded_spec)
+                f"--template {field}" for field in _template_differences(requested, recorded_spec)
             )
         if conflicts:
             raise ValueError(
@@ -395,15 +399,25 @@ def materialize(
         for name in _MIB:
             if type(needs[name]) is not int or needs[name] < 1:
                 raise ValueError(f"allocation.{name} must be a positive integer")
+        if needs["engine_memory_mib"] * count > needs["device_memory_mib"]:
+            raise ValueError(
+                f"{count} engines of {needs['engine_memory_mib']} MiB exceed the "
+                f"{needs['device_memory_mib']} MiB the engines are allowed"
+            )
         if needs["device_memory_mib"] > memory["total_mib"]:
             raise ValueError(
                 f"GPU VRAM of {memory['total_mib']} MiB is below the "
                 f"{needs['device_memory_mib']} MiB the engines are allowed"
             )
-        # The launch records carry each budget as a fraction of this GPU's memory.
+        # The launch records carry each budget as a fraction of this GPU's memory. Each
+        # fraction rounds up, so the allowance also covers the engines' rounded fractions.
+        engine = _fraction(needs["engine_memory_mib"], memory["total_mib"])
+        covering = float((Decimal(str(engine)) * count).quantize(Decimal("0.0001")))
         needs.update(
-            gpu_memory_utilization=_fraction(needs["engine_memory_mib"], memory["total_mib"]),
-            device_allowance=_fraction(needs["device_memory_mib"], memory["total_mib"]),
+            gpu_memory_utilization=engine,
+            device_allowance=max(
+                _fraction(needs["device_memory_mib"], memory["total_mib"]), covering
+            ),
         )
         _check_budgets(needs, count)
     fraction = spec["allocation"]["gpu_memory_utilization"]
