@@ -70,7 +70,7 @@ nav:
       - Reading the live view: dev/Live-View.md
       - Setup for coding agents: dev/Agent-Setup.md
       - llama.cpp engines: dev/Llama-Cpp-Engines.md
-      - vLLM and SGLang engines: Dev-Runtime.md
+      - Overview and vLLM or SGLang engines: Dev-Runtime.md
       - Installing the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
       - Recovery and qualification: dev/Recovery-and-Qualification.md

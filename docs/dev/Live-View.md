@@ -25,7 +25,7 @@ served 125   failed 0   refused, rejected or expired 0
 role switches 1   n1 to decode
 ```
 
-## The figures
+## Fields
 
 | Figure | Meaning |
 | --- | --- |
@@ -37,12 +37,12 @@ role switches 1   n1 to decode
 | `time per output token` | A request's mean time per output token after its prefill, including the wait for a decode engine. |
 | `throughput` | Completed requests and their output tokens per second. Tokens are counted when a request completes, so one long reply arrives in a single frame. |
 | `served`, `failed` | Requests completed and requests an engine failed, since the router started. |
-| `refused, rejected or expired` | Requests the router turned away at admission, at its queue limit or at their deadline. |
+| `refused, rejected or expired` | Requests refused by admission, rejected for capacity or router readiness, or expired at a deadline or queue timeout. |
 | `role switches` | Engines the router moved to the other role since it started, with the five most recent. |
 
 The second line states the window the latency and throughput cover, which grows to 30 seconds. The latency rows are the median and the 95th percentile of the requests that completed in it, read from the router's histograms. A percentile inside a histogram bucket is interpolated, so a figure moves in steps when few requests completed.
 
-`watch` reads the times the router records. `narwhal dev ask` reports the times its own client observed, so the two differ by the time a reply spends between the router and the client.
+`watch` reads the times the router records. `narwhal dev ask` reports the time from sending a request to the first chunk of reply text, which adds the KV handoff, the wait for a decode engine and the first decoded token to the router's figure. Its time per output token starts at that first chunk.
 
 ## Sending concurrent requests
 
@@ -54,11 +54,11 @@ To load the decode engines, ask for long replies:
 narwhal dev ask --repeat 600 --concurrency 8 --max-tokens 200
 ```
 
-On a four-engine fleet with either installed model, the decode engines fill and after 15 to 25 seconds the router moves one prefill engine to the decode role. The view then shows `1 prefill, 3 decode` and the switch in its last line.
+On the measured host, a four-engine fleet with either installed model filled its decode engines, and the router moved one prefill engine to the decode role after 15 to 25 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line.
 
-The router decides a switch from the load of the last 30 seconds and needs ten arrivals in that window, so a short burst leaves the roles unchanged.
+With the installed templates, the router decides a switch from the load of the last 30 seconds and needs ten arrivals in that window, so a short burst leaves the roles unchanged.
 
-## One frame for a script
+## Single-frame JSON output
 
 `narwhal dev watch --once` takes two readings one `--interval` apart and prints that frame as JSON:
 

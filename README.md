@@ -63,7 +63,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
     </tr>
     <tr>
       <td>Development mode</td>
-      <td>Runs two to eight engines on one NVIDIA CUDA GPU under Ubuntu or WSL2</td>
+      <td>Runs two to eight engines on one workstation under Ubuntu or WSL2, on a GPU or the CPU</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Narwhal%20dev-0f766e" alt="Narwhal dev documentation"></a></td>
     </tr>
   </tbody>
@@ -99,7 +99,7 @@ The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest
 
 ## Trying it on one workstation
 
-Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.6 GB in all.
+Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.6 GB with the CPU build of the engine.
 
 ```bash
 narwhal dev setup

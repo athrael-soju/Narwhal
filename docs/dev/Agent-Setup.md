@@ -4,15 +4,16 @@ description: Checks, commands and expected results for a coding agent that sets 
 
 # Setup for coding agents
 
-This page gives the [quick start](Quick-Start.md) as steps a coding agent can run and check. Each step has a command, the result that means success, and what to do otherwise. Run the commands in one Linux shell, inside WSL2 on a Windows host, and stop at the first step whose check fails.
+Each step of the [quick start](Quick-Start.md) appears here with its command, expected result and recovery action. Run the commands in one Linux shell and one working directory. On Windows, use a WSL2 Ubuntu shell. Stop at the first step whose check fails after its recovery action.
 
-Every `narwhal dev` command prints one JSON document on stdout and its progress on stderr. With `--format json` it prints a [versioned command result](../Command-Results.md) whose `status` and exit code follow the same table for every command.
+A successful `narwhal dev` command prints one JSON document on stdout and its progress on stderr. A failed one prints `narwhal: dev <action> <instance>: <message>` on stderr and nothing on stdout. `watch` prints JSON only with `--once`. With `--format json` a command prints a [versioned command result](../Command-Results.md) whose `status` and exit code follow the same table for every command.
 
 ## 1. Check the host
 
 ```bash
 uname -sm
 python3 -c 'import sys; print(sys.version_info >= (3, 11, 4))'
+python3 -c 'import ensurepip' && echo venv-ok
 df --output=avail -m . | tail -1
 awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo
 ```
@@ -21,10 +22,11 @@ awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo
 | --- | --- |
 | `uname -sm` | `Linux x86_64` |
 | Python version | `True` |
-| Free disk in MiB | At least `1500` |
-| Available memory in MiB | At least `2400` for the default model on the CPU, or `1500` for `ERNIE-4.5-0.3B` |
+| `venv` support | `venv-ok`. Otherwise run `sudo apt install python3-venv`. |
+| Free disk in MiB | At least `1500` for the CPU build. The CUDA build needs more for its runtime libraries. |
+| Available memory in MiB | At least `2800` for the default model with the CPU build, `1800` for `ERNIE-4.5-0.3B`, or half of either with `--engine-count 2`. The GPU build skips this check. |
 
-On Windows, run the commands in a WSL2 Ubuntu shell. Keep the virtual environment and the instance directory on the Linux filesystem.
+Under WSL2, keep the virtual environment and the instance directory on the Linux filesystem. A host with Python older than 3.11.4 needs a newer Python before step 2.
 
 ## 2. Install
 
@@ -43,13 +45,13 @@ Expected: `narwhal-inference <version>` and exit code `0`. Keep the virtual envi
 narwhal dev setup --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/dev` already holds an instance. The result's `engine_build` is `cuda` on a host with an NVIDIA driver and `none` otherwise.
+Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/dev` already holds an instance. An `initialized` result's `engine_build` is `cuda` on a host with an NVIDIA driver and `none` otherwise.
 
 | Result | Action |
 | --- | --- |
-| Exit code `2`, `port … is unavailable` | Repeat with a new `--instance` and `--port-base` set to a free port that has four free ports after it. |
+| Exit code `2`, `port … is unavailable` | Repeat with the same `--instance` and `--port-base` set to a free port that has four free ports after it. The downloaded files are kept. |
 | Exit code `2`, `holds other files` | Repeat with a new `--instance` directory. |
-| Exit code `2`, `host memory check failed` | Repeat with `--model-name ERNIE-4.5-0.3B` or `--engine-count 2` on a new `--instance`. |
+| Exit code `2`, `host memory check failed` | Repeat with `--engine-count 2`. To change the model, use a new `--instance` with `--model-name ERNIE-4.5-0.3B`. |
 | Exit code `2`, `SHA-256 … differs` | Repeat the command once. It downloads the file again. |
 | A network error | Repeat the command. Verified files are kept. |
 
@@ -61,11 +63,11 @@ To use the CPU on a host with a GPU, add `--accelerator none`.
 narwhal dev up --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "launched"`, within a minute. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
+Expected: exit code `0` and `"status": "launched"`, usually within seconds. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
 
 | Result | Action |
 | --- | --- |
-| `process exited before … became healthy` | Read the last lines of `engine-1.log` in the directory the result's failure names. For a CUDA load error, set up a new instance with `--accelerator cuda12`, then `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a CUDA load error, set up a new instance with `--accelerator cuda12`, then `--accelerator none`. |
 | `run dev down before starting another generation` | Run `narwhal dev down --instance runs/dev`, then repeat. |
 
 ## 5. Verify
@@ -82,7 +84,7 @@ Expected: exit code `0`, `"status": "ready"`, an empty `problems` list and a non
 narwhal dev ask --instance runs/dev "What is the capital of France?"
 ```
 
-Expected: exit code `0`, `"status": "answered"`, a nonempty `reply`, and `engines.prefill` and `engines.decode` naming two different engines such as `n1` and `n3`.
+Expected: exit code `0`, `"status": "answered"`, a nonempty `reply`, and `engines.prefill` and `engines.decode` each naming an engine, usually two different ones such as `n1` and `n3`.
 
 ## 7. Send concurrent prompts and read the fleet
 
@@ -93,7 +95,7 @@ narwhal dev watch --instance runs/dev --once
 
 Expected from `ask`: exit code `0`, `"status": "completed"` and `"failed": 0`. Exit code `1` means at least one request failed, and `errors` lists up to five distinct messages.
 
-Expected from `watch --once`: exit code `0`, `"status": "observed"`, four entries in `engines` with `"state": "live"`, and `served` at least `101`.
+Expected from `watch --once`: exit code `0`, `"status": "observed"`, one entry in `engines` for each engine, each with `"state": "live"`, and `served` at least `101`.
 
 To see a role switch, send long replies and read `role_switches` afterwards:
 
@@ -102,7 +104,7 @@ narwhal dev ask --instance runs/dev --repeat 600 --concurrency 8 --max-tokens 20
 narwhal dev watch --instance runs/dev --once
 ```
 
-Expected: `role_switches` at least `1`.
+Expected on most hosts: `role_switches` at least `1`. The run took about three minutes on the measured host, so give the command a ten-minute limit. A result of `0` is not a failure.
 
 ## 8. Stop
 
@@ -116,12 +118,12 @@ Expected: exit code `0` and `"status": "stopped"`. `narwhal dev status --instanc
 
 | Exit code | Meaning |
 | :--: | --- |
-| `0` | The command reached its status. |
-| `1` | A failed `up`, `verify` or `down`, a `degraded` instance, or a failed `ask` request. |
-| `2` | Invalid arguments, a failed `setup` or `init` check, or an unreadable instance. |
+| `0` | The command succeeded. |
+| `1` | A failed `up`, `verify`, `status`, `watch` or `down`, a `degraded` instance, a failed `ask` request, or `ask` or `watch` on a stopped instance. |
+| `2` | Invalid arguments, a failed `setup` or `init` check, an unreadable instance, or a Python environment other than the one that ran `setup`. |
 
 With `--format json` the codes follow [the command result statuses](../Command-Results.md).
 
-## Using the router from other code
+## OpenAI-compatible routes
 
-The router serves `POST /v1/completions` and `POST /v1/chat/completions` in the OpenAI format at the URL `up` printed. The `model` field is the template's served name, `Qwen3.5-0.8B` by default.
+The router serves `POST /v1/completions` and `POST /v1/chat/completions` in the OpenAI format at the URL `up` printed. The `model` field is the template's served name, `Qwen3.5-0.8B` by default. `ask` adds `"chat_template_kwargs": {"enable_thinking": false}` to its requests for that model, and a chat request without it returns the model's reasoning before its reply.

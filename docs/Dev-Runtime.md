@@ -4,7 +4,7 @@ description: Narwhal dev runs several vLLM, SGLang or llama.cpp engines with pre
 
 # Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. To try Narwhal in a few minutes, on a GPU or on the CPU alone, follow [the quick start](dev/Quick-Start.md), which runs llama.cpp engines. This page covers vLLM and SGLang engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page covers vLLM and SGLang engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
 A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three for vLLM and SGLang, and two for [llama.cpp engines](dev/Llama-Cpp-Engines.md#templates):
 

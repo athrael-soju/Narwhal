@@ -1,5 +1,5 @@
 ---
-description: Options, exit codes and run directories for narwhal dev on one NVIDIA CUDA GPU.
+description: Options, exit codes and run directories for narwhal dev on one workstation.
 ---
 
 # `narwhal dev`
@@ -67,7 +67,7 @@ In text mode, stdout carries the result as one JSON document, and stderr carries
 | --- | :--: |
 | `initialized`, `reused`, `starting`, `launched`, `ready`, `stopped`, `observed`, `answered`, or `completed` with every request served | `0` |
 | `degraded`, a failed `up`, `verify` or `down`, a failed `ask` request, or `completed` with a failed request | `1` |
-| Invalid `ask` or `watch` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `init` | `2` |
+| Invalid `ask` or `watch` arguments, a failed `setup` download or check, a failed `init` check, an unreadable instance or lifecycle record, a missing runtime package, or a Python environment other than the one that ran `setup` or `init` | `2` |
 
 With `--format json`, the command prints a [versioned command result](../Command-Results.md), and the exit code follows its status. A `degraded` instance exits with code `3`, a failed step or routed check during `up` or `verify` and a failed single `ask` request exit with code `4`, and an `ask --repeat` run with a failed request exits with code `1`.
 
@@ -83,7 +83,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--model` | The template's pinned file or snapshot in the Hugging Face cache | Model to serve, a GGUF file for a vLLM template or a checkpoint directory for an SGLang template. | Matches the template's checksums, and for a GGUF file its file name |
 | `--model-dir` | The template's pinned tokenizer snapshot in the Hugging Face cache | Directory with the tokenizer files and `config.json`. | Matches the template's checksums |
 | `--gpu` | The only GPU that `nvidia-smi` lists | Physical GPU UUID. | |
-| `--engine-count` | Template value, `2` in the small templates | Number of engines. | 2 to 8 |
+| `--engine-count` | Template value, `2` in the small templates and `4` in the llama.cpp templates | Number of engines. | 2 to 8 |
 | `--port-base` | Template ports | Base of the port layout below. | Every port within 1 to 65535 and distinct |
 | `--gpu-memory-utilization` | Template value, `0.35` in the small templates | Each engine's fraction of total GPU memory on vLLM, or of the GPU memory free at engine start on SGLang. | Above 0 and at most 1 |
 | `--device-allowance` | Template value, `0.8` in the small templates | Fraction of total GPU memory that bounds the sum of engine fractions and the memory growth during startup. | At least `--engine-count` times `--gpu-memory-utilization`, and at most 1 |

@@ -58,7 +58,7 @@
     "build": 12365,
     "context_tokens": 4096,
     "slots": 2,
-    "memory_mib": 1200,
+    "memory_mib": 700,
     "extra_args": []
   },
   "request": {

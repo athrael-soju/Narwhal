@@ -10,27 +10,29 @@ The `llamacpp` backend routes requests over `llama-server` processes. `narwhal d
 
 Narwhal installs two templates that start llama.cpp engines:
 
-| Template | Model | Engines | Memory for each engine on the CPU |
+| Template | Model | Engines | Host memory `setup` and `init` require for each engine on the CPU |
 | --- | --- | --- | --- |
-| `direct-qwen35-08b-v1.json`, the default of `setup` | Qwen3.5-0.8B Q4_K_M GGUF | 4 | 1,200 MiB |
-| `direct-ernie45-03b-v1.json` | ERNIE-4.5-0.3B Q4_K_M GGUF | 4 | 900 MiB |
+| `direct-qwen35-08b-v1.json`, the default of `setup` | Qwen3.5-0.8B Q4_K_M GGUF | 4 | 700 MiB |
+| `direct-ernie45-03b-v1.json` | ERNIE-4.5-0.3B Q4_K_M GGUF | 4 | 450 MiB |
 
 `narwhal dev setup --model-name` selects one by the model it serves. `narwhal dev init --template PATH --engine-binary PATH --model PATH` initializes an instance from files already on the host.
 
 | Field | Meaning |
 | --- | --- |
+| `schema`, `schema_version` | `narwhal.dev-template` and `1`. |
 | `start` | `direct` for engines that start as plain processes. |
+| `setup_default` | `true` on the template `setup` uses when `--model-name` is omitted. |
 | `model.repository`, `model.revision`, `model.filename`, `model.sha256` | The model file `setup` downloads and the checksum `setup`, `init` and `up` require. |
 | `model.served_name` | The model name the router and the engines serve. |
-| `engine.url`, `engine.binary` | The download URL of an engine archive by name, and the server's file name inside it. |
-| `engine.builds` | The archives and checksums of each engine build by machine type. `detect` lists the paths whose presence selects the build under `--accelerator auto`. |
+| `engine.url`, `engine.binary` | The download URL pattern of an engine archive, with `{name}` for the archive's name, and the server's file name inside it. |
+| `engine.builds` | The archives and checksums of each engine build by machine type. The keys are the values of `--accelerator`, and `none` is the CPU build. `detect` lists the paths whose presence selects the build under `--accelerator auto`. |
 | `runtime.backend` | `llamacpp`. |
 | `runtime.build` | The llama.cpp build number the server must report. |
 | `runtime.slots` | Requests one engine serves at once. |
 | `runtime.context_tokens` | Context tokens of each slot. |
-| `runtime.memory_mib` | Host memory `init` requires for each engine with `--no-accelerator`. |
+| `runtime.memory_mib` | Available host memory required for each engine by `setup` with the `none` build and by `init` with `--no-accelerator`. |
 | `runtime.extra_args` | Further `llama-server` arguments. |
-| `request` | Fields `narwhal dev ask` adds to each request body. |
+| `request` | Optional fields `narwhal dev ask` adds to each request body. |
 | `allocation.engine_count`, `ports`, `slo`, `controller` | The engine count, the router and first engine port, and the router's [SLO and role-control settings](../configuration/02-Serving-and-Role-Control.md). |
 
 ## Engine command line
@@ -43,7 +45,7 @@ Narwhal installs two templates that start llama.cpp engines:
 | `--host`, `--port` | `127.0.0.1` and the engine's port |
 | `--parallel` | `runtime.slots` |
 | `--ctx-size` | `runtime.context_tokens` times `runtime.slots`, which the server divides among its slots |
-| `--threads` | The host's usable CPUs less one, divided among the engines, at most 8 |
+| `--threads` | The host's usable CPUs less one, divided among the engines and rounded down, from 1 to 8 |
 | `--n-gpu-layers` | `all`, or `0` with `--no-accelerator` or the CPU build |
 | `--cache-ram` | `0`, which turns off the server's host prompt cache |
 | `--slot-save-path` | The run's `slot-files` directory, shared by every engine |
@@ -53,7 +55,7 @@ The server's shared libraries load from the directory of the engine binary.
 
 ## KV handoff
 
-A request's prefill and decode legs each take one server slot through `id_slot` and wait while every slot is taken. After the prefill reply, the router saves the producer's slot to a file with `POST /slots/<id>?action=save`. Before the decode stream opens, it restores that file into the consumer's slot with `action=restore`, and the consumer computes the last few prompt tokens and generates the reply.
+A request's prefill and decode legs each take one server slot through `id_slot` and wait while every slot is taken. After the prefill reply, the router saves the producer's slot to a file with `POST /slots/<id>?action=save`. Before the decode stream opens, it restores that file into the consumer's slot with `action=restore`, and the consumer computes any prompt tokens the restored state lacks and generates the reply.
 
 A producer keeps as many slot files as it has had handoffs in flight at once and reuses their names. `down` leaves them in the run directory.
 
@@ -73,4 +75,4 @@ The engines publish `llamacpp:` series on `/metrics`. The router reads `llamacpp
 
 - Engine attestation, the profiling sweep of `narwhal-profile` and KV transfer evidence apply to vLLM and SGLang fleets.
 - `narwhal-engine` and the [deployment stages](../Deploy.md) launch vLLM and SGLang engines.
-- The backend runs on Linux and under WSL2.
+- The backend runs on x86-64 Linux and under WSL2, with every engine of a fleet on one host.
