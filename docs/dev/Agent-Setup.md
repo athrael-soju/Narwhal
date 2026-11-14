@@ -63,11 +63,11 @@ To use the CPU on a host with a GPU, add `--accelerator none`.
 narwhal dev up --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "launched"`, usually within seconds, and about a minute for the first start of a CUDA build. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
+Expected: exit code `0` and `"status": "launched"`, usually within seconds, and about a minute for the first start of the CUDA 12 build. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
 
 | Result | Action |
 | --- | --- |
-| `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a `CUDA error` in the log, set up a new instance with `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a `CUDA error` in the log, set up a new instance in a new directory with `--accelerator none`. |
 | `run dev down before starting another generation` | Run `narwhal dev down --instance runs/dev`, then repeat. |
 
 ## 5. Verify

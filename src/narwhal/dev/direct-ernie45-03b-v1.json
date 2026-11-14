@@ -71,6 +71,9 @@
     "ttft_s": 5.0,
     "tpot_s": 0.5
   },
+  "serving": {
+    "admission": "open"
+  },
   "controller": {
     "monitor_interval_s": 0.1,
     "monitor_failure_limit": 5,

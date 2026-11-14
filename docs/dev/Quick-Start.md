@@ -13,9 +13,9 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 | Download | 0.6 GB | 0.3 GB | 1.3 GB |
 | Disk after setup | 0.6 GB | 0.3 GB | 2.3 GB |
 | Memory with four engines | 2.4 GB of host memory | 1.5 GB of host memory | 5.5 GB of GPU memory |
-| Available host memory `setup` requires for four engines | 2.8 GB | 1.8 GB | None |
+| Available host memory `setup` requires for four engines | 2.8 GB | 1.8 GB | No check |
 | `setup`, downloads included, on a fast connection | 5 s | 4 s | 8 to 26 s |
-| `up` | 3 s | 2 s | 5 s, and 62 s the first time after `setup` |
+| `up` | 3 s | 2 s | 62 s for the first `up` after `setup`, 5 s after that |
 
 Qwen3.5-0.8B is the default model. Every figure was measured on Linux hosts, the GPU column on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for the default model.
 
@@ -23,7 +23,7 @@ The host needs:
 
 - Ubuntu or a comparable Linux distribution on x86-64, or Windows with [WSL2](https://learn.microsoft.com/windows/wsl/install) and an Ubuntu distribution
 - Python 3.11.4 or newer with `venv`
-- For a GPU, an NVIDIA driver. `setup` then downloads the CUDA 12 build of the engine together with its runtime libraries.
+- For a GPU, an NVIDIA driver that supports CUDA 12. `setup` then downloads the CUDA 12 build of the engine together with its runtime libraries.
 
 A request's prefill computes the KV cache of its prompt, and its decode generates the reply's tokens from that cache. Narwhal runs the two on different engines.
 
@@ -65,7 +65,7 @@ narwhal dev setup
 | To change | Pass |
 | --- | --- |
 | The model | `--model-name ERNIE-4.5-0.3B` |
-| The engine build | `--accelerator none` for the CPU, or `--accelerator cuda` for the CUDA 13 build, which needs a driver that supports CUDA 13.5 |
+| The engine build | `--accelerator none` for the CPU, or `--accelerator cuda` for the CUDA 13.5 build, for a driver with CUDA 13.5 support |
 | The number of engines, two to eight | `--engine-count 2` |
 | The ports, when 18000 or 18101 to 18104 are taken | `--port-base 19000` |
 | The instance directory | `--instance runs/second` |
@@ -174,4 +174,4 @@ narwhal dev down
 
 ## Differences from a deployed fleet
 
-The quick-start fleet gives each engine a profile from one short request. It has no engine attestation, profiling sweep or KV transfer evidence, which the [deployment stages](../Deploy.md) produce. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.
+The quick-start fleet gives each engine a profile from a few short requests. Its admission is `open`, so the router queues a request that the predictive admission of a deployed fleet would refuse with HTTP 429 when its predicted latency exceeds the targets. It has no engine attestation, profiling sweep or KV transfer evidence, which the [deployment stages](../Deploy.md) produce. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.

@@ -129,6 +129,7 @@ class DirectInitTests(DirectInstance):
         )
         self.assertTrue(all("attestation_url" not in e for e in fleet["engines"]))
         self.assertEqual(fleet["engine"]["backend"], "llamacpp")
+        self.assertEqual(fleet["serving"], {"admission": "open"})
 
     def test_init_checks_the_engine_binary_the_model_file_and_host_memory(self):
         for changes, message in (
@@ -216,44 +217,65 @@ class DirectLifecycleTests(DirectInstance):
             lifecycle.down(self.root)
 
     def test_every_engine_is_measured_while_all_of_them_serve(self):
-        inflight = peak = 0
+        together = threading.Barrier(4, timeout=5)
         lock = threading.Lock()
-        seen: list[str] = []
+        served: dict[str, int] = {}
 
         class Loaded(Simulated):
             def probe_requests(self, runtime):
                 return 2
 
             def figures(self, reply, runtime):
-                # The second reply of each engine reports twice the first one's times.
-                factor = 1 + (reply["id"] % 2)
-                return NominalFigures(0.001 * factor, 0.01 * factor, 8192, 2)
+                return NominalFigures(reply["factor"] * 0.001, reply["factor"] * 0.01, 8192, 2)
 
         def handle(request: httpx.Request) -> httpx.Response:
-            nonlocal inflight, peak
+            # Every request of the fleet is in flight before any of them returns.
+            together.wait()
+            host = request.url.host
             with lock:
-                inflight += 1
-                peak = max(peak, inflight)
-                seen.append(str(request.url))
-                number = len(seen)
-            time.sleep(0.05)
-            with lock:
-                inflight -= 1
-            return httpx.Response(200, json={"id": number})
+                served[host] = served.get(host, 0) + 1
+                nth = served[host]
+            # The first engine's replies report 1 and 3, the second engine's 10 and 30.
+            return httpx.Response(200, json={"factor": (1 if host == "e1" else 10) * (2 * nth - 1)})
 
         fleet = {"model": "m", "engines": [{"iid": f"n{i}", "url": f"http://e{i}"} for i in (1, 2)]}
         client = httpx.Client(transport=httpx.MockTransport(handle))
-        with patch.object(direct.httpx, "Client", return_value=client):
+        with patch.object(direct.httpx, "Client", return_value=client) as built:
             figures = direct._measure(Loaded(), fleet, self.spec["runtime"])
-        self.assertEqual(peak, 4)
-        self.assertEqual(
-            sorted(seen), sorted(["http://e1/v1/completions", "http://e2/v1/completions"] * 2)
-        )
-        self.assertEqual(set(figures), {"n1", "n2"})
-        for measured in figures.values():
-            self.assertAlmostEqual(measured.prefill_token_s, 0.0015)
-            self.assertAlmostEqual(measured.token_interval_s, 0.015)
+        self.assertEqual(built.call_args.kwargs["limits"].max_connections, 4)
+        self.assertEqual(served, {"e1": 2, "e2": 2})
+        self.assertAlmostEqual(figures["n1"].prefill_token_s, 0.002)
+        self.assertAlmostEqual(figures["n1"].token_interval_s, 0.02)
+        self.assertAlmostEqual(figures["n2"].prefill_token_s, 0.02)
+        self.assertAlmostEqual(figures["n2"].token_interval_s, 0.2)
         self.assertEqual(LlamacppDirect().probe_requests({"slots": 3}), 3)
+
+    def test_a_failed_measurement_raises_without_waiting_for_the_others(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "e1":
+                return httpx.Response(503, text="loading")
+            release.wait(5)
+            return httpx.Response(200, json={})
+
+        fleet = {"model": "m", "engines": [{"iid": f"n{i}", "url": f"http://e{i}"} for i in (1, 2)]}
+        client = httpx.Client(transport=httpx.MockTransport(handle))
+        started = time.monotonic()
+        with (
+            patch.object(direct.httpx, "Client", return_value=client),
+            self.assertRaises(httpx.HTTPStatusError),
+        ):
+            direct._measure(Simulated(), fleet, self.spec["runtime"])
+        self.assertLess(time.monotonic() - started, 2)
+
+        class Idle(Simulated):
+            def probe_requests(self, runtime):
+                return 0
+
+        with self.assertRaisesRegex(ValueError, "at least one request"):
+            direct._measure(Idle(), fleet, self.spec["runtime"])
 
     def test_an_engine_that_exits_fails_up_and_stops_the_engine_that_started(self):
         self.init()

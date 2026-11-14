@@ -10,7 +10,7 @@ from ...deployment.direct_start import DirectEngine, DirectStart, NominalFigures
 
 VERSION_TIMEOUT_S = 20
 _BUILD = re.compile(r"\(build (\d+), commit ([0-9a-f]+)\)")
-# One request of about a hundred prompt tokens keeps startup in seconds.
+# Requests of about a hundred prompt tokens keep startup in seconds.
 PROBE_PROMPT = " ".join(["The quick brown fox jumps over the lazy dog."] * 12)
 PROBE_OUTPUT_TOKENS = 16
 
