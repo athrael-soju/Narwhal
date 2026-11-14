@@ -16,7 +16,7 @@ cryptography==50.0.1
 distlib==0.4.3
 docutils==0.23
 fastapi==0.141.1
-filelock==3.32.6
+filelock==4.2.1
 h11==0.16.0
 httpcore==1.0.9
 httptools==0.8.0
