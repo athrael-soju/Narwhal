@@ -281,16 +281,24 @@ class EngineClient:
     async def tokenize(
         self, url: str, body: dict[str, Any], timeout_s: float, *, strict: bool = False
     ) -> Tokenization | None:
-        if self.dialect.tokenize_path is None:
+        dialect = self.dialect
+        if dialect.tokenize_path is None:
             return None
+        model = body.get("model")
         try:
+            # One deadline covers the render and the count.
             async with asyncio.timeout(timeout_s):
-                r = await self._wire.post(
-                    f"{url}{self.dialect.tokenize_path}",
-                    self.dialect.tokenize_request(body.get("model"), body),
-                    self._auth(None),
-                    timeout_s=timeout_s,
-                )
+                if dialect.render_path is not None and "messages" in body:
+                    rendered = await self._tokenize_call(
+                        url, dialect.render_path, dialect.render_request(model, body), timeout_s
+                    )
+                    prompt = dialect.render_response(rendered)
+                    if prompt is None:
+                        raise EngineError("tokenize", url, 502, "response has no rendered prompt")
+                    request = dialect.rendered_tokenize_request(model, prompt)
+                else:
+                    request = dialect.tokenize_request(model, body)
+                payload = await self._tokenize_call(url, dialect.tokenize_path, request, timeout_s)
         except (httpx.TimeoutException, TimeoutError) as exc:
             if strict:
                 raise EngineError(
@@ -301,23 +309,31 @@ class EngineClient:
             if strict:
                 raise EngineError("tokenize", url, 502, str(exc)) from exc
             return None
-        if r.status_code != 200:
+        except EngineError:
             if strict:
-                raise EngineError("tokenize", url, r.status_code, r.text[:200])
+                raise
             return None
-        try:
-            payload = r.json()
-        except ValueError:
-            if strict:
-                raise EngineError("tokenize", url, 502, "invalid JSON response") from None
-            return None
-        count = self.dialect.tokenize_response(payload)
+        count = dialect.tokenize_response(payload)
         if count is None:
             if strict:
                 raise EngineError("tokenize", url, 502, "response has no valid token count")
             return None
         token_ids = self.dialect.tokenize_token_ids(payload)
         return Tokenization(count, None if token_ids is None else tuple(token_ids))
+
+    async def _tokenize_call(
+        self, url: str, path: str, request: dict[str, Any], timeout_s: float
+    ) -> dict[str, Any]:
+        r = await self._wire.post(f"{url}{path}", request, self._auth(None), timeout_s=timeout_s)
+        if r.status_code != 200:
+            raise EngineError("tokenize", url, r.status_code, r.text[:200])
+        try:
+            payload = r.json()
+        except ValueError:
+            raise EngineError("tokenize", url, 502, "invalid JSON response") from None
+        if not isinstance(payload, dict):
+            raise EngineError("tokenize", url, 502, "invalid JSON response")
+        return payload
 
     def _prefill_leg(
         self, body: dict[str, Any], rendezvous: dict[str, Any] | None = None
