@@ -58,7 +58,7 @@ Each original completion request and its retries share one terminal row.
 | `crossed`                      | `true` when `decode_iid` differs from `prefill_iid`.                                                               |
 | `cached_tokens`                | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
 | `cache_placement`              | The prefill placement priced with [cache evidence](#cache-placement).                                              |
-| `token_accounting`             | `token_ids` for exact per-token identity, `unavailable` when the engine dialect omits token IDs.                   |
+| `token_accounting`             | `token_ids` for exact per-token identity, `reported` when the engine's stream reports each reply's output token count, `unavailable` when it supplies neither. |
 | `refused`, `refused_cause`     | `true` on a predictive refusal, with its [refusal cause](#refusal-causes).                                         |
 | `rejected`                     | `true` on a capacity or router-readiness rejection.                                                                |
 | `expired`                      | `true` on an admission or total deadline expiry.                                                                   |
@@ -84,6 +84,7 @@ These conditions set a field to `0` or null:
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `input_sized` is false                                           | `input_len` is `0`.                                                             |
 | `token_accounting` is `unavailable`                              | `output_len`, `tpot_s`, `decode_tpot_s`, and `decode_tokens_observed` are null. |
+| `token_accounting` is `reported`                                 | `decode_tokens_observed` is null. A request that ends before the engine's last chunk has null `output_len`, `tpot_s` and `decode_tpot_s`. |
 | Fewer than two measured output tokens                            | `tpot_s` and `decode_tpot_s` are null.                                          |
 | Prefill incomplete                                               | `ttft_s` and `tpot_s` are null.                                                 |
 | Zero visible output                                              | `first_byte_s` is null.                                                         |

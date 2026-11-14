@@ -29,6 +29,8 @@ class EngineDialect(ABC):
     )
     # True when each streamed decode chunk carries its token IDs.
     token_ids: ClassVar[bool] = True
+    # True when `stream_output_tokens` reads a reply's output token count from its stream.
+    reports_output_tokens: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")

@@ -24,6 +24,7 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         # Text chunks of the decode stream, and the count its last chunk reports.
         self.chunks, self.reported = ["a", "b", "c"], 5
+        self.steps: list[tuple[str, str]] = []
         self.router, self.client = serving_app(self, self.engine, backend="llamacpp")
 
     def engine(self, request: httpx.Request) -> httpx.Response:
@@ -31,6 +32,7 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
         if request.url.path == "/props":
             return httpx.Response(200, json={"total_slots": 2})
         if request.url.path.startswith("/slots/"):
+            self.steps.append((request.url.host, request.url.params["action"]))
             return httpx.Response(200, json={"n_saved": 3})
         if not body.get("stream"):
             return httpx.Response(200, json={"choices": [{"text": "x"}]})
@@ -47,11 +49,32 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response
 
+    def row(self) -> dict:
+        lines = self.router.journal.path.read_text().splitlines()
+        return next(row for line in reversed(lines) if "rid" in (row := json.loads(line)))
+
     async def test_the_reported_count_sets_the_output_length_and_the_token_interval(self):
+        # One chunk of text holds the five tokens the stream reports.
+        self.chunks = ["abcde"]
         reply = (await self.complete()).json()
-        self.assertEqual(reply["choices"][0]["text"], "abc")
         self.assertEqual(reply["usage"]["completion_tokens"], 5)
         self.assertEqual(self.router.tpot.n, 1)
+        self.assertEqual(self.router.state()["token_accounting"], "reported")
+        row = self.row()
+        self.assertEqual((row["output_len"], row["decode_tokens_observed"]), (5, None))
+        self.assertGreaterEqual(row["tpot_s"], 0)
+        self.assertEqual(row["token_accounting"], "reported")
+
+    async def test_a_one_token_reply_in_several_chunks_has_no_token_interval(self):
+        self.reported = 1
+        await self.complete()
+        self.assertEqual(self.router.tpot.n, 0)
+        row = self.row()
+        self.assertEqual((row["output_len"], row["tpot_s"]), (1, None))
+
+    async def test_each_leg_ran_its_slot_step(self):
+        await self.complete()
+        self.assertEqual(self.steps, [("prefill", "save"), ("decode", "restore")])
 
     async def test_a_stream_that_reports_no_count_leaves_the_output_length_unknown(self):
         self.reported = None

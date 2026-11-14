@@ -325,7 +325,12 @@ class RequestLifecycle:
             "attempts": self.attempts,
             "decode_attempts": self.decode_attempts,
             "attempt_failures": self.attempt_failures.copy(),
-            "decode_tokens_observed": self.decode_tokens_observed if measured is not None else None,
+            # Chunks are counted without token IDs, and a chunk can hold several tokens.
+            "decode_tokens_observed": (
+                self.decode_tokens_observed
+                if measured is not None and router.engines.dialect.token_ids
+                else None
+            ),
             "upstream_seconds": self.upstream_seconds.copy(),
             "prefill_iid": self.prefill_iid,
             "decode_iid": self.decode_iid,

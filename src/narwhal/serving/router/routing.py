@@ -373,7 +373,10 @@ class NarwhalRouter:
                 values[iid] = value
 
     def _token_accounting(self) -> str:
-        return "token_ids" if self.engines.dialect.token_ids else "unavailable"
+        dialect = self.engines.dialect
+        if dialect.token_ids:
+            return "token_ids"
+        return "reported" if dialect.reports_output_tokens else "unavailable"
 
     async def serve(
         self,

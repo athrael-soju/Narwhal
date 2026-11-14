@@ -571,7 +571,8 @@ async def _decode_attempt(
                             502,
                             "decode output lacks valid token_ids",
                         )
-                    # Without token IDs, each streamed chunk carries one token.
+                    # Without token IDs, a chunk counts as one token until the stream reports
+                    # the reply's count.
                     n = len(ids) if ids is not None else sse_token_count(event)
                     if sse_token_bearing(event, dialect, endpoint):
                         now = router._clock()
@@ -583,7 +584,7 @@ async def _decode_attempt(
                     if sse_finished(event):
                         router.monitor.output_ended(state.rid)
                     state.tokens += n
-                    if not dialect.token_ids and event.data is not None:
+                    if dialect.reports_output_tokens and event.data is not None:
                         reported = dialect.stream_output_tokens(event.data)
                         if reported is not None:
                             state.reported_tokens = reported

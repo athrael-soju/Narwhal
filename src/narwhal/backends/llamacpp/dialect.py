@@ -15,6 +15,7 @@ class LlamacppDialect(EngineDialect):
     context_limit_path = PROPS_PATH
     # Stream chunks carry text and no token IDs.
     token_ids = False
+    reports_output_tokens = True
     # The connector assigns the slot and keeps prompt caching on for the handoff.
     # n_predict outranks the max_tokens that bounds a prefill leg to one token.
     reserved_fields = (SEAT_FIELD, "cache_prompt", "n_predict")
