@@ -104,7 +104,7 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
         dialect = self.backend.dialect
         self.assertTrue(dialect.name)
         self.assertTrue(dialect.health_path.startswith("/"))
-        for path in (dialect.tokenize_path, dialect.cache_reset_path):
+        for path in (dialect.tokenize_path, dialect.render_path, dialect.cache_reset_path):
             self.assertTrue(path is None or path.startswith("/"))
         for fields in (
             dialect.prefill_incompatible,
