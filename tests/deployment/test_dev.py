@@ -167,10 +167,11 @@ class DevTests(unittest.TestCase):
         return launch["engines"]["engine-1"]["shared_device"]
 
     def test_the_small_templates_ask_every_gpu_for_the_same_memory(self):
-        for name in ("small-cuda-v1.json", "small-cuda-sglang-v1.json"):
+        # An SGLang engine takes its CUDA graphs and runtime beside the pool its fraction sizes.
+        for name, allowed in (("small-cuda-v1.json", 6553), ("small-cuda-sglang-v1.json", 9216)):
             self.assertEqual(
                 template._read_template(name)["allocation"],
-                {"engine_count": 2, "engine_memory_mib": 2867, "device_memory_mib": 6553},
+                {"engine_count": 2, "engine_memory_mib": 2867, "device_memory_mib": allowed},
             )
         # A GPU of 8 GiB keeps the fractions the templates carried before.
         shared = self.small(8192)
@@ -260,7 +261,7 @@ class DevTests(unittest.TestCase):
         return self.initialize_with(
             spec,
             gpu_name="NVIDIA Test GPU",
-            memory={"total_mib": 8192, "used_mib": 0},
+            memory={"total_mib": 12288, "used_mib": 0},
             model_path=self.model,
             dev=sglang_dev,
         )

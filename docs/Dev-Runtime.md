@@ -14,7 +14,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on an NVIDIA GPU of at least 8 GiB with about 7,070 MiB of VRAM free. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The two small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs a GPU of at least 8 GiB with about 7,070 MiB of VRAM free, and the SGLang template a GPU of at least 12 GiB with about 9,730 MiB free. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -43,7 +43,7 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 A template states the GPU memory of its engines in MiB or as fractions of the GPU.
 
-The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` is `6553` for all engines together and for whole-device memory growth during startup. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. On a GPU of 8 GiB the fractions are `0.35` and `0.8`. On a GPU of 32 GiB they are `0.088` and `0.201`, so the engines take the same memory on both. `--engine-memory-mib` and `--device-memory-mib` set the two values.
+The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `6553` in the vLLM template and `9216` in the SGLang template, whose engines take about 1,700 MiB each for CUDA graphs and runtime beside the memory their fraction sizes. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.8` on a GPU of 8 GiB, and `0.088` and `0.201` on a GPU of 32 GiB, so the engines take the same memory on both. `--engine-memory-mib` and `--device-memory-mib` set the two values.
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
@@ -51,7 +51,7 @@ A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of 
 
 Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
 
-`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`, which is about 7,070 MiB for the small templates on any GPU.
+`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,070 MiB for the small vLLM template and about 9,730 MiB for the small SGLang template, on any GPU.
 
 ## Initializing and verifying an instance
 

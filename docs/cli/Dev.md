@@ -86,7 +86,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--engine-count` | Template value, `2` in the small templates and `4` in the llama.cpp templates | Number of engines. | 2 to 8 |
 | `--port-base` | Template ports | Base of the port layout below. | Every port within 1 to 65535 and distinct |
 | `--engine-memory-mib` | Template value, `2867` in the small templates | Each engine's GPU memory in MiB, which `init` converts to a fraction of the GPU it finds. | A positive integer |
-| `--device-memory-mib` | Template value, `6553` in the small templates | GPU memory in MiB that bounds the sum of the engines' memory and the memory growth during startup. | At least `--engine-count` times `--engine-memory-mib`, and at most the GPU's total |
+| `--device-memory-mib` | Template value, `6553` in the small vLLM template and `9216` in the small SGLang template | GPU memory in MiB that bounds the sum of the engines' memory and the memory growth during startup. | At least `--engine-count` times `--engine-memory-mib`, and at most the GPU's total |
 | `--gpu-memory-utilization` | Template value, `0.1` in the reference template | Each engine's fraction of total GPU memory on vLLM, or of the GPU memory free at engine start on SGLang. Pass it with `--device-allowance` on a template that states MiB. | Above 0 and at most 1 |
 | `--device-allowance` | Template value, `0.5` in the reference template | Fraction of total GPU memory that bounds the sum of engine fractions and the memory growth during startup. | At least `--engine-count` times `--gpu-memory-utilization`, and at most 1 |
 | `--interface` | `eth0` | Network interface for KV transfer. | An interface with exactly one IPv4 address |
@@ -106,7 +106,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 
 | Check | Requirement |
 | --- | --- |
-| Free memory | Free VRAM covers the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,070 MiB for the small templates on any GPU, and `--device-allowance` times total VRAM plus 2,048 MiB for the reference template. |
+| Free memory | Free VRAM covers the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,070 MiB for the small vLLM template and about 9,730 MiB for the small SGLang template on any GPU, and `--device-allowance` times total VRAM plus 2,048 MiB for the reference template. |
 | GPU product | The GPU name matches the template's `gpu.product` when the template sets it. |
 | Total memory | Total VRAM is at least the template's `gpu.minimum_total_mib` when the template sets it. |
 
