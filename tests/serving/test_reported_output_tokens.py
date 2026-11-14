@@ -60,6 +60,9 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["usage"]["completion_tokens"], 5)
         self.assertEqual(self.router.tpot.n, 1)
         self.assertEqual(self.router.state()["token_accounting"], "reported")
+        self.assertEqual(self.router.state()["serving"]["output_tokens"], 5)
+        metrics = (await self.client.get("/metrics")).text
+        self.assertIn("\nnarwhal_output_tokens_total 5\n", metrics)
         row = self.row()
         self.assertEqual((row["output_len"], row["decode_tokens_observed"]), (5, None))
         self.assertGreaterEqual(row["tpot_s"], 0)
@@ -82,6 +85,7 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["choices"][0]["text"], "abc")
         self.assertNotIn("usage", reply)
         self.assertEqual(self.router.tpot.n, 0)
+        self.assertEqual(self.router.state()["serving"]["output_tokens"], 0)
 
     async def test_a_reply_of_no_text_is_served(self):
         self.chunks, self.reported = [], 1

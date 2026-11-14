@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from importlib import metadata
@@ -200,6 +201,9 @@ def _main(argv: list[str]) -> int:
                 help="keep the model on the CPU, for a template that starts its engines directly",
             )
     args = parser.parse_args(argv)
+    watching = args.command == "dev" and args.action == "watch"
+    if watching and not (math.isfinite(args.interval) and args.interval > 0):
+        parser.error("--interval must be a positive number")
     if args.command == "dev" and args.action == "ask":
         if (args.prompt is None) == (args.repeat is None):
             parser.error("dev ask takes one prompt, or --repeat for the built-in prompts")

@@ -21,6 +21,14 @@ FETCH_TIMEOUT_S = 5.0
 # Latency and throughput cover the samples of this many seconds.
 WINDOW_S = 30.0
 RECENT_SWITCHES = 5
+SERVED, TOKENS, FAILED = (
+    "narwhal_served_total",
+    "narwhal_output_tokens_total",
+    "narwhal_failed_total",
+)
+# Requests the router turned away or timed out before an engine failed them.
+UNSERVED = ("narwhal_refused_total", "narwhal_rejected_total", "narwhal_expired_total")
+COUNTERS = (SERVED, TOKENS, FAILED, *UNSERVED)
 CLEAR = "\x1b[H\x1b[2J"
 _SAMPLE = re.compile(r"^(narwhal_[a-z_]+)(?:\{([^}]*)\})?\s+(\S+)$")
 _LABEL = re.compile(r'(\w+)="([^"]*)"')
@@ -56,7 +64,7 @@ def parse(at: float, state: dict[str, Any], metrics: str) -> Sample:
             if name == f"narwhal_{key}_seconds_bucket" and "le" in labels:
                 bound = math.inf if labels["le"] == "+Inf" else float(labels["le"])
                 buckets[key][bound] = buckets[key].get(bound, 0.0) + number
-        if name in ("narwhal_served_total", "narwhal_output_tokens_total", "narwhal_failed_total"):
+        if name in COUNTERS:
             counters[name] = counters.get(name, 0.0) + number
     return Sample(at, state, buckets, counters)
 
@@ -82,6 +90,15 @@ def quantile(counts: dict[float, float], fraction: float) -> float | None:
     return lower
 
 
+def restarted(old: Sample, new: Sample) -> bool:
+    """Whether the router's counters began again between two samples."""
+    return any(new.counters.get(name, 0.0) < count for name, count in old.counters.items()) or any(
+        set(new.buckets[key]) != set(counts)
+        or any(new.buckets[key][bound] < count for bound, count in counts.items())
+        for key, counts in old.buckets.items()
+    )
+
+
 def _spread(old: Sample | None, new: Sample, key: str) -> dict[str, float | None]:
     counts = {
         bound: count - (old.buckets[key].get(bound, 0.0) if old else 0.0)
@@ -103,26 +120,38 @@ def view(old: Sample | None, new: Sample) -> dict[str, Any]:
     roles = {iid: role for role, members in pools.items() for iid in members}
     resident = state.get("resident") or {}
     ejected, draining = set(state.get("ejected") or []), set(state.get("draining") or [])
+    quarantined = set(state.get("quarantined") or [])
     engines = [
         {
             "iid": iid,
             "role": roles.get(iid),
             "requests": sum((resident.get(iid) or {}).values()),
-            "state": "ejected" if iid in ejected else "draining" if iid in draining else "live",
+            "state": "ejected"
+            if iid in ejected
+            else "quarantined"
+            if iid in quarantined
+            else "draining"
+            if iid in draining
+            else "live",
         }
         for iid in sorted(set(roles) | set(resident))
     ]
     flips = state.get("flips") or []
+    # The flip list keeps a bounded history; the control counters keep the total.
+    counted = (state.get("control") or {}).get("flips")
+    switches = sum(counted.values()) if isinstance(counted, dict) else len(flips)
     return {
         "status": "observed",
         "engines": engines,
         "ttft_s": _spread(old, new, "ttft"),
         "tpot_s": _spread(old, new, "tpot"),
-        "requests_per_second": _rate(old, new, "narwhal_served_total"),
-        "output_tokens_per_second": _rate(old, new, "narwhal_output_tokens_total"),
-        "served": int(new.counters.get("narwhal_served_total", 0)),
-        "failed": int(new.counters.get("narwhal_failed_total", 0)),
-        "role_switches": len(flips),
+        "requests_per_second": _rate(old, new, SERVED),
+        # Counted when a request completes, so a long reply lands in one frame.
+        "output_tokens_per_second": _rate(old, new, TOKENS),
+        "served": int(new.counters.get(SERVED, 0)),
+        "failed": int(new.counters.get(FAILED, 0)),
+        "unserved": int(sum(new.counters.get(name, 0) for name in UNSERVED)),
+        "role_switches": switches,
         "recent_switches": [
             {"iid": flip.get("iid"), "to": flip.get("to")} for flip in flips[-RECENT_SWITCHES:]
         ],
@@ -156,15 +185,19 @@ def render(shown: dict[str, Any], router: str) -> str:
             for e in shown["engines"]
         ),
         "",
-        "                     median    95th percentile",
+        "                       median    95th percentile",
         *(
-            f"{label:<20} {_seconds(shown[key]['p50'])}    {_seconds(shown[key]['p95'])}"
-            for label, key in (("time to first token", "ttft_s"), ("time per token", "tpot_s"))
+            f"{label:<22} {_seconds(shown[key]['p50'])}    {_seconds(shown[key]['p95'])}"
+            for label, key in (
+                ("time to first token", "ttft_s"),
+                ("time per output token", "tpot_s"),
+            )
         ),
         "",
         f"throughput  {_per_second(shown['requests_per_second'])} requests/s   "
         f"{_per_second(shown['output_tokens_per_second'])} output tokens/s",
-        f"served {shown['served']}   failed {shown['failed']}",
+        f"served {shown['served']}   failed {shown['failed']}   "
+        f"refused, rejected or expired {shown['unserved']}",
         f"role switches {shown['role_switches']}"
         + "".join(f"   {flip['iid']} to {flip['to']}" for flip in shown["recent_switches"]),
     ]
@@ -194,8 +227,8 @@ def run(
     """Return the last frame. Unless `once`, redraw every `interval` seconds until `frames`
     frames are drawn or the user interrupts.
     """
-    if not interval > 0:
-        raise ValueError("--interval must be positive")
+    if not (math.isfinite(interval) and interval > 0):
+        raise ValueError("--interval must be a positive number")
     config = lifecycle.instance(root)
     state = lifecycle._read_state(root) if (root / "lifecycle.json").exists() else {}
     if state.get("phase") not in PHASES:
@@ -205,8 +238,14 @@ def run(
     url = config["router_url"]
     fetch = fetch or http_fetch
     if once:
-        return view(None, parse(clock(), *fetch(url)))
+        # Two readings one interval apart give the rates their window.
+        first = parse(clock(), *fetch(url))
+        sleep(interval)
+        second = parse(clock(), *fetch(url))
+        return view(None if restarted(first, second) else first, second)
     out = out or sys.stdout
+    # A file or pipe takes the frames one after another.
+    clear = CLEAR if out.isatty() else "\n"
     window: deque[Sample] = deque()
     shown: dict[str, Any] = {"status": "observed", "engines": []}
     drawn = 0
@@ -214,15 +253,17 @@ def run(
         while frames is None or drawn < frames:
             try:
                 sample = parse(clock(), *fetch(url))
-            except (httpx.HTTPError, ValueError) as exc:
-                out.write(f"{CLEAR}narwhal dev watch  {url}\nrouter unreachable: {exc}\n")
-            else:
+                if window and restarted(window[-1], sample):
+                    window.clear()
                 window.append(sample)
                 # The baseline is the oldest sample inside the window, or the one before this.
                 while len(window) > 2 and sample.at - window[0].at > WINDOW_S:
                     window.popleft()
                 shown = view(window[0] if len(window) > 1 else None, sample)
-                out.write(CLEAR + render(shown, url))
+                text = render(shown, url)
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                text = f"narwhal dev watch  {url}\nrouter unreachable: {exc}\n"
+            out.write(clear + text)
             out.flush()
             drawn += 1
             if frames is None or drawn < frames:
