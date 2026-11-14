@@ -455,9 +455,14 @@ class DevTemplateTests(unittest.TestCase):
         gpu = spec["gpu"]
         if "product" in gpu:
             gpu["product"] = "fixture-gpu"
-        allowance = spec["allocation"]["device_allowance"]
-        total = max(
-            gpu.get("minimum_total_mib", 0), math.ceil(gpu["reserve_mib"] / (1 - allowance))
+        allowance = spec["allocation"].get("device_allowance")
+        # A template sized in MiB gives the fractions it carried before on a GPU of 8 GiB.
+        total = (
+            8191
+            if allowance is None
+            else max(
+                gpu.get("minimum_total_mib", 0), math.ceil(gpu["reserve_mib"] / (1 - allowance))
+            )
         )
         packages = {"narwhal-inference": "0.0.0", **spec["runtime"]["expected_packages"]}
         environment = {k: v for k, v in os.environ.items() if k != "NARWHAL_ENGINE_API_KEY"}
