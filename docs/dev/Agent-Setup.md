@@ -23,7 +23,7 @@ awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo
 | `uname -sm` | `Linux x86_64` |
 | Python version | `True` |
 | `venv` support | `venv-ok`. Otherwise run `sudo apt install python3-venv`. |
-| Free disk in MiB | At least `1500` for the CPU build. The CUDA build needs more for its runtime libraries. |
+| Free disk in MiB | At least `1500` for the CPU build, or `4000` for the CUDA 12 build |
 | Available memory in MiB | At least `2800` for the default model with the CPU build, `1800` for `ERNIE-4.5-0.3B`, or half of either with `--engine-count 2`. The GPU build skips this check. |
 
 Under WSL2, keep the virtual environment and the instance directory on the Linux filesystem. A host with Python older than 3.11.4 needs a newer Python before step 2.
@@ -45,7 +45,7 @@ Expected: `narwhal-inference <version>` and exit code `0`. Keep the virtual envi
 narwhal dev setup --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/dev` already holds an instance. An `initialized` result's `engine_build` is `cuda` on a host with an NVIDIA driver and `none` otherwise.
+Expected: exit code `0` and `"status": "initialized"`, or `"reused"` when `runs/dev` already holds an instance. An `initialized` result's `engine_build` is `cuda12` on a host with an NVIDIA driver and `none` otherwise.
 
 | Result | Action |
 | --- | --- |
@@ -63,11 +63,11 @@ To use the CPU on a host with a GPU, add `--accelerator none`.
 narwhal dev up --instance runs/dev
 ```
 
-Expected: exit code `0` and `"status": "launched"`, usually within seconds. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
+Expected: exit code `0` and `"status": "launched"`, usually within seconds, and about a minute for the first start of the CUDA 12 build. Allow five minutes. The `router` field holds the router's URL, `http://127.0.0.1:18000` unless `--port-base` changed it.
 
 | Result | Action |
 | --- | --- |
-| `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a CUDA load error, set up a new instance with `--accelerator cuda12`, then `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a `CUDA error` in the log, set up a new instance in a new directory with `--accelerator none`. |
 | `run dev down before starting another generation` | Run `narwhal dev down --instance runs/dev`, then repeat. |
 
 ## 5. Verify

@@ -8,22 +8,22 @@ description: Take a clean Linux or WSL2 machine to a routed reply from four llam
 
 ## Requirements
 
-| | Qwen3.5-0.8B, the default | ERNIE-4.5-0.3B |
-| --- | --- | --- |
-| Download | 0.6 GB | 0.3 GB |
-| Disk after setup | 0.6 GB | 0.3 GB |
-| Memory with four engines | 2.4 GB | 1.5 GB |
-| Available memory `setup` requires for four engines | 2.8 GB | 1.8 GB |
-| `setup`, downloads included, on a fast connection | 5 s | 4 s |
-| `up` | 3 s | 2 s |
+| | Qwen3.5-0.8B on the CPU | ERNIE-4.5-0.3B on the CPU | Qwen3.5-0.8B on a GPU |
+| --- | --- | --- | --- |
+| Download | 0.6 GB | 0.3 GB | 1.3 GB |
+| Disk after setup | 0.6 GB | 0.3 GB | 2.3 GB |
+| Memory with four engines | 2.4 GB of host memory | 1.5 GB of host memory | 5.5 GB of GPU memory |
+| Available host memory `setup` requires for four engines | 2.8 GB | 1.8 GB | No check |
+| `setup`, downloads included, on a fast connection | 5 s | 4 s | 8 to 26 s |
+| `up` | 3 s | 2 s | 62 s for the first `up` after `setup`, 5 s after that |
 
-Every figure was measured on a Linux host with the CPU build of the engine. The GPU build was not measured: its download is larger, and the model weights occupy GPU memory. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for the default model.
+Qwen3.5-0.8B is the default model. Every figure was measured on Linux hosts, the GPU column on an NVIDIA GPU with the CUDA 12 build of the engine. Both model files are 4-bit GGUF quantizations. While the fleet serves, each run keeps handed-over KV state in files under the instance directory, up to 0.5 GB for the default model.
 
 The host needs:
 
 - Ubuntu or a comparable Linux distribution on x86-64, or Windows with [WSL2](https://learn.microsoft.com/windows/wsl/install) and an Ubuntu distribution
 - Python 3.11.4 or newer with `venv`
-- For a GPU, an NVIDIA driver. `setup` then downloads a CUDA build of the engine together with its runtime libraries.
+- For a GPU, an NVIDIA driver that supports CUDA 12. `setup` then downloads the CUDA 12 build of the engine together with its runtime libraries.
 
 A request's prefill computes the KV cache of its prompt, and its decode generates the reply's tokens from that cache. Narwhal runs the two on different engines.
 
@@ -60,12 +60,12 @@ narwhal dev setup
 }
 ```
 
-`engine_build` is `cuda` when `setup` finds an NVIDIA driver, and `none` for the CPU build.
+`engine_build` is `cuda12` when `setup` finds an NVIDIA driver, and `none` for the CPU build.
 
 | To change | Pass |
 | --- | --- |
 | The model | `--model-name ERNIE-4.5-0.3B` |
-| The engine build | `--accelerator none` for the CPU, or `--accelerator cuda12` for a driver that predates CUDA 13 |
+| The engine build | `--accelerator none` for the CPU, or `--accelerator cuda` for the CUDA 13.5 build, for a driver with CUDA 13.5 support |
 | The number of engines, two to eight | `--engine-count 2` |
 | The ports, when 18000 or 18101 to 18104 are taken | `--port-base 19000` |
 | The instance directory | `--instance runs/second` |
@@ -133,7 +133,7 @@ In the first shell, send 600 built-in prompts with eight in flight:
 narwhal dev ask --repeat 600 --concurrency 8 --max-tokens 200
 ```
 
-The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. On the measured host, the router moved one prefill engine to the decode role after 15 to 25 seconds. [Reading the live view](Live-View.md) explains each figure.
+The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. On the measured hosts, the router moved one prefill engine to the decode role within 30 seconds. [Reading the live view](Live-View.md) explains each figure.
 
 When the prompts finish, `ask` prints their latency spread and throughput:
 
@@ -168,10 +168,10 @@ narwhal dev down
 | `host memory check failed` | Repeat `setup` with `--engine-count 2` or `--model-name ERNIE-4.5-0.3B`. |
 | `holds other files; name an empty or new instance directory` | Pass `--instance` with a new directory. |
 | `SHA-256 … differs from the pinned` | Run `setup` again. It removed the file and downloads it once more. |
-| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. With the `cuda` build on an older driver, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |
+| `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, set up a new instance with `--accelerator cuda12` or `--accelerator none`. |
 | `run dev down before starting another generation` | Run `narwhal dev down`, then `narwhal dev up`. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |
 
 ## Differences from a deployed fleet
 
-The quick-start fleet gives each engine a profile from one short request. It has no engine attestation, profiling sweep or KV transfer evidence, which the [deployment stages](../Deploy.md) produce. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.
+The quick-start fleet gives each engine a profile from a few short requests. Its admission is `open`, so the router queues a request that the predictive admission of a deployed fleet would refuse with HTTP 429 when its predicted latency exceeds the targets. It has no engine attestation, profiling sweep or KV transfer evidence, which the [deployment stages](../Deploy.md) produce. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.

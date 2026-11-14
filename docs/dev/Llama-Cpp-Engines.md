@@ -25,7 +25,7 @@ Narwhal installs two templates that start llama.cpp engines:
 | `model.repository`, `model.revision`, `model.filename`, `model.sha256` | The model file `setup` downloads and the checksum `setup`, `init` and `up` require. |
 | `model.served_name` | The model name the router and the engines serve. |
 | `engine.url`, `engine.binary` | The download URL pattern of an engine archive, with `{name}` for the archive's name, and the server's file name inside it. |
-| `engine.builds` | The archives and checksums of each engine build by machine type. The keys are the values of `--accelerator`, and `none` is the CPU build. `detect` lists the paths whose presence selects the build under `--accelerator auto`. |
+| `engine.builds` | The archives and checksums of each engine build by machine type. The keys are the values of `--accelerator`, and `none` is the CPU build. `detect` lists the paths whose presence selects the build under `--accelerator auto`. The installed templates pin `none`, `cuda12` for CUDA 12.8 and `cuda` for CUDA 13.5, and `auto` selects `cuda12` on a host with an NVIDIA driver. |
 | `runtime.backend` | `llamacpp`. |
 | `runtime.build` | The llama.cpp build number the server must report. |
 | `runtime.slots` | Requests one engine serves at once. |
@@ -34,6 +34,7 @@ Narwhal installs two templates that start llama.cpp engines:
 | `runtime.extra_args` | Further `llama-server` arguments. |
 | `request` | Optional fields `narwhal dev ask` adds to each request body. |
 | `allocation.engine_count`, `ports`, `slo`, `controller` | The engine count, the router and first engine port, and the router's [SLO and role-control settings](../configuration/02-Serving-and-Role-Control.md). |
+| `serving` | Optional [serving settings](../configuration/02-Serving-and-Role-Control.md#request-admission-and-bounded-serving) of the fleet. The installed templates set `admission` to `open`. |
 
 ## Engine command line
 
@@ -63,7 +64,7 @@ One `llama-server` process serves both roles, so a role switch changes the route
 
 ## Profiles
 
-`up` writes each engine a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles) from one request of about a hundred prompt tokens and sixteen output tokens: the prefill time per token, the token interval, the context of all slots as KV capacity, and `runtime.slots` as the request limit. The engines of a fleet share one device, so an engine under load runs slower than its profile states.
+`up` writes each engine a [nominal profile](../telemetry/02-Profiles.md#nominal-profiles). It sends every engine `runtime.slots` requests of about a hundred prompt tokens and sixteen output tokens concurrently, so each engine is measured while its neighbours on the shared device serve. An engine's profile holds the mean prefill time per token and the mean token interval of its replies, the context of all its slots as KV capacity, and `runtime.slots` as the request limit.
 
 ## Token counts and metrics
 

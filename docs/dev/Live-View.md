@@ -54,7 +54,7 @@ To load the decode engines, ask for long replies:
 narwhal dev ask --repeat 600 --concurrency 8 --max-tokens 200
 ```
 
-On the measured host, a four-engine fleet with either installed model filled its decode engines, and the router moved one prefill engine to the decode role after 15 to 25 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line.
+On the measured hosts, a four-engine fleet filled its decode engines, and the router moved one prefill engine to the decode role within 30 seconds. The view then shows `1 prefill, 3 decode` and the switch in its last line.
 
 With the installed templates, the router decides a switch from the load of the last 30 seconds and needs ten arrivals in that window, so a short burst leaves the roles unchanged.
 

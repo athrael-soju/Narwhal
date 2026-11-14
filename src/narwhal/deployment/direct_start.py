@@ -46,7 +46,11 @@ class DirectStart(ABC):
 
     @abstractmethod
     def probe(self, served_name: str) -> tuple[str, dict[str, Any]]:
-        """The endpoint and body of the one short request that measures an engine."""
+        """The endpoint and body of a short request that measures an engine."""
+
+    def probe_requests(self, runtime: dict[str, Any]) -> int:
+        """How many probe requests one engine serves at once when the fleet is measured."""
+        return 1
 
     @abstractmethod
     def figures(self, reply: dict[str, Any], runtime: dict[str, Any]) -> NominalFigures:

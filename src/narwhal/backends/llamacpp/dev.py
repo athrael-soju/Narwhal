@@ -10,7 +10,7 @@ from ...deployment.direct_start import DirectEngine, DirectStart, NominalFigures
 
 VERSION_TIMEOUT_S = 20
 _BUILD = re.compile(r"\(build (\d+), commit ([0-9a-f]+)\)")
-# One request of about a hundred prompt tokens keeps startup in seconds.
+# Requests of about a hundred prompt tokens keep startup in seconds.
 PROBE_PROMPT = " ".join(["The quick brown fox jumps over the lazy dog."] * 12)
 PROBE_OUTPUT_TOKENS = 16
 
@@ -96,6 +96,9 @@ class LlamacppDirect(DirectStart):
             "ignore_eos": True,
         }
         return "/v1/completions", body
+
+    def probe_requests(self, runtime: dict[str, Any]) -> int:
+        return int(runtime["slots"])
 
     def figures(self, reply: dict[str, Any], runtime: dict[str, Any]) -> NominalFigures:
         timings = reply.get("timings")
