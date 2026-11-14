@@ -163,7 +163,7 @@ def engine_backend(name: str | None = None) -> EngineBackend:
 
 
 def launcher(name: str | None = None) -> EngineLauncher:
-    return engine_backend(name).launcher()
+    return engine_backend(name).engine_launcher()
 
 
 def plan_launcher(plan: Mapping) -> EngineLauncher:

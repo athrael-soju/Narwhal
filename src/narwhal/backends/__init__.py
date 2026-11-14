@@ -32,7 +32,8 @@ class EngineBackend:
     kv_events: KvEventDecoder
     metrics: EngineMetrics
     fabric: FabricLifecycle
-    launcher: Callable[[], EngineLauncher] = field(repr=False)
+    # None for a backend whose engines the launch tools do not start.
+    launcher: Callable[[], EngineLauncher] | None = field(repr=False)
     role_switch: RoleSwitcher = field(repr=False)
     # A small PNG of the engine's logo for operator views.
     icon: bytes = field(default=b"", repr=False)
@@ -44,6 +45,11 @@ class EngineBackend:
         if switcher.connectors is not None and connector not in switcher.connectors:
             return FixedRoles()
         return switcher
+
+    def engine_launcher(self) -> EngineLauncher:
+        if self.launcher is None:
+            raise ValueError(f"backend {self.name!r} has no engine launcher")
+        return self.launcher()
 
     def connector(self, name: str) -> KvHandoff:
         try:

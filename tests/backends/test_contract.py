@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import dataclasses
+import functools
 import io
 import itertools
 import json
@@ -52,9 +53,20 @@ CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
 LAUNCH = {"bootstrap": {"bootstrap_host": "192.0.2.11", "bootstrap_port": 5600}}
 
 
-class BackendContract(unittest.IsolatedAsyncioTestCase):
-    name: str
+class Launched:
+    """The backend's launcher, skipping the test that reads it for a backend with none."""
+
     backend: EngineBackend
+
+    @functools.cached_property
+    def launcher(self) -> EngineLauncher:
+        if self.backend.launcher is None:
+            self.skipTest("the backend has no engine launcher")
+        return self.backend.launcher()
+
+
+class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
+    name: str
 
     def setUp(self):
         self.backend = load(self.name)
@@ -270,7 +282,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 fabric.check_engine_bind("127.0.0.1", held.getsockname()[1])
 
     def test_launcher_offline_surface(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher, self.fixtures
         self.assertIsInstance(launcher, EngineLauncher)
         self.assertTrue(launcher.runtime_script.is_file())
         capture = cache_capture(launcher)
@@ -288,7 +300,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(launcher.memory_fraction([]))
 
     def test_extra_args_reject_every_flag_a_neutral_setting_maps(self):
-        launcher, runtime = self.backend.launcher(), self.fixtures.launch_runtime
+        launcher, runtime = self.launcher, self.fixtures.launch_runtime
         flags = mapped_flags(launcher.launch_settings)
         self.assertLessEqual(
             {"context_length", "max_sequences", "tokenizer", "prefix_caching", "kv_events"},
@@ -302,7 +314,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                         launcher.validate_runtime(record)
 
     def test_launcher_discovers_a_valid_runtime_for_each_connector(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher, self.fixtures
         self.assertTrue(
             all(re.fullmatch(launcher.image_packages, name) for name in fixture.image_packages)
         )
@@ -328,7 +340,7 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(launcher.sequence_limit(runtime), 0)
 
     def test_launcher_rejects_invalid_discovery_settings(self):
-        launcher, fixture = self.backend.launcher(), self.fixtures
+        launcher, fixture = self.launcher, self.fixtures
         observed = {"packages": fixture.image_packages, "image_environment": {}}
         for name, value, message in (
             ("MODEL_DTYPE", "float32", "set MODEL_DTYPE to bfloat16 or float16 in .env"),
@@ -377,15 +389,15 @@ class BackendContract(unittest.IsolatedAsyncioTestCase):
                 await switcher.switch(client, "http://engine", role, {})
 
 
-class BackendFlows(unittest.TestCase):
+class BackendFlows(Launched, unittest.TestCase):
     """The shared launch, runtime check and attestation steps, run on each backend's fixtures."""
 
     name: str
 
     def setUp(self):
         self.backend = load(self.name)
-        self.launcher = self.backend.launcher()
         self.fixtures = fixtures(self.name)
+        assert self.launcher
 
     def prepared(self, *, native: bool = False, fixture=None, **environment: str):
         folder = tempfile.TemporaryDirectory()
@@ -548,7 +560,7 @@ class BackendFlows(unittest.TestCase):
                 engine_document(run, log)
 
 
-class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
+class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
     """Golden records of each step a backend takes part in, recorded at the engine boundary."""
 
     name: str
@@ -557,7 +569,6 @@ class BackendCharacterization(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.backend = load(self.name)
         self.fixtures = fixtures(self.name)
-        self.launcher = self.backend.launcher()
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
