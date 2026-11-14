@@ -69,7 +69,7 @@ Expected: exit code `0` and `"status": "launched"`, usually within seconds, and 
 | Result | Action |
 | --- | --- |
 | `process exited before http://127.0.0.1:18101/health became healthy` | Run `narwhal dev status --instance runs/dev` and read the last lines of `engine-N.log` in the directory its `run` field names, where N is the port in the message less the first engine port plus one. For a `CUDA error` in the log, run `narwhal dev down --instance runs/dev`, then `narwhal dev setup --instance runs/dev --accelerator none`. |
-| `run dev down before starting another generation` | Run `narwhal dev down --instance runs/dev`, then repeat. |
+| `the fleet is already up` | Continue with the next step, or run `narwhal dev down --instance runs/dev`, then repeat. |
 
 ## 5. Verify
 

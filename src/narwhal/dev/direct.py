@@ -241,7 +241,7 @@ def up(root: Path, config: dict) -> dict:
         if (root / "lifecycle.json").exists():
             previous = lifecycle._read_state(root)
             if previous.get("phase") != "stopped":
-                raise ValueError("run dev down before starting another generation")
+                raise ValueError("the fleet is already up; run narwhal dev down to stop it")
         spec = lifecycle.read(root / "template.json")
         start = _direct_start(spec)
         binary = _binary(Path(config["engine_binary"]))

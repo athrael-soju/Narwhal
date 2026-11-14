@@ -66,10 +66,12 @@ def _main(argv: list[str]) -> int:
         "init": "Check pinned model files, native runtime and GPU allocation, then write an "
         "initialized instance, or report reused when explicit settings match an existing "
         "instance. Reuse preserves operator edits.",
-        "up": "Start an initialized instance, capture attestations, profile role splits and "
-        "start its router; reports launched. Requires the pinned native runtime and GPU.",
-        "verify": "Check a launched instance's directed KV paths, profiles and routed "
-        "arithmetic response; retain metrics and evidence before reporting ready.",
+        "up": "Start an instance's engines and its router; reports launched. An instance from "
+        "init also captures attestations and profiles role splits, and requires the pinned "
+        "native runtime and GPU.",
+        "verify": "Check a launched instance's profiles and a routed arithmetic response, and "
+        "for an instance from init its directed KV paths; retain metrics and evidence before "
+        "reporting ready.",
         "status": "Inspect an initialized instance's recorded processes and HTTP health; "
         "report launched or verified ready, retaining verification failures as degraded.",
         "ask": "Send one prompt through a launched instance's router and report the reply, its "
@@ -240,7 +242,12 @@ def _main(argv: list[str]) -> int:
     context = f"dev {args.action} {root}"
     if args.action not in ("init", "setup"):
         try:
-            lifecycle.instance(root)
+            try:
+                lifecycle.instance(root)
+            except FileNotFoundError:
+                if (root / "instance.json").exists():
+                    raise
+                raise FileNotFoundError("no instance here; run narwhal dev setup first") from None
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if results.json_mode():
                 raise

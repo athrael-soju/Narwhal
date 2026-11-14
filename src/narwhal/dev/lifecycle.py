@@ -401,7 +401,7 @@ def up(root: Path, alongside: bool = False) -> dict:
         if (root / "lifecycle.json").exists():
             previous = _read_state(root)
             if previous.get("phase") != "stopped":
-                raise ValueError("run dev down before starting another generation")
+                raise ValueError("the fleet is already up; run narwhal dev down to stop it")
         spec = read(root / "template.json")
         launcher(spec["runtime"].get("backend")).check_dev_files(spec["runtime"])
         for path, expected in model_files(spec["model"], Path(config["model_path"])).items():

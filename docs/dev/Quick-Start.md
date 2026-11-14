@@ -186,7 +186,8 @@ narwhal dev down
 | `process exited before http://127.0.0.1:18101/health became healthy` during `up` | Run `narwhal dev status` and read `engine-N.log` in the directory its `run` field names. N is the port in the message less 18100, so 18101 is `engine-1.log`. When the log reports `CUDA error`, as the `cuda` build does on a driver without CUDA 13.5 support, run `narwhal dev down`, then `narwhal dev setup --accelerator cuda12` or `--accelerator none`. |
 | `a fleet is already up in …` during `up` | Change the running fleet with `narwhal dev down` and `narwhal dev setup` on its instance, or stop it first. |
 | `run narwhal dev down … before changing the instance's settings` | Run `narwhal dev down`, then repeat the `setup` command. |
-| `run dev down before starting another generation` | Run `narwhal dev down`, then `narwhal dev up`. |
+| `no instance here; run narwhal dev setup first` | Run `narwhal dev setup`, or change to the directory where you ran it. |
+| `the fleet is already up` during `up` | The fleet is running. Use it, or run `narwhal dev down` to stop it. |
 | `run this instance with the Python environment used by dev init` | Activate the virtual environment that ran `setup`. |
 
 ## Differences from a deployed fleet

@@ -225,7 +225,7 @@ class DirectLifecycleTests(DirectInstance):
         status = lifecycle.status(self.root)
         self.assertEqual((status["status"], status["problems"]), ("ready", []))
         self.assertEqual(sorted(status["processes"]), ["engine-1", "engine-2", "router"])
-        with self.assertRaisesRegex(ValueError, "run dev down before starting"):
+        with self.assertRaisesRegex(ValueError, "the fleet is already up"):
             lifecycle.up(self.root)
         self.assertEqual(lifecycle.down(self.root)["status"], "stopped")
         instance = lifecycle.instance(self.root)
