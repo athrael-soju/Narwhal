@@ -30,6 +30,7 @@ narwhal dev down
 | `init` | Checks the model files, runtime packages, GPU, network interface and ports, then writes `template.json`, `instance.json`, `engine-launch.json` and `fleet.json` to the instance directory. | `initialized`, or `reused` |
 | `up` | Prepares, checks and starts the engines with [`narwhal-engine`](Engine.md), captures their attestations, starts the attestation sidecars, profiles the engines and starts the router. | `launched` |
 | `verify` | Records [KV evidence](Check.md#recording-and-verifying-kv-evidence) for every directed pair, sends a routed `2 + 3` request that must return `5`, saves router and engine metrics, and checks the router's `/ready`. | `ready` |
+| `ask` | Sends one prompt through the router and prints the reply, its time to first token, its tokens per second and the engine that served each leg. With `--repeat`, sends that many built-in prompts and prints the time to first token and the time per output token at the median and the 95th percentile, the throughput and the count of failed requests. | `answered`, or `completed` |
 | `status` | Reads the recorded processes, health routes and saved evidence. | A state from the next table |
 | `down` | Sends SIGTERM to each recorded process group and SIGKILL to members still running 10 seconds later. | `stopped` |
 
@@ -65,7 +66,7 @@ With `--format json`, the command prints a [versioned command result](../Command
 
 ## Options
 
-`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup`, `--engine-count` and `--port-base` to `setup` and `init`, and the other options to `init`. An omitted option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
+`--instance` and `--format` apply to every subcommand. `--model-name` and `--accelerator` apply to `setup`, `--repeat`, `--concurrency` and `--max-tokens` to `ask`, `--engine-count` and `--port-base` to `setup` and `init`, and the other options to `init`. An omitted option takes its value from the saved instance or the template. `narwhal --version` prints the installed distribution version.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
@@ -83,6 +84,9 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--engine-binary` | None | Engine server executable, for a template that starts its engines directly. | An executable file of the build the template pins |
 | `--no-accelerator` | Off | Keeps the model on the CPU, for a template that starts its engines directly. | A flag with no value |
 | `--accelerator` | `auto` | Engine build that `setup` downloads. `auto` selects by the host's devices. | `auto`, `none` for the CPU, or a build the template pins |
+| `--repeat` | None | Number of built-in prompts `ask` sends in place of one prompt. | A positive integer |
+| `--concurrency` | `1` | Requests `ask` keeps in flight with `--repeat`. | A positive integer |
+| `--max-tokens` | `128` | Output token limit of each `ask` request. | A positive integer |
 | `--model-name` | The default template's model | Served name of the model `setup` prepares. | A model that an installed template starting its engines directly serves |
 
 `--port-base P` puts the router at `P` and starts the engine HTTP, attestation and KV side-channel ranges at `P+1`, `P+101` and `P+201`, one port per engine. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. The installed templates put the router at 18000 and start the ranges at 18101, 18201 and 5701. `init` and `up` require every port to be free on `127.0.0.1`.
