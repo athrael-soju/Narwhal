@@ -267,7 +267,7 @@ class SplitScorer:
             self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
 
     def decode_wait_ratios(
-        self, decodes: Iterable[int], refused_s: float = 0.0
+        self, decodes: Iterable[int], refused_s: float = 0.0, refused_span_s: float = 0.0
     ) -> tuple[tuple[int, float], ...]:
         """Return each decode engine count's largest slot wait over the remaining TTFT budget.
 
@@ -275,8 +275,9 @@ class SplitScorer:
         in prefill before their decode leg is placed take the pool's slots in handoff order, as
         decode admission projects them. A request past its TTFT
         deadline at handoff adds nothing. The requests admission refused for their slot wait
-        within the last `refused_s` seconds follow them, each with its whole TTFT budget. The
-        measured handoff delay, scaled to each count, is a floor over the TTFT target.
+        follow them, each with its whole TTFT budget: those of the `refused_s` interval with the
+        most refusals within the last `refused_span_s` seconds. The measured handoff delay,
+        scaled to each count, is a floor over the TTFT target.
         """
         current = len(self.monitor.pool(Role.DECODE))
         handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s
@@ -287,7 +288,11 @@ class SplitScorer:
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
             expected_output=estimate,
         )
-        refused = self.scheduler.slot_refusals.since(refused_s) if refused_s > 0 else []
+        refused = (
+            self.scheduler.slot_refusals.busiest(refused_s, max(refused_s, refused_span_s))
+            if refused_s > 0
+            else []
+        )
         # A refused request takes its slot behind every admitted request.
         last = max((first for first, _, _ in occupancy.queued), default=0.0) if occupancy else 0.0
         rows = []
@@ -403,6 +408,7 @@ class SplitScorer:
         step_s: float | None = None,
         resident_s: float | None = None,
         prefills: Collection[int] | None = None,
+        refused_span_s: float = 0.0,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values.
 
@@ -515,6 +521,7 @@ class SplitScorer:
             decode_wait_ratios=self.decode_wait_ratios(
                 (len(instances) - prefill for prefill, _ in profile_options),
                 refused_s=step_s or 0.0,
+                refused_span_s=refused_span_s,
             ),
             pending_decode_tokens=sum(
                 input_len + output / 2.0 for input_len, output in pending_shapes

@@ -141,6 +141,8 @@ class ReactivePolicy:
             correction=correction,
             window_s=controller.window_s,
             step_s=controller.step_s,
+            refused_span_s=controller.step_s
+            * max(controller.confirmations_needed, controller.scheduler.th.sustained_intervals),
         )
         n = snapshot.current_prefill + snapshot.current_decode
         current_p = snapshot.current_prefill

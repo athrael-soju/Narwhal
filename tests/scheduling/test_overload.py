@@ -735,3 +735,15 @@ class SlotRefusalsTests(unittest.TestCase):
         now[0] = 20.0
         refusals.note(Request("c", 30))
         self.assertEqual([r.rid for r in refusals.since(60.0)], ["c"])
+
+    def test_the_busiest_step_carries_the_shortfall(self):
+        now = [0.0]
+        refusals = SlotRefusals(lambda: now[0])
+        for at, rid in ((0.2, "a"), (0.5, "b"), (0.8, "c"), (6.0, "d")):
+            now[0] = at
+            refusals.note(Request(rid, 10))
+        now[0] = 11.0
+        # Steps count back from now: d is in the step before last, a to c in the one before it.
+        self.assertEqual([r.rid for r in refusals.busiest(5.0, 5.0)], ["d"])
+        self.assertEqual([r.rid for r in refusals.busiest(5.0, 15.0)], ["a", "b", "c"])
+        self.assertEqual(refusals.busiest(5.0, 4.0), [])

@@ -194,6 +194,20 @@ class SlotRefusals:
         cutoff = self._clock() - seconds
         return [request for at, request in self._rows if at >= cutoff]
 
+    def busiest(self, step_s: float, span_s: float) -> list[Request]:
+        """Return the refusals of the `step_s` interval with the most within the last `span_s`.
+
+        Intervals count back from now. A move the controller prepares shifts or thins the
+        refusals of the passes that follow, so the shortfall is read from the busiest interval.
+        """
+        now = self._clock()
+        steps: dict[int, list[Request]] = {}
+        for at, request in self._rows:
+            age = now - at
+            if age <= span_s and step_s > 0:
+                steps.setdefault(int(age // step_s), []).append(request)
+        return max(steps.values(), key=len, default=[])
+
 
 @dataclass(frozen=True)
 class DecodeCheck:
