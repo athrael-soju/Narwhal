@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from narwhal.scheduling.prefill import prefill_seconds
 from narwhal.scheduling.scheduler.occupancy import (
+    SlotRefusals,
     SlotWaitHeadroom,
     decode_admits,
     decode_check,
@@ -695,7 +696,7 @@ class DecodeAdmissionTests(unittest.TestCase):
 class SlotWaitHeadroomTests(unittest.TestCase):
     def setUp(self):
         self.now = 0.0
-        self.headroom = SlotWaitHeadroom(lambda: self.now, min_samples=4)
+        self.headroom = SlotWaitHeadroom(lambda: self.now, quantile=0.95, min_samples=4)
 
     def test_the_headroom_is_a_high_quantile_of_recent_lateness(self):
         for late in (0.3, -0.1, 0.1):
@@ -718,3 +719,19 @@ class SlotWaitHeadroomTests(unittest.TestCase):
         self.assertEqual(self.headroom.seconds(), 0.2)
         self.now = 61.0
         self.assertEqual(self.headroom.seconds(), 0.0)
+
+
+class SlotRefusalsTests(unittest.TestCase):
+    def test_refusals_are_read_by_age(self):
+        now = [0.0]
+        refusals = SlotRefusals(lambda: now[0], retained_s=10.0)
+        refusals.note(Request("a", 10, wanted_len=5, output_len=3))
+        now[0] = 4.0
+        refusals.note(Request("b", 20))
+        self.assertEqual([r.rid for r in refusals.since(5.0)], ["a", "b"])
+        now[0] = 6.0
+        (recent,) = refusals.since(5.0)
+        self.assertEqual((recent.rid, recent.phase, recent.output_len), ("b", Phase.DECODE, 0))
+        now[0] = 20.0
+        refusals.note(Request("c", 30))
+        self.assertEqual([r.rid for r in refusals.since(60.0)], ["c"])

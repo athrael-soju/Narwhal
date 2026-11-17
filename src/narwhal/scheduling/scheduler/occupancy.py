@@ -139,7 +139,7 @@ class SlotWaitHeadroom:
         self,
         clock: Callable[[], float] = time.monotonic,
         *,
-        quantile: float = 0.95,
+        quantile: float = 0.99,
         window_s: float = 60.0,
         max_samples: int = 512,
         min_samples: int = 16,
@@ -170,6 +170,29 @@ class SlotWaitHeadroom:
                 late = sorted(sample for _, sample in self._samples)
                 self._seconds = max(0.0, late[min(len(late) - 1, int(self.quantile * len(late)))])
         return min(self._seconds, limit_s)
+
+
+class SlotRefusals:
+    """Remember the requests admission refused for their decode slot wait."""
+
+    def __init__(
+        self, clock: Callable[[], float] = time.monotonic, retained_s: float = 60.0
+    ) -> None:
+        self._clock = clock
+        self.retained_s = retained_s
+        self._rows: deque[tuple[float, Request]] = deque()
+
+    def note(self, request: Request) -> None:
+        """Record one request refused now."""
+        now = self._clock()
+        while self._rows and self._rows[0][0] < now - self.retained_s:
+            self._rows.popleft()
+        self._rows.append((now, replace(request, phase=Phase.DECODE, output_len=0)))
+
+    def since(self, seconds: float) -> list[Request]:
+        """Return the requests refused within the last `seconds`, oldest first."""
+        cutoff = self._clock() - seconds
+        return [request for at, request in self._rows if at >= cutoff]
 
 
 @dataclass(frozen=True)

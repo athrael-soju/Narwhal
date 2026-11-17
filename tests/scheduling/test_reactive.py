@@ -753,6 +753,40 @@ class MixedPressureTests(unittest.TestCase):
         self.assertGreater(dict(snapshot.decode_wait_ratios)[4], floor / 4)
         self.assertGreater(current.decode_queue_ratio, 0.0)
 
+    def test_requests_refused_for_slot_wait_count_as_decode_demand(self) -> None:
+        # Admission keeps the decode queue inside the TTFT budget, so the requests it refused
+        # carry the decode pool's shortfall.
+        fleet = self.fleet
+        fleet.monitor.instances["e1"].role = Role.PREFILL
+        for iid in fleet.monitor.instances:
+            fleet.profiles.put(replace(fleet.profiles.get(iid), decode_max_requests=4))
+        for iid in ("e2", "e3", "e4", "e5"):
+            for index in range(4):
+                fleet.monitor.dispatched(
+                    iid, Request(f"{iid}-{index}", 100, phase=Phase.DECODE, wanted_len=400)
+                )
+
+        def ratios(step_s):
+            snapshot = fleet.controller.scorer.capture(
+                fleet.now,
+                Demand(0.1, 3.0, 30, 0),
+                utilization=0.8,
+                observed_load=(0.1, 1.0),
+                window_s=fleet.controller.window_s if step_s else None,
+                step_s=step_s,
+            )
+            return dict(snapshot.decode_wait_ratios)
+
+        quiet = ratios(fleet.controller.step_s)
+        for index in range(40):
+            fleet.scheduler.slot_refusals.note(Request(f"refused{index}", 100, wanted_len=400))
+        refused = ratios(fleet.controller.step_s)
+        self.assertGreater(refused[4], 1.0)
+        self.assertGreater(refused[4], refused[5])
+        self.assertGreater(refused[4], quiet[4])
+        # Without a controller step the refusals are left out.
+        self.assertEqual(ratios(None), quiet)
+
     def test_requests_held_by_a_waiting_decode_leg_add_no_prefill_work(self) -> None:
         self._decode_overload(64, 64)
         self.fleet.monitor.sequence_limit = lambda iid: 64

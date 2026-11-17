@@ -15,7 +15,7 @@ from ..health import DriftTracker
 from ..monitor import InstanceMonitor
 from ..outcomes import OutcomeWindow
 from ..prefill import prefill_seconds, resident_prefill_seconds
-from .occupancy import SlotWaitHeadroom
+from .occupancy import SlotRefusals, SlotWaitHeadroom
 from .roles import RoleChanges
 
 log = logging.getLogger("narwhal.scheduler")
@@ -74,6 +74,9 @@ class GlobalScheduler:
         self.outcomes = OutcomeWindow(clock, outcome_bucket_s, outcome_retained_s)
         # TTFT budget kept free for a request admitted to wait for a decode slot.
         self.slot_headroom = SlotWaitHeadroom(clock)
+        # Requests refused for their decode slot wait, which the role controller counts as
+        # decode demand.
+        self.slot_refusals = SlotRefusals(clock)
         self.availability = EngineAvailability(
             monitor,
             clock,

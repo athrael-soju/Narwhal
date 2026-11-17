@@ -10,7 +10,7 @@ from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
 from .prefill import prefill_seconds, resident_prefill_seconds
-from .scheduler.occupancy import decode_occupancy
+from .scheduler.occupancy import decode_occupancy, decode_span
 
 # Projections reuse a waiting request's cache evidence checked within this many seconds.
 CACHE_RECHECK_S = 0.25
@@ -266,31 +266,41 @@ class SplitScorer:
         for row in waiting:
             self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
 
-    def decode_wait_ratios(self, decodes: Iterable[int]) -> tuple[tuple[int, float], ...]:
+    def decode_wait_ratios(
+        self, decodes: Iterable[int], refused_s: float = 0.0
+    ) -> tuple[tuple[int, float], ...]:
         """Return each decode engine count's largest slot wait over the remaining TTFT budget.
 
         Decode legs waiting for a seat inside their engine, waiting decode requests and requests
         in prefill before their decode leg is placed take the pool's slots in handoff order, as
         decode admission projects them. A request past its TTFT
-        deadline at handoff adds nothing. The measured handoff delay, scaled to each count, is a
-        floor over the TTFT target.
+        deadline at handoff adds nothing. The requests admission refused for their slot wait
+        within the last `refused_s` seconds follow them as requests that reach decode now with
+        their whole TTFT budget. The measured handoff delay, scaled to each count, is a floor
+        over the TTFT target.
         """
         current = len(self.monitor.pool(Role.DECODE))
         handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s
         queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
+        estimate = self.demand.output_estimator()
         occupancy = decode_occupancy(
             self.scheduler,
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
-            expected_output=self.demand.output_estimator(),
+            expected_output=estimate,
         )
+        refused = self.scheduler.slot_refusals.since(refused_s) if refused_s > 0 else []
         rows = []
         for decode in decodes:
             ratio = handoff / decode if decode > 0 else 0.0
             if occupancy is not None:
-                started, _ = occupancy.schedule(occupancy.slots * decode // len(occupancy.engines))
+                started, joined = occupancy.schedule(
+                    occupancy.slots * decode // len(occupancy.engines),
+                    tuple(decode_span(r, 0.0, occupancy.step, estimate) for r in refused),
+                )
                 ratio = max(
                     [
                         ratio,
+                        *(start / self.scheduler.slo.ttft_s for start, _, _ in joined),
                         *(
                             (start - ready) / (deadline - ready)
                             for (ready, _, _), (start, _, _), deadline in zip(
@@ -502,7 +512,8 @@ class SplitScorer:
             resident_decode_tokens=seated_tokens,
             resident_decode_requests=seated_requests,
             decode_wait_ratios=self.decode_wait_ratios(
-                len(instances) - prefill for prefill, _ in profile_options
+                (len(instances) - prefill for prefill, _ in profile_options),
+                refused_s=step_s or 0.0,
             ),
             pending_decode_tokens=sum(
                 input_len + output / 2.0 for input_len, output in pending_shapes

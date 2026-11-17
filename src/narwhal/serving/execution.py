@@ -325,6 +325,8 @@ async def _prepare_once(
                 ),
             )
             if check.refusal is not None:
+                if check.refusal == "slot_wait" and not retry:
+                    router.scheduler.slot_refusals.note(req)
                 raise PlacementRefused(priced, cause=check.refusal)
             state.slot_wait_first_s = (
                 priced + check.slot_wait_s if check.slot_wait_s > 0 and not retry else None
