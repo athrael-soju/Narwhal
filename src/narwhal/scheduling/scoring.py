@@ -275,9 +275,8 @@ class SplitScorer:
         in prefill before their decode leg is placed take the pool's slots in handoff order, as
         decode admission projects them. A request past its TTFT
         deadline at handoff adds nothing. The requests admission refused for their slot wait
-        within the last `refused_s` seconds follow them as requests that reach decode now with
-        their whole TTFT budget. The measured handoff delay, scaled to each count, is a floor
-        over the TTFT target.
+        within the last `refused_s` seconds follow them, each with its whole TTFT budget. The
+        measured handoff delay, scaled to each count, is a floor over the TTFT target.
         """
         current = len(self.monitor.pool(Role.DECODE))
         handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s
@@ -289,18 +288,20 @@ class SplitScorer:
             expected_output=estimate,
         )
         refused = self.scheduler.slot_refusals.since(refused_s) if refused_s > 0 else []
+        # A refused request takes its slot behind every admitted request.
+        last = max((first for first, _, _ in occupancy.queued), default=0.0) if occupancy else 0.0
         rows = []
         for decode in decodes:
             ratio = handoff / decode if decode > 0 else 0.0
             if occupancy is not None:
                 started, joined = occupancy.schedule(
                     occupancy.slots * decode // len(occupancy.engines),
-                    tuple(decode_span(r, 0.0, occupancy.step, estimate) for r in refused),
+                    tuple(decode_span(r, last, occupancy.step, estimate) for r in refused),
                 )
                 ratio = max(
                     [
                         ratio,
-                        *(start / self.scheduler.slo.ttft_s for start, _, _ in joined),
+                        *((start - last) / self.scheduler.slo.ttft_s for start, _, _ in joined),
                         *(
                             (start - ready) / (deadline - ready)
                             for (ready, _, _), (start, _, _), deadline in zip(

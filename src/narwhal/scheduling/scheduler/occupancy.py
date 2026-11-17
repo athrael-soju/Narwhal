@@ -141,7 +141,7 @@ class SlotWaitHeadroom:
         *,
         quantile: float = 0.99,
         window_s: float = 60.0,
-        max_samples: int = 512,
+        max_samples: int = 2048,
         min_samples: int = 16,
     ) -> None:
         self._clock = clock
