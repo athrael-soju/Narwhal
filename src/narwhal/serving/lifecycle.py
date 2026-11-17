@@ -51,6 +51,9 @@ class RequestLifecycle:
         self.queue_waits: dict[str, float] = {}
         # The latest prefill admission price and its parts.
         self.admission_price: dict[str, Any] | None = None
+        # Projected seconds from arrival to the first token of a first attempt admitted to wait
+        # for a decode slot, else None.
+        self.slot_wait_first_s: float | None = None
         self.owned: set[str] = set()
         self.terminal: str | None = None
         self.outcome: dict[str, Any] = {"error": None, "status": 200}

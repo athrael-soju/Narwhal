@@ -22,7 +22,7 @@ from ..engines.stream import (
     sse_token_ids,
 )
 from ..scheduling.prefill import prefill_seconds
-from ..scheduling.scheduler.occupancy import decode_occupancy, decode_refusal
+from ..scheduling.scheduler.occupancy import decode_check, decode_occupancy
 from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
@@ -52,6 +52,9 @@ if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
 
 T = TypeVar("T")
+
+# The largest share of the TTFT target kept free as decode slot-wait headroom.
+SLOT_HEADROOM_SHARE = 0.5
 
 
 @dataclass
@@ -306,7 +309,8 @@ async def _prepare_once(
             # A retry already passed the TTFT price; it rechecks decode as a fresh handoff.
             if not retry:
                 _check_ttft(state, priced)
-            check = decode_refusal(
+            own = (state.admission_price or {}).get("own_prefill_s")
+            check = decode_check(
                 router.scheduler,
                 req,
                 ready_s=router.scheduler.prefill_ready_s(req, prefill),
@@ -314,9 +318,17 @@ async def _prepare_once(
                 ttft_margin=router.cfg.admission_margin,
                 seats=decode_seat_map(router),
                 expected_output=router.controller.demand.output_estimator(),
+                # A concurrent connector's prefill leg runs once its decode leg holds a seat.
+                post_seat_s=own if own is not None and router.engines.kv.concurrent else 0.0,
+                slot_headroom_s=router.scheduler.slot_headroom.seconds(
+                    SLOT_HEADROOM_SHARE * router.cfg.slo.ttft_s
+                ),
             )
-            if check is not None:
-                raise PlacementRefused(priced, cause=check)
+            if check.refusal is not None:
+                raise PlacementRefused(priced, cause=check.refusal)
+            state.slot_wait_first_s = (
+                priced + check.slot_wait_s if check.slot_wait_s > 0 and not retry else None
+            )
         state.reserve(prefill)
 
     prefill = await _place(state, prefill=True, claim=admit_prefill)
@@ -570,6 +582,10 @@ async def _decode_attempt(
                         now = router._clock()
                         if state.first_at is None:
                             state.first_at = now
+                            if state.slot_wait_first_s is not None:
+                                router.scheduler.slot_headroom.note(
+                                    now - state.arrived - state.slot_wait_first_s
+                                )
                         state.last_at = now
                     for _ in range(n):
                         router.monitor.output_token(prepared.decode.iid, state.rid)

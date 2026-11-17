@@ -132,11 +132,14 @@ def meets_slo(request: Request, cost: Cost, *, slo: SLO, ttft_margin: float = 0.
 def prefill_load(
     inst: Instance, *, monitor: InstanceMonitor, profiles: ProfileStore, slo: SLO
 ) -> float:
-    """Return the larger of resident and last-interval prefill price, over the TTFT target."""
+    """Return the larger of resident and last-interval prefill price, over the TTFT target.
+
+    Both prices leave out a request whose decode leg waits for a seat.
+    """
     profile = profiles.get(inst.iid)
     if profile is None:
         return 0.0
-    resident = resident_prefill_seconds(profile, inst)
+    resident = monitor.running_prefill_seconds(inst.iid)
     return max(resident, monitor.mean_prefill_price(inst.iid)) / slo.ttft_s
 
 

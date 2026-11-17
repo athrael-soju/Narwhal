@@ -733,6 +733,44 @@ class MixedPressureTests(unittest.TestCase):
                 self.assertEqual(candidate.decode_requests_per_engine, 4 * residents / 5)
                 self.assertEqual(candidate.decode_profile_covered, covered)
 
+    def test_legs_waiting_for_a_seat_count_as_decode_queue_not_batch(self) -> None:
+        # Each engine runs 64 sequences, so 17 of its 81 legs wait inside it for a seat.
+        self._decode_overload(64, 81)
+        self.fleet.monitor.sequence_limit = lambda iid: 64
+        snapshot = self.fleet.controller.scorer.capture(
+            self.fleet.now,
+            Demand(0.1, 3.0, 30, 0),
+            utilization=0.8,
+            observed_load=(0.1, 1.0),
+        )
+        self.assertEqual(snapshot.resident_decode_requests, 4 * 64)
+        current, candidate = snapshot.score(2), snapshot.score(1)
+        self.assertEqual(candidate.decode_requests_per_engine, 4 * 64 / 5)
+        self.assertTrue(candidate.decode_profile_covered)
+        self.assertTrue(current.decode_profile_covered)
+        # The waiting legs raise the decode wait at four engines above the handoff floor.
+        floor = self.fleet.scheduler.handoff_s() * 4 / self.fleet.scheduler.slo.ttft_s
+        self.assertGreater(dict(snapshot.decode_wait_ratios)[4], floor / 4)
+        self.assertGreater(current.decode_queue_ratio, 0.0)
+
+    def test_requests_held_by_a_waiting_decode_leg_add_no_prefill_work(self) -> None:
+        self._decode_overload(64, 64)
+        self.fleet.monitor.sequence_limit = lambda iid: 64
+        base = self.fleet.controller.scorer.capture(
+            self.fleet.now, Demand(0.1, 3.0, 30, 0), utilization=0.8, observed_load=(0.1, 1.0)
+        )
+        for index in range(8):
+            leg = Request(f"gated{index}", 4_000)
+            self.fleet.monitor.dispatched("e1", leg)
+            leg.phase = Phase.DECODE
+            self.fleet.monitor.dispatched("e2", leg)
+        gated = self.fleet.controller.scorer.capture(
+            self.fleet.now, Demand(0.1, 3.0, 30, 0), utilization=0.8, observed_load=(0.1, 1.0)
+        )
+        self.assertEqual(gated.resident_prefill_s, base.resident_prefill_s)
+        self.assertEqual(gated.pending_decode_requests, base.pending_decode_requests + 8)
+        self.assertEqual(self.fleet.scheduler.prefill_load(self.fleet.monitor.instances["e1"]), 0)
+
     def test_decode_residents_past_the_profile_hold_the_move_toward_decode(self) -> None:
         self._decode_overload(48, 61)
         for _ in range(6):

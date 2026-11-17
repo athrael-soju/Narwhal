@@ -8,6 +8,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.client import EngineError
+from narwhal.scheduling.scheduler.occupancy import DecodeCheck
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.outcomes import OUTCOME_REASONS, error_response, failure_reason
 from narwhal.serving.policy import ServingPolicy
@@ -233,12 +234,12 @@ class OutcomeReasonTests(HttpHarness):
         )
         # A retry skips the TTFT price and refuses only on its decode check.
         self.prefill_statuses = [503]
-        checks = iter((None, "tpot"))
+        checks = iter((DecodeCheck(None), DecodeCheck("tpot")))
         with (
             patch.object(scheduler, "prefill_admission_price", return_value=0.0) as price,
             patch.object(scheduler, "cheapest_own_prefill", return_value=1),
             patch(
-                "narwhal.serving.execution.decode_refusal", side_effect=lambda *a, **k: next(checks)
+                "narwhal.serving.execution.decode_check", side_effect=lambda *a, **k: next(checks)
             ) as decode,
         ):
             self.assertEqual((await self.post(client)).status_code, 429)

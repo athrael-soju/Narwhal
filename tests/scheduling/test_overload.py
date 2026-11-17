@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 from narwhal.scheduling.prefill import prefill_seconds
 from narwhal.scheduling.scheduler.occupancy import (
+    SlotWaitHeadroom,
     decode_admits,
+    decode_check,
     decode_occupancy,
     decode_refusal,
     decode_span,
@@ -45,6 +47,8 @@ class PinnedPlacementTests(unittest.TestCase):
         scheduler = self.router(pinned=False).scheduler
         monitor = scheduler.monitor
         monitor.dispatched("e3", Request("r", 10, phase=Phase.DECODE))
+        # The drift score prices the legs past their first decode token.
+        monitor.output_token("e3", "r")
         inst = monitor.instances["e3"]
         expected = scheduler.profiles.get("e3").token_interval(inst.decode_tokens(), 1)
         for interval, gap, residual in ((expected, 20 * expected, 1.0), (0.0, 20 * expected, 20.0)):
@@ -387,6 +391,91 @@ class DecodeAdmissionTests(unittest.TestCase):
         ready, budget = self.ready(request), self.scheduler.slo.ttft_s
         self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
 
+    def seats(self):
+        """Attest the decode engine's sequence limit at its profiled maximum."""
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.scheduler.monitor.sequence_limit = lambda iid: limit
+        return limit
+
+    def test_a_leg_past_the_sequence_limit_takes_its_engines_next_seat(self):
+        limit = self.seats()
+        self.fill(limit - 1, wanted_len=2_000)
+        self.scheduler.monitor.dispatched(
+            "e3", Request("short", 10, phase=Phase.DECODE, wanted_len=100)
+        )
+        self.prefilling(1, input_len=8_000)
+        leg = self.seat("w", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        # The waiting leg's request starts its own prefill when the leg is seated.
+        own = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        hold = (0.0, own + 200 * occupancy.step, leg.input_len + 200)
+        self.assertEqual((len(occupancy.residents), occupancy.queued[0]), (limit, hold))
+        self.assertEqual(len(occupancy.queued), 2)
+        freed = occupancy.ends["e3", "short"]
+        self.assertAlmostEqual(freed, 100 * occupancy.step)
+        self.assertAlmostEqual(occupancy.ends["e3", "w"], freed + hold[1])
+        # A joining request follows the waiting leg onto the seat the leg frees.
+        request = Request("new", 10, wanted_len=1)
+        check = decode_check(self.scheduler, request, ttft_s=0.0, ttft_margin=1_000.0)
+        self.assertIsNone(check.refusal)
+        self.assertAlmostEqual(check.slot_wait_s, freed + hold[1])
+
+    def test_the_step_prices_the_seated_batch(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=2_000)
+        step = decode_occupancy(self.scheduler, 10).step
+        for index in range(limit):
+            self.seat(f"w{index}", 9_000, 200)
+        self.assertEqual(decode_occupancy(self.scheduler, 10).step, step)
+
+    def test_a_concurrent_prefill_follows_the_slot_wait(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=200)
+        step = decode_occupancy(self.scheduler, 10).step
+        request = Request("new", 10, wanted_len=1)
+        free = 200 * step
+        for ready, post, wait in (
+            (0.5, 0.0, free - 0.5),
+            (0.5, 0.25, free - 0.25),
+            (free + 1.0, 0.25, 0.0),
+            (free + 0.1, 0.25, 0.15),
+        ):
+            with self.subTest(ready=ready, post=post):
+                check = decode_check(
+                    self.scheduler, request, ready_s=ready, ttft_s=0.0, post_seat_s=post
+                )
+                self.assertAlmostEqual(check.slot_wait_s, wait)
+
+    def test_a_request_waiting_for_a_slot_keeps_the_headroom_free(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=20)
+        request = Request("new", 10, wanted_len=1)
+        wait = decode_check(self.scheduler, request, ttft_s=0.0).slot_wait_s
+        ttft = self.scheduler.slo.ttft_s - wait - 0.1
+        self.assertGreater(ttft, 0.0)
+        for headroom, refusal in ((0.0, None), (0.09, None), (0.11, "slot_wait")):
+            with self.subTest(headroom=headroom):
+                self.assertEqual(
+                    decode_refusal(self.scheduler, request, ttft_s=ttft, slot_headroom_s=headroom),
+                    refusal,
+                )
+        # A request that takes a free slot keeps its whole budget.
+        self.scheduler.monitor.finished("e3", "d0")
+        self.assertIsNone(
+            decode_refusal(
+                self.scheduler, request, ttft_s=self.scheduler.slo.ttft_s, slot_headroom_s=1.0
+            )
+        )
+
+    def test_the_tpot_check_seats_the_request_beside_the_engines_other_seats(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=2_000)
+        self.scheduler.monitor.instances["e3"].decode["d0"].wanted_len = 1
+        for index in range(3):
+            self.seat(f"w{index}", 10, 2_000)
+        request = Request("new", 10, wanted_len=1)
+        self.assertIsNone(decode_refusal(self.scheduler, request, ttft_s=0.0, ttft_margin=1_000.0))
+
     def test_a_request_in_prefill_without_a_decode_leg_queues_from_its_prefill_completion(self):
         limit = self.scheduler.profiles.get("e3").decode_max_requests
         self.fill(limit - 2, wanted_len=2_000)
@@ -601,3 +690,31 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
         self.scheduler.eject("e3", "liveness")
         self.assertTrue(decode_admits(self.scheduler, self.request))
+
+
+class SlotWaitHeadroomTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0.0
+        self.headroom = SlotWaitHeadroom(lambda: self.now, min_samples=4)
+
+    def test_the_headroom_is_a_high_quantile_of_recent_lateness(self):
+        for late in (0.3, -0.1, 0.1):
+            self.headroom.note(late)
+        self.assertEqual(self.headroom.seconds(), 0.0)
+        for index in range(97):
+            self.headroom.note(index / 1000)
+        self.assertAlmostEqual(self.headroom.seconds(), 0.094)
+        self.assertEqual(self.headroom.seconds(0.05), 0.05)
+
+    def test_early_first_tokens_leave_no_headroom(self):
+        for _ in range(8):
+            self.headroom.note(-0.2)
+        self.assertEqual(self.headroom.seconds(), 0.0)
+
+    def test_samples_leave_after_the_window(self):
+        for _ in range(8):
+            self.headroom.note(0.2)
+        self.now = 59.0
+        self.assertEqual(self.headroom.seconds(), 0.2)
+        self.now = 61.0
+        self.assertEqual(self.headroom.seconds(), 0.0)

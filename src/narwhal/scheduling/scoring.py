@@ -269,8 +269,9 @@ class SplitScorer:
     def decode_wait_ratios(self, decodes: Iterable[int]) -> tuple[tuple[int, float], ...]:
         """Return each decode engine count's largest slot wait over the remaining TTFT budget.
 
-        Waiting decode requests and requests in prefill before their decode leg is placed take the
-        pool's slots in handoff order, as decode admission projects them. A request past its TTFT
+        Decode legs waiting for a seat inside their engine, waiting decode requests and requests
+        in prefill before their decode leg is placed take the pool's slots in handoff order, as
+        decode admission projects them. A request past its TTFT
         deadline at handoff adds nothing. The measured handoff delay, scaled to each count, is a
         floor over the TTFT target.
         """
@@ -411,15 +412,22 @@ class SplitScorer:
         waiting = tuple(self.monitor.waiting.values())
         resident_prefill = 0.0
         resident_covered = True
+        # Each engine batches its seated decode legs. A leg past the engine's sequence limit
+        # waits inside the engine, and its request's prefill starts when the leg is seated.
+        seat_waiting = self.monitor.seat_waiting()
+        seated_requests, seated_tokens = 0, 0
         for inst in instances:
             profile = self.scheduler.profiles.get(inst.iid)
-            if profile is not None:
-                resident_prefill += resident_prefill_seconds(profile, inst)
+            resident_prefill += self.monitor.running_prefill_seconds(inst.iid, seat_waiting)
             if inst.decode:
+                seated = self.monitor.seat_legs(inst.iid)[0]
+                tokens = sum(leg.length for leg in seated)
+                seated_requests += len(seated)
+                seated_tokens += tokens
                 resident_covered = (
                     resident_covered
                     and profile is not None
-                    and (profile.covers_decode(len(inst.decode), inst.decode_tokens()))
+                    and profile.covers_decode(len(seated), tokens)
                 )
         queued_prefill = 0.0
         if prefill_profiles:
@@ -491,8 +499,8 @@ class SplitScorer:
             prefill_pressure=observed_load[0],
             decode_pressure=observed_load[1],
             resident_prefill_s=resident_prefill,
-            resident_decode_tokens=sum(i.decode_tokens() for i in instances),
-            resident_decode_requests=sum(len(i.decode) for i in instances),
+            resident_decode_tokens=seated_tokens,
+            resident_decode_requests=seated_requests,
             decode_wait_ratios=self.decode_wait_ratios(
                 len(instances) - prefill for prefill, _ in profile_options
             ),

@@ -211,6 +211,7 @@ class NarwhalRouter:
         # Engine ID to the sequence limit, the KV producer lease in seconds and the launch
         # record from its verified attestation.
         self.sequence_limits: dict[str, int] = {}
+        self.monitor.sequence_limit = lambda iid: self.sequence_limits.get(iid, 0)
         self.kv_leases: dict[str, int] = {}
         self.launches: dict[str, dict[str, Any]] = {}
         self.unsized_offered = 0

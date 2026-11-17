@@ -12,7 +12,7 @@ from unittest.mock import patch
 import httpx
 
 from narwhal.engines.prefix import CacheNamespace
-from narwhal.scheduling.scheduler.occupancy import decode_refusal
+from narwhal.scheduling.scheduler.occupancy import DecodeCheck, decode_check
 from narwhal.serving import execution
 from narwhal.serving.admission import PlacementRefused
 from narwhal.serving.app import create_app
@@ -436,7 +436,7 @@ class HttpAccountingTests(HttpHarness):
         prefill = next(i for i in self.router.monitor.instances.values() if i.role is Role.PREFILL)
         self.router.monitor.dispatched(prefill.iid, Request("queued", 1_000))
         with (
-            patch.object(execution, "decode_refusal", wraps=decode_refusal) as gate,
+            patch.object(execution, "decode_check", wraps=decode_check) as gate,
             patch.object(scheduler.health, "probation_set", return_value={prefill.iid}),
         ):
             self.assertEqual((await self.post(client)).status_code, 200)
@@ -449,6 +449,22 @@ class HttpAccountingTests(HttpHarness):
         self.assertGreaterEqual(gate.call_args.kwargs["ttft_s"], priced)
         self.assertEqual(gate.call_args.kwargs["ttft_margin"], self.cfg.admission_margin)
         self.assertEqual(gate.call_args.kwargs["expected_output"](request), 1)
+        # A sequential connector's prefill runs before the decode leg needs its slot.
+        self.assertEqual(gate.call_args.kwargs["post_seat_s"], 0.0)
+        self.assertEqual(gate.call_args.kwargs["slot_headroom_s"], 0.0)
+
+    async def test_a_first_token_after_a_slot_wait_sizes_the_slot_headroom(self):
+        self.cfg.admission = "predictive"
+        client = self.client()
+        samples = self.router.scheduler.slot_headroom._samples
+        for wait, noted in ((0.0, 0), (0.25, 1)):
+            with self.subTest(wait=wait):
+                with patch.object(execution, "decode_check", return_value=DecodeCheck(None, wait)):
+                    self.assertEqual((await self.post(client)).status_code, 200)
+                self.assertEqual(len(samples), noted)
+        # The first token came sooner than the price plus the projected slot wait.
+        self.assertLess(samples[0][1], 0.0)
+        self.assertGreater(samples[0][1], -1.0)
 
     async def test_invalid_output_identity_fails_the_original_request(self):
         """Serving rejects unidentified output before committing a successful response."""
