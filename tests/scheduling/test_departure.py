@@ -489,6 +489,22 @@ class SurgeTests(unittest.TestCase):
         ControllerDecisionOut.model_validate({k: v for k, v in move.items() if k != "event"})
 
 
+class ConfirmationCountTests(unittest.TestCase):
+    def test_the_same_move_under_another_rule_keeps_its_count(self):
+        policy = ReactivePolicy()
+        self.assertEqual(policy._confirm((3, False, "source_shrink")), 1)
+        self.assertEqual(policy._confirm((3, False, "mixed_pressure")), 2)
+        self.assertEqual(policy._confirm((3, False, "mixed_pressure")), 3)
+        self.assertEqual(policy.proposal, (3, False, "mixed_pressure"))
+
+    def test_a_new_split_or_demand_completeness_restarts_the_count(self):
+        policy = ReactivePolicy()
+        policy._confirm((3, False, "source_shrink"))
+        policy._confirm((3, False, "source_shrink"))
+        self.assertEqual(policy._confirm((2, False, "source_shrink")), 1)
+        self.assertEqual(policy._confirm((2, True, "source_shrink")), 1)
+
+
 class StandingDrainTests(unittest.TestCase):
     """An approved move to decode stands while its donor drains, until a check ends it."""
 

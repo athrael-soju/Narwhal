@@ -597,11 +597,8 @@ class ReactivePolicy:
         if drain is not None:
             # The approved move keeps its confirmations while its donor drains.
             confirmations = self.confirmations = drain.confirmations
-        elif proposal != self.proposal:
-            self.proposal = proposal
-            self.confirmations = 1
         else:
-            self.confirmations += 1
+            self._confirm(proposal)
         details["confirmations"] = self.confirmations
         details["required_confirmations"] = confirmations
         if self.confirmations < confirmations:
@@ -645,6 +642,18 @@ class ReactivePolicy:
             # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)
         return moved
+
+    def _confirm(self, proposal: tuple[int, bool, str]) -> int:
+        """Count a confirmation of `proposal`; a new split or demand completeness restarts at 1.
+
+        The same move under another eligibility rule keeps its count.
+        """
+        if self.proposal is not None and proposal[:2] == self.proposal[:2]:
+            self.confirmations += 1
+        else:
+            self.confirmations = 1
+        self.proposal = proposal
+        return self.confirmations
 
     def _standing_drain(
         self,

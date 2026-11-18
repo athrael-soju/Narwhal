@@ -633,8 +633,9 @@ Any of these resets the confirmation sequence:
 
 - a change in the proposed split
 - a change in demand completeness
-- a change in the eligibility rule
 - a failed eligibility check
+
+A change in the eligibility rule keeps the count. The move then needs the confirmations of its latest rule.
 
 Prefill-to-decode moves require:
 
