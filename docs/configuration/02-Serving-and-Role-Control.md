@@ -57,7 +57,7 @@ An engine seats its decode legs in placement order, up to its attested sequence 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
 | Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot. On SGLang, the request's own prefill runs after its slot starts, so the slot wait runs from when that prefill can start |
-| Slot-wait headroom | The 95th percentile of how much later than projected the first token arrived, over the requests admitted with a slot wait in the last 60 seconds, at most 512. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
+| Slot-wait headroom | The 99th percentile of how much later than projected the first token arrived, over the latest 2,048 requests admitted with a slot wait in the last 60 seconds. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
 | Projected TTFT | Time since arrival plus the prefill placement price, including queueing               |
 | Request KV     | Key-value (KV) tokens for the prompt plus delivered and remaining output              |
 | Output cap     | `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset        |
