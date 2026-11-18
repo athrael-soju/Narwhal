@@ -46,15 +46,18 @@ The check admits the request outright when the fleet has zero live decode engine
 
 Each request holds one slot. The pool's slot count is the sum of each live decode engine's [decode seats](#engine-seats).
 
+An engine seats its decode legs in placement order, up to its attested sequence limit. A leg placed past the limit waits inside the engine for a seat, and on SGLang its request's prefill starts when the leg is seated.
+
 | Request                                          | Reaches decode                                        | Holds a slot                                                                                                                   |
 | ------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Request in decode                                | Now, or on SGLang at its predicted prefill completion | From now until its projected last token                                                                                        |
-| Request waiting for a decode slot                | Now                                                   | From the earliest free slot until its projected last token, which on SGLang includes its predicted prefill time from that slot |
+| Request seated in decode                         | Now, or on SGLang at its predicted prefill completion | From now until its projected last token                                                                                        |
+| Request waiting for a decode slot or a seat      | Now                                                   | From the earliest free slot until its projected last token, which on SGLang includes its predicted prefill time from that slot |
 | Other request in prefill, or the checked request | At its predicted prefill completion                   | From the earliest free slot after it reaches decode until its projected last token                                             |
 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
-| Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot |
+| Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot. On SGLang, the request's own prefill runs after its slot starts, so the slot wait runs from when that prefill can start |
+| Slot-wait headroom | The 95th percentile of how much later than projected the first token arrived, over the requests admitted with a slot wait in the last 60 seconds, at most 512. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
 | Projected TTFT | Time since arrival plus the prefill placement price, including queueing               |
 | Request KV     | Key-value (KV) tokens for the prompt plus delivered and remaining output              |
 | Output cap     | `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset        |
@@ -93,9 +96,9 @@ The check admits the request when all three of these pass:
 
 | Check     | Passes when                                                                                                                                                                                                                                  |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics)                                                                            |
+| Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait and the slot-wait headroom fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics)                                                                            |
 | KV tokens | Peak request KV during the checked request's hold fits the sum of the live decode engines' [decode KV token bounds](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request is alone in decode during its hold |
-| TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents whose projected last token falls after that start, or the request misses `slo.tpot_s` on every idle decode engine                               |
+| TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents whose projected last token falls after that start, up to the engine's other seats, or the request misses `slo.tpot_s` on every idle decode engine                               |
 
 #### Retry pricing
 
@@ -422,7 +425,8 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 | Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream.   |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
-| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
+| Predicted prefill work                        | The profiled prefill time of the engine's resident requests. A request whose decode leg [waits inside an engine for a seat](#decode-admission-check) adds none. |
+| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. |
 
 When the corrected idle floor reaches the TPOT target, decode load is the raw interval-to-target ratio.
 
@@ -456,7 +460,7 @@ Both floor recoveries:
 
 A decode-to-prefill move requires:
 
-- the new split and resident decode batches inside the profile's decode domain
+- the new split and resident decode batches inside the profile's decode domain, counting each engine's seated decode legs
 - KV capacity for the resident work
 
 ### Advisory rollout
@@ -489,7 +493,7 @@ The worst projected SLO ratio of a split is the largest of its projected TTFT, T
 The decode queueing ratio projects the slots of the [decode admission check](#decode-admission-check) onto the split's decode engines:
 
 ```text
-max over requests waiting for a decode slot and requests in prefill before their decode leg is placed:
+max over requests waiting for a decode slot or a seat and requests in prefill before their decode leg is placed:
   slot wait / (slo.ttft_s - time since arrival - time until the request reaches decode)
 ```
 

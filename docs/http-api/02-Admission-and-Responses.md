@@ -26,7 +26,7 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | Projected TTFT exceeds the budget for a prompt that fits alone, at prefill placement or during an admission-seat or prefill-seat wait | `429` | `server_overloaded_error` | | Placement price minus the budget in seconds, excluding the time the request has waited, rounded up, minimum `1` |
 | Prompt alone exceeds the TTFT budget | `429` | `server_overloaded_error` | | |
 | Zero prefill engines are live and the decode target holds resident decode work | `429` | `server_overloaded_error` | | `1` |
-| The projected TTFT plus the projected [decode slot wait](../configuration/02-Serving-and-Role-Control.md#decode-admission-check) exceeds the budget | `429` | `server_overloaded_error` | | `1` |
+| The projected TTFT plus the projected [decode slot wait](../configuration/02-Serving-and-Role-Control.md#decode-admission-check) and its headroom exceeds the budget | `429` | `server_overloaded_error` | | `1` |
 | The peak KV tokens projected in decode during the request's decode hold exceed live decode capacity | `429` | `server_overloaded_error` | | `1` |
 | Decode load pushes the request past `slo.tpot_s` on every live decode engine | `429` | `server_overloaded_error` | | `1` |
 | Zero engines are live while the router holds its lease, with engine monitoring healthy and no lifecycle hold | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
