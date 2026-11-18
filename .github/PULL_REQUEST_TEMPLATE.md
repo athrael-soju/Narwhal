@@ -6,6 +6,10 @@ For milestone work, target the branch in [Milestone delivery](https://github.com
 
 ## Checks
 
+- [ ] Run CI
+
+Tick **Run CI** to start the remote CI. It runs again on each push while the box stays ticked.
+
 List the checks you ran, their results, live fleet checks, and pending checks.
 
 Keep hardware/model selections and raw evidence in private execution records. Include a sanitized evidence reference when applicable.
