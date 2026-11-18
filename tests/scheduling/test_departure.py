@@ -327,6 +327,20 @@ class Sim:
         self.telemetry.stop()
 
 
+class OverloadOnsetTests(unittest.TestCase):
+    """A jump to sustained decode overload moves an engine to decode within two steps."""
+
+    def test_the_confirmation_span_shows_decode_overload_before_the_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.run(60, (512, 64, 2.0))
+            sim.run(30, (512, 256, 30.0))
+            sim.close()
+        [first, *_] = [d for d in sim.decisions if d["result"] == "applied"]
+        self.assertEqual((first["current_prefill"], first["prefill"]), (4, 3))
+        self.assertLessEqual(first["at"], 70.0)
+
+
 class SustainedShiftTests(unittest.TestCase):
     """A settled fleet moves its first engine within 30 s of a sustained shift."""
 
@@ -820,8 +834,8 @@ class SwitchDrainTests(unittest.TestCase):
     def test_router_side_switches_move_at_approval(self):
         with tempfile.TemporaryDirectory() as directory:
             sim = self.approve(directory, requires_idle=False)
-        move = sim.decisions[-1]
-        self.assertEqual((move["result"], move["prefill"]), ("applied", 3))
+        [move] = [d for d in sim.decisions if d.get("current_prefill") == 4 and d["prefill"] == 3]
+        self.assertEqual(move["result"], "applied")
         self.assertEqual([f.to for f in sim.scheduler.roles.flips], [Role.DECODE])
         self.assertEqual(sim.scheduler.held_for_switch(), set())
 

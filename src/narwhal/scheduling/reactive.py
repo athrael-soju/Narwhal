@@ -276,6 +276,14 @@ class ReactivePolicy:
         departure = self.departure
         short_current = short.current if short is not None else current
         short_demand = short.demand if short is not None else demand
+        # A move toward decode prices current decode pressure at the larger of the window and
+        # confirmation-span estimates, as it prices the source's prefill pressure.
+        decode_need = max(
+            current.tpot_ratio,
+            current.decode_queue_ratio,
+            short_current.tpot_ratio,
+            short_current.decode_queue_ratio,
+        )
         # After its first move, an open departure holds the reverse move.
         held_reverse = {
             candidate.prefill
@@ -365,8 +373,7 @@ class ReactivePolicy:
                         departure is None
                         and candidate.prefill < current_p
                         and candidate.ttft_ratio > controller.scheduler.th.shrink
-                        and max(current.tpot_ratio, current.decode_queue_ratio)
-                        >= controller.scheduler.th.expand
+                        and decode_need >= controller.scheduler.th.expand
                     )
                 ),
                 controller.within_floors(candidate.prefill),
@@ -561,11 +568,7 @@ class ReactivePolicy:
         direction = 1 if candidate_p > current_p else -1
         details = describe(chosen)
         details["eligibility_rule"] = eligibility_rule
-        destination_ratio = (
-            current.ttft_ratio
-            if direction > 0
-            else max(current.tpot_ratio, current.decode_queue_ratio)
-        )
+        destination_ratio = current.ttft_ratio if direction > 0 else decode_need
         # A move from a source above shrink requires repeated pressure, even with complete demand.
         # The settled run confirms a departure.
         confirmations = (

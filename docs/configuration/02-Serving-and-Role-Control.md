@@ -537,7 +537,7 @@ The `mixed_pressure` rule moves one engine when all of these hold:
 
 - projected source load is above `controller.thresholds.shrink`
 - for a move to prefill, the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
-- for a move to decode, the current split's projected decode load is at or above `controller.thresholds.expand` and no departure is open
+- for a move to decode, the current split's projected decode load on window or confirmation-span demand is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile
 - the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
 
@@ -618,7 +618,7 @@ One confirmation is enough in three cases:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
   - the eligibility rule is `source_shrink`
   - the projected source load is at or below `controller.thresholds.shrink`
-  - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`
+  - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`, on window or confirmation-span demand for a move to decode
 
 Every other move needs this many confirmations:
 
