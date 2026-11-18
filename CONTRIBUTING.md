@@ -81,7 +81,7 @@ make test TEST_ARGS='-k failover -v'
 
 `make unit` and `make check` always run the full unit suite and ignore `TEST_ARGS`, including any value set in the environment.
 
-You can start the remote CI either from GitHub Actions or with `gh workflow run ci.yml --ref <branch>`, replacing `<branch>` with the branch name. Release automation dispatches the same suite for release PRs.
+To run the remote CI on a pull request, tick **Run CI** in its description. The suite starts when you tick the box and runs again on each push while the box stays ticked. You can also start it from GitHub Actions or with `gh workflow run ci.yml --ref <branch>`, replacing `<branch>` with the branch name. Release automation dispatches the same suite for release PRs.
 
 On the GitHub-hosted runners, the suite covers:
 
