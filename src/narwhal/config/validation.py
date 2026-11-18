@@ -90,9 +90,9 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         problems.append(
             f"serving.admission must be 'predictive' or 'open', got {config.admission!r}"
         )
-    if config.admission_margin < 0:
+    if config.admission_margin <= -1:
         problems.append(
-            f"serving.admission_margin must be nonnegative, got {config.admission_margin}"
+            f"serving.admission_margin must be greater than -1, got {config.admission_margin}"
         )
     if config.failure_quarantine_s < 0:
         problems.append(

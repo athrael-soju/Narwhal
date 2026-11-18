@@ -122,7 +122,7 @@ def _decode_price(
 def meets_slo(request: Request, cost: Cost, *, slo: SLO, ttft_margin: float = 0.0) -> bool:
     """Return whether the placement price fits its phase budget.
 
-    The prefill TTFT budget widens by `ttft_margin`.
+    The prefill TTFT budget scales by `1 + ttft_margin`.
     """
     if request.phase is Phase.PREFILL:
         return cost[1] <= slo.ttft_s * (1.0 + ttft_margin)

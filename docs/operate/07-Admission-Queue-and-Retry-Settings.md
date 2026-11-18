@@ -16,6 +16,7 @@ Restart the router after changing a fleet setting.
 - Use open admission for an in-flight sweep or another measurement without predictive refusals.
 - Compare `price_s` with `ttft_s` on completed journal rows before relying on predictive admission. Remeasure the [engine profiles](../measure/01-Profile.md) when the median ratio is materially above or below 1.
 - Raise `serving.admission_margin` only when you accept first tokens beyond `slo.ttft_s`.
+- Lower `serving.admission_margin` below zero when clients count first tokens late that the journal records within `slo.ttft_s`. A margin of `-0.25` admits a request only when its price fits within 75% of the target.
 
 ## Queue
 
