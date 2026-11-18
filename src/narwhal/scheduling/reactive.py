@@ -372,7 +372,14 @@ class ReactivePolicy:
                     or (
                         departure is None
                         and candidate.prefill < current_p
-                        and candidate.ttft_ratio > controller.scheduler.th.shrink
+                        # Window source load above shrink, or confirmation-span source load
+                        # above shrink and within expand: a rising burst past expand holds.
+                        and (
+                            candidate.ttft_ratio > controller.scheduler.th.shrink
+                            or controller.scheduler.th.shrink
+                            < short_ttft.get(candidate.prefill, 0.0)
+                            <= controller.scheduler.th.expand
+                        )
                         and decode_need >= controller.scheduler.th.expand
                     )
                 ),

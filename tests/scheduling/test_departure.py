@@ -340,6 +340,19 @@ class OverloadOnsetTests(unittest.TestCase):
         self.assertEqual((first["current_prefill"], first["prefill"]), (4, 3))
         self.assertLessEqual(first["at"], 70.0)
 
+    def test_a_source_loaded_on_the_confirmation_span_counts_as_mixed_pressure(self):
+        # The window still reads the prefill source below shrink while the confirmation span
+        # reads it above; decode overload then moves an engine under mixed pressure.
+        with tempfile.TemporaryDirectory() as directory:
+            sim = Sim(directory, prefill=4)
+            sim.run(60, (512, 64, 2.0))
+            sim.run(40, (2048, 256, 18.0))
+            sim.close()
+        [first, *_] = [d for d in sim.decisions if d["result"] == "applied"]
+        self.assertEqual((first["current_prefill"], first["prefill"]), (4, 3))
+        self.assertEqual(first["eligibility_rule"], "mixed_pressure")
+        self.assertLessEqual(first["at"], 90.0)
+
 
 class SustainedShiftTests(unittest.TestCase):
     """A settled fleet moves its first engine within 30 s of a sustained shift."""
@@ -649,12 +662,13 @@ class SwitchDrainTests(unittest.TestCase):
         self.assertEqual((move["result"], move["prefill"]), ("applied", 3))
         self.assertEqual(move["eligibility_rule"], "source_shrink")
         self.assertEqual(move["confirmations"], move["required_confirmations"])
-        # The filled confirmation span prices the new split above shrink and within expand.
+        # The filled confirmation span prices the new split above shrink and within expand,
+        # which with decode above expand is mixed pressure.
         th = sim.scheduler.th
         ratio = move["steady_prefill_work"] / (3 * sim.controller.utilization)
         self.assertGreater(ratio, th.shrink)
         self.assertLessEqual(ratio, th.expand)
-        self.assertFalse(move["source_pressure_safe"])
+        self.assertTrue(move["source_pressure_safe"])
         self.assertEqual([(f.iid, f.to) for f in sim.scheduler.roles.flips], [(donor, Role.DECODE)])
         self.assertEqual(sim.scheduler.held_for_switch(), set())
         self.assertIsNone(sim.controller.reactive.drain)
@@ -787,8 +801,10 @@ class SwitchDrainTests(unittest.TestCase):
     def test_the_approval_lapses_after_the_hold_span(self):
         with tempfile.TemporaryDirectory() as directory:
             sim = self.approve(directory)
-            # The donor still runs its prefill.
+            # The donor still runs its prefill. Decode load below expand leaves the move to
+            # source_shrink, which the filled confirmation span blocks.
             self.held(sim)
+            sim.scheduler.th = replace(sim.scheduler.th, expand=10.0)
             sim.run(15, DECODE_RAMP)
             asked = sim.decisions[-3:]
             sim.run(5, DECODE_RAMP)

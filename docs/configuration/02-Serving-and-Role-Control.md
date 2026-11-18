@@ -535,7 +535,7 @@ Triggering this move cancels any pending moves to decode.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
-- projected source load is above `controller.thresholds.shrink`
+- projected source load is above `controller.thresholds.shrink`; for a move to decode, on window demand, or on confirmation-span demand while it stays at or below `controller.thresholds.expand`
 - for a move to prefill, the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
 - for a move to decode, the current split's projected decode load on window or confirmation-span demand is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile
