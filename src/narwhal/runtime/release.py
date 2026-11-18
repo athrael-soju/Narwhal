@@ -125,6 +125,7 @@ async def release_round(
         if not others:
             return "no producer"
         producer = others[(index + shift) % len(others)]
+        router.monitor.sent(producer.iid, consumer_iid)
         result = await router.engines.probe_inference(
             url,
             prefill_url=producer.url,

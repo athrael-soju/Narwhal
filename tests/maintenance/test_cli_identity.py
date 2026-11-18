@@ -11,6 +11,8 @@ from importlib import metadata
 from pathlib import Path
 from unittest import mock
 
+from narwhal import cli_support
+
 ROOT = Path(__file__).resolve().parents[2]
 COMMANDS = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"]
 
@@ -84,6 +86,19 @@ class CLIIdentityTests(unittest.TestCase):
                     self.assertEqual(stdout.getvalue(), f"narwhal-inference {value}\n")
                     self.assertEqual(stderr.getvalue(), "")
                     version.assert_called_once_with("narwhal-inference")
+
+    def test_version_names_the_commit_of_an_install_from_a_repository(self):
+        recorded = (
+            '{"url": "https://example.invalid/narwhal", "vcs_info": {"commit_id": "fb3821b2'
+            + "0" * 32
+            + '"}}'
+        )
+        distribution = mock.Mock(read_text=mock.Mock(return_value=recorded))
+        with mock.patch("narwhal.cli_support.metadata.distribution", return_value=distribution):
+            self.assertEqual(cli_support._commit(), " (fb3821b2)")
+        distribution.read_text.return_value = '{"dir_info": {"editable": true}}'
+        with mock.patch("narwhal.cli_support.metadata.distribution", return_value=distribution):
+            self.assertEqual(cli_support._commit(), "")
 
     def test_help_and_version_import_each_entry_point_on_cpu(self):
         script = """

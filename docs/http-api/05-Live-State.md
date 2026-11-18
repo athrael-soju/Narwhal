@@ -28,7 +28,7 @@ The state document carries these top-level fields:
 | `cancelled`               | Requests whose client disconnected                                                                            |
 | `invalid_requests`        | Requests refused with HTTP `400`, `404`, or `413` before admission                                            |
 | `controller`              | Active role controller, `reactive`                                                                            |
-| `token_accounting`        | `token_ids` when the engines supply token IDs, otherwise `unavailable`                                        |
+| `token_accounting`        | `token_ids` when the engines supply token IDs, `reported` when their streams report each reply's output token count, otherwise `unavailable` |
 | `control`                 | Role-controller mode and decision counts                                                                      |
 | `monitoring`              | Timing and failure state of the engine monitoring loop                                                        |
 | `ha`                      | High-availability state: readiness, standby status, lease, and failover block                                 |
@@ -289,6 +289,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `served_after_retry`       | Completed requests whose final attempt followed a failed one                                  |
 | `attempt_failures`         | Failed attempts as `phase`, `reason`, and `count` rows                                        |
 | `decode_tokens_observed`   | Decode tokens the router observed                                                             |
+| `output_tokens`            | Measured output tokens of completed requests                                                  |
 | `upstream_seconds`         | Total time in engine HTTP calls by phase, across all attempts                                 |
 
 ## Scheduler and controller state

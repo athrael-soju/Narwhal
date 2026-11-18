@@ -136,7 +136,7 @@ The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`
 
 Use the same authentication mode for workload measurement and production serving.
 
-`engine.backend` is `"vllm"`, the default, or `"sglang"`. `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang.
+`engine.backend` is `"vllm"`, the default, `"sglang"`, or `"llamacpp"` for a [development fleet of llama.cpp engines](../dev/Llama-Cpp-Engines.md). `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang, `"slot-file"` and `"llamacpp"` on llama.cpp.
 
 
 ## Profile validation

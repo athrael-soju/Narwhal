@@ -5,7 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from .control import render_controller, render_decode_floor, render_demand
-from .engines import render_availability, render_health, render_roles, render_work
+from .engines import (
+    render_availability,
+    render_health,
+    render_requests,
+    render_roles,
+    render_work,
+)
 from .exposition import Histogram, render_histograms
 from .runtime import render_runtime
 from .traffic import render_admission, render_outcomes, render_refusals, render_slo
@@ -17,8 +23,9 @@ def render(
     tpot: Histogram,
     seat: Histogram | None = None,
     queue_wait: Mapping[str, Histogram] | None = None,
+    requests: Mapping[str, int] | None = None,
 ) -> str:
-    """Render a `/narwhal/state` snapshot plus the latency histograms."""
+    """Render a `/narwhal/state` snapshot plus the latency histograms and request counts."""
     out: list[str] = []
     out += render_admission(state)
     out += render_runtime(state)
@@ -30,6 +37,8 @@ def render(
     out += render_availability(state)
     out += render_controller(state)
     out += render_work(state)
+    if requests is not None:
+        out += render_requests(requests)
     out += render_slo(state)
     out += ttft.render("narwhal_ttft_seconds", "Router arrival to prefill completion")
     out += tpot.render(

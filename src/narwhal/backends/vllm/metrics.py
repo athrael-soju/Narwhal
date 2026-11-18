@@ -37,6 +37,11 @@ class VllmMetrics(EngineMetrics):
             "sum by(iid) (rate(vllm:prompt_tokens_total{@sel}[$__rate_interval]))"
         ),
         "output_tokens": "sum by(iid) (rate(vllm:generation_tokens_total{@sel}[$__rate_interval]))",
+        # A counter that moves whenever the engine computes prompt tokens or generates output.
+        "processed_tokens": (
+            'sum by(iid) ({__name__=~"vllm:prompt_tokens_total|vllm:prompt_tokens_by_source_total'
+            '|vllm:generation_tokens_total",@sel})'
+        ),
     }
 
     def prefix_cache_hits(self, metrics: str) -> int | None:

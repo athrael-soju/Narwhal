@@ -14,7 +14,7 @@ from ...config import FleetConfig
 from ...config.model import CONTRACT_LAYOUT_FLAGS
 from ...engines.attestation import fetch_spec_identity, verify_attestation
 from ...engines.validation import validation_pairs
-from ...profiling.generation import binding_digest, generation_problem
+from ...profiling.generation import binding_digest, bound_profiles, generation_problem
 from ...profiling.store import ProfileStore
 from .report import Report
 
@@ -187,7 +187,7 @@ async def check_directed_evidence(
             current = await pair_snapshot(cfg, iid)
             if not same_generation(before, current):
                 generation_failures.add(f"{iid} process changed after directed KV probes")
-            for profile in store.profiles_for_engine(iid):
+            for profile in bound_profiles(store, iid):
                 problem = generation_problem(
                     iid,
                     profile.generation_digest,

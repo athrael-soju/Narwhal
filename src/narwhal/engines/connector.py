@@ -5,10 +5,33 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, Protocol
 
 
 class HandoffExpired(Exception): ...
+
+
+class HandoffStepError(Exception):
+    """An engine refused or failed a handoff step that the router runs outside the two legs."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(f"handoff step failed ({status}): {detail[:240]}")
+        self.status = status
+        self.detail = detail
+
+
+class EngineCalls(Protocol):
+    """The engine requests a staged handoff makes; each raises HandoffStepError on a non-200."""
+
+    async def get(self, url: str, path: str, *, timeout_s: float) -> dict[str, Any]: ...
+
+    async def post(
+        self, url: str, path: str, body: dict[str, Any], *, timeout_s: float
+    ) -> dict[str, Any]: ...
+
+
+# The leg a staged handoff step belongs to.
+HandoffPhase = Literal["prefill", "decode"]
 
 
 @dataclass(frozen=True)
@@ -46,12 +69,55 @@ class KvHandoff(ABC):
     # Handoff fields that transfer diagnostics record for each pair.
     diagnostics_fields: ClassVar[tuple[str, ...]] = ()
 
+    # True when the router runs the steps below on the engines around a sequential handoff's legs.
+    staged: ClassVar[bool] = False
+
     @property
     def concurrent(self) -> bool:
         return self.leg_order == "concurrent"
 
     @abstractmethod
     def handoff_bound(self, lease_s: int) -> float: ...
+
+    async def claim(self, calls: EngineCalls, url: str, phase: HandoffPhase) -> dict[str, Any]:
+        """Reserve what a leg needs on its engine and return the body fields that select it."""
+        return {}
+
+    def release(self, url: str, phase: HandoffPhase, seat: Mapping[str, Any]) -> None:
+        """Free what `claim` reserved, once the leg and its steps have ended."""
+        return None
+
+    async def export(
+        self,
+        calls: EngineCalls,
+        url: str,
+        seat: Mapping[str, Any],
+        result: PrefillResult,
+        *,
+        timeout_s: float,
+    ) -> PrefillResult:
+        """Make the producer's state reachable by a consumer once its prefill leg has returned."""
+        return result
+
+    async def restore(
+        self,
+        calls: EngineCalls,
+        url: str,
+        seat: Mapping[str, Any],
+        result: PrefillResult,
+        *,
+        timeout_s: float,
+    ) -> None:
+        """Load the exported state into the consumer before its decode leg opens."""
+        return None
+
+    def discard(self, result: PrefillResult) -> None:
+        """Free what `export` holds for one handoff.
+
+        Runs when the handoff is consumed or dropped, including after a `restore`, so it
+        accepts a handoff it has already freed.
+        """
+        return None
 
     def first_token_bound(self, limit: float | None) -> float | None:
         """Return the decode leg's first-token deadline under the caller's limit."""

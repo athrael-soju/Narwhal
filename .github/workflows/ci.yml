@@ -1,13 +1,19 @@
 name: ci
 on:
   workflow_dispatch: {}
+  # A pull request runs the suite while "Run CI" is ticked in its description: when the box is
+  # ticked, and on each push or reopen after that. Other description edits start nothing.
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
 concurrency:
-  group: ci-${{ github.ref }}
+  # A run that skips the suite takes its own group, so it never cancels a running suite.
+  group: ${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.body, '- [x] Run CI') && (github.event.action != 'edited' || (github.event.changes.body != null && !contains(github.event.changes.body.from, '- [x] Run CI'))))) && format('ci-{0}', github.ref) || format('ci-skip-{0}', github.run_id) }}
   cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   checks:
+    if: ${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.body, '- [x] Run CI') && (github.event.action != 'edited' || (github.event.changes.body != null && !contains(github.event.changes.body.from, '- [x] Run CI'))))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -20,12 +26,16 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -e '.[dev]' -c constraints-dev.txt
+      - name: Pull the pinned Prometheus image for the State query tests
+        run: |
+          docker pull "$(sed -n 's/^ *image: *\(prom\/prometheus:.*\)$/\1/p' tools/observability/compose.yml)"
       - run: make check VENV_PYTHON=python
       - name: Validate the release PR metadata
         if: github.ref_name == 'release/v0.1.0' || github.head_ref == 'release-please--branches--main' || github.ref_name == 'release-please--branches--main'
         run: python tools/maintenance/release.py check --release
 
   unit:
+    if: ${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.body, '- [x] Run CI') && (github.event.action != 'edited' || (github.event.changes.body != null && !contains(github.event.changes.body.from, '- [x] Run CI'))))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -44,6 +54,7 @@ jobs:
       - run: make unit VENV_PYTHON=python
 
   package:
+    if: ${{ (github.event_name != 'pull_request' || (contains(github.event.pull_request.body, '- [x] Run CI') && (github.event.action != 'edited' || (github.event.changes.body != null && !contains(github.event.changes.body.from, '- [x] Run CI'))))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -83,7 +94,7 @@ jobs:
           make test VENV_PYTHON=python
 
   gates:
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || (contains(github.event.pull_request.body, '- [x] Run CI') && (github.event.action != 'edited' || (github.event.changes.body != null && !contains(github.event.changes.body.from, '- [x] Run CI'))))) }}
     needs: [checks, unit, package]
     runs-on: ubuntu-latest
     timeout-minutes: 1

@@ -177,7 +177,8 @@ def sse_token_bearing(event: SseEvent, dialect: EngineDialect, endpoint: str | N
     if dialect.token_ids if endpoint is None else dialect.streams_token_ids(endpoint):
         ids = sse_token_ids(event)
         return ids is None or bool(ids)
-    return sse_token_count(event) > 0
+    # An engine with no token IDs ends a reply of no text with its finish frame alone.
+    return sse_token_count(event) > 0 or (not dialect.token_ids and sse_finished(event))
 
 
 def rewrite_sse(event: SseEvent, *, strip: tuple[str, ...]) -> str:

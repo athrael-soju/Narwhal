@@ -21,6 +21,9 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
             else {}
         ),
         "context_length": template["max_model_len"],
+        # Without it the launcher requests 256 running requests, more than SGLang serves from a
+        # small memory fraction.
+        **({"max_sequences": template["max_num_seqs"]} if "max_num_seqs" in template else {}),
         "tokenizer": str(model_dir),
         "extra_args": [
             "--mem-fraction-static",

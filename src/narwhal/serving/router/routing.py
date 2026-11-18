@@ -227,6 +227,8 @@ class NarwhalRouter:
         self.decode_attempts = 0
         self.retry_attempts = 0
         self.decode_tokens_observed = 0
+        # Measured output tokens of completed requests.
+        self.output_tokens = 0
         self.upstream_seconds = {"prefill": 0.0, "decode": 0.0}
         self.ttft = slo_histogram(cfg.slo.ttft_s)
         self.tpot = slo_histogram(cfg.slo.tpot_s)
@@ -374,7 +376,10 @@ class NarwhalRouter:
                 values[iid] = value
 
     def _token_accounting(self) -> str:
-        return "token_ids" if self.engines.dialect.token_ids else "unavailable"
+        dialect = self.engines.dialect
+        if dialect.token_ids:
+            return "token_ids"
+        return "reported" if dialect.reports_output_tokens else "unavailable"
 
     async def serve(
         self,
@@ -547,6 +552,7 @@ class NarwhalRouter:
                     for (phase, reason), count in sorted(self.attempt_failures.items())
                 ],
                 "decode_tokens_observed": self.decode_tokens_observed,
+                "output_tokens": self.output_tokens,
                 "upstream_seconds": self.upstream_seconds.copy(),
             },
             # Connection limits for engine requests and recovery probes.

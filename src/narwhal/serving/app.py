@@ -18,10 +18,16 @@ from fastapi.responses import JSONResponse, Response
 from .. import __version__
 from ..config import FleetConfig
 from ..observability.journal import RunJournal
+from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
-from ..profiling.generation import generation_problem, read_generation
+from ..profiling.generation import (
+    bound_profiles,
+    generation_problem,
+    nominal_problem,
+    read_generation,
+)
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
@@ -140,7 +146,12 @@ def create_app(
             )
         generation_failures = []
         for spec in cfg.engines:
-            profiles = router.profiles.profiles_for_engine(spec.iid)
+            if cfg.engine_contract is not None and (
+                problem := nominal_problem(router.profiles, spec.iid)
+            ):
+                generation_failures.append(problem)
+                continue
+            profiles = bound_profiles(router.profiles, spec.iid)
             if not profiles:
                 continue
             try:
@@ -316,9 +327,14 @@ def create_app(
     async def metrics() -> Response:
         return Response(
             content=render(
-                router.state(), router.ttft, router.tpot, router.seat, router.queue_wait
+                router.state(),
+                router.ttft,
+                router.tpot,
+                router.seat,
+                router.queue_wait,
+                router.monitor.requests_sent,
             ),
-            media_type="text/plain; version=0.0.4; charset=utf-8",
+            media_type=CONTENT_TYPE,
         )
 
     @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")

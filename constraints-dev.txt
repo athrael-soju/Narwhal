@@ -6,7 +6,7 @@ anyio==4.15.1
 ast-serialize==0.11.2
 backports-tarfile==1.2.0
 build==1.6.1
-certifi==2026.7.22
+certifi==2026.10.18
 cffi==2.1.1
 cfgv==3.5.0
 charset-normalizer==3.5.1
@@ -16,7 +16,7 @@ cryptography==50.0.1
 distlib==0.4.3
 docutils==0.23
 fastapi==0.141.1
-filelock==3.32.6
+filelock==4.2.1
 h11==0.16.0
 httpcore==1.0.9
 httptools==0.8.0
@@ -48,7 +48,7 @@ pydantic==2.13.5
 pydantic-core==2.46.5
 pygments==2.21.0
 pyproject-hooks==1.2.0
-python-discovery==1.6.0
+python-discovery==1.9.5
 pyyaml==6.0.3
 pyzmq==27.2.0
 readme-renderer==46.0
@@ -65,5 +65,5 @@ typing-inspection==0.4.4
 urllib3==2.7.0
 uvicorn==0.52.4
 uvloop==0.22.1
-virtualenv==21.7.9
+virtualenv==21.14.13
 zipp==4.1.0

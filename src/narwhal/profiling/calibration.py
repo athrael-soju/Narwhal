@@ -27,6 +27,7 @@ from ..engines.dialect import EngineDialect
 from ..engines.handoff import HandoffLegs
 from ..engines.stream import sse_token_bearing
 from ..engines.validation import validation_pairs
+from ..observability.tools import ToolActivity
 from ..runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ..types import Role
 from .generation import read_generation
@@ -622,7 +623,9 @@ async def calibrate(
     observation_timeout_s: float,
     out: Path,
     base: Path | None = None,
+    activity: ToolActivity | None = None,
 ) -> int:
+    activity = activity or ToolActivity("calibration")
     if not input_tokens or any(value < 1 for value in input_tokens):
         raise ValueError("--input-tokens requires positive token counts")
     if len(set(input_tokens)) != len(input_tokens):
@@ -686,6 +689,16 @@ async def calibrate(
         )
         for batch, targets in batches.items()
     ]
+    used = {iid for src, dst, _ in needed for iid in (src, dst)}
+    activity.use(used)
+    # Each lockstep step is one step: sweep 1 steps each group alone, later sweeps each round.
+    activity.plan(
+        sum(
+            len(phase) * len(targets) + (samples_per_group - 1) * len(targets) * len(rounds)
+            for targets, phases in schedule
+            for phase, rounds in phases
+        )
+    )
     if base is not None:
         print(f"calibration base: {base}; reused groups: {len(reused)} of {len(groups)}")
     measured: dict[tuple[str, str, int, int], dict[str, Any]] = {}
@@ -698,7 +711,7 @@ async def calibrate(
                 timeout=observation_timeout_s, headers=cfg.engine_headers()
             ) as sizing:
                 context_limits: dict[str, int] = {}
-                for iid in sorted({iid for src, dst, _ in needed for iid in (src, dst)}):
+                for iid in sorted(used):
                     spec = by_id[iid]
                     async with asyncio.timeout(observation_timeout_s):
                         context_limit = await engine_context_limit(
@@ -744,10 +757,12 @@ async def calibrate(
                         for src, dst, target in groups:
                             if (src, dst) in members_of and target in targets:
                                 await lockstep.step([(src, dst)], target, 1, None)
+                                activity.advance()
                         for index in range(2, samples_per_group + 1):
                             for target in targets:
                                 for number, members in enumerate(rounds, first):
                                     await lockstep.step(members, target, index, number)
+                                    activity.advance()
                         first += len(rounds)
                 measured = lockstep.rows
     finally:

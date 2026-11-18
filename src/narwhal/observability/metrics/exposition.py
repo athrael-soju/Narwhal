@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
 # Histogram bucket edges as fractions of the SLO.
 _SLO_FRACTIONS = (0.025, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0, 1.5, 3.0, 10.0)
 

@@ -34,6 +34,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                     artifacts.NARWHAL_DASHBOARD,
                     artifacts.CONTROL_TARGETS,
                     artifacts.CONTROL_TOKEN_FILE,
+                    artifacts.TOOL_TARGETS,
                     "prometheus/targets/router.json",
                 }
                 self.assertEqual(
@@ -162,6 +163,38 @@ class OrchestratorDashboardTests(unittest.TestCase):
                 [{"targets": ["127.0.0.1:8020"]}],
             )
             self.assertEqual((root / artifacts.CONTROL_TOKEN_FILE).read_text(), "t" * 32)
+
+    def test_tool_target_needs_an_http_origin(self):
+        self.assertIsNone(artifacts.tool_target({}))
+        self.assertEqual(
+            artifacts.tool_target({artifacts.TOOL_METRICS_URL_ENV: "http://127.0.0.1:18030"}),
+            "127.0.0.1:18030",
+        )
+        for url in ("https://127.0.0.1:18030", "http://127.0.0.1", "http://127.0.0.1:18030/x"):
+            with (
+                self.subTest(url=url),
+                self.assertRaisesRegex(ValueError, artifacts.TOOL_METRICS_URL_ENV),
+            ):
+                artifacts.tool_target({artifacts.TOOL_METRICS_URL_ENV: url})
+
+    def test_staging_writes_the_tool_target_for_the_tool_job(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "mounts"
+            contract = TargetContract("127.0.0.1:8000")
+            artifacts.stage_artifacts(contract, root=root)
+            self.assertEqual(json.loads((root / artifacts.TOOL_TARGETS).read_text()), [])
+            artifacts.stage_artifacts(contract, tools="127.0.0.1:18030", root=root)
+            self.assertEqual(
+                json.loads((root / artifacts.TOOL_TARGETS).read_text()),
+                [{"targets": ["127.0.0.1:18030"]}],
+            )
+            prometheus = (root / "prometheus/prometheus.yml").read_text()
+        self.assertIn(
+            "  - job_name: narwhal-tools\n"
+            "    file_sd_configs:\n"
+            '      - files: ["/etc/prometheus/targets/tools.json"]\n',
+            prometheus,
+        )
 
     def test_console_url_defaults_to_the_tunnel_port_and_refuses_unsafe_values(self):
         self.assertEqual(artifacts.console_url({}), "http://127.0.0.1:18020/console")

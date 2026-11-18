@@ -12,6 +12,9 @@ class EngineDialect(ABC):
     health_path: ClassVar[str] = "/health"
     # None selects character-ratio estimates in callers.
     tokenize_path: ClassVar[str | None] = "/tokenize"
+    # A route that renders chat messages to prompt text, for an engine whose tokenize route
+    # takes text only. None sends the messages to the tokenize route.
+    render_path: ClassVar[str | None] = None
     # None reads the context limit from the tokenize response.
     context_limit_path: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.
@@ -26,6 +29,8 @@ class EngineDialect(ABC):
     )
     # True when each streamed decode chunk carries its token IDs.
     token_ids: ClassVar[bool] = True
+    # True when `stream_output_tokens` reads a reply's output token count from its stream.
+    reports_output_tokens: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")
@@ -40,6 +45,8 @@ class EngineDialect(ABC):
     decode_reserved_tokens: ClassVar[int] = 0
     # Cache blocks the engine's reported KV capacity includes but never gives to a request.
     kv_reserved_blocks: ClassVar[int] = 0
+    # Chat template fields the render route takes.
+    render_passthrough: ClassVar[tuple[str, ...]] = ()
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
@@ -68,6 +75,25 @@ class EngineDialect(ABC):
                 payload["add_special_tokens"] = body["add_special_tokens"]
         return payload
 
+    def render_request(self, model: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model, "messages": body["messages"]}
+        for field_name in self.render_passthrough:
+            if field_name in body:
+                payload[field_name] = body[field_name]
+        return payload
+
+    def render_response(self, payload: dict[str, Any]) -> str | None:
+        prompt = payload.get("prompt")
+        return prompt if isinstance(prompt, str) else None
+
+    def rendered_tokenize_request(
+        self, model: str | None, prompt: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The tokenize request that counts `prompt`, the render of the chat request `body`,
+        as the engine counts that request.
+        """
+        return {"model": model, "prompt": prompt, "add_special_tokens": False}
+
     def tokenize_response(self, payload: dict[str, Any]) -> int | None:
         try:
             return int(payload["count"])
@@ -88,8 +114,25 @@ class EngineDialect(ABC):
             return None
         return tokens
 
+    def stream_output_tokens(self, payload: dict[str, Any]) -> int | None:
+        """The reply's output token count as a stream chunk reports it, for an engine whose
+        chunks carry no token IDs; None for a chunk that reports none.
+        """
+        return None
+
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"min_tokens": tokens, "ignore_eos": True}
+
+    def peerless_fields(self) -> dict[str, Any] | None:
+        """Fields that let a disaggregated engine serve a request in its role without a KV peer.
+
+        None when every request needs an engine of the other role.
+        """
+        return None
+
+    def cache_reset_params(self, wait_s: float) -> dict[str, Any]:
+        """Query parameters that make a cache reset wait up to `wait_s` for the engine to idle."""
+        return {}
 
     def cold_probe_extras(self) -> dict[str, Any]:
         # The engine keys its prefix cache by cache_salt, so a fresh salt shares no prefix.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from importlib import metadata
@@ -12,7 +13,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from . import lifecycle, template
+from . import ask, lifecycle, setup, template, watch
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,17 +60,30 @@ def _main(argv: list[str]) -> int:
     )
     actions = dev.add_subparsers(dest="action", required=True)
     descriptions = {
+        "setup": "Download the pinned engine build and model file into the instance directory, "
+        "verify their checksums and initialize an instance whose engines start directly; "
+        "reports initialized, or reused for an existing instance.",
         "init": "Check pinned model files, native runtime and GPU allocation, then write an "
         "initialized instance, or report reused when explicit settings match an existing "
         "instance. Reuse preserves operator edits.",
-        "up": "Start an initialized instance, capture attestations, profile role splits and "
-        "start its router; reports launched. Requires the pinned native runtime and GPU.",
-        "verify": "Check a launched instance's directed KV paths, profiles and routed "
-        "arithmetic response; retain metrics and evidence before reporting ready.",
+        "up": "Start an instance's engines and its router; reports launched. Sets up the "
+        "instance first when it does not exist or when a setup option is given. An instance from "
+        "init also captures attestations and profiles role splits, and requires the pinned "
+        "native runtime and GPU.",
+        "verify": "Check a launched instance's profiles and a routed arithmetic response, and "
+        "for an instance from init its directed KV paths; retain metrics and evidence before "
+        "reporting ready.",
         "status": "Inspect an initialized instance's recorded processes and HTTP health; "
         "report launched or verified ready, retaining verification failures as degraded.",
+        "ask": "Send one prompt through a launched instance's router and report the reply, its "
+        "time to first token, its tokens per second and the engines that served it; or send "
+        "--repeat built-in prompts at --concurrency and report the spread.",
+        "watch": "Redraw each engine's role and requests in flight, the time to first token and "
+        "time per output token at the median and the 95th percentile, the throughput and the "
+        "role switches of a launched instance, from the router's state and metrics.",
         "down": "Stop an instance's recorded native process groups after validating their "
-        "identities; retain logs and measurements and report stopped.",
+        "identities; retain logs and measurements and report stopped, or with --remove delete "
+        "the instance directory and report removed.",
     }
     for name, description in descriptions.items():
         action = actions.add_parser(name, help=description, description=description)
@@ -80,6 +94,70 @@ def _main(argv: list[str]) -> int:
             default=Path("runs/dev"),
             help="private instance directory (default: %(default)s)",
         )
+        if name == "up":
+            action.add_argument(
+                "--alongside",
+                action="store_true",
+                help="start this fleet while another instance's fleet is up; each fleet takes "
+                "its own memory",
+            )
+        if name == "watch":
+            action.add_argument(
+                "--interval",
+                type=float,
+                default=1.0,
+                help="seconds between redraws (default: %(default)s)",
+            )
+            action.add_argument(
+                "--once", action="store_true", help="print one frame as the result and exit"
+            )
+        if name == "ask":
+            action.add_argument("prompt", nargs="?", help="one prompt to send")
+            action.add_argument(
+                "--repeat",
+                type=int,
+                help="send this many requests, of the prompt when one is given and of the "
+                "built-in prompts otherwise",
+            )
+            action.add_argument(
+                "--concurrency",
+                type=int,
+                default=1,
+                help="requests in flight at once with --repeat (default: %(default)s)",
+            )
+            action.add_argument(
+                "--max-tokens",
+                type=int,
+                default=128,
+                help="output token limit of each request (default: %(default)s)",
+            )
+        if name == "down":
+            action.add_argument(
+                "--remove",
+                action="store_true",
+                help="after stopping, delete the instance directory with its downloads and logs",
+            )
+        if name in ("setup", "up"):
+            action.add_argument(
+                "--model-name",
+                help="served name of the model, among the installed templates that start "
+                "their engines directly (default: the default template's model)",
+            )
+            action.add_argument(
+                "--accelerator",
+                help="engine build to download; auto selects by the host's devices, none keeps "
+                "the model on the CPU, and another value names a build the template pins "
+                "(default: auto, or the instance's build)",
+            )
+            action.add_argument(
+                "--engine-count", type=int, help="engines, 2 to 8 (default: template value, 4)"
+            )
+            action.add_argument(
+                "--port-base",
+                type=int,
+                help="router TCP port; engine ports start at +1 "
+                "(default: router 18000, engines from 18101)",
+            )
         if name == "init":
             action.description = (
                 description + " To change settings, select a fresh directory with --instance. "
@@ -119,19 +197,50 @@ def _main(argv: list[str]) -> int:
                 type=float,
                 help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
                 "engine-count * fraction <= device-allowance "
-                "(default: template value, installed 0.35)",
+                "(default: template value)",
             )
             action.add_argument(
                 "--device-allowance",
                 type=float,
                 help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
                 "engine fractions; bounds startup memory increase "
-                "(default: template value, installed 0.8)",
+                "(default: template value)",
+            )
+            action.add_argument(
+                "--engine-memory-mib",
+                type=int,
+                help="GPU memory of each engine in MiB, converted to a fraction of the GPU found "
+                "(default: template value, installed 2867)",
+            )
+            action.add_argument(
+                "--device-memory-mib",
+                type=int,
+                help="GPU memory all engines may take in MiB, at least --engine-count times "
+                "--engine-memory-mib (default: template value, installed 7168 or 9728)",
             )
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"
             )
+            action.add_argument(
+                "--engine-binary",
+                type=Path,
+                help="engine server executable, for a template that starts its engines directly",
+            )
+            action.add_argument(
+                "--no-accelerator",
+                action="store_true",
+                default=None,
+                help="keep the model on the CPU, for a template that starts its engines directly",
+            )
     args = parser.parse_args(argv)
+    watching = args.command == "dev" and args.action == "watch"
+    if watching and not (math.isfinite(args.interval) and args.interval > 0):
+        parser.error("--interval must be a positive number")
+    if args.command == "dev" and args.action == "ask":
+        if args.prompt is None and args.repeat is None:
+            parser.error("dev ask takes a prompt, --repeat for the built-in prompts, or both")
+        if min(1 if args.repeat is None else args.repeat, args.concurrency, args.max_tokens) < 1:
+            parser.error("--repeat, --concurrency and --max-tokens must be positive")
     if args.command == "config":
         return config_cli.run(args)
     if args.command == "diagnostics":
@@ -142,9 +251,24 @@ def _main(argv: list[str]) -> int:
     for name in ("instance.json", "lifecycle.json", "fleet.json"):
         results.add_artifact(name.removesuffix(".json"), root / name)
     context = f"dev {args.action} {root}"
-    if args.action != "init":
+    # up sets up an instance that does not exist yet, or one whose settings it names.
+    setting_up = args.action == "up" and (
+        not (root / "instance.json").exists()
+        or any(
+            value is not None
+            for value in (args.model_name, args.accelerator, args.engine_count, args.port_base)
+        )
+    )
+    if args.action not in ("init", "setup") and not setting_up:
         try:
-            lifecycle.instance(root)
+            try:
+                lifecycle.instance(root)
+            except FileNotFoundError:
+                if (root / "instance.json").exists():
+                    raise
+                raise FileNotFoundError(
+                    "no instance here; run narwhal dev up or narwhal dev init"
+                ) from None
         except (OSError, ValueError, KeyError, TypeError) as exc:
             if results.json_mode():
                 raise
@@ -163,11 +287,47 @@ def _main(argv: list[str]) -> int:
                 port_base=args.port_base,
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 device_allowance=args.device_allowance,
+                engine_binary=args.engine_binary,
+                accelerated=False if args.no_accelerator else None,
+                engine_memory_mib=args.engine_memory_mib,
+                device_memory_mib=args.device_memory_mib,
             )
             result = {"status": "reused" if reused else "initialized", "instance": str(root)}
+        elif args.action == "setup" or setting_up:
+            result = setup.run(
+                root,
+                model=args.model_name.lower() if args.model_name else None,
+                accelerator=args.accelerator,
+                engine_count=args.engine_count,
+                port_base=args.port_base,
+            )
+            if args.action == "up":
+                prepared: dict = result
+                result = lifecycle.up(root, alongside=args.alongside)
+                result["setup"] = prepared["status"]
+                result["downloaded"] = prepared.get("downloaded", [])
+        elif args.action == "watch":
+            # A result document describes one frame, so a JSON result takes a single reading.
+            once = args.once or results.json_mode()
+            result = watch.run(root, interval=args.interval, once=once)
+            results.set_data(result)
+            if once:
+                print(json.dumps(result, indent=2))
+            return 0
+        elif args.action == "ask":
+            result = ask.run(
+                root,
+                prompt=args.prompt,
+                repeat=args.repeat,
+                concurrency=args.concurrency,
+                max_tokens=args.max_tokens,
+            )
+        elif args.action == "up":
+            result = lifecycle.up(root, alongside=args.alongside)
+        elif args.action == "down" and args.remove:
+            result = lifecycle.remove(root)
         else:
             operation = {
-                "up": lifecycle.up,
                 "verify": lifecycle.verify,
                 "status": lifecycle.status,
                 "down": lifecycle.down,
@@ -177,8 +337,12 @@ def _main(argv: list[str]) -> int:
         if result["status"] == "degraded":
             results.set_status("degraded")
             results.record_error("instance_degraded", "Development instance requires recovery")
+        failed = args.action == "ask" and result.get("failed")
+        if failed:
+            results.set_status("failed_gate")
+            results.record_error("gate_failed", f"{failed} of {result['requests']} requests failed")
         print(json.dumps(result, indent=2))
-        return 1 if result["status"] == "degraded" else 0
+        return 1 if failed or result["status"] == "degraded" else 0
     except metadata.PackageNotFoundError as exc:
         results.record_error("runtime_package_missing", str(exc), stage="runtime-package")
         return failure("narwhal", f"{context}: load runtime package", exc, 2)
@@ -204,7 +368,7 @@ def _main(argv: list[str]) -> int:
     ) as exc:
         if results.json_mode():
             raise
-        return failure("narwhal", context, exc, 2 if args.action == "init" else 1)
+        return failure("narwhal", context, exc, 2 if args.action in ("init", "setup") else 1)
 
 
 if __name__ == "__main__":

@@ -60,10 +60,11 @@ ACTIONS = (
 
 
 def capture_backends() -> list[str]:
+    backends = [load_backend(name) for name in names()]
     return [
-        load_backend(name).label
-        for name in names()
-        if cache_capture(load_backend(name).launcher()) is not None
+        backend.label
+        for backend in backends
+        if backend.launcher is not None and cache_capture(backend.launcher()) is not None
     ]
 
 

@@ -44,6 +44,13 @@ class MonitorMathTests(unittest.TestCase):
         self.monitor.dispatched("d0", request)
         return request
 
+    def test_each_dispatched_leg_counts_as_a_request_sent_to_its_engine(self):
+        self.assertEqual(self.monitor.requests_sent, {"d0": 0, "p0": 0})
+        self.decode("a", 100)
+        self.decode("b", 100)
+        self.monitor.sent("p0", "d0")
+        self.assertEqual(self.monitor.requests_sent, {"d0": 3, "p0": 3})
+
     def expected(self) -> float:
         inst = self.monitor.instances["d0"]
         tokens = sum(r.input_len + r.output_len for r in inst.decode.values())

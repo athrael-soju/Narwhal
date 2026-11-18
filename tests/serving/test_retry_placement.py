@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections import Counter
 from dataclasses import replace
 
 import httpx
@@ -72,6 +73,12 @@ class RetryPlacementTests(HttpHarness):
         """Return the engines that served the named legs, in order."""
         return [iid for iid, leg in self.legs if leg in (*legs, "connect")]
 
+    def assert_counted(self):
+        """Every attempt counts each leg it sends on the engine the leg reached."""
+        self.assertEqual(
+            Counter(self.router.monitor.requests_sent), Counter(self.used("prefill", "decode"))
+        )
+
     def attempts(self):
         """Return the engines each failed attempt used, as the journal records them."""
         return [
@@ -88,6 +95,7 @@ class RetryPlacementTests(HttpHarness):
                 self.inject("prefill", fault)
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 200, response.text)
+                self.assert_counted()
                 first, second = self.used("prefill")
                 self.assertEqual({first, second}, {"e0", "e1"})
                 ((phase, prefill_iid, _, reason),) = self.attempts()
@@ -103,6 +111,7 @@ class RetryPlacementTests(HttpHarness):
                 self.inject("decode", fault)
                 response = await self.post(client)
                 self.assertEqual(response.status_code, 200, response.text)
+                self.assert_counted()
                 prefill, decode = self.used("prefill"), self.used("decode")
                 self.assertEqual((len(set(prefill)), len(set(decode))), (2, 2))
                 ((phase, prefill_iid, decode_iid, reason),) = self.attempts()

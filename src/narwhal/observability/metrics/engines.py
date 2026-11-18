@@ -220,3 +220,13 @@ def render_work(state: dict) -> list[str]:
         ],
     )
     return out
+
+
+def render_requests(requests: Mapping[str, int]) -> list[str]:
+    """Render the requests the router has sent to each engine."""
+    return metric_lines(
+        "narwhal_engine_requests_total",
+        "Requests the router has sent to each engine since it started, including its probes",
+        "counter",
+        [({"iid": iid}, count) for iid, count in sorted(requests.items())],
+    )

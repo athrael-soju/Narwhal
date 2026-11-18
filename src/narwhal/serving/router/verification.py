@@ -193,6 +193,7 @@ class SuspectVerifier:
             if not producer and scheduler.availability.roles_bound:
                 return self._no_peer(iid, "producer", recorded_producer=recorded or None)
             inst = self.router.monitor.instances.get(producer) if producer else None
+            self.router.monitor.sent(iid, *([producer] if producer else []))
             probe = await self.router.engines.probe_inference(
                 url,
                 prefill_url=inst.url if inst is not None else None,
@@ -218,6 +219,7 @@ class SuspectVerifier:
             key=lambda inst: (len(inst.decode), inst.iid),
         )
         for consumer in consumers:
+            self.router.monitor.sent(iid, consumer.iid)
             probe = await self.router.engines.probe_inference(
                 consumer.url,
                 prefill_url=url,

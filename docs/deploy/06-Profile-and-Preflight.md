@@ -38,7 +38,7 @@ The effective sweep has these bounds:
 
 Prefix caching can stay on during profiling.
 
-On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines, and rejects `--colocated`.
+On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines.
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
 

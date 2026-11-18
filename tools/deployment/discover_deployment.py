@@ -277,7 +277,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     backend = engine_backend(env.get("NARWHAL_ENGINE_BACKEND"))
     connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
     backend.connector(connector)
-    engine = backend.launcher()
+    engine = backend.engine_launcher()
     pin = backend.role_switcher(connector).model is RoleModel.FIXED
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
@@ -406,7 +406,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
 
 def discover(env: dict[str, str], out: Path) -> Path:
     hosts = derive_hosts(env)
-    engine = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).launcher()
+    engine = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).engine_launcher()
     paths = {
         name: Path(env.get(name, default))
         for name, default in (

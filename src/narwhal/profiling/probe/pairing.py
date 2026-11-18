@@ -46,13 +46,16 @@ class _Joined(httpx.AsyncByteStream):
             yield part
 
     async def aclose(self) -> None:
-        await self.inner.aclose()
-        # The peer leg finishes with its KV transfer; a lost one ends at the decode wait.
-        with contextlib.suppress(TimeoutError, httpx.HTTPError):
-            async with asyncio.timeout(self.wait_s):
-                await asyncio.shield(self.peer)
-        if not self.peer.done():
-            await cancel_tasks([self.peer])
+        try:
+            await self.inner.aclose()
+            # The peer leg finishes with its KV transfer; a lost one ends at the decode wait.
+            with contextlib.suppress(TimeoutError, httpx.HTTPError):
+                async with asyncio.timeout(self.wait_s):
+                    await asyncio.shield(self.peer)
+        finally:
+            # A cancelled request takes its peer leg with it, so no leg outlives the request.
+            if not self.peer.done():
+                await cancel_tasks([self.peer])
 
 
 class PairedTransport(httpx.AsyncBaseTransport):
@@ -69,6 +72,10 @@ class PairedTransport(httpx.AsyncBaseTransport):
     def pair(self, url: str, role: Role, peer: str, producer: Mapping[str, Any] | None) -> None:
         """Serve requests to `url` in `role`, with `peer` serving the other leg."""
         self.pairs[origin(url)] = Pairing(role, origin(peer), producer or {})
+
+    def unpair(self, url: str) -> None:
+        """Send requests to `url` to that engine alone again."""
+        self.pairs.pop(origin(url), None)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         pairing = self.pairs.get(origin(request.url))

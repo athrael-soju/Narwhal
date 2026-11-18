@@ -81,7 +81,7 @@ make test TEST_ARGS='-k failover -v'
 
 `make unit` and `make check` always run the full unit suite and ignore `TEST_ARGS`, including any value set in the environment.
 
-You can start the remote CI either from GitHub Actions or with `gh workflow run ci.yml --ref <branch>`, replacing `<branch>` with the branch name. Release automation dispatches the same suite for release PRs.
+To run the remote CI on a pull request, tick **Run CI** in its description. The suite starts when you tick the box and runs again on each push while the box stays ticked. You can also start it from GitHub Actions or with `gh workflow run ci.yml --ref <branch>`, replacing `<branch>` with the branch name. Release automation dispatches the same suite for release PRs.
 
 On the GitHub-hosted runners, the suite covers:
 
@@ -98,6 +98,8 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 `make coverage` runs the unit suite with package and tool coverage, writing HTML branch annotations, JSON and XML reports, and the test log to a fresh `runs/coverage/run-*` directory. Set the output path with `COVERAGE_ARGS='--out runs/coverage/review'`.
 
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
+
+`tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
 
 Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 

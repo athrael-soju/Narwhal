@@ -6,7 +6,12 @@ import httpx
 
 from ...backends import load as load_backend
 from ...config import FleetConfig
-from ...profiling.generation import generation_problem, read_generation
+from ...profiling.generation import (
+    bound_profiles,
+    generation_problem,
+    nominal_problem,
+    read_generation,
+)
 from ...profiling.model import Profile, decode_evidence_problems, evidence_matches
 from ...profiling.store import ProfileStore, measured_evidence
 from ...types import Role
@@ -122,6 +127,15 @@ def gate_profile(cfg: FleetConfig, rep: Report) -> ProfileStore:
             else:
                 rep.fail(f"{spec.iid} has no profile; run narwhal-profile --fleet <config>")
             continue
+        if cfg.engine_contract is not None and (refused := nominal_problem(store, spec.iid)):
+            rep.fail(refused)
+            continue
+        if p.nominal:
+            rep.ok(
+                f"{spec.iid} nominal profile: prefill {p.ttft_b:.2e} s per token, decode "
+                f"interval {p.tpot_intercept:.4f} s up to {p.decode_max_requests} sequences"
+            )
+            continue
         problems = decode_evidence_problems(
             p,
             max_fit_mape=policy.max_decode_fit_mape,
@@ -170,8 +184,10 @@ async def gate_profile_generation(
     identity = load_backend(cfg.backend).identity
     evidence, _ = measured_evidence(cfg.profiles_path.with_suffix(".samples.json"))
     for spec in cfg.engines:
-        profiles = store.profiles_for_engine(spec.iid)
-        if not profiles or spec.iid not in live:
+        if spec.iid not in live:
+            continue
+        profiles = bound_profiles(store, spec.iid)
+        if not profiles:
             continue
         try:
             generation = await read_generation(cfg, spec, transport=transport)

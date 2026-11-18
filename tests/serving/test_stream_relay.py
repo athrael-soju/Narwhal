@@ -234,6 +234,7 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
         row = self.terminal_rows()[-1]
         self.assertEqual(row["output_len"], 4)
         self.assertEqual(row["decode_tokens_observed"], 4)
+        self.assertEqual(self.router.state()["serving"]["output_tokens"], 4)
         self.assertGreater(row["first_byte_s"], 0)
         self.assertGreater(row["decode_tpot_s"], 0)
         self.assertGreater(row["upstream_seconds"]["decode"], 0)

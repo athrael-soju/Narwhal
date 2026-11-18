@@ -1,0 +1,15 @@
+{
+  "connectors": null,
+  "place": [],
+  "place_after_producer_switch": [],
+  "place_again": [],
+  "requires_idle": false,
+  "restore": [],
+  "role_reads": [],
+  "roles": {
+    "http://a": null,
+    "http://b": null,
+    "http://c": null
+  },
+  "switch_producer_to_decode": []
+}

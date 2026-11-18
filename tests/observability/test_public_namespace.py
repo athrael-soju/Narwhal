@@ -10,6 +10,7 @@ import httpx
 from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
+from narwhal.observability.tools import ToolActivity
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.release import PeerRelease
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
@@ -35,6 +36,7 @@ DASHBOARD_PALETTE = {
     "state serious": "#E0752D",
     "state severe": "#A11D1D",
     "state pending": "#9E4AA4",
+    "state probing": "#9C6B4E",
     "neutral": "#8E9196",
     "offered": "#5794F2",
     "cancelled": "#FFEE52",
@@ -360,7 +362,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_and_alert_queries_name_exported_metrics(self):
         response = await self.client.get("/metrics")
         exported = set()
-        for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", response.text, re.M):
+        exposition = response.text + ToolActivity("preflight").render()
+        for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":
                 exported.update(f"{name}_{suffix}" for suffix in ("bucket", "sum", "count"))
@@ -456,6 +459,15 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         spec = dashboard()["spec"]
         _, loop = titled("Router event loop")
         self.assertEqual(loop["y"], max(item["spec"]["y"] for item in layout_items(spec)))
+
+    def test_target_down_alerts_leave_the_tool_job_out(self):
+        # The tool target is up only while an operation runs.
+        selectors = [
+            selector
+            for rule in alert_rules().values()
+            for selector in re.findall(r"\bup(\{[^}]*\})?", rule["expr"])
+        ]
+        self.assertEqual(sorted(selectors), ['{job="engines"}', '{job="narwhal-router"}'])
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()
@@ -555,6 +567,38 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(source, state)
         # An aggregated engine holds both roles and serves both phases.
         self.assertIn("unless on(iid) (count by(iid) (count by(iid, role) (", state)
+        # Probing needs engine-side work in a window that ends 8 seconds ago and at the latest
+        # scrape, and no work any router sent or held on the engine, and no tool report, over a
+        # wider window.
+        self.assertIn("label_replace(3 * clamp_max(((max_over_time(((sum by(iid) (", state)
+        for source in (
+            "[15s:1s] offset 8s) > 0) or (changes(((sum by(iid) ({__name__=~",
+            "[15s:1s] offset 8s) > 0)) and on(iid) ((((sum by(iid) (",
+            "[5100ms:100ms]) > 0))",
+            ' and on(iid) (max by(iid) (up{job="engines",iid=~"$iid"} offset 23s))',
+            " unless on(iid) (max by(iid) (max_over_time(narwhal_resident_requests"
+            '{job="narwhal-router",iid=~"$iid"}[37s])) > 0)',
+            " unless on(iid) (sum by(iid) (increase(narwhal_engine_requests_total"
+            '{job="narwhal-router",iid=~"$iid"}[37s])) > 0)',
+            " unless on(iid) (max by(iid) (max_over_time(narwhal_tool_engine_in_use"
+            '{job="narwhal-tools",iid=~"$iid"}[37s])))',
+            ' unless on() ((max_over_time(up{job="narwhal-router"}[37s]) == 1) and '
+            '(min_over_time(up{job="narwhal-router"}[37s]) == 0)), 1), "s", "probing", "", "")',
+        ):
+            self.assertIn(source, state)
+        # A tool names its operation for the engines Prometheus scrapes.
+        for code, operation, name in (
+            (4, "calibration", "calibrating"),
+            (5, "profiling", "profiling"),
+            (6, "preflight", "preflight"),
+        ):
+            self.assertIn(
+                f"label_replace({code} * max by(iid) (narwhal_tool_engine_in_use"
+                f'{{job="narwhal-tools",iid=~"$iid",operation="{operation}"}} and on(job,instance) '
+                '(up{job="narwhal-tools"} == 1) and on(iid) '
+                f'(max by(iid) (up{{job="engines",iid=~"$iid"}}))), "s", "{name}", "", "")',
+                state,
+            )
         overrides = {
             override["matcher"]["options"]: override["properties"]
             for override in table["vizConfig"]["spec"]["fieldConfig"]["overrides"]
@@ -572,6 +616,10 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Serving",
                 "Switching",
                 "Backlogged",
+                "Probing",
+                "Calibrating",
+                "Profiling",
+                "Preflight",
                 "Probation",
                 "Verifying",
                 "Quarantined",
