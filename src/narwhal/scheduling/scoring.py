@@ -269,10 +269,10 @@ class SplitScorer:
     def decode_wait_ratios(self, decodes: Iterable[int]) -> tuple[tuple[int, float], ...]:
         """Return each decode engine count's largest slot wait over the remaining TTFT budget.
 
-        Waiting decode requests and requests in prefill take the pool's slots in handoff order,
-        as decode admission projects them. A request past its TTFT deadline at handoff adds
-        nothing. The measured handoff delay, scaled to each count, is a floor over the TTFT
-        target.
+        Waiting decode requests and requests in prefill before their decode leg is placed take the
+        pool's slots in handoff order, as decode admission projects them. A request past its TTFT
+        deadline at handoff adds nothing. The measured handoff delay, scaled to each count, is a
+        floor over the TTFT target.
         """
         current = len(self.monitor.pool(Role.DECODE))
         handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s

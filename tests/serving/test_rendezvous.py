@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from narwhal.serving import execution
-from narwhal.types import Phase, Request, Role
-from tests.fixtures import fleet, role_scheduler
+from narwhal.types import Instance, Phase, Request, Role
+from tests.fixtures import fleet, profile, role_scheduler
 from tests.serving.test_http_accounting import HttpHarness
 from tests.wire import FakeRendezvous, RendezvousLegs, engine_transports
 
@@ -128,6 +128,19 @@ class SeatedDecodeTests(unittest.TestCase):
         # Legs already queued on d2 take its next freed seats.
         self.resident("d2", "r5", 10)
         self.resident("d2", "r6", 600)
+        self.assertEqual(self.skipped(), {"d2"})
+
+    def test_a_leg_in_prefill_frees_its_seat_after_its_prefill_and_its_decode(self):
+        self.monitor.add(Instance("p1", "http://p1", Role.PREFILL))
+        self.router.profiles.put(profile("p1"))
+        self.resident("d1", "r1", 400)
+        self.resident("d1", "r2", 300)
+        self.resident("d2", "r3", 500)
+        # On SGLang the router places the decode leg while its prefill runs.
+        leg = Request("r4", 8_000, wanted_len=20)
+        self.monitor.dispatched("p1", leg)
+        leg.phase = Phase.DECODE
+        self.monitor.dispatched("d2", leg)
         self.assertEqual(self.skipped(), {"d2"})
 
 
