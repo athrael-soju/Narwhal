@@ -9,7 +9,7 @@ from statistics import median
 from ..profiling.model import Profile
 from ..types import Request, Role
 from .monitor import InstanceMonitor
-from .prefill import warm_prefill_time
+from .prefill import batched_prefill_seconds, warm_prefill_time
 from .scheduler.placement import GlobalScheduler
 from .window import Cohort, DemandWindow, weighted_median
 
@@ -358,14 +358,16 @@ class DemandModel:
         cached: tuple[tuple[str, int], ...],
         prefill_iids: Collection[str] | None,
     ) -> float:
-        cold = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+        # Arrivals share prefill batches, so each prices its batched share.
+        cold = sum(batched_prefill_seconds(p, length) for p in profiles) / len(profiles)
         tokens = dict(cached)
         warm = (
-            warm_prefill_time(p, length, tokens.get(p.iid, 0))
+            batched_prefill_seconds(p, length, tokens[p.iid])
             for p in profiles
-            if prefill_iids is None or p.iid in prefill_iids
+            if (prefill_iids is None or p.iid in prefill_iids)
+            and warm_prefill_time(p, length, tokens.get(p.iid, 0)) is not None
         )
-        return min((cold, *(price for price in warm if price is not None)))
+        return min((cold, *warm))
 
     @staticmethod
     def _shape_bucket(tokens: int) -> int:

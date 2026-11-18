@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from narwhal.engines.prefix import CacheNamespace, block_identities
 from narwhal.scheduling.demand import Arrival
-from narwhal.scheduling.prefill import prefill_seconds
+from narwhal.scheduling.prefill import batched_prefill_seconds, prefill_seconds
 from narwhal.scheduling.scoring import CACHE_RECHECK_S
 from narwhal.serving.app import create_app
 from narwhal.serving.router import sizing
@@ -433,8 +433,8 @@ class SharedCostContractTests(unittest.TestCase):
         self.assertLess(offered({self.iid: 32}), offered({}))
         self.assertAlmostEqual(
             offered({self.iid: 32}) / offered({}),
-            prefill_seconds(profiles[0], Request("r", 40, cached_tokens={profiles[0].iid: 32}))
-            / (sum(p.prefill_time(40) for p in profiles) / len(profiles)),
+            batched_prefill_seconds(profiles[0], 40, 32)
+            / (sum(batched_prefill_seconds(p, 40) for p in profiles) / len(profiles)),
         )
 
     def test_demand_takes_warm_prices_only_from_engines_that_run_the_prefill(self):
