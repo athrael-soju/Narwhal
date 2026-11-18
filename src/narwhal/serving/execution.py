@@ -22,7 +22,7 @@ from ..engines.stream import (
     sse_token_ids,
 )
 from ..scheduling.prefill import prefill_seconds
-from ..scheduling.scheduler.occupancy import decode_check, decode_occupancy
+from ..scheduling.scheduler.occupancy import DecodeCheck, decode_check, decode_occupancy
 from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
 from .completion import reassemble
@@ -239,6 +239,34 @@ def _check_ttft(state: RequestLifecycle, priced: float) -> None:
         raise PlacementRefused(priced, cause=ttft_refusal_cause(router, req, priced))
 
 
+def _decode_slot_check(
+    state: RequestLifecycle, prefill: Instance, priced: float | None
+) -> DecodeCheck:
+    """Check decode admission for a request priced at `priced` on `prefill`; record the wait.
+
+    `priced` is None for a retry, which rechecks decode as a fresh handoff without the TTFT test.
+    """
+    router, req = state.router, state.request
+    own = (state.admission_price or {}).get("own_prefill_s")
+    headroom = router.scheduler.slot_headroom.seconds(SLOT_HEADROOM_SHARE * router.cfg.slo.ttft_s)
+    check = decode_check(
+        router.scheduler,
+        req,
+        ready_s=router.scheduler.prefill_ready_s(req, prefill),
+        ttft_s=priced,
+        ttft_margin=router.cfg.admission_margin,
+        seats=decode_seat_map(router),
+        expected_output=router.controller.demand.output_estimator(),
+        # A concurrent connector's prefill leg runs once its decode leg holds a seat.
+        post_seat_s=own if own is not None and router.engines.kv.concurrent else 0.0,
+        slot_headroom_s=headroom,
+    )
+    if state.admission_price is not None:
+        state.admission_price["slot_wait_s"] = check.slot_wait_s
+        state.admission_price["slot_headroom_s"] = headroom if check.slot_wait_s > 0 else 0.0
+    return check
+
+
 def price_waiting(state: RequestLifecycle) -> float | None:
     router, req = state.router, state.request
     if router.cfg.admission != "predictive" or state.attempts:
@@ -255,10 +283,19 @@ def price_waiting(state: RequestLifecycle) -> float | None:
         cheapest = min(candidates, key=lambda inst: (placements[inst.iid], inst.iid))
         priced = _price_admission(state, cheapest)
         _check_ttft(state, priced)
+        # A queued request that would wait past its TTFT budget for a decode slot is refused
+        # while it waits, before it takes a prefill seat.
+        check = _decode_slot_check(state, cheapest, priced)
+        if check.refusal is not None:
+            if check.refusal == "slot_wait":
+                scheduler.slot_refusals.note(req)
+            raise PlacementRefused(priced, cause=check.refusal)
     finally:
         req.phase = phase
     budget = router.cfg.slo.ttft_s * (1.0 + router.cfg.admission_margin)
-    return state.arrived + budget - placements[cheapest.iid]
+    price = state.admission_price or {}
+    wait = price.get("slot_wait_s", 0.0) + price.get("slot_headroom_s", 0.0)
+    return state.arrived + budget - placements[cheapest.iid] - wait
 
 
 async def _run_prefill(
@@ -309,21 +346,7 @@ async def _prepare_once(
             # A retry already passed the TTFT price; it rechecks decode as a fresh handoff.
             if not retry:
                 _check_ttft(state, priced)
-            own = (state.admission_price or {}).get("own_prefill_s")
-            check = decode_check(
-                router.scheduler,
-                req,
-                ready_s=router.scheduler.prefill_ready_s(req, prefill),
-                ttft_s=None if retry else priced,
-                ttft_margin=router.cfg.admission_margin,
-                seats=decode_seat_map(router),
-                expected_output=router.controller.demand.output_estimator(),
-                # A concurrent connector's prefill leg runs once its decode leg holds a seat.
-                post_seat_s=own if own is not None and router.engines.kv.concurrent else 0.0,
-                slot_headroom_s=router.scheduler.slot_headroom.seconds(
-                    SLOT_HEADROOM_SHARE * router.cfg.slo.ttft_s
-                ),
-            )
+            check = _decode_slot_check(state, prefill, None if retry else priced)
             if check.refusal is not None:
                 if check.refusal == "slot_wait" and not retry:
                     router.scheduler.slot_refusals.note(req)

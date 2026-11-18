@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 from unittest.mock import patch
 
+from narwhal.scheduling.scheduler.occupancy import DecodeCheck
 from narwhal.serving import dispatch, execution
 from narwhal.serving.policy import ServingPolicy
 from narwhal.serving.seats import decode_seats
@@ -128,6 +129,31 @@ class PredictiveQueueTests(QueueWaitHarness):
         self.blocked.set()
         self.assertEqual((await holder).status_code, 200)
         self.assert_released()
+
+    async def test_a_queued_request_is_refused_for_slot_wait_before_its_prefill(self):
+        client = self.client()
+        holder = await self.hold_prefill(client)
+        late = DecodeCheck("slot_wait", slot_wait_s=1.5)
+        with patch.object(execution, "decode_check", return_value=late) as check:
+            response = await asyncio.wait_for(self.post(client), timeout=2)
+        self.assertEqual(response.status_code, 429, response.text)
+        row = self.row(response.headers["x-request-id"])
+        self.assertEqual((row["refused_cause"], row["reason"]), ("decode", "slot_wait"))
+        # Refused while waiting for the prefill seat, priced with its slot wait.
+        self.assertEqual(check.call_count, 1)
+        self.assertIsNotNone(row["queue_waits"]["prefill"])
+        self.assertEqual(row["admission_price"]["slot_wait_s"], 1.5)
+        self.assertEqual(len(self.router.scheduler.slot_refusals.since(60.0)), 1)
+        self.blocked.set()
+        self.assertEqual((await holder).status_code, 200)
+        self.assert_released()
+
+    async def test_the_admission_price_records_the_decode_slot_wait(self):
+        client = self.client()
+        response = await self.post(client)
+        self.assertEqual(response.status_code, 200, response.text)
+        price = self.row(response.headers["x-request-id"])["admission_price"]
+        self.assertEqual((price["slot_wait_s"], price["slot_headroom_s"]), (0.0, 0.0))
 
     async def test_an_admission_wait_is_priced_and_retry_after_excludes_the_wait(self):
         self.cfg.max_connections = 1
