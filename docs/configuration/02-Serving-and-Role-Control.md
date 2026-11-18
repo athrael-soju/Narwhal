@@ -11,7 +11,7 @@ description: Narwhal fleet settings for request admission, placement, deadlines 
 | Field                        | Default        | Meaning                                                                                              | Values                                                 |
 | ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `serving.admission`          | `"predictive"` | Admission mode.                                                                                      | `predictive` or `open`                                 |
-| `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget. A negative value keeps that share free.   | Greater than -1                                        |
+| `serving.admission_margin`   | `0.0`          | Fraction of the TTFT target added to the admission budget.                                           | Zero or greater                                        |
 | `serving.max_connections`    | `768`          | Router in-flight limit, and the data connections the router opens to each engine.                    | At least 1                                             |
 | `engine.control_connections` | `0`            | Size of the control connection pool that all engines share, reserved for health and recovery probes. | `0` for `max(4, 2 × engine count)`, or a positive size |
 

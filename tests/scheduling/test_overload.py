@@ -252,17 +252,6 @@ class DecodeAdmissionTests(unittest.TestCase):
             decode_admits(self.scheduler, self.request, ttft_s=priced, ttft_margin=margin)
         )
 
-    def test_a_negative_admission_margin_narrows_the_budget_for_a_decode_wait(self):
-        self.fill(self.scheduler.profiles.get("e3").decode_max_requests, wanted_len=2_000)
-        wait = self.first_free_slot()
-        budget = self.scheduler.slo.ttft_s
-        priced = budget - 2 * wait
-        self.assertTrue(decode_admits(self.scheduler, self.request, ttft_s=priced))
-        margin = -2 * wait / budget
-        self.assertFalse(
-            decode_admits(self.scheduler, self.request, ttft_s=priced, ttft_margin=margin)
-        )
-
     def test_the_kv_limit_refuses_a_request_whose_wait_fits_its_budget(self):
         for index in range(4):
             self.scheduler.monitor.dispatched(

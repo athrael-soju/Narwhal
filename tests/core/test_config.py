@@ -264,12 +264,6 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
                 replace(cfg, thresholds=replace(cfg.thresholds, **{name: -1})).validate()
 
-    def test_a_negative_admission_margin_keeps_part_of_the_budget_free(self):
-        cfg = self.load(self.raw)
-        replace(cfg, admission_margin=-0.3).validate()
-        with self.assertRaisesRegex(ValueError, "greater than -1"):
-            replace(cfg, admission_margin=-1.0).validate()
-
     def test_policy_boundaries_preserve_hysteresis_and_evidence(self):
         cfg = self.load(self.raw)
         for changes, message in (
