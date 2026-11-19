@@ -136,7 +136,7 @@ Waiting requests keep their arrival order. When a seat frees, the release gives 
 
 In `predictive` mode, the router prices an original request's first attempt throughout an admission-seat or prefill-seat wait. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. Each price also runs the [decode admission check](#decode-admission-check) on that engine, so a request whose projected TTFT plus its slot wait and the slot-wait headroom exceeds the budget leaves the queue with a `slot_wait` refusal before it takes a prefill seat. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
 
-A prefilled request that waits for a decode seat is not priced again. Its seat wait adds to its TTFT, and it is served late when a seat frees before the producer's KV handoff bound.
+The router does not price a prefilled request again while it waits for a decode seat. The wait adds to its TTFT, and the request is served late when a seat frees before the producer's KV handoff bound.
 
 The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
 
@@ -537,7 +537,7 @@ Triggering this move cancels any pending moves to decode.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
-- projected source load is above `controller.thresholds.shrink`; for a move to decode, on window demand, or on confirmation-span demand while it stays at or below `controller.thresholds.expand`
+- projected source load is above `controller.thresholds.shrink` on window demand, or, for a move to decode, above `controller.thresholds.shrink` and at or below `controller.thresholds.expand` on confirmation-span demand
 - for a move to prefill, the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
 - for a move to decode, the current split's projected decode load on window or confirmation-span demand is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile

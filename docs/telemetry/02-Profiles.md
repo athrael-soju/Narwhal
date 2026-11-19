@@ -117,7 +117,7 @@ The router prices a cold prompt of `n` tokens with the prefill fit:
 | From `prefill_min_tokens` to `prefill_max_tokens` | Fit at `n` |
 | Longer than `prefill_max_tokens` | Fit extended to `n` |
 
-Placement, admission, pool load, and the resident prefill work in role-split scoring use this price. The demand estimate prices each arriving prompt at this price less `ttft_c`, or at a warm price less `cached_ttft_c`, because an engine pays the fit's constant term once for each batch of prompts it prefills.
+Placement, admission, pool load, and the resident prefill work in role-split scoring use this price. An engine pays the fit's constant term once per batch of prompts it prefills, so the demand estimate prices each arriving prompt at this price less `ttft_c`, or at a warm price less `cached_ttft_c`.
 
 ### Decode capacity derived from the profile
 
