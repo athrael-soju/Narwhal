@@ -40,7 +40,7 @@ Prefix caching can stay on during profiling.
 
 On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines.
 
-When an engine refuses a decode measurement request or reports an error in its stream, such as a lost KV transfer, the profiler discards that cohort's measurement and runs it again, up to twice. A third consecutive error stops the profile. The log shows each rerun as `rerun after engine error`.
+When an engine refuses a decode measurement request, reports an error in its stream, or its stream times out or drops, as after a lost KV transfer, the profiler discards that cohort's measurement and runs it again, up to twice. A third consecutive error stops the profile. The log shows each rerun as `rerun after engine error`.
 
 If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
 

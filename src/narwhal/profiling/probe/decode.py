@@ -18,7 +18,7 @@ from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 DECODE_RETRIES = 3
 # A cohort sized to the KV cache leaves the rest free for a lagged cohort's longer retry.
 LARGEST_FIT_KV_SHARE = 0.8
-# Reruns of a cohort after an engine reports a request error, such as a lost KV transfer.
+# Reruns of a cohort after a request error or a stalled stream, such as a lost KV transfer.
 ENGINE_ERROR_RETRIES = 2
 
 
@@ -170,7 +170,8 @@ async def _retried_cohort(
     tokens: int,
     dialect: EngineDialect,
 ) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
-    """Run a cohort, rerunning it whole when an engine reports a request error.
+    """Run a cohort, rerunning it whole when an engine reports a request error or a stream
+    times out or drops.
 
     A rerun discards the failed attempt's intervals. The last error propagates after
     `ENGINE_ERROR_RETRIES` reruns.
@@ -180,10 +181,13 @@ async def _retried_cohort(
             return await _decode_cohort(
                 client, url, model, prompt, input_len, cohort, tokens, dialect
             )
-        except DecodeEngineError as exc:
+        except (DecodeEngineError, httpx.TransportError) as exc:
             if attempt == ENGINE_ERROR_RETRIES:
                 raise
-            print(f"    decode  isl={input_len:<6} c={cohort:<3} rerun after engine error: {exc}")
+            detail = str(exc) or type(exc).__name__
+            print(
+                f"    decode  isl={input_len:<6} c={cohort:<3} rerun after engine error: {detail}"
+            )
     raise AssertionError("unreachable")
 
 

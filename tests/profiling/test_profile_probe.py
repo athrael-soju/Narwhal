@@ -1,5 +1,6 @@
 import asyncio
 import io
+import itertools
 import json
 import os
 import tempfile
@@ -681,8 +682,14 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
     async def test_engine_error_reruns_the_cohort_and_keeps_its_intervals(self):
         """A lost KV transfer fails one cohort; its rerun supplies the cell, and a third
         consecutive engine error stops the sweep."""
-        for failures, raises in ((1, False), (2, False), (3, True)):
-            with self.subTest(failures=failures):
+        errors = (
+            decode_probe.DecodeEngineError("decode probe returned an error"),
+            httpx.ReadTimeout("timed out"),
+        )
+        for (failures, raises), error in itertools.product(
+            ((1, False), (2, False), (3, True)), errors
+        ):
+            with self.subTest(failures=failures, error=type(error).__name__):
                 calls: list[tuple[int, int]] = []
                 left = {"n": failures}
 
@@ -697,11 +704,12 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                     dialect,
                     calls=calls,
                     left=left,
+                    error=error,
                 ):
                     calls.append((input_len, size))
                     if input_len == 4096 and size == 16 and len(calls) > 2 and left["n"]:
                         left["n"] -= 1
-                        raise decode_probe.DecodeEngineError("decode probe returned an error")
+                        raise error
                     state = {"cohort": size, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
                     return [(float(size), float(size * input_len), 0.01)] * (2 * size), state
 
@@ -723,7 +731,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         tokens=64,
                     )
                     if raises:
-                        with self.assertRaisesRegex(RuntimeError, "returned an error"):
+                        with self.assertRaises(type(error)):
                             await run
                         continue
                     samples = await run
