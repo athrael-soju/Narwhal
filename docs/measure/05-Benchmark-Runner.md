@@ -134,11 +134,13 @@ A plan is a JSON object with these fields:
 | `schema` | `1` |
 | `points` | Ordered array of points |
 | `evidence` | Optional [evidence collector](06-Benchmark-Evidence.md) settings |
+| `attainment` | [SLO settings](10-Trace-Replay.md#finding-the-highest-rate-within-the-slos) for traced points. Required when a point has a `trace` |
 | `points[].id` | Unique name of letters, digits, hyphens, and underscores |
 | `points[].workload` | Nonempty object copied into `result.json` |
 | `points[].client_argv` | Nonempty argument vector that contains `{base}` and `{model}` |
 | `points[].client_timeout_s` | Positive client deadline in seconds |
 | `points[].drain_timeout_s` | Positive drain deadline in seconds for each drain wait |
+| `points[].trace` | Optional `name` and `file` of the [trace replay](10-Trace-Replay.md) the point scores |
 
 `client_argv` placeholders:
 
@@ -164,6 +166,7 @@ The new private `--out` directory holds:
 | `manifest.json`                  | Output root     | Plan, its SHA-256 digest, runner digest, model, URL, and invocation                             |
 | `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, and evidence diagnostic count |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
+| `attainment.json`                | Output root     | Highest rate within the SLOs for each trace, when the plan has traced points                    |
 
 The runner exits `0` when every point reaches `completed`. It exits `1` when the plan fails validation or a point ends with another `condition`.
 
@@ -179,3 +182,4 @@ The runner stops at the first point that ends with one of these `result.json` co
 | `drain_timeout`, `drain_state_error` | The drain wait after the client timed out or failed to read `/narwhal/state` |
 | `client_failure` | The client timed out, failed to start, or returned a nonzero [exit code](03-Load-Trial.md#measuring-05-requests) |
 | `evidence_error` | The evidence collector failed |
+| `attainment_error` | The client records of a traced point were missing or unreadable |

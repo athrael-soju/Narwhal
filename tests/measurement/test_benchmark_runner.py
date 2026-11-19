@@ -152,6 +152,89 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(record["drain"]["condition"], "idle")
         self.assertFalse((out / "fast").exists())
 
+    def traced_plan(self, ttfts):
+        """Return a plan whose clients write one AIPerf record per TTFT, in milliseconds."""
+        code = (
+            "import json, pathlib, sys, urllib.request; "
+            "urllib.request.urlopen(sys.argv[1] + '/start/' + sys.argv[3]).read(); "
+            "out = pathlib.Path(sys.argv[4]); out.mkdir(); "
+            "rows = [{'metadata': {'benchmark_phase': 'profiling'}, 'error': None, "
+            "'metrics': {'time_to_first_token': {'value': t, 'unit': 'ms'}, "
+            "'inter_token_latency': {'value': 10, 'unit': 'ms'}}} "
+            "for t in json.loads(sys.argv[5])]; "
+            "(out / 'profile_export.jsonl').write_text("
+            "''.join(json.dumps(r) + '\\n' for r in rows))"
+        )
+        root = Path(self.temp.name)
+        plan = self.plan()
+        for point, scale in zip(plan["points"], (1, 2), strict=True):
+            trace = root / f"trace-x{scale}.jsonl"
+            trace.write_text(
+                "".join(
+                    json.dumps({"timestamp": t / scale, "input_length": 4, "output_length": 4})
+                    + "\n"
+                    for t in (0, 1000, 2000, 3000)
+                )
+            )
+            point["trace"] = {"name": "code", "file": str(trace)}
+            point["client_argv"] = [
+                sys.executable,
+                "-c",
+                code,
+                "{base}",
+                "{model}",
+                "{point_id}",
+                "{point_dir}/aiperf",
+                json.dumps(ttfts[point["id"]]),
+            ]
+        plan["attainment"] = {"ttft_s": 0.2, "tpot_s": 0.05, "share": 0.75}
+        return plan
+
+    def test_traced_points_report_the_highest_rate_within_the_slo_share(self):
+        status, out = self.execute(
+            self.traced_plan({"slow": [100, 100, 100, 900], "fast": [100, 900, 900, 900]})
+        )
+        self.assertEqual(status, 0)
+        slow = json.loads((out / "slow/result.json").read_text())["attainment"]
+        self.assertEqual(slow["offered_rps"], 1.0)
+        self.assertEqual(slow["attainment"], 0.75)
+        report = json.loads((out / "attainment.json").read_text())
+        self.assertEqual(report["share"], 0.75)
+        self.assertEqual(report["traces"]["code"]["highest_rps"], 1.0)
+        self.assertEqual(report["traces"]["code"]["highest_point"], "slow")
+        self.assertEqual([p["offered_rps"] for p in report["traces"]["code"]["points"]], [1.0, 2.0])
+
+    def test_missing_client_records_stop_with_an_attainment_error(self):
+        plan = self.traced_plan({"slow": [100], "fast": [100]})
+        plan["attainment"]["client_records"] = "{point_dir}/missing.jsonl"
+        status, out = self.execute(plan)
+        self.assertEqual(status, 1)
+        record = json.loads((out / "slow/result.json").read_text())
+        self.assertEqual(record["condition"], "attainment_error")
+        self.assertFalse((out / "fast").exists())
+        self.assertEqual(json.loads((out / "attainment.json").read_text())["traces"], {})
+
+    def test_trace_plans_are_validated_before_the_run(self):
+        cases = (
+            ("attainment", None, "require an attainment object"),
+            ("share", 1.5, "attainment.share"),
+            ("client_records", "records.jsonl", "{point_dir}"),
+            ("file", "missing.jsonl", "slow: trace file"),
+        )
+        for key, value, expected in cases:
+            with self.subTest(key=key):
+                plan = self.traced_plan({"slow": [], "fast": []})
+                if key == "attainment":
+                    del plan["attainment"]
+                elif key == "file":
+                    plan["points"][0]["trace"]["file"] = str(Path(self.temp.name, value))
+                else:
+                    plan["attainment"][key] = value
+                path = Path(self.temp.name, "plan.json")
+                path.write_text(json.dumps(plan))
+                with self.assertRaisesRegex(ValueError, expected):
+                    runner.trace_rates(runner.load_plan(path))
+
     def test_drain_timeout_stops_sequence_with_point_result(self):
         status, out = self.execute(self.plan(drain_timeout=0.01))
         self.assertEqual(status, 1)

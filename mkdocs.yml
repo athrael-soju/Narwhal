@@ -93,6 +93,7 @@ nav:
           - Benchmark evidence bundle: measure/06-Benchmark-Evidence.md
           - Cache-aware placement trial: measure/08-Cache-Aware-Trial.md
           - Benchmarking the router: measure/09-Router-Benchmark.md
+          - Shifting-demand traces: measure/10-Trace-Replay.md
       - Setting up observability:
           - Overview: Observability.md
           - Starting and verifying monitoring: observability/01-Start-and-Verify.md

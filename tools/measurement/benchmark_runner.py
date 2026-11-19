@@ -19,6 +19,13 @@ from urllib.parse import urlsplit
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools.measurement.attainment import (
+    DEFAULT_RECORDS,
+    DEFAULT_SHARE,
+    highest_rates,
+    score,
+    trace_rate,
+)
 from tools.measurement.benchmark_evidence import EvidenceCollector
 from tools.measurement.load_trial import poll_drain
 
@@ -41,6 +48,10 @@ def positive(value: object, name: str) -> float:
     return float(value)
 
 
+def identifier(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and all(c.isalnum() or c in "-_" for c in value)
+
+
 def load_plan(path: Path) -> dict:
     plan = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(plan, dict) or plan.get("schema") != 1:
@@ -53,7 +64,7 @@ def load_plan(path: Path) -> dict:
         if not isinstance(point, dict):
             raise ValueError("each point must be an object")
         name = point.get("id")
-        if not isinstance(name, str) or not name or not all(c.isalnum() or c in "-_" for c in name):
+        if not identifier(name):
             raise ValueError("point id must contain only letters, digits, hyphens, or underscores")
         if name in seen:
             raise ValueError(f"duplicate point id: {name}")
@@ -69,6 +80,29 @@ def load_plan(path: Path) -> dict:
             raise ValueError(f"{name}: client_argv must be a nonempty string array")
         for field in ("client_timeout_s", "drain_timeout_s"):
             positive(point.get(field), f"{name}.{field}")
+        trace = point.get("trace")
+        if trace is not None and (
+            not isinstance(trace, dict)
+            or not identifier(trace.get("name"))
+            or not isinstance(trace.get("file"), str)
+            or not trace["file"]
+        ):
+            raise ValueError(
+                f"{name}: trace requires a name of letters, digits, hyphens, "
+                "or underscores, and a file"
+            )
+    attainment = plan.get("attainment")
+    if attainment is not None or any("trace" in point for point in points):
+        if not isinstance(attainment, dict):
+            raise ValueError("points with a trace require an attainment object")
+        for field in ("ttft_s", "tpot_s"):
+            positive(attainment.get(field), f"attainment.{field}")
+        share = attainment.get("share", DEFAULT_SHARE)
+        if type(share) not in (int, float) or not 0 < share <= 1:
+            raise ValueError("attainment.share must be above 0 and at most 1")
+        records = attainment.get("client_records", DEFAULT_RECORDS)
+        if not isinstance(records, str) or "{point_dir}" not in records:
+            raise ValueError("attainment.client_records must contain {point_dir}")
     evidence = plan.get("evidence")
     if evidence is not None:
         if not isinstance(evidence, dict):
@@ -198,7 +232,56 @@ def run_client(command: list[str], directory: Path, timeout: float) -> dict:
     return result
 
 
-def run(plan: dict, base: str, model: str, out: Path, client: httpx.Client) -> int:
+def trace_rates(plan: dict) -> dict[str, dict]:
+    """Return each traced point's request count and offered rate, read from its trace file."""
+    rates = {}
+    for point in plan["points"]:
+        if "trace" in point:
+            try:
+                rates[point["id"]] = trace_rate(Path(point["trace"]["file"]))
+            except (OSError, ValueError) as error:
+                raise ValueError(f"{point['id']}: trace file: {error}") from error
+    return rates
+
+
+def score_point(settings: dict, point: dict, directory: Path, rate: dict) -> dict:
+    records = settings.get("client_records", DEFAULT_RECORDS).format_map(
+        {"point_dir": str(directory), "point_id": point["id"]}
+    )
+    result = score(
+        Path(records),
+        rate["requests"],
+        settings["ttft_s"],
+        settings["tpot_s"],
+        settings.get("share", DEFAULT_SHARE),
+    )
+    return {"trace": point["trace"]["name"], "offered_rps": rate["offered_rps"], **result}
+
+
+def write_attainment(plan: dict, out: Path, scored: list[dict]) -> None:
+    settings = plan["attainment"]
+    write_json(
+        out / "attainment.json",
+        {
+            "ttft_s": settings["ttft_s"],
+            "tpot_s": settings["tpot_s"],
+            "share": settings.get("share", DEFAULT_SHARE),
+            "traces": highest_rates(scored),
+        },
+    )
+
+
+def run(
+    plan: dict,
+    base: str,
+    model: str,
+    out: Path,
+    client: httpx.Client,
+    rates: dict[str, dict] | None = None,
+) -> int:
+    rates = trace_rates(plan) if rates is None else rates
+    scored: list[dict] = []
+    status = 0
     for point in plan["points"]:
         directory = out / point["id"]
         directory.mkdir(mode=0o700)
@@ -239,12 +322,30 @@ def run(plan: dict, base: str, model: str, out: Path, client: httpx.Client) -> i
                 except (OSError, ValueError, KeyError, TypeError, httpx.HTTPError) as error:
                     record["condition"] = "evidence_error"
                     record["evidence_error"] = str(error)
+        if record["condition"] == "completed" and point["id"] in rates:
+            try:
+                record["attainment"] = score_point(
+                    plan["attainment"], point, directory, rates[point["id"]]
+                )
+                scored.append(
+                    {
+                        "id": point["id"],
+                        "trace": point["trace"]["name"],
+                        "attainment": record["attainment"],
+                    }
+                )
+            except (OSError, ValueError) as error:
+                record["condition"] = "attainment_error"
+                record["attainment_error"] = str(error)
         record["finished_at"] = now()
         write_json(directory / "result.json", record)
         print(f"{point['id']}: {record['condition']}")
         if record["condition"] != "completed":
-            return 1
-    return 0
+            status = 1
+            break
+    if rates:
+        write_attainment(plan, out, scored)
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
         out = args.out.resolve()
         for point in plan["points"]:
             command_for(point, base, args.model, out / point["id"])
+        rates = trace_rates(plan)
         headers = {}
         if args.api_key_env:
             if not os.environ.get(args.api_key_env):
@@ -296,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         with httpx.Client(headers=headers, timeout=10, trust_env=False) as client:
-            return run(plan, base, args.model, out, client)
+            return run(plan, base, args.model, out, client, rates)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         print(f"Benchmark blocked: {error}", file=sys.stderr)
         return 1
