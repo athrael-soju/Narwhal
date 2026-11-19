@@ -18,6 +18,12 @@ from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
 DECODE_RETRIES = 3
 # A cohort sized to the KV cache leaves the rest free for a lagged cohort's longer retry.
 LARGEST_FIT_KV_SHARE = 0.8
+# Reruns of a cohort after an engine reports a request error, such as a lost KV transfer.
+ENGINE_ERROR_RETRIES = 2
+
+
+class DecodeEngineError(RuntimeError):
+    """An engine refused a decode probe request or reported an error in its stream."""
 
 
 async def _one_decode_stream(
@@ -53,7 +59,7 @@ async def _one_decode_stream(
         async with client.stream("POST", f"{url}/v1/completions", json=body) as r:
             if r.status_code != 200:
                 detail = (await r.aread()).decode("utf-8", "replace")
-                raise RuntimeError(
+                raise DecodeEngineError(
                     f"decode probe failed on {url} ({r.status_code}): {detail[:200]}"
                 )
             async with aclosing(sse_events(r.aiter_bytes())) as events:
@@ -67,7 +73,10 @@ async def _one_decode_stream(
                         raise RuntimeError("decode probe returned malformed SSE")
                     obj = event.data
                     if obj is None or obj.get("error"):
-                        raise RuntimeError("decode probe returned an error")
+                        detail = str(obj.get("error"))[:200] if obj is not None else "no data"
+                        raise DecodeEngineError(
+                            f"decode probe returned an error on {url}: {detail}"
+                        )
                     try:
                         choices = event_choices(obj)
                     except ValueError as exc:
@@ -149,6 +158,33 @@ async def _decode_cohort(
     finally:
         await cancel_tasks(tasks)
     return observed, state
+
+
+async def _retried_cohort(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    prompt: str,
+    input_len: int,
+    cohort: int,
+    tokens: int,
+    dialect: EngineDialect,
+) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
+    """Run a cohort, rerunning it whole when an engine reports a request error.
+
+    A rerun discards the failed attempt's intervals. The last error propagates after
+    `ENGINE_ERROR_RETRIES` reruns.
+    """
+    for attempt in range(ENGINE_ERROR_RETRIES + 1):
+        try:
+            return await _decode_cohort(
+                client, url, model, prompt, input_len, cohort, tokens, dialect
+            )
+        except DecodeEngineError as exc:
+            if attempt == ENGINE_ERROR_RETRIES:
+                raise
+            print(f"    decode  isl={input_len:<6} c={cohort:<3} rerun after engine error: {exc}")
+    raise AssertionError("unreachable")
 
 
 def stream_kv_tokens(input_len: int, tokens: int, block_tokens: int | None, reserved: int) -> int:
@@ -349,7 +385,7 @@ async def probe_decode(
         # out of the fit.
         for c in cells:
             if c not in warmed:
-                await _decode_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
+                await _retried_cohort(client, url, model, prompt, input_len, c, tokens, dialect)
                 warmed.add(c)
         # The length's cells and interval evidence, kept once two cohorts remain.
         length_samples: list[tuple[float, float, float]] = []
@@ -362,7 +398,7 @@ async def probe_decode(
             dropped: str | None = None
             for repeat in range(repeats):
                 used = tokens
-                observed, state = await _decode_cohort(
+                observed, state = await _retried_cohort(
                     client, url, model, prompt, input_len, c, used, dialect
                 )
                 limit = max_model_len - input_len if max_model_len is not None else None
@@ -378,7 +414,7 @@ async def probe_decode(
                     if retry is None:
                         break
                     used = retry
-                    observed, state = await _decode_cohort(
+                    observed, state = await _retried_cohort(
                         client, url, model, prompt, input_len, c, used, dialect
                     )
                 if len(observed) < 2 * c:

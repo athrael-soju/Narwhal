@@ -678,6 +678,59 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         return calls, samples
 
+    async def test_engine_error_reruns_the_cohort_and_keeps_its_intervals(self):
+        """A lost KV transfer fails one cohort; its rerun supplies the cell, and a third
+        consecutive engine error stops the sweep."""
+        for failures, raises in ((1, False), (2, False), (3, True)):
+            with self.subTest(failures=failures):
+                calls: list[tuple[int, int]] = []
+                left = {"n": failures}
+
+                async def cohort(
+                    client,
+                    url,
+                    model,
+                    prompt,
+                    input_len,
+                    size,
+                    tokens,
+                    dialect,
+                    calls=calls,
+                    left=left,
+                ):
+                    calls.append((input_len, size))
+                    if input_len == 4096 and size == 16 and len(calls) > 2 and left["n"]:
+                        left["n"] -= 1
+                        raise decode_probe.DecodeEngineError("decode probe returned an error")
+                    state = {"cohort": size, "first_at": 0.0, "last_join_at": 10.0, "left_at": 5.0}
+                    return [(float(size), float(size * input_len), 0.01)] * (2 * size), state
+
+                async def prompt(client, url, model, target, *args, **kwargs):
+                    return "p", target
+
+                with (
+                    patch.object(decode_probe, "make_prompt", side_effect=prompt),
+                    patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+                    redirect_stdout(io.StringIO()) as out,
+                ):
+                    run = probe_decode(
+                        None,
+                        "http://e",
+                        "stub",
+                        DIALECT,
+                        concurrency=(1, 16),
+                        input_lens=(512, 4096),
+                        tokens=64,
+                    )
+                    if raises:
+                        with self.assertRaisesRegex(RuntimeError, "returned an error"):
+                            await run
+                        continue
+                    samples = await run
+                self.assertEqual(len(samples), 4)
+                self.assertEqual(calls.count((4096, 16)), 1 + failures)
+                self.assertEqual(out.getvalue().count("rerun after engine error"), failures)
+
     async def test_decode_sweep_measures_the_same_cells_when_every_cohort_fits(self):
         """A 64-sequence engine with a large KV cache measures what it measured before."""
         cohorts = (1, 4, 16, 48, 64)
