@@ -46,15 +46,18 @@ The check admits the request outright when the fleet has zero live decode engine
 
 Each request holds one slot. The pool's slot count is the sum of each live decode engine's [decode seats](#engine-seats).
 
-| Request                                    | Reaches decode                      | Holds a slot                                                                       |
-| ------------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- |
-| Request resident in decode                 |                                     | From now until its projected last token                                            |
-| Request waiting for a decode slot          | Now                                 | From the earliest free slot until its projected last token                         |
-| Request in prefill, or the checked request | At its predicted prefill completion | From the earliest free slot after it reaches decode until its projected last token |
+An engine seats its decode legs in placement order, up to its attested sequence limit. A leg placed past the limit waits inside the engine for a seat, and on SGLang its request's prefill starts when the leg is seated.
+
+| Request                                          | Reaches decode                                        | Holds a slot                                                                                                                   |
+| ------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Request seated in decode                         | Now, or on SGLang at its predicted prefill completion | From now until its projected last token                                                                                        |
+| Request waiting for a decode slot or a seat      | Now                                                   | From the earliest free slot until its projected last token, which on SGLang includes its predicted prefill time from that slot |
+| Other request in prefill, or the checked request | At its predicted prefill completion                   | From the earliest free slot after it reaches decode until its projected last token                                             |
 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
-| Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot |
+| Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot. On SGLang, the request's own prefill runs after its slot starts, so the slot wait runs from when that prefill can start |
+| Slot-wait headroom | The 99th percentile of how much later than projected the first token arrived, over the latest 2,048 requests admitted with a slot wait in the last 60 seconds. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
 | Projected TTFT | Time since arrival plus the prefill placement price, including queueing               |
 | Request KV     | Key-value (KV) tokens for the prompt plus delivered and remaining output              |
 | Output cap     | `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset        |
@@ -93,9 +96,9 @@ The check admits the request when all three of these pass:
 
 | Check     | Passes when                                                                                                                                                                                                                                  |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics)                                                                            |
+| Slot wait | The slot wait is zero, or the projected TTFT plus the slot wait and the slot-wait headroom fits the [TTFT budget](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics)                                                                            |
 | KV tokens | Peak request KV during the checked request's hold fits the sum of the live decode engines' [decode KV token bounds](../telemetry/02-Profiles.md#decode-capacity-derived-from-the-profile), or the request is alone in decode during its hold |
-| TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents still generating on that engine, or the request misses `slo.tpot_s` on every idle decode engine                               |
+| TPOT      | At the start of the request's slot, a live decode engine meets `slo.tpot_s` with the request and the residents whose projected last token falls after that start, up to the engine's other seats, or the request misses `slo.tpot_s` on every idle decode engine                               |
 
 #### Retry pricing
 
@@ -131,7 +134,9 @@ A request with no queue budget left still takes a free prefill seat, but it does
 
 Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat.
 
-In `predictive` mode, the router prices an original request's first attempt throughout an admission-seat or prefill-seat wait. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+In `predictive` mode, the router prices an original request's first attempt throughout an admission-seat or prefill-seat wait. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. Each price also runs the [decode admission check](#decode-admission-check) on that engine, so a request whose projected TTFT plus its slot wait and the slot-wait headroom exceeds the budget leaves the queue with a `slot_wait` refusal before it takes a prefill seat. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+
+The router does not price a prefilled request again while it waits for a decode seat. The wait adds to its TTFT, and the request is served late when a seat frees before the producer's KV handoff bound.
 
 The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
 
@@ -422,7 +427,8 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 | Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream.   |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
-| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max` |
+| Predicted prefill work                        | The profiled prefill time of the engine's resident requests. A request whose decode leg [waits inside an engine for a seat](#decode-admission-check) adds none. |
+| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. |
 
 When the corrected idle floor reaches the TPOT target, decode load is the raw interval-to-target ratio.
 
@@ -456,7 +462,7 @@ Both floor recoveries:
 
 A decode-to-prefill move requires:
 
-- the new split and resident decode batches inside the profile's decode domain
+- the new split and resident decode batches inside the profile's decode domain, counting each engine's seated decode legs
 - KV capacity for the resident work
 
 ### Advisory rollout
@@ -489,7 +495,7 @@ The worst projected SLO ratio of a split is the largest of its projected TTFT, T
 The decode queueing ratio projects the slots of the [decode admission check](#decode-admission-check) onto the split's decode engines:
 
 ```text
-max over waiting decode requests and requests in prefill:
+max over requests waiting for a decode slot or a seat and requests in prefill before their decode leg is placed:
   slot wait / (slo.ttft_s - time since arrival - time until the request reaches decode)
 ```
 
@@ -531,9 +537,9 @@ Triggering this move cancels any pending moves to decode.
 
 The `mixed_pressure` rule moves one engine when all of these hold:
 
-- projected source load is above `controller.thresholds.shrink`
+- projected source load is above `controller.thresholds.shrink` on window demand, or, for a move to decode, above `controller.thresholds.shrink` and at or below `controller.thresholds.expand` on confirmation-span demand
 - for a move to prefill, the [prefill recovery ratio](../http-api/06-SLO-and-Demand.md#prefill-recovery-ratio) is at or above `controller.thresholds.expand`
-- for a move to decode, the current split's projected decode load is at or above `controller.thresholds.expand` and no departure is open
+- for a move to decode, the current split's projected decode load on window or confirmation-span demand is at or above `controller.thresholds.expand` and no departure is open
 - every engine has a profile
 - the move improves the worst projected SLO ratio by more than zero and by at least `controller.reactive.movement_margin`
 
@@ -614,7 +620,7 @@ One confirmation is enough in three cases:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
   - the eligibility rule is `source_shrink`
   - the projected source load is at or below `controller.thresholds.shrink`
-  - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`
+  - the destination phase's current SLO ratio meets or exceeds `controller.thresholds.expand`, on window or confirmation-span demand for a move to decode
 
 Every other move needs this many confirmations:
 
@@ -629,8 +635,9 @@ Any of these resets the confirmation sequence:
 
 - a change in the proposed split
 - a change in demand completeness
-- a change in the eligibility rule
 - a failed eligibility check
+
+A change in the eligibility rule keeps the count. The move then needs the confirmations of its latest rule.
 
 Prefill-to-decode moves require:
 

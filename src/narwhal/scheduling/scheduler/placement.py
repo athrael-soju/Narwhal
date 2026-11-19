@@ -15,6 +15,7 @@ from ..health import DriftTracker
 from ..monitor import InstanceMonitor
 from ..outcomes import OutcomeWindow
 from ..prefill import prefill_seconds, resident_prefill_seconds
+from .occupancy import SlotRefusals, SlotWaitHeadroom
 from .roles import RoleChanges
 
 log = logging.getLogger("narwhal.scheduler")
@@ -71,6 +72,11 @@ class GlobalScheduler:
         # Placements with no SLO-eligible candidate; refused role changes count separately.
         self.unserved = 0
         self.outcomes = OutcomeWindow(clock, outcome_bucket_s, outcome_retained_s)
+        # TTFT budget kept free for a request admitted to wait for a decode slot.
+        self.slot_headroom = SlotWaitHeadroom(clock)
+        # Requests refused for their decode slot wait, which the role controller counts as
+        # decode demand.
+        self.slot_refusals = SlotRefusals(clock)
         self.availability = EngineAvailability(
             monitor,
             clock,
@@ -441,8 +447,9 @@ class GlobalScheduler:
             profile = self.profiles.get(inst.iid)
             if profile is None:
                 continue
-            # Compare with the profiled interval at the current batch size.
-            expected = profile.token_interval(inst.decode_tokens(), len(inst.decode))
+            # Compare with the profiled interval at the batch that decodes.
+            requests, tokens = self.monitor.decoding(inst.iid)
+            expected = profile.token_interval(tokens, requests)
             if observed > 0.0 and expected > 0.0:
                 self.health.note(inst.iid, observed / expected)
         for verdict, iid in self.health.tick():

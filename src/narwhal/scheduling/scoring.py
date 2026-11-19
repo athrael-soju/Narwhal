@@ -10,7 +10,7 @@ from ..profiling.model import Profile
 from ..types import Instance, Phase, Request, Role
 from .demand import Demand, DemandModel, OutputEstimates, rounded
 from .prefill import prefill_seconds, resident_prefill_seconds
-from .scheduler.occupancy import decode_occupancy
+from .scheduler.occupancy import decode_occupancy, decode_span
 
 # Projections reuse a waiting request's cache evidence checked within this many seconds.
 CACHE_RECHECK_S = 0.25
@@ -266,30 +266,47 @@ class SplitScorer:
         for row in waiting:
             self.scheduler.recheck_evidence(row, CACHE_RECHECK_S)
 
-    def decode_wait_ratios(self, decodes: Iterable[int]) -> tuple[tuple[int, float], ...]:
+    def decode_wait_ratios(
+        self, decodes: Iterable[int], refused_s: float = 0.0, refused_span_s: float = 0.0
+    ) -> tuple[tuple[int, float], ...]:
         """Return each decode engine count's largest slot wait over the remaining TTFT budget.
 
-        Waiting decode requests and requests in prefill take the pool's slots in handoff order,
-        as decode admission projects them. A request past its TTFT deadline at handoff adds
-        nothing. The measured handoff delay, scaled to each count, is a floor over the TTFT
-        target.
+        Decode legs waiting for a seat inside their engine, waiting decode requests and requests
+        in prefill before their decode leg is placed take the pool's slots in handoff order, as
+        decode admission projects them. A request past its TTFT
+        deadline at handoff adds nothing. The requests admission refused for their slot wait
+        follow them, each with its whole TTFT budget: those of the `refused_s` interval with the
+        most refusals within the last `refused_span_s` seconds. The measured handoff delay,
+        scaled to each count, is a floor over the TTFT target.
         """
         current = len(self.monitor.pool(Role.DECODE))
         handoff = self.scheduler.handoff_s() * current / self.scheduler.slo.ttft_s
         queued = [r for inst in self.monitor.instances.values() for r in inst.prefill.values()]
+        estimate = self.demand.output_estimator()
         occupancy = decode_occupancy(
             self.scheduler,
             round(sum(r.input_len for r in queued) / len(queued)) if queued else 0,
-            expected_output=self.demand.output_estimator(),
+            expected_output=estimate,
         )
+        refused = (
+            self.scheduler.slot_refusals.busiest(refused_s, max(refused_s, refused_span_s))
+            if refused_s > 0
+            else []
+        )
+        # A refused request takes its slot behind every admitted request.
+        last = max((first for first, _, _ in occupancy.queued), default=0.0) if occupancy else 0.0
         rows = []
         for decode in decodes:
             ratio = handoff / decode if decode > 0 else 0.0
             if occupancy is not None:
-                started, _ = occupancy.schedule(occupancy.slots * decode // len(occupancy.engines))
+                started, joined = occupancy.schedule(
+                    occupancy.slots * decode // len(occupancy.engines),
+                    tuple(decode_span(r, last, occupancy.step, estimate) for r in refused),
+                )
                 ratio = max(
                     [
                         ratio,
+                        *((start - last) / self.scheduler.slo.ttft_s for start, _, _ in joined),
                         *(
                             (start - ready) / (deadline - ready)
                             for (ready, _, _), (start, _, _), deadline in zip(
@@ -391,6 +408,7 @@ class SplitScorer:
         step_s: float | None = None,
         resident_s: float | None = None,
         prefills: Collection[int] | None = None,
+        refused_span_s: float = 0.0,
     ) -> SplitSnapshot:
         """Resolve live request and profile inputs into immutable values.
 
@@ -411,15 +429,22 @@ class SplitScorer:
         waiting = tuple(self.monitor.waiting.values())
         resident_prefill = 0.0
         resident_covered = True
+        # Each engine batches its seated decode legs. A leg past the engine's sequence limit
+        # waits inside the engine, and its request's prefill starts when the leg is seated.
+        seat_waiting = self.monitor.seat_waiting()
+        seated_requests, seated_tokens = 0, 0
         for inst in instances:
             profile = self.scheduler.profiles.get(inst.iid)
-            if profile is not None:
-                resident_prefill += resident_prefill_seconds(profile, inst)
+            resident_prefill += self.monitor.running_prefill_seconds(inst.iid, seat_waiting)
             if inst.decode:
+                seated = self.monitor.seat_legs(inst.iid)[0]
+                tokens = sum(leg.length for leg in seated)
+                seated_requests += len(seated)
+                seated_tokens += tokens
                 resident_covered = (
                     resident_covered
                     and profile is not None
-                    and (profile.covers_decode(len(inst.decode), inst.decode_tokens()))
+                    and profile.covers_decode(len(seated), tokens)
                 )
         queued_prefill = 0.0
         if prefill_profiles:
@@ -491,10 +516,12 @@ class SplitScorer:
             prefill_pressure=observed_load[0],
             decode_pressure=observed_load[1],
             resident_prefill_s=resident_prefill,
-            resident_decode_tokens=sum(i.decode_tokens() for i in instances),
-            resident_decode_requests=sum(len(i.decode) for i in instances),
+            resident_decode_tokens=seated_tokens,
+            resident_decode_requests=seated_requests,
             decode_wait_ratios=self.decode_wait_ratios(
-                len(instances) - prefill for prefill, _ in profile_options
+                (len(instances) - prefill for prefill, _ in profile_options),
+                refused_s=step_s or 0.0,
+                refused_span_s=refused_span_s,
             ),
             pending_decode_tokens=sum(
                 input_len + output / 2.0 for input_len, output in pending_shapes

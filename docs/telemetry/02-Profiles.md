@@ -73,7 +73,7 @@ Each profile row has these fields:
 | `tpot_intercept` | number | Nonnegative zero-contention decode interval. |
 | `tpot_request_slope` | number, optional | Nonnegative increase in decode interval per active sequence, default `0`. |
 | `kv_capacity_tokens` | integer, optional | Positive, and at least `decode_max_kv_tokens`. |
-| `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. |
+| `decode_min_requests`, `decode_max_requests` | integer | Positive measured concurrency range with `min <= max`. `decode_max_requests` is the cohort of the measured cell that held the most KV tokens. |
 | `decode_min_kv_tokens`, `decode_max_kv_tokens` | integer | Positive measured range of resident KV tokens with `min <= max`. |
 | `decode_fit_mape`, `decode_cv_mape` | number | Nonnegative fit error and leave-one-cell-out cross-validation error. |
 | `cached_ttft_a`, `cached_ttft_b`, `cached_ttft_c`, `cached_ttft_d` | number, optional | Nonnegative coefficients of the [warm prefill fit](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix). |
@@ -117,7 +117,7 @@ The router prices a cold prompt of `n` tokens with the prefill fit:
 | From `prefill_min_tokens` to `prefill_max_tokens` | Fit at `n` |
 | Longer than `prefill_max_tokens` | Fit extended to `n` |
 
-Placement, admission, pool load, demand, and role-split scoring all use this price.
+Placement, admission, pool load, and the resident prefill work in role-split scoring use this price. An engine pays the fit's constant term once per batch of prompts it prefills, so the demand estimate prices each arriving prompt at this price less `ttft_c`, or at a warm price less `cached_ttft_c`.
 
 ### Decode capacity derived from the profile
 

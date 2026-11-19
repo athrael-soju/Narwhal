@@ -58,6 +58,16 @@ async def _require_cold(
         )
 
 
+def covered_decode_requests(decode: list[tuple[float, float, float]]) -> float:
+    """Return the cohort of the measured decode cell that held the most KV tokens.
+
+    The profile's request and KV bounds then meet at a measured cell. A larger cohort measured
+    only at shorter inputs would otherwise claim coverage of requests and KV tokens that no
+    cell held together.
+    """
+    return max(decode, key=lambda row: (row[1], row[0]))[0]
+
+
 async def profile_instance(
     client: httpx.AsyncClient,
     iid: str,
@@ -109,7 +119,9 @@ async def profile_instance(
             prefill_block_tokens=block_tokens,
         )
     decode_intervals: list[dict[str, object]] = []
+    decode_skipped: list[dict[str, object]] = []
     await serve_as(Role.DECODE)
+    capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     decode = await probe_decode(
         client,
         url,
@@ -123,12 +135,17 @@ async def profile_instance(
         max_model_len=max_model_len,
         repeats=s.decode_repeats,
         observation_timeout_s=observation_timeout_s,
+        kv_capacity_tokens=capacity,
+        block_tokens=block_tokens,
+        skipped=decode_skipped,
     )
     decode_tokens_used = [
         used for row in decode_intervals if isinstance(used := row.get("tokens"), int)
     ]
     if evidence is not None:
         evidence.update(decode=decode, decode_intervals=decode_intervals)
+        if decode_skipped:
+            evidence["decode_skipped"] = decode_skipped
     await _require_cold(client, iid, url, metrics, hits_before, observation_timeout_s, evidence)
     cached: list[dict[str, Any]] = []
     reason: str | None
@@ -155,7 +172,8 @@ async def profile_instance(
         )
     slope, request_slope, intercept = fit_decode_plane(decode)
     coefficients = (slope, request_slope, intercept)
-    capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
+    if capacity is None:
+        capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
     profile = Profile(
         iid=iid,
         **prefill_fields(prefill_fit, block_tokens),
@@ -164,7 +182,7 @@ async def profile_instance(
         kv_capacity_tokens=capacity,
         tpot_request_slope=request_slope,
         decode_min_requests=max(1, math.ceil(min(row[0] for row in decode))),
-        decode_max_requests=max(1, math.floor(max(row[0] for row in decode))),
+        decode_max_requests=max(1, math.floor(covered_decode_requests(decode))),
         decode_min_kv_tokens=max(1, math.ceil(min(row[1] for row in decode))),
         decode_max_kv_tokens=max(1, math.floor(max(row[1] for row in decode))),
         decode_fit_mape=decode_mape(decode, coefficients),

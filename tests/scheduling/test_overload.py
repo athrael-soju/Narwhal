@@ -6,7 +6,16 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from narwhal.scheduling.scheduler.occupancy import decode_admits, decode_occupancy, decode_refusal
+from narwhal.scheduling.prefill import prefill_seconds
+from narwhal.scheduling.scheduler.occupancy import (
+    SlotRefusals,
+    SlotWaitHeadroom,
+    decode_admits,
+    decode_check,
+    decode_occupancy,
+    decode_refusal,
+    decode_span,
+)
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -39,6 +48,8 @@ class PinnedPlacementTests(unittest.TestCase):
         scheduler = self.router(pinned=False).scheduler
         monitor = scheduler.monitor
         monitor.dispatched("e3", Request("r", 10, phase=Phase.DECODE))
+        # The drift score prices the legs past their first decode token.
+        monitor.output_token("e3", "r")
         inst = monitor.instances["e3"]
         expected = scheduler.profiles.get("e3").token_interval(inst.decode_tokens(), 1)
         for interval, gap, residual in ((expected, 20 * expected, 1.0), (0.0, 20 * expected, 20.0)):
@@ -174,6 +185,14 @@ class DecodeAdmissionTests(unittest.TestCase):
         for _ in range(count):
             rid = f"p{len(self.scheduler.monitor.instances['e0'].prefill)}"
             self.scheduler.monitor.dispatched("e0", Request(rid, input_len, wanted_len=wanted_len))
+
+    def seat(self, rid, input_len, wanted_len, prefill="e0", decode="e3"):
+        """Place a decode leg while its prefill runs, as the router does on SGLang."""
+        leg = Request(rid, input_len, wanted_len=wanted_len)
+        self.scheduler.monitor.dispatched(prefill, leg)
+        leg.phase = Phase.DECODE
+        self.scheduler.monitor.dispatched(decode, leg)
+        return leg
 
     def ready(self, request):
         prefill = self.scheduler.monitor.instances["e0"]
@@ -321,6 +340,173 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.assertFalse(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=budget))
         self.assertTrue(decode_admits(self.scheduler, request, ready_s=ready, ttft_s=ready))
 
+    def test_a_decode_leg_seated_during_prefill_holds_one_slot(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        self.seat("p0", 10, 2_000)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        self.assertEqual((len(occupancy.residents), occupancy.queued), (limit - 1, ()))
+        request = Request("new", 10, wanted_len=1)
+        ready, budget = self.ready(request), self.scheduler.slo.ttft_s
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
+
+    def test_a_seated_leg_holds_its_slot_until_its_prefill_completes_plus_its_decode(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 1, wanted_len=2_000)
+        leg = self.seat("p0", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        self.assertAlmostEqual(occupancy.ends["e3", "p0"], prefilled + 200 * occupancy.step)
+        # A request ready now takes the leg's slot when the leg's decode ends.
+        request = Request("new", 10, wanted_len=1)
+        _, ((start, _, _),) = occupancy.schedule(
+            occupancy.slots, (decode_span(request, 0.0, occupancy.step, lambda r: r.wanted_len),)
+        )
+        self.assertAlmostEqual(start, occupancy.ends["e3", "p0"])
+        self.assertGreater(start, self.scheduler.slo.ttft_s)
+        self.assertEqual(decode_refusal(self.scheduler, request, ttft_s=0.0), "slot_wait")
+
+    def test_a_seated_leg_counts_the_prefill_queued_ahead_of_it(self):
+        self.prefilling(1, input_len=8_000)
+        leg = self.seat("p1", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        profile = self.scheduler.profiles.get("e0")
+        ahead = prefill_seconds(profile, self.scheduler.monitor.instances["e0"].prefill["p0"])
+        self.assertAlmostEqual(
+            occupancy.ends["e3", "p1"], ahead + prefill_seconds(profile, leg) + 200 * occupancy.step
+        )
+
+    def test_a_decode_leg_waiting_during_prefill_holds_one_slot_through_its_prefill(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        # On SGLang the decode leg waits for a seat before its prefill starts.
+        leg = Request("w", 8_000, wanted_len=2_000)
+        self.scheduler.monitor.dispatched("e0", leg)
+        leg.phase = Phase.DECODE
+        self.scheduler.monitor.waiting[leg.rid] = leg
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        _, last, kv = decode_span(leg, prefilled, occupancy.step, lambda r: r.wanted_len)
+        self.assertEqual(occupancy.queued, ((0.0, last, kv),))
+        request = Request("new", 10, wanted_len=1)
+        ready, budget = self.ready(request), self.scheduler.slo.ttft_s
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=ready, ttft_s=budget))
+
+    def seats(self):
+        """Attest the decode engine's sequence limit at its profiled maximum."""
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.scheduler.monitor.sequence_limit = lambda iid: limit
+        return limit
+
+    def test_a_leg_past_the_sequence_limit_takes_its_engines_next_seat(self):
+        limit = self.seats()
+        self.fill(limit - 1, wanted_len=2_000)
+        self.scheduler.monitor.dispatched(
+            "e3", Request("short", 10, phase=Phase.DECODE, wanted_len=100)
+        )
+        self.prefilling(1, input_len=8_000)
+        leg = self.seat("w", 8_000, 200)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        # The waiting leg's request starts its own prefill when the leg is seated.
+        own = prefill_seconds(self.scheduler.profiles.get("e0"), leg)
+        hold = (0.0, own + 200 * occupancy.step, leg.input_len + 200)
+        self.assertEqual((len(occupancy.residents), occupancy.queued[0]), (limit, hold))
+        self.assertEqual(len(occupancy.queued), 2)
+        freed = occupancy.ends["e3", "short"]
+        self.assertAlmostEqual(freed, 100 * occupancy.step)
+        self.assertAlmostEqual(occupancy.ends["e3", "w"], freed + hold[1])
+        # A joining request follows the waiting leg onto the seat the leg frees.
+        request = Request("new", 10, wanted_len=1)
+        check = decode_check(self.scheduler, request, ttft_s=0.0, ttft_margin=1_000.0)
+        self.assertIsNone(check.refusal)
+        self.assertAlmostEqual(check.slot_wait_s, freed + hold[1])
+
+    def test_the_step_prices_the_seated_batch(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=2_000)
+        step = decode_occupancy(self.scheduler, 10).step
+        for index in range(limit):
+            self.seat(f"w{index}", 9_000, 200)
+        self.assertEqual(decode_occupancy(self.scheduler, 10).step, step)
+
+    def test_a_concurrent_prefill_follows_the_slot_wait(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=200)
+        step = decode_occupancy(self.scheduler, 10).step
+        request = Request("new", 10, wanted_len=1)
+        free = 200 * step
+        for ready, post, wait in (
+            (0.5, 0.0, free - 0.5),
+            (0.5, 0.25, free - 0.25),
+            (free + 1.0, 0.25, 0.0),
+            (free + 0.1, 0.25, 0.15),
+        ):
+            with self.subTest(ready=ready, post=post):
+                check = decode_check(
+                    self.scheduler, request, ready_s=ready, ttft_s=0.0, post_seat_s=post
+                )
+                self.assertAlmostEqual(check.slot_wait_s, wait)
+
+    def test_a_request_waiting_for_a_slot_keeps_the_headroom_free(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=20)
+        request = Request("new", 10, wanted_len=1)
+        wait = decode_check(self.scheduler, request, ttft_s=0.0).slot_wait_s
+        ttft = self.scheduler.slo.ttft_s - wait - 0.1
+        self.assertGreater(ttft, 0.0)
+        for headroom, refusal in ((0.0, None), (0.09, None), (0.11, "slot_wait")):
+            with self.subTest(headroom=headroom):
+                self.assertEqual(
+                    decode_refusal(self.scheduler, request, ttft_s=ttft, slot_headroom_s=headroom),
+                    refusal,
+                )
+        # A request that takes a free slot keeps its whole budget.
+        self.scheduler.monitor.finished("e3", "d0")
+        self.assertIsNone(
+            decode_refusal(
+                self.scheduler, request, ttft_s=self.scheduler.slo.ttft_s, slot_headroom_s=1.0
+            )
+        )
+
+    def test_the_tpot_check_seats_the_request_beside_the_engines_other_seats(self):
+        limit = self.seats()
+        self.fill(limit, wanted_len=2_000)
+        self.scheduler.monitor.instances["e3"].decode["d0"].wanted_len = 1
+        for index in range(3):
+            self.seat(f"w{index}", 10, 2_000)
+        request = Request("new", 10, wanted_len=1)
+        self.assertIsNone(decode_refusal(self.scheduler, request, ttft_s=0.0, ttft_margin=1_000.0))
+
+    def test_a_request_in_prefill_without_a_decode_leg_queues_from_its_prefill_completion(self):
+        limit = self.scheduler.profiles.get("e3").decode_max_requests
+        self.fill(limit - 2, wanted_len=2_000)
+        self.prefilling(1, wanted_len=2_000)
+        p0 = self.scheduler.monitor.instances["e0"].prefill["p0"]
+        estimate = lambda r: r.wanted_len
+        occupancy = decode_occupancy(self.scheduler, 10)
+        prefilled = prefill_seconds(self.scheduler.profiles.get("e0"), p0)
+        self.assertEqual(len(occupancy.residents), limit - 2)
+        self.assertEqual(occupancy.queued, (decode_span(p0, prefilled, occupancy.step, estimate),))
+        request = Request("new", 10, wanted_len=1)
+        budget = self.scheduler.slo.ttft_s
+        self.assertIsNone(
+            decode_refusal(self.scheduler, request, ready_s=self.ready(request), ttft_s=budget)
+        )
+        self.prefilling(1, wanted_len=2_000)
+        self.assertEqual(
+            decode_refusal(self.scheduler, request, ready_s=self.ready(request), ttft_s=budget),
+            "slot_wait",
+        )
+        # Placed after its prefill completes, the leg holds its slot from now.
+        self.scheduler.monitor.first_token("e0", "p0")
+        p0.phase = Phase.DECODE
+        self.scheduler.monitor.dispatched("e3", p0)
+        occupancy = decode_occupancy(self.scheduler, 10)
+        self.assertEqual(len(occupancy.queued), 1)
+        resident = decode_span(p0, 0.0, occupancy.step, estimate)
+        self.assertEqual(occupancy.ends["e3", "p0"], resident[1])
+        self.assertIn(resident, occupancy.residents)
+
     def test_the_tpot_check_admits_on_any_engine_with_room(self):
         self.scheduler.monitor.instances["e0"].role = Role.DECODE
         for iid in ("e0", "e3"):
@@ -361,6 +547,41 @@ class DecodeAdmissionTests(unittest.TestCase):
         request = Request("new", 200_000, wanted_len=1)
         self.assertEqual(decode_refusal(self.scheduler, request), "tpot")
         self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=2.0))
+
+    def test_the_tpot_check_counts_a_seated_leg_generating_after_its_prefill(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.router = create_app(fleet(Path(folder.name), ("e0", "e1", "e3"))).state.router
+        self.scheduler = self.router.scheduler
+        self.scheduler.monitor.instances["e0"].role = Role.DECODE
+        for iid in ("e0", "e3"):
+            self.scheduler.profiles.put(
+                replace(
+                    self.scheduler.profiles.get(iid),
+                    kv_capacity_tokens=1_000_000,
+                    decode_max_kv_tokens=1_000_000,
+                )
+            )
+        self.scheduler.profiles.put(replace(self.scheduler.profiles.get("e1"), ttft_b=1e-6))
+        for index in range(2):
+            self.scheduler.monitor.dispatched(
+                "e3", Request(f"b{index}", 200_000, phase=Phase.DECODE, wanted_len=2_000)
+            )
+        legs = [
+            Request(f"a{index}", 150_000, phase=Phase.DECODE, wanted_len=1) for index in range(3)
+        ]
+        for leg in legs:
+            self.scheduler.monitor.dispatched("e0", leg)
+        request = Request("new", 200_000, wanted_len=1)
+        decoded = decode_occupancy(self.scheduler, request.input_len).ends["e0", "a0"]
+        prefill = prefill_seconds(self.scheduler.profiles.get("e1"), legs[0])
+        start = decoded + prefill / 2
+        self.assertIsNone(decode_refusal(self.scheduler, request, ready_s=start))
+        # The same legs placed while their prefills run generate at `start`.
+        for leg in legs:
+            self.scheduler.monitor.finished("e0", leg.rid)
+            self.seat(leg.rid, leg.input_len, leg.wanted_len, prefill="e1", decode="e0")
+        self.assertEqual(decode_refusal(self.scheduler, request, ready_s=start), "tpot")
 
     def test_admission_reuses_the_controller_estimate_snapshot(self):
         demand = self.router.controller.demand
@@ -470,3 +691,59 @@ class DecodeAdmissionTests(unittest.TestCase):
         self.fill(self.scheduler.profiles.get("e3").decode_max_requests)
         self.scheduler.eject("e3", "liveness")
         self.assertTrue(decode_admits(self.scheduler, self.request))
+
+
+class SlotWaitHeadroomTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0.0
+        self.headroom = SlotWaitHeadroom(lambda: self.now, quantile=0.95, min_samples=4)
+
+    def test_the_headroom_is_a_high_quantile_of_recent_lateness(self):
+        for late in (0.3, -0.1, 0.1):
+            self.headroom.note(late)
+        self.assertEqual(self.headroom.seconds(), 0.0)
+        for index in range(97):
+            self.headroom.note(index / 1000)
+        self.assertAlmostEqual(self.headroom.seconds(), 0.094)
+        self.assertEqual(self.headroom.seconds(0.05), 0.05)
+
+    def test_early_first_tokens_leave_no_headroom(self):
+        for _ in range(8):
+            self.headroom.note(-0.2)
+        self.assertEqual(self.headroom.seconds(), 0.0)
+
+    def test_samples_leave_after_the_window(self):
+        for _ in range(8):
+            self.headroom.note(0.2)
+        self.now = 59.0
+        self.assertEqual(self.headroom.seconds(), 0.2)
+        self.now = 61.0
+        self.assertEqual(self.headroom.seconds(), 0.0)
+
+
+class SlotRefusalsTests(unittest.TestCase):
+    def test_refusals_are_read_by_age(self):
+        now = [0.0]
+        refusals = SlotRefusals(lambda: now[0], retained_s=10.0)
+        refusals.note(Request("a", 10, wanted_len=5, output_len=3))
+        now[0] = 4.0
+        refusals.note(Request("b", 20))
+        self.assertEqual([r.rid for r in refusals.since(5.0)], ["a", "b"])
+        now[0] = 6.0
+        (recent,) = refusals.since(5.0)
+        self.assertEqual((recent.rid, recent.phase, recent.output_len), ("b", Phase.DECODE, 0))
+        now[0] = 20.0
+        refusals.note(Request("c", 30))
+        self.assertEqual([r.rid for r in refusals.since(60.0)], ["c"])
+
+    def test_the_busiest_step_carries_the_shortfall(self):
+        now = [0.0]
+        refusals = SlotRefusals(lambda: now[0])
+        for at, rid in ((0.2, "a"), (0.5, "b"), (0.8, "c"), (6.0, "d")):
+            now[0] = at
+            refusals.note(Request(rid, 10))
+        now[0] = 11.0
+        # Steps count back from now: d is in the step before last, a to c in the one before it.
+        self.assertEqual([r.rid for r in refusals.busiest(5.0, 5.0)], ["d"])
+        self.assertEqual([r.rid for r in refusals.busiest(5.0, 15.0)], ["a", "b", "c"])
+        self.assertEqual(refusals.busiest(5.0, 4.0), [])

@@ -297,8 +297,82 @@ class MonitorMathTests(unittest.TestCase):
         self.assertFalse(window.prefill_overlap)
 
 
+class SeatedBatchTests(MonitorMathTests):
+    """The correction and the prefill price leave out decode legs waiting for a seat."""
+
+    def test_the_correction_is_fitted_on_the_legs_past_their_first_token(self):
+        seated = [self.decode(f"s{index}", 600) for index in range(4)]
+        for index in range(3):
+            self.monitor.dispatched("d0", Request(f"w{index}", 600, phase=Phase.DECODE))
+        profile = self.store.get("d0")
+        for request in seated:
+            self.monitor.output_token("d0", request.rid)
+        self.assertEqual(self.monitor.decoding("d0"), (4, sum(r.length for r in seated)))
+        for _ in range(30):
+            for _ in range(2):
+                requests, tokens = self.monitor.decoding("d0")
+                self.clock.now += 1.05 * profile.token_interval(tokens, requests)
+                for request in seated:
+                    self.monitor.output_token("d0", request.rid)
+            self.monitor.roll_interval()
+        self.assertAlmostEqual(self.monitor.decode_correction("d0"), 1.05, delta=0.01)
+        # Priced with every placed leg as batch, the same gaps read as a fast engine.
+        inst = self.monitor.instances["d0"]
+        self.assertLess(
+            1.05
+            * profile.token_interval(*reversed(self.monitor.decoding("d0")))
+            / profile.token_interval(inst.decode_tokens(), len(inst.decode)),
+            0.8,
+        )
+
+    def test_a_finished_or_replaced_leg_leaves_the_decoding_batch(self):
+        a, b = self.decode("a", 100), self.decode("b", 300)
+        for rid in ("a", "b", "b"):
+            self.monitor.output_token("d0", rid)
+        self.assertEqual(self.monitor.decoding("d0"), (2, a.length + b.length))
+        self.monitor.dispatched("d0", Request("b", 300, phase=Phase.DECODE))
+        self.assertEqual(self.monitor.decoding("d0"), (1, a.length))
+        self.monitor.finished("d0", "a")
+        self.assertEqual(self.monitor.decoding("d0"), (0, 0))
+
+    def test_legs_past_the_sequence_limit_wait_for_a_seat_in_placement_order(self):
+        legs = [Request(f"r{index}", 100, phase=Phase.DECODE) for index in range(5)]
+        for leg in legs:
+            self.monitor.dispatched("d0", leg)
+        self.assertEqual(self.monitor.seat_legs("d0"), (legs, []))
+        self.assertEqual(self.monitor.seat_waiting(), set())
+        self.monitor.sequence_limit = lambda iid: 3
+        self.assertEqual(self.monitor.seat_legs("d0"), (legs[:3], legs[3:]))
+        self.assertEqual(self.monitor.seat_waiting(), {"r3", "r4"})
+        self.monitor.finished("d0", "r0")
+        self.assertEqual(self.monitor.seat_waiting(), {"r4"})
+
+    def test_a_request_whose_decode_leg_waits_for_a_seat_adds_no_prefill_price(self):
+        self.monitor.sequence_limit = lambda iid: 1
+        self.decode("seated", 100)
+        running, gated = Request("running", 2_000), Request("gated", 4_000)
+        for request in (running, gated):
+            self.monitor.dispatched("p0", request)
+        gated.phase = Phase.DECODE
+        self.monitor.dispatched("d0", gated)
+        price = self.store.get("p0").prefill_time(2_000)
+        self.assertAlmostEqual(self.monitor.running_prefill_seconds("p0"), price)
+        self.clock.now = 1.0
+        self.monitor.roll_interval()
+        self.assertAlmostEqual(self.monitor.mean_prefill_price("p0"), price)
+        # Seated, the leg's request prefills.
+        self.monitor.finished("d0", "seated")
+        self.assertAlmostEqual(
+            self.monitor.running_prefill_seconds("p0"),
+            price + self.store.get("p0").prefill_time(4_000),
+        )
+
+
 class RunningDecodeTotalTests(unittest.TestCase):
-    """The monitor's running decode total equals the resident recompute after every event."""
+    """The monitor's running decode totals equal the resident recompute after every event.
+
+    The expected interval prices the legs past their first decode token.
+    """
 
     ENGINES = ("e0", "e1", "e2")
 
@@ -311,7 +385,14 @@ class RunningDecodeTotalTests(unittest.TestCase):
 
         def checked(row, batch_tokens, batch_requests=0.0):
             self.assertIs(type(batch_tokens), int)
-            self.assertEqual(batch_tokens, self.monitor.instances[row.iid].decode_tokens())
+            decoding = [
+                leg
+                for rid, leg in self.monitor.instances[row.iid].decode.items()
+                if self.monitor._decoding_on.get(rid) == row.iid
+            ]
+            self.assertEqual(
+                (batch_requests, batch_tokens), (len(decoding), sum(r.length for r in decoding))
+            )
             self.priced += 1
             return original(row, batch_tokens, batch_requests)
 

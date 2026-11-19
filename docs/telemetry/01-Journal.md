@@ -141,7 +141,7 @@ The [global admission policy](../configuration/02-Serving-and-Role-Control.md#gl
 | `refused`         | `queue`              | `refused_cause` is `queue`.                                                                                                                                                         |
 | `refused`         | `prompt`             | `refused_cause` is `prompt`.                                                                                                                                                        |
 | `refused`         | `aggregate_unpriced` | `refused_cause` is `aggregate_unpriced`.                                                                                                                                            |
-| `refused`         | `slot_wait`          | The projected TTFT plus the decode slot wait exceeds the TTFT budget.                                                                                                               |
+| `refused`         | `slot_wait`          | The projected TTFT plus the decode slot wait and its headroom exceeds the TTFT budget.                                                                                              |
 | `refused`         | `kv_capacity`        | Peak decode KV tokens during the request's decode hold exceed live decode capacity.                                                                                                 |
 | `refused`         | `tpot`               | Decode load pushes the request past `slo.tpot_s` on every live decode engine.                                                                                                       |
 | `rejected`        | `inflight_limit`     | Requests counted against the router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`.                      |
@@ -197,10 +197,12 @@ The router prices each attempt's prefill placement in both [admission modes](../
 | `elapsed_s`     | Seconds from arrival to pricing.                                                                                                                                                                                                          |
 | `handoff_s`     | Seconds from prefill completion to the first decode token, averaged on each decode engine over the latest monitoring interval and then across decode engines. A decode engine with no first decode token in that interval counts as zero. |
 | `price_s`       | Projected TTFT: `backlog_s + own_prefill_s + elapsed_s + handoff_s`.                                                                                                                                                                      |
+| `slot_wait_s`   | The [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check)'s slot wait, in `predictive` mode. Null in `open` mode.                                                                              |
+| `slot_headroom_s` | The slot-wait headroom added to that check when `slot_wait_s` is above zero, else `0`. Null in `open` mode.                                                                                                                              |
 
 `backlog_s` and `price_s` are null when aggregate prefill has no calibrated price. `own_prefill_s` and `backlog_s` are null when the placed engine is outside the profile store.
 
-Compare `price_s` with `first_byte_s` on completed rows to check the price against the observed TTFT.
+Compare `price_s` plus `slot_wait_s` with `first_byte_s` on completed rows to check the price against the observed TTFT.
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 

@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import islice
 
 from ..profiling.store import ProfileStore
 from ..types import Instance, Phase, Request, Role
-from .prefill import resident_prefill_seconds
+from .prefill import prefill_seconds
 
 
 @dataclass
@@ -106,10 +107,17 @@ class InstanceMonitor:
         # Accepted work without an engine reservation remains controller demand.
         self.waiting: dict[str, Request] = {}
         self.on_capacity_change: Callable[[], None] = lambda: None
+        # Returns an engine's attested sequence limit, 0 when unknown. The router sets it.
+        self.sequence_limit: Callable[[str], int] = lambda iid: 0
         self._windows: dict[str, _Window] = {}
         self._handoffs: dict[str, _Window] = {}
-        # Resident decode tokens per engine, read by `output_token`.
+        # Resident decode tokens per engine.
         self._decode_tokens: dict[str, int] = {}
+        # Requests and tokens of each engine's decode legs past their first decode token,
+        # read by `output_token`.
+        self._decoding: dict[str, list[int]] = {}
+        # The engine each such leg decodes on, by request ID.
+        self._decoding_on: dict[str, str] = {}
         self._prices: dict[str, _PriceWindow] = {}
         self._last_token: dict[str, float] = {}
         # Latest prefill completion or decode token per engine.
@@ -130,6 +138,7 @@ class InstanceMonitor:
         self._handoffs[instance.iid] = _Window()
         self._prices[instance.iid] = _PriceWindow(anchor=now, window_start=now)
         self._decode_tokens[instance.iid] = instance.decode_tokens()
+        self._decoding[instance.iid] = [0, 0]
         self.requests_sent.setdefault(instance.iid, 0)
 
     def sent(self, *iids: str) -> None:
@@ -145,13 +154,47 @@ class InstanceMonitor:
         """Update the engine's resident prefill price at the current time."""
         w = self._prices[iid]
         w.touch(self._clock())
+        w.current = self.running_prefill_seconds(iid)
+
+    def seat_legs(self, iid: str) -> tuple[list[Request], list[Request]]:
+        """Split the engine's decode legs into those it seats and those waiting for a seat.
+
+        An engine seats its legs in placement order, up to its attested sequence limit. Without
+        a limit every leg is seated.
+        """
+        legs = list(self.instances[iid].decode.values())
+        limit = self.sequence_limit(iid)
+        if limit <= 0 or len(legs) <= limit:
+            return legs, []
+        return legs[:limit], legs[limit:]
+
+    def seat_waiting(self) -> set[str]:
+        """Return the requests whose decode leg waits for a seat inside its engine."""
+        return {
+            leg.rid
+            for iid, inst in self.instances.items()
+            if 0 < self.sequence_limit(iid) < len(inst.decode)
+            for leg in self.seat_legs(iid)[1]
+        }
+
+    def running_prefill_seconds(self, iid: str, waiting: set[str] | None = None) -> float:
+        """Price the prefill work resident on the engine that is free to run.
+
+        A request whose decode leg waits for a seat starts its prefill when the leg is seated,
+        so it adds no prefill work. `waiting` is `seat_waiting()`, read when None.
+        """
         profile = self.profiles.get(iid) if self.profiles is not None else None
-        if profile is None:
-            w.current = 0.0
-            return
-        inst = self.instances[iid]
+        prefill = self.instances[iid].prefill
+        if profile is None or not prefill:
+            return 0.0
+        waiting = self.seat_waiting() if waiting is None else waiting
         # Resident requests keep their placement-time price.
-        w.current = resident_prefill_seconds(profile, inst)
+        return sum(prefill_seconds(profile, r) for r in prefill.values() if r.rid not in waiting)
+
+    def _reprice_prefill(self, request: Request) -> None:
+        iid = request.prefill_instance
+        if iid in self.instances and request.rid in self.instances[iid].prefill:
+            self._reprice(iid)
 
     def dispatched(self, iid: str, request: Request) -> None:
         """Add `request` to the engine's resident prefill or decode set."""
@@ -167,9 +210,13 @@ class InstanceMonitor:
             replaced = inst.decode.get(request.rid)
             if replaced is not None:
                 self._decode_tokens[iid] -= replaced.length
+                self._stop_decoding(iid, replaced)
             inst.decode[request.rid] = request
             self._decode_tokens[iid] += request.length
             self._decode_ended.discard(request.rid)
+            if 0 < self.sequence_limit(iid) < len(inst.decode):
+                # Placed past the engine's seats, the leg holds its request's prefill.
+                self._reprice_prefill(request)
 
     def first_token(self, iid: str, rid: str) -> None:
         """Move a request out of prefill and start its token clock."""
@@ -191,9 +238,12 @@ class InstanceMonitor:
                 # completed before this token or the current monitoring pass.
                 window.prefill_overlap = True
             profile = self.profiles.get(iid) if self.profiles is not None else None
+            # The engine batches the legs that decode. A leg placed past the engine's seats
+            # waits inside the engine and adds nothing to the interval.
+            requests, tokens = self._decoding[iid]
             expected = (
-                profile.token_interval(self._decode_tokens[iid], len(inst.decode))
-                if profile is not None and profile.decode_max_requests is not None
+                profile.token_interval(tokens, requests)
+                if profile is not None and profile.decode_max_requests is not None and requests
                 else None
             )
             window.add(now - prev, expected)
@@ -205,6 +255,13 @@ class InstanceMonitor:
         if req is not None:
             req.output_len += 1
             self._decode_tokens[iid] += 1
+            decoding = self._decoding[iid]
+            if self._decoding_on.get(rid) == iid:
+                decoding[1] += 1
+            else:
+                self._decoding_on[rid] = iid
+                decoding[0] += 1
+                decoding[1] += req.length
 
     def output_ended(self, rid: str) -> None:
         """Record that a decode stream's engine output has ended before its release."""
@@ -220,6 +277,11 @@ class InstanceMonitor:
         decoding = inst.decode.pop(rid, None)
         if decoding is not None:
             self._decode_tokens[iid] -= decoding.length
+            self._stop_decoding(iid, decoding)
+            limit = self.sequence_limit(iid)
+            if 0 < limit <= len(inst.decode):
+                # The freed seat goes to the first waiting leg, whose request then prefills.
+                self._reprice_prefill(next(islice(inst.decode.values(), limit - 1, None)))
         had_prefill = inst.prefill.pop(rid, None)
         self._last_token.pop(rid, None)
         self._decode_started.discard(rid)
@@ -228,6 +290,18 @@ class InstanceMonitor:
             self._prefill_changed(iid)
             self._reprice(iid)
         self.on_capacity_change()
+
+    def _stop_decoding(self, iid: str, leg: Request) -> None:
+        if self._decoding_on.get(leg.rid) == iid:
+            del self._decoding_on[leg.rid]
+            decoding = self._decoding[iid]
+            decoding[0] -= 1
+            decoding[1] -= leg.length
+
+    def decoding(self, iid: str) -> tuple[int, int]:
+        """Return the requests and tokens of the engine's legs past their first decode token."""
+        requests, tokens = self._decoding[iid]
+        return requests, tokens
 
     def _prefill_changed(self, iid: str) -> None:
         self._windows[iid].prefill_overlap = True

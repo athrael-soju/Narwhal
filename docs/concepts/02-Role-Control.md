@@ -12,7 +12,7 @@ Every vLLM engine runs with the `kv_both` role, so a vLLM role change takes effe
 
 During normal operation, the role controller runs at most one evaluation every `controller.reactive.step_s`. Each evaluation scores the current split of engines and every split that differs from it by one engine. A split's score is the worst of three ratios, each a projected value divided by its service-level objective (SLO) target: time to first token (TTFT), time per output token (TPOT), and the wait for a decode slot.
 
-The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) covers requests waiting for a decode slot and requests still in prefill. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
+The [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) covers requests waiting for a decode slot, decode legs waiting inside an engine for a seat, and requests in prefill before their decode leg is placed. For each request, it divides the projected wait for a decode slot by the time left in the request's `slo.ttft_s` budget once prefill finishes.
 
 The demand estimate includes prompts longer than any in the profiled range, pricing them by extending the [prompt-processing cost curve](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile) past that range.
 
@@ -95,7 +95,16 @@ While an engine is ejected, quarantined, draining, or recovering, the role contr
 
 Requests already running on a vLLM engine finish there after the engine changes role.
 
-An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle if the controller still selects the move. The controller renews the hold each time it asks for the move, and at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
+An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle. A move to decode needs its approval to still stand, as the next paragraph describes. A move to prefill needs the controller to still select it. The controller renews the hold each time it asks for the move. For a move to prefill, it also renews the hold at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
+
+A move to decode that passes its confirmations while its engine is busy stays approved as long as that engine stays held and the number of live prefill engines stays the same. While it is approved, each evaluation asks for the move again without new confirmations, and the move happens at the first evaluation that finds a prefill engine idle. The approval ends, and the engine returns to new placements, when any of these happens:
+
+- three `controller.reactive.step_s` intervals pass after the latest evaluation that found the move eligible
+- a move to prefill becomes eligible
+- a projected-TTFT recovery evaluation runs, or an evaluation with incomplete demand finds the decode recovery ratio below `controller.thresholds.expand`
+- an evaluation stops before scoring splits
+- the role change is blocked, such as by the decode cooldown
+- the move is no longer eligible and fails the decode profile or role floor check, projects prefill load above `controller.thresholds.expand` at the new split, or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, or by zero or less when `mixed_pressure` approved it
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 

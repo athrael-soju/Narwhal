@@ -37,6 +37,18 @@ class Departure:
     reverses: bool = False
 
 
+@dataclass(frozen=True)
+class SwitchDrain:
+    """A move to decode approved while its donor drains for an engine-side role switch."""
+
+    prefill: int
+    donor: str
+    # Latest evaluation whose rules admitted the move.
+    approved_at: float
+    rule: str
+    confirmations: int
+
+
 class ReactivePolicy:
     def __init__(self) -> None:
         self.proposal: tuple[int, bool, str] | None = None
@@ -50,6 +62,7 @@ class ReactivePolicy:
         self.unsettled_since: float | None = None
         # Start of the current run of evaluations that would end the departure's lead.
         self.lead_break_since: float | None = None
+        self.drain: SwitchDrain | None = None
 
     def interrupt(self) -> None:
         self.settled_since = self.balanced_since = None
@@ -84,6 +97,8 @@ class ReactivePolicy:
             for role in (Role.PREFILL, Role.DECODE)
         ):
             self.proposal, self.confirmations = None, 0
+            self._release(controller, self.drain)
+            self.drain = None
             self.settled_since = self.balanced_since = None
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
@@ -126,6 +141,8 @@ class ReactivePolicy:
             correction=correction,
             window_s=controller.window_s,
             step_s=controller.step_s,
+            refused_span_s=controller.step_s
+            * max(controller.confirmations_needed, controller.scheduler.th.sustained_intervals),
         )
         n = snapshot.current_prefill + snapshot.current_decode
         current_p = snapshot.current_prefill
@@ -150,6 +167,8 @@ class ReactivePolicy:
             )
         ):
             self.proposal, self.confirmations = None, 0
+            self._release(controller, self.drain)
+            self.drain = None
             if prefill_recovery is None:
                 self.settled_since = self.balanced_since = None
             details: dict[str, object] = {
@@ -257,6 +276,14 @@ class ReactivePolicy:
         departure = self.departure
         short_current = short.current if short is not None else current
         short_demand = short.demand if short is not None else demand
+        # A move toward decode prices current decode pressure at the larger of the window and
+        # confirmation-span estimates, as it prices the source's prefill pressure.
+        decode_need = max(
+            current.tpot_ratio,
+            current.decode_queue_ratio,
+            short_current.tpot_ratio,
+            short_current.decode_queue_ratio,
+        )
         # After its first move, an open departure holds the reverse move.
         held_reverse = {
             candidate.prefill
@@ -345,9 +372,15 @@ class ReactivePolicy:
                     or (
                         departure is None
                         and candidate.prefill < current_p
-                        and candidate.ttft_ratio > controller.scheduler.th.shrink
-                        and max(current.tpot_ratio, current.decode_queue_ratio)
-                        >= controller.scheduler.th.expand
+                        # Window source load above shrink, or confirmation-span source load
+                        # above shrink and within expand: a rising burst past expand holds.
+                        and (
+                            candidate.ttft_ratio > controller.scheduler.th.shrink
+                            or controller.scheduler.th.shrink
+                            < short_ttft.get(candidate.prefill, 0.0)
+                            <= controller.scheduler.th.expand
+                        )
+                        and decode_need >= controller.scheduler.th.expand
                     )
                 ),
                 controller.within_floors(candidate.prefill),
@@ -467,8 +500,14 @@ class ReactivePolicy:
             return details
 
         eligible = [row for row in evaluations if admitted(row)]
+        # An approval's donor stays held only while each pass asks for the move.
+        approved = self.drain
+        drain = self._standing_drain(controller, now, current_p, evaluations, eligible)
+        if drain is not None:
+            eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
-            # A donor draining for an engine-side switch keeps the confirmed proposal and its hold.
+            self._release(controller, approved)
+            # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
             if controller.scheduler.held_for_switch():
                 controller.scheduler.renew_draining_holds()
             else:
@@ -531,15 +570,12 @@ class ReactivePolicy:
 
         chosen = min(eligible, key=lambda row: (row[0].objective, row[0].prefill))
         candidate = chosen[0]
-        eligibility_rule = rule(chosen)
+        eligibility_rule = rule(chosen) if drain is None else drain.rule
         candidate_p = candidate.prefill
         direction = 1 if candidate_p > current_p else -1
         details = describe(chosen)
-        destination_ratio = (
-            current.ttft_ratio
-            if direction > 0
-            else max(current.tpot_ratio, current.decode_queue_ratio)
-        )
+        details["eligibility_rule"] = eligibility_rule
+        destination_ratio = current.ttft_ratio if direction > 0 else decode_need
         # A move from a source above shrink requires repeated pressure, even with complete demand.
         # The settled run confirms a departure.
         confirmations = (
@@ -558,14 +594,15 @@ class ReactivePolicy:
             )
         )
         proposal = candidate_p, recovery, eligibility_rule
-        if proposal != self.proposal:
-            self.proposal = proposal
-            self.confirmations = 1
+        if drain is not None:
+            # The approved move keeps its confirmations while its donor drains.
+            confirmations = self.confirmations = drain.confirmations
         else:
-            self.confirmations += 1
+            self._confirm(proposal)
         details["confirmations"] = self.confirmations
         details["required_confirmations"] = confirmations
         if self.confirmations < confirmations:
+            self._release(controller, approved)
             controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
                 decode=candidate.decode,
@@ -583,6 +620,16 @@ class ReactivePolicy:
         if moved is None and controller.scheduler.held_for_switch():
             # The next pass with this proposal moves the donor once it is idle.
             self.proposal, self.confirmations = proposal, confirmations
+        donor = controller.scheduler.roles.held_donor
+        if moved is None and target is Role.DECODE and donor is not None:
+            approved_at = drain.approved_at if drain is not None else now
+            self.drain = SwitchDrain(
+                candidate_p, donor, approved_at, eligibility_rule, confirmations
+            )
+        else:
+            self.drain = None
+        if approved is not None and approved.donor != donor:
+            self._release(controller, approved)
         if moved is not None and departure is not None:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
@@ -595,6 +642,69 @@ class ReactivePolicy:
             # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)
         return moved
+
+    def _confirm(self, proposal: tuple[int, bool, str]) -> int:
+        """Count a confirmation of `proposal`; a new split or demand completeness restarts at 1.
+
+        The same move under another eligibility rule keeps its count.
+        """
+        if self.proposal is not None and proposal[:2] == self.proposal[:2]:
+            self.confirmations += 1
+        else:
+            self.confirmations = 1
+        self.proposal = proposal
+        return self.confirmations
+
+    def _standing_drain(
+        self,
+        controller: ReactiveController,
+        now: float,
+        current_p: int,
+        evaluations: list[Evaluation],
+        eligible: list[Evaluation],
+    ) -> SwitchDrain | None:
+        """Return the approved move to decode whose donor still drains, if it stands.
+
+        The approval stands while its donor stays held and the live prefill count is unchanged,
+        and lapses `switch_hold_s` after the latest evaluation whose rules admitted the move. An
+        eligible move to prefill withdraws it. Unless the move is still eligible, so does a failed
+        profile or floor check, projected prefill load above expand at the new split, or an
+        objective gain below the one its rule requires.
+        """
+        drain, self.drain = self.drain, None
+        if drain is None:
+            return None
+        scheduler = controller.scheduler
+        if drain.prefill != current_p - 1 or drain.donor not in scheduler.held_for_switch():
+            return None
+        row = next((row for row in evaluations if row[0].prefill == drain.prefill), None)
+        if row is not None and row in eligible:
+            drain = replace(drain, approved_at=now)
+        elif now - drain.approved_at > scheduler.switch_hold_s:
+            return None
+        if (
+            row is None
+            or any(other[0].prefill > current_p for other in eligible)
+            or (
+                row not in eligible
+                and (
+                    not (row[4] and row[6])
+                    or row[1] > scheduler.th.expand
+                    or row[2] < controller.movement_margin
+                    or (row[2] <= 0.0 and drain.rule == "mixed_pressure")
+                )
+            )
+        ):
+            self.proposal, self.confirmations = None, 0
+            return None
+        self.drain = drain
+        return drain
+
+    @staticmethod
+    def _release(controller: ReactiveController, drain: SwitchDrain | None) -> None:
+        """End the hold on an approval's donor."""
+        if drain is not None:
+            controller.scheduler.switch_holds.pop(drain.donor, None)
 
     @staticmethod
     def _short_view(

@@ -8,10 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from narwhal.scheduling.demand import Arrival, Demand, DemandModel
-from narwhal.scheduling.prefill import prefill_seconds
+from narwhal.scheduling.prefill import batched_prefill_seconds, prefill_seconds
 from narwhal.serving.app import create_app
 from narwhal.types import Request
-from tests.fixtures import fleet, profile, put_warm
+from tests.fixtures import fleet, profile, put_warm, warm
 
 
 def reference_price_profiles(
@@ -37,7 +37,7 @@ def reference_price_profiles(
     beyond = 0
     for row in model.arrivals.rows(h0) if profiles else ():
         length = row.value.input_len
-        cost = sum(p.prefill_time(length) for p in profiles) / len(profiles)
+        cost = sum(p.prefill_time(length) - p.ttft_c for p in profiles) / len(profiles)
         cached = dict(row.value.cached)
         for p in profiles:
             if prefill_iids is not None and p.iid not in prefill_iids:
@@ -45,7 +45,7 @@ def reference_price_profiles(
             tokens = cached.get(p.iid, 0)
             warm_s = p.cached_prefill_time(tokens, length - tokens) if tokens else None
             if warm_s is not None:
-                cost = min(cost, warm_s)
+                cost = min(cost, warm_s - p.cached_ttft_c)
         prefill += cost * row.count / span
         if not all(p.covers_prefill(length) for p in profiles):
             beyond += row.count
@@ -185,9 +185,32 @@ class WindowPricingTests(unittest.TestCase):
         full, overflowed = offered(shapes), offered(shapes + 5)
         [row] = [row for row in overflowed.arrivals.rows() if row.overflow]
         self.assertEqual((row.count, row.value), (5, Arrival(1100)))
-        cold = sum(p.prefill_time(1100) for p in profiles) / len(profiles)
+        cold = sum(batched_prefill_seconds(p, 1100) for p in profiles) / len(profiles)
         self.assertLess(price(full), shapes * cold)
         self.assertAlmostEqual(price(overflowed) - price(full), 5 * cold)
+
+
+class BatchedPrefillShareTests(unittest.TestCase):
+    """An engine pays the prefill fit's constant term once per batch of prompts."""
+
+    def test_a_cold_prompt_prices_its_tokens_without_the_batch_constant(self):
+        row = profile("e0", ttft_c=0.05)
+        self.assertAlmostEqual(prefill_seconds(row, Request("r", 400)), 0.45)
+        self.assertAlmostEqual(batched_prefill_seconds(row, 400), 0.4)
+
+    def test_a_cached_prompt_prices_its_warm_fit_without_the_warm_constant(self):
+        row = warm("e0")
+        self.assertAlmostEqual(
+            batched_prefill_seconds(row, 40, 32),
+            row.cached_prefill_time(32, 8) - row.cached_ttft_c,
+        )
+
+    def test_a_prefix_outside_the_warm_domain_prices_the_cold_share(self):
+        row = warm("e0")
+        self.assertIsNone(row.cached_prefill_time(100, 20))
+        self.assertAlmostEqual(
+            batched_prefill_seconds(row, 120, 100), row.prefill_time(120) - row.ttft_c
+        )
 
 
 class DomainAndUnsizedPricingTests(unittest.TestCase):
@@ -233,16 +256,18 @@ class DomainAndUnsizedPricingTests(unittest.TestCase):
         mixed = (replace(self.profiles[0], prefill_max_tokens=None), *self.profiles[1:])
         priced = self.demand.price_profiles(self.now, window_s=60.0, step_s=1.0, profiles=mixed)
         self.assertTrue(priced.complete)
-        cold = {n: sum(p.prefill_time(n) for p in mixed) / len(mixed) for n in (4000, 400)}
+        cold = {
+            n: sum(batched_prefill_seconds(p, n) for p in mixed) / len(mixed) for n in (4000, 400)
+        }
         self.assertAlmostEqual(priced.prefill_engines, (3 * cold[4000] + 2 * cold[400]) / 60.0)
         self.assertEqual(priced.arrivals_beyond_profile, 3)
 
-    def test_cold_price_above_the_sweep_matches_admission(self):
+    def test_cold_price_above_the_sweep_is_the_admission_price_less_the_batch_constant(self):
         row = self.profiles[0]
         self.assertFalse(row.covers_prefill(4000))
-        self.assertEqual(
+        self.assertAlmostEqual(
             DemandModel._arrival_price((row,), 4000, (), None),
-            prefill_seconds(row, Request("r", 4000)),
+            prefill_seconds(row, Request("r", 4000)) - row.ttft_c,
         )
 
     def test_unsized_offers_take_the_mean_parsed_price(self):
@@ -274,7 +299,7 @@ class DomainAndUnsizedPricingTests(unittest.TestCase):
         self.unsized(1)
         window, recent = self.price(), self.price(horizon_s=15.0)
         self.assertEqual((window.unsized_offers, recent.unsized_offers), (5, 1))
-        cold = sum(p.prefill_time(400) for p in self.profiles) / len(self.profiles)
+        cold = sum(batched_prefill_seconds(p, 400) for p in self.profiles) / len(self.profiles)
         self.assertAlmostEqual(window.prefill_engines, 6 * cold / 60.0 * 11 / 6)
         self.assertAlmostEqual(recent.prefill_engines, 2 * cold / 15.0 * 3 / 2)
 
@@ -287,5 +312,5 @@ class DomainAndUnsizedPricingTests(unittest.TestCase):
         self.parsed(4)
         priced = self.price()
         self.assertTrue(priced.complete)
-        cold = sum(p.prefill_time(400) for p in self.profiles) / len(self.profiles)
+        cold = sum(batched_prefill_seconds(p, 400) for p in self.profiles) / len(self.profiles)
         self.assertAlmostEqual(priced.prefill_engines, 4 * cold / 60.0)

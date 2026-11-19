@@ -44,8 +44,18 @@ def warm_cases(sweep: Sweep, max_model_len: int | None = None) -> list[tuple[int
     ]
 
 
+def decode_concurrency(sweep: Sweep, max_num_seqs: int | None = None) -> tuple[int, ...]:
+    """Return the decode cohorts for an engine: the sweep's, ending at `max_num_seqs`."""
+    concurrency = sweep.decode_concurrency
+    if max_num_seqs is not None:
+        concurrency = tuple(n for n in concurrency if n <= max_num_seqs)
+        if max_num_seqs not in concurrency:
+            concurrency += (max_num_seqs,)
+    return concurrency
+
+
 def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = None) -> Sweep:
-    """Keep candidate lengths and cohorts within the serving engine's limits."""
+    """Fit candidate lengths to the context limit and end decode cohorts at `max_num_seqs`."""
     prefill = tuple(n for n in sweep.prefill_lens if n + 1 < max_model_len)
     decode = tuple(n for n in sweep.decode_input_lens if n + sweep.decode_tokens < max_model_len)
     if len(set(prefill)) < 3 or len(set(decode)) < 2:
@@ -53,16 +63,12 @@ def bounded_sweep(sweep: Sweep, max_model_len: int, max_num_seqs: int | None = N
             f"max_model_len {max_model_len} leaves too few sweep points; choose shorter "
             "--prefill-lens and --decode-input-lens"
         )
-    concurrency = sweep.decode_concurrency
-    if max_num_seqs is not None:
-        concurrency = tuple(n for n in concurrency if n <= max_num_seqs)
-        if max_num_seqs < max(sweep.decode_concurrency) and max_num_seqs not in concurrency:
-            concurrency += (max_num_seqs,)
-        if len(set(concurrency)) < 2:
-            raise ValueError(
-                f"max_num_seqs {max_num_seqs} leaves fewer than two decode concurrency "
-                "points; adjust the engine launch policy before profiling"
-            )
+    concurrency = decode_concurrency(sweep, max_num_seqs)
+    if max_num_seqs is not None and len(set(concurrency)) < 2:
+        raise ValueError(
+            f"max_num_seqs {max_num_seqs} leaves fewer than two decode concurrency "
+            "points; adjust the engine launch policy before profiling"
+        )
     # Prefix, suffix and one output token fit the context.
     shortest_suffix = min(sweep.cached_suffix_lens, default=0)
     shortest_prefix = min(sweep.cached_prefix_lens, default=0)

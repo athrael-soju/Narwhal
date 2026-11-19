@@ -24,6 +24,8 @@ class VllmDialect(EngineDialect):
         "add_generation_prompt",
         "add_special_tokens",
     )
+    # vLLM keeps one cache block as its null block.
+    kv_reserved_blocks = 1
 
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]:
         return {"x-request-id": rid}, {}
