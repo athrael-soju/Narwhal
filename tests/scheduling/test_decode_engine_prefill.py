@@ -372,6 +372,37 @@ class BorrowedStallTests(unittest.TestCase):
         # Spans no decode gap can still overlap are dropped.
         self.assertEqual(self.monitor._lent, {})
 
+    def test_legs_that_finish_early_restart_the_queued_spans_from_their_release(self):
+        # Three queued 1.01 s legs prefill together and leave prefill after 0.5 s.
+        for rid in "abc":
+            self.monitor.dispatched("d", Request(rid, 1000, borrowed=True))
+        self.now[0] += 0.25
+        self.monitor.first_token("d", "a")
+        # The queued spans start again from a's release, each keeping its length.
+        spans = [
+            (w.rid, w.start - self.now[0], w.end - self.now[0]) for w in self.monitor._lent["d"]
+        ]
+        self.assertEqual([rid for rid, _, _ in spans], [None, "b", "c"])
+        for (_, start, end), want in zip(spans[1:], [(0.0, 1.01), (1.01, 2.02)], strict=True):
+            self.assertAlmostEqual(start, want[0])
+            self.assertAlmostEqual(end, want[1])
+        self.now[0] += 0.25
+        for rid in "bc":
+            self.monitor.first_token("d", rid)
+        self.decode(1, 0.01)
+        # A leg placed 0.1 s later prices its own 1.01 s span from its placement.
+        self.monitor.dispatched("d", Request("e", 1000, borrowed=True))
+        placed = self.now[0]
+        (span,) = [w for w in self.monitor._lent["d"] if w.rid == "e"]
+        self.assertAlmostEqual(span.start, placed)
+        self.now[0] += 1.01
+        self.monitor.first_token("d", "e")
+        for k in range(4):
+            self.monitor.output_token("d", f"r{k}")
+        self.monitor.roll_interval()
+        # Each 1.01 s gap keeps 1.01 - 0.8 * 1.01 s of unpriced stall.
+        self.assertAlmostEqual(self.monitor.mean_token_interval("d"), 0.202)
+
     def test_borrowed_prefill_counts_toward_the_prefill_pool_but_not_its_engine_count(self):
         case = DecodeEnginePrefillTests(
             "test_held_pinned_and_unavailable_decode_engines_take_no_leg"

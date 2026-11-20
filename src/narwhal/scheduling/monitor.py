@@ -315,26 +315,47 @@ class InstanceMonitor:
         """Open the span the borrow envelope priced for a borrowed leg.
 
         The engine prefills its borrowed legs one after another, so a span starts at dispatch
-        or at the end of the engine's previous span and lasts the leg's profiled prefill time.
+        or at the end of the last span whose leg is still in prefill, and lasts the leg's
+        profiled prefill time.
         """
         profile = self.profiles.get(iid) if self.profiles is not None else None
         if profile is None:
             return
         windows = self._lent.setdefault(iid, [])
-        start = max(self._clock(), windows[-1].end if windows else float("-inf"))
+        start = max([self._clock(), *(w.end for w in windows if w.rid is not None)])
         windows.append(_LentWindow(request.rid, start, start + prefill_seconds(profile, request)))
 
     def _unlend(self, iid: str, rid: str) -> None:
-        """End a borrowed leg's span when the leg leaves prefill."""
+        """End a borrowed leg's span when the leg leaves prefill.
+
+        A span that has not started is dropped. The queued spans after it start again from
+        now, each keeping its length.
+        """
         now = self._clock()
-        for window in self._lent.get(iid, ()):
+        windows = self._lent.get(iid)
+        if not windows:
+            return
+        kept: list[_LentWindow] = []
+        cursor: float | None = None
+        for window in windows:
             if window.rid == rid:
-                window.rid, window.end = None, max(window.start, min(window.end, now))
+                window.rid, window.end, cursor = None, min(window.end, now), now
+                if window.end > window.start:
+                    kept.append(window)
+                continue
+            if cursor is not None and window.rid is not None:
+                if window.start > cursor:
+                    length = window.end - window.start
+                    window.start, window.end = cursor, cursor + length
+                cursor = max(cursor, window.end)
+            kept.append(window)
+        self._lent[iid] = kept
         self._prune_lent(iid)
 
     def _prune_lent(self, iid: str) -> None:
         windows = self._lent.get(iid)
         if not windows:
+            self._lent.pop(iid, None)
             return
         oldest = min(
             (
