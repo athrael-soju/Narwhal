@@ -307,7 +307,7 @@ The engine stays inside its envelope when all of these hold:
 
 Placement chooses a borrowed engine only when no prefill-role engine meets the TTFT budget and a borrowed engine does, or when no prefill-role engine is a candidate. Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first, because the prefill cost starts with them. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
 
-Decode load leaves out the token gaps a borrowed leg stalls, and the prefill pool's load counts the leg's prefill work, as [Load definitions](#load-definitions) describes.
+Decode load leaves out the stall the envelope priced for a borrowed leg, and the prefill pool's load counts the leg's prefill work, as [Load definitions](#load-definitions) describes.
 
 
 ## Request deadlines and engine HTTP behaviour
@@ -453,7 +453,7 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream. Both leave out each gap during which a [borrowed prefill leg](#prefill-legs-on-decode-engines) ran on the engine. |
+| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream. Each gap, closed or open, has `decode_prefill_slowdown` times its overlap with the priced spans of the engine's [borrowed prefill legs](#prefill-legs-on-decode-engines) subtracted, down to `0`. A leg's priced span starts when the leg is placed or when the engine's previous priced span ends, lasts the leg's profiled prefill time, and ends early when the leg leaves prefill. |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Predicted prefill work                        | The profiled prefill time of the engine's resident requests. A request whose decode leg [waits inside an engine for a seat](#decode-admission-check) adds none. |

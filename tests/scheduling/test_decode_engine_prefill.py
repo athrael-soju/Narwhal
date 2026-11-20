@@ -12,6 +12,7 @@ from narwhal.profiling.fitting import fit_prefill_slowdown, prefill_share
 from narwhal.profiling.store import ProfileStore
 from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.prefill import prefill_seconds
 from narwhal.scheduling.scheduler.occupancy import DecodeCheck
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving import execution
@@ -287,51 +288,89 @@ class DecodeEnginePrefillTests(unittest.TestCase):
 
 
 class BorrowedStallTests(unittest.TestCase):
-    def stall(self, borrowed):
-        """Decode on d, stall it for 1 s with a prefill leg, then decode again."""
+    """d decodes four streams at 4 ms; its fit prices 0.8 s of stall per prefill second."""
+
+    def setUp(self):
         case = DecodeEnginePrefillTests(
             "test_held_pinned_and_unavailable_decode_engines_take_no_leg"
         )
         case.setUp()
         self.addCleanup(case.doCleanups)
-        monitor, scheduler, now = case.monitor, case.scheduler, case.now
-        d = monitor.instances["d"]
+        self.monitor, self.scheduler, self.now = case.monitor, case.scheduler, case.now
+        self.d = self.monitor.instances["d"]
         for k in range(4):
-            monitor.dispatched("d", Request(f"r{k}", 1000, phase=Phase.DECODE, wanted_len=500))
-            monitor.first_token("d", f"r{k}")
+            self.monitor.dispatched("d", Request(f"r{k}", 1000, phase=Phase.DECODE, wanted_len=500))
+            self.monitor.first_token("d", f"r{k}")
+        # The correction settles at its lower bound.
+        self.decode(60, 0.004)
+        self.base = (self.scheduler.decode_load(self.d), self.monitor.decode_correction("d"))
 
-        def decode(intervals):
-            for _ in range(intervals):
-                for _ in range(10):
-                    now[0] += 0.004
-                    for k in range(4):
-                        monitor.output_token("d", f"r{k}")
-                monitor.roll_interval()
+    def decode(self, intervals, gap):
+        for _ in range(intervals):
+            for _ in range(10):
+                self.now[0] += gap
+                for k in range(4):
+                    self.monitor.output_token("d", f"r{k}")
+            self.monitor.roll_interval()
 
-        # The correction settles at its lower bound before the stall.
-        decode(60)
-        before = (scheduler.decode_load(d), monitor.decode_correction("d"))
-        monitor.dispatched("d", Request("leg", 1000, borrowed=borrowed))
-        now[0] += 1.0
-        monitor.roll_interval()
-        during = (scheduler.decode_load(d), monitor.stalled_gap("d"))
-        monitor.first_token("d", "leg")
-        monitor.finished("d", "leg")
-        decode(1)
-        after = (scheduler.decode_load(d), monitor.decode_correction("d"))
-        decode(10)
-        return before, during, after, monitor.decode_correction("d")
+    def lend(self, borrowed=True):
+        leg = Request("leg", 1000, borrowed=borrowed)
+        self.monitor.dispatched("d", leg)
+        # The leg's profiled prefill time, the span the envelope priced.
+        self.assertAlmostEqual(prefill_seconds(self.scheduler.profiles.get("d"), leg), 1.01)
+        return leg
 
-    def test_a_borrowed_legs_stall_raises_neither_decode_load_nor_the_correction(self):
-        before, during, after, settled = self.stall(borrowed=True)
-        self.assertEqual(during, (before[0], 0.0))
-        self.assertEqual(after, before)
-        self.assertAlmostEqual(settled, before[1], places=4)
-        # The same stall from a prefill leg placed without the envelope counts as decode load.
-        unpriced = self.stall(borrowed=False)
-        self.assertGreater(unpriced[1][0], 10 * before[0])
-        self.assertAlmostEqual(unpriced[1][1], 1.0)
-        self.assertGreater(unpriced[2][0], before[0])
+    def release(self):
+        self.monitor.first_token("d", "leg")
+        self.monitor.finished("d", "leg")
+
+    def test_a_stall_within_the_priced_slowdown_leaves_decode_load_unchanged(self):
+        loads = {}
+        for borrowed in (True, False):
+            with self.subTest(borrowed=borrowed):
+                self.setUp()
+                self.lend(borrowed)
+                # Five times the 4 ms gap: 16 ms of each 20 ms gap is the priced 0.8 share.
+                self.decode(5, 0.02)
+                loads[borrowed] = self.scheduler.decode_load(self.d)
+                self.release()
+                self.decode(10, 0.004)
+                self.assertAlmostEqual(self.scheduler.decode_load(self.d), self.base[0])
+                self.assertAlmostEqual(self.monitor.decode_correction("d"), self.base[1], 4)
+        self.assertAlmostEqual(loads[True], self.base[0])
+        # Placed without the envelope, the same slowdown counts in full.
+        self.assertGreater(loads[False], 4 * self.base[0])
+
+    def test_an_overload_beside_a_borrowed_leg_raises_decode_load(self):
+        self.lend()
+        # Forty times the 4 ms gap: 0.8 of it is priced, and 128 ms per gap still counts.
+        self.decode(2, 0.16)
+        self.assertGreater(self.scheduler.decode_load(self.d), 30 * self.base[0])
+
+    def test_a_hang_beside_a_borrowed_leg_shows_and_survives_its_release(self):
+        self.lend()
+        self.now[0] += 10.0
+        # The leg's 1.01 s span prices 0.808 s of each open gap.
+        self.assertAlmostEqual(self.monitor.stalled_gap("d"), 10.0 - 0.808)
+        self.now[0] += 20.0
+        self.assertAlmostEqual(self.monitor.stalled_gap("d"), 30.0 - 0.808)
+        self.release()
+        self.monitor.roll_interval()
+        self.assertAlmostEqual(self.monitor.stalled_gap("d"), 30.0 - 0.808)
+        self.assertGreater(self.scheduler.decode_load(self.d), 500)
+
+    def test_back_to_back_legs_price_one_span_after_another(self):
+        for index in range(3):
+            self.monitor.dispatched("d", Request(f"leg{index}", 1000, borrowed=True))
+        self.now[0] += 10.0
+        self.assertAlmostEqual(self.monitor.stalled_gap("d"), 10.0 - 3 * 0.808)
+        for index in range(3):
+            self.monitor.first_token("d", f"leg{index}")
+            self.monitor.finished("d", f"leg{index}")
+        self.decode(1, 0.004)
+        self.monitor.roll_interval()
+        # Spans no decode gap can still overlap are dropped.
+        self.assertEqual(self.monitor._lent, {})
 
     def test_borrowed_prefill_counts_toward_the_prefill_pool_but_not_its_engine_count(self):
         case = DecodeEnginePrefillTests(
@@ -354,6 +393,15 @@ class BorrowedStallTests(unittest.TestCase):
             fleet = Fleet(folder.name)
             fleet.telemetry.stop()
             fleet.monitor.instances["e1"].role = Role.PREFILL
+            # The fit prices a stall that pauses decode for the whole of a 10 ms/token prefill.
+            fleet.profiles.put(
+                replace(
+                    fleet.profiles.get("e2"),
+                    ttft_b=0.01,
+                    decode_prefill_slowdown=1.0,
+                    decode_prefill_max_share=0.5,
+                )
+            )
             monitor = fleet.monitor
             for k in range(4):
                 monitor.dispatched("e2", Request(f"r{k}", 100, phase=Phase.DECODE, wanted_len=100))
@@ -363,7 +411,7 @@ class BorrowedStallTests(unittest.TestCase):
                 for k in range(4):
                     monitor.output_token("e2", f"r{k}")
             monitor.roll_interval()
-            # A long prefill leg on the decode engine stalls its streams.
+            # A 50 s prefill leg on the decode engine stalls its streams through the test.
             monitor.dispatched("e2", Request("leg", 5000, wanted_len=10, borrowed=borrowed))
             moves[borrowed] = []
             with patch.object(fleet.scheduler, "prefill_load", return_value=0.7):
@@ -388,17 +436,19 @@ class DecodeEnginePrefillJournalTests(HttpHarness):
         self.cfg.serving = ServingPolicy(prefill_on_decode=True)
         ProfileStore(self.cfg.profiles_path).put(profile("e3", **ENVELOPE))
         client = self.client()
-        self.assertEqual((await self.post(client)).status_code, 200)
-        # A prefill engine held for a switch leaves the leg to the decode engine.
-        self.router.scheduler.hold_for_switch("e0")
-        self.assertEqual((await self.post(client)).status_code, 200)
+        monitor = self.router.monitor
+        with patch.object(monitor, "_lend", wraps=monitor._lend) as lent:
+            self.assertEqual((await self.post(client)).status_code, 200)
+            # A prefill engine held for a switch leaves the leg to the decode engine.
+            self.router.scheduler.hold_for_switch("e0")
+            self.assertEqual((await self.post(client)).status_code, 200)
         rows = self.terminal_rows()
         self.assertEqual(
             [(row["prefill_iid"], row["prefill_role"]) for row in rows],
             [("e0", "prefill"), ("e3", "decode")],
         )
         # The monitor saw the second leg as borrowed on e3.
-        self.assertEqual(set(self.router.monitor._lent_until), {"e3"})
+        self.assertEqual([call.args[0] for call in lent.call_args_list], ["e3"])
         self.assert_released()
 
 
