@@ -47,6 +47,16 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(json.loads(self.path.read_text()), document(cfg))
                 self.assertGreater(restored.control_connections, 0)
 
+    def test_early_decode_recovery_loads_off_by_default(self):
+        self.assertFalse(self.load(self.raw).reactive_decode_recovery)
+        cfg = self.load(self.changed(("controller", "reactive", "decode_recovery"), True))
+        self.assertTrue(cfg.reactive_decode_recovery)
+        cfg.save(self.path)
+        self.assertTrue(
+            json.loads(self.path.read_text())["controller"]["reactive"]["decode_recovery"]
+        )
+        self.assertEqual(FleetConfig.load(self.path), cfg)
+
     def test_packaged_example_matches_the_canonical_document(self):
         packaged = ROOT / "src/narwhal/fleet.example.json"
         canonical = ROOT / "config/fleet.example.json"
@@ -125,6 +135,7 @@ class ConfigTests(unittest.TestCase):
         for path, value in (
             (("model",), 1),
             (("controller", "advisory"), 1),
+            (("controller", "reactive", "decode_recovery"), 1),
             (("serving", "max_connections"), True),
             (("controller", "monitor_interval_s"), "1"),
             (("controller", "monitor_interval_s"), float("nan")),
@@ -277,6 +288,7 @@ class ConfigTests(unittest.TestCase):
             ({"health_window_s": 0}, "window_s"),
             ({"admission": "unknown"}, "admission"),
             ({"advisory": 1}, "advisory"),
+            ({"reactive_decode_recovery": 1}, "decode_recovery"),
             ({"engine_restart_policy": "unknown"}, "engine_restart_policy"),
             ({"connector": "unknown"}, "connector"),
             ({"dialect": "unknown"}, "dialect"),
@@ -379,6 +391,22 @@ class ConfigTests(unittest.TestCase):
             self.load({**self.raw, "serving": {"max_attempts": 4}})
         with self.assertRaisesRegex(ValueError, "max_attempts"):
             replace(self.load(self.raw), serving=replace(policy, max_attempts=4)).validate()
+
+    def test_prefill_on_decode_is_off_by_default_and_needs_router_chosen_roles(self):
+        self.assertIs(self.load(self.raw).serving.prefill_on_decode, False)
+        cfg = self.load({**self.raw, "serving": {"prefill_on_decode": True}})
+        self.assertIs(cfg.serving.prefill_on_decode, True)
+        self.assertIs(document(cfg)["serving"]["prefill_on_decode"], True)
+        cfg.save(self.path)
+        self.assertEqual(FleetConfig.load(self.path), cfg)
+        with self.assertRaisesRegex(ValueError, "serving.prefill_on_decode must be a boolean"):
+            self.load({**self.raw, "serving": {"prefill_on_decode": 1}})
+        sglang = replace(
+            cfg, backend="sglang", dialect="sglang", connector="mooncake", engine_contract=None
+        )
+        with self.assertRaisesRegex(ValueError, "prefill_on_decode needs engines that serve"):
+            sglang.validate()
+        replace(sglang, serving=ServingPolicy()).validate()
 
     def test_check_cli_uses_native_fleet_config(self):
         with patch.object(check_cli, "run", new=AsyncMock(return_value=0)) as run:

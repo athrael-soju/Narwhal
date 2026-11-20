@@ -22,6 +22,8 @@ class ServingPolicy:
     # Byte ceilings bound retained bodies independently of token estimates.
     max_request_bytes: int = 4 * 1024 * 1024
     max_response_bytes: int = 16 * 1024 * 1024
+    # Lets placement send a prefill leg to a decode-role engine inside its profiled envelope.
+    prefill_on_decode: bool = False
 
     def validate(self) -> None:
         """Reject unbounded, mistyped, and contradictory serving settings."""
@@ -50,6 +52,8 @@ class ServingPolicy:
             raise ValueError("serving retry delays require 0 < retry_base_s <= retry_cap_s")
         if self.retry_replenish > 1:
             raise ValueError("serving.retry_replenish must not exceed one credit per completion")
+        if type(self.prefill_on_decode) is not bool:
+            raise ValueError("serving.prefill_on_decode must be a boolean")
 
     def retry_policy(self) -> RetryPolicy:
         """Return the per-request attempt and delay policy."""

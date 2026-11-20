@@ -114,6 +114,28 @@ class ProfileStoreTests(unittest.TestCase):
         self.assertEqual(row.max_tokens(0.001, batch_requests=1), 0)
         self.assertLessEqual(row.max_tokens(100, batch_requests=1), 100_000)
 
+    def test_prefill_share_fields_go_together_and_persist(self):
+        """The slowdown needs its measured share, which lies strictly between 0 and 1."""
+        row = profile(decode_prefill_slowdown=0.8, decode_prefill_max_share=0.5)
+        for changes, message in (
+            ({"decode_prefill_max_share": None}, "go together"),
+            ({"decode_prefill_slowdown": None}, "go together"),
+            ({"decode_prefill_slowdown": -0.1}, "decode_prefill_slowdown must be nonnegative"),
+            ({"decode_prefill_max_share": 0.0}, "above 0 and below 1"),
+            ({"decode_prefill_max_share": 1.0}, "above 0 and below 1"),
+            ({"decode_prefill_max_share": True}, "decode_prefill_max_share must be a number"),
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, message):
+                replace(row, **changes)
+        store = ProfileStore(self.path)
+        store.put(row)
+        store.put(profile("plain"))
+        self.assertEqual(ProfileStore(self.path).get(row.iid), row)
+        # A row without the fit stores no share fields, so earlier releases load it.
+        rows = {r["iid"]: r for r in json.loads(self.path.read_text())["profiles"]}
+        self.assertNotIn("decode_prefill_slowdown", rows["plain"])
+        self.assertEqual(rows[row.iid]["decode_prefill_max_share"], 0.5)
+
     def test_workload_domain_and_colocated_load_are_persisted(self):
         row = replace(
             profile(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -16,9 +17,10 @@ from ..fitting import (
     decode_mape,
     fit_decode_plane,
     fit_prefill_samples,
+    fit_prefill_slowdown,
 )
 from ..model import Profile
-from .decode import probe_decode
+from .decode import probe_decode, probe_prefill_share
 from .engine import cache_block_tokens, kv_capacity, prefix_cache_hits
 from .prefill import probe_prefill
 from .sweep import Sweep, warm_cases
@@ -82,6 +84,7 @@ async def profile_instance(
     max_model_len: int | None = None,
     observation_timeout_s: float | None = None,
     roles: Callable[[Role], Awaitable[None]] | None = None,
+    prefill_on_decode: bool = False,
 ) -> Profile:
     async def serve_as(role: Role) -> None:
         if roles is not None:
@@ -174,6 +177,7 @@ async def profile_instance(
     coefficients = (slope, request_slope, intercept)
     if capacity is None:
         capacity = await kv_capacity(client, url, metrics, observation_timeout_s or 30.0)
+    longest_prefill = math.ceil(max(row[0] for row in prefill))
     profile = Profile(
         iid=iid,
         **prefill_fields(prefill_fit, block_tokens),
@@ -188,10 +192,43 @@ async def profile_instance(
         decode_fit_mape=decode_mape(decode, coefficients),
         decode_cv_mape=decode_cross_validation_mape(decode),
         prefill_min_tokens=math.floor(min(row[0] for row in prefill)),
-        prefill_max_tokens=math.ceil(max(row[0] for row in prefill)),
+        prefill_max_tokens=longest_prefill,
         decode_min_output_tokens=1,
         decode_max_output_tokens=max(decode_tokens_used, default=s.decode_tokens),
     )
+    if prefill_on_decode:
+        await serve_as(Role.DECODE)
+        share_samples: list[dict[str, object]] = []
+        try:
+            runs = await probe_prefill_share(
+                client,
+                url,
+                model,
+                dialect,
+                profile,
+                longest_prefill,
+                chars_per_token=chars_per_token,
+                max_model_len=max_model_len,
+                observation_timeout_s=observation_timeout_s,
+                evidence=share_samples,
+            )
+            slowdown, max_share = fit_prefill_slowdown(runs)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            # The engine keeps its profile without the fit, so placement never borrows it.
+            print(f"    prefill share left unfitted: {exc}")
+            if evidence is not None:
+                evidence["prefill_share"] = {"samples": share_samples, "reason": str(exc)}
+        else:
+            if evidence is not None:
+                evidence["prefill_share"] = {
+                    "samples": share_samples,
+                    "slowdown": slowdown,
+                    "max_share": max_share,
+                }
+            print(f"    prefill share slowdown {slowdown:.2f} up to share {max_share:.2f}")
+            profile = replace(
+                profile, decode_prefill_slowdown=slowdown, decode_prefill_max_share=max_share
+            )
     try:
         if reason is not None:
             raise ValueError(reason)

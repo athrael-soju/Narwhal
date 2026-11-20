@@ -76,6 +76,8 @@ class Request:
     cache_placement: dict[str, Any] | None = None
     # Offered-demand cohort, repriced when cache evidence changes.
     demand_arrival: Any = None
+    # Whether placement borrowed a decode-role engine for this prefill leg.
+    borrowed: bool = False
 
     @property
     def length(self) -> int:

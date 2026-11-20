@@ -8,7 +8,7 @@ from .demand import Demand, OutputEstimates, rounded
 from .scoring import PrefillProjection, SplitScore, decision_details
 
 if TYPE_CHECKING:
-    from .controller import PrefillRecovery, ReactiveController
+    from .controller import DecodeRecovery, PrefillRecovery, ReactiveController
 
 Evaluation = tuple[SplitScore, float, float, bool, bool, bool, bool]
 
@@ -63,6 +63,8 @@ class ReactivePolicy:
         # Start of the current run of evaluations that would end the departure's lead.
         self.lead_break_since: float | None = None
         self.drain: SwitchDrain | None = None
+        # Time of the latest applied early decode recovery move.
+        self.early_decode_at: float | None = None
 
     def interrupt(self) -> None:
         self.settled_since = self.balanced_since = None
@@ -72,9 +74,20 @@ class ReactivePolicy:
         controller: ReactiveController,
         *,
         prefill_recovery: PrefillRecovery | None = None,
+        decode_recovery: DecodeRecovery | None = None,
         advance_cadence: bool = True,
     ) -> Instance | None:
         now = controller._clock()
+        urgent: PrefillRecovery | DecodeRecovery | None = prefill_recovery or decode_recovery
+        # An urgent evaluation scores the one adjacent split toward the pressed role.
+        urgent_heading = 1 if prefill_recovery is not None else -1
+        urgent_rule = (
+            "projected_ttft_recovery" if prefill_recovery is not None else "early_decode_recovery"
+        )
+        # An early decode evaluation leaves the panic count, steady run, departure, and the
+        # proposal and confirmations of another split unchanged. Held, it also leaves the settled
+        # run and a drain approval unchanged.
+        decode_urgent = decode_recovery is not None
         adjusted = controller.restore_floor()
         if adjusted:
             controller._last_step = now
@@ -84,8 +97,9 @@ class ReactivePolicy:
             controller.scheduler.pool_load(Role.PREFILL),
             controller.scheduler.pool_load(Role.DECODE),
         )
-        controller.scheduler.roles.observe_control_load(*observed_load)
-        if now - controller._last_step < controller.step_s and prefill_recovery is None:
+        if not decode_urgent:
+            controller.scheduler.roles.observe_control_load(*observed_load)
+        if now - controller._last_step < controller.step_s and urgent is None:
             return None
         if advance_cadence:
             controller._last_step = now
@@ -96,21 +110,24 @@ class ReactivePolicy:
             controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
             for role in (Role.PREFILL, Role.DECODE)
         ):
-            self.proposal, self.confirmations = None, 0
-            self._release(controller, self.drain)
-            self.drain = None
-            self.settled_since = self.balanced_since = None
+            if not decode_urgent:
+                self.proposal, self.confirmations = None, 0
+                self._release(controller, self.drain)
+                self.drain = None
+                self.settled_since = self.balanced_since = None
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
-            proposed_p = min(current_p + 1, n) if prefill_recovery is not None else current_p
+            proposed_p = (
+                min(max(current_p + urgent_heading, 0), n) if urgent is not None else current_p
+            )
             health_details = None
-            if prefill_recovery is not None:
+            if urgent is not None:
                 health_details = {
-                    **prefill_recovery.details(now),
+                    **urgent.details(now),
                     "current_prefill": current_p,
                     "current_decode": n - current_p,
-                    "decision_basis": "projected_ttft_recovery",
-                    "eligibility_rule": "projected_ttft_recovery",
+                    "decision_basis": urgent_rule,
+                    "eligibility_rule": urgent_rule,
                 }
             controller.scheduler.roles.record_decision(
                 prefill=proposed_p,
@@ -158,18 +175,20 @@ class ReactivePolicy:
         )
         recovery_projection = prefill_recovery.projection if prefill_recovery is not None else None
         urgent_ready = recovery_projection is not None and snapshot.profiles_complete
-        if (prefill_recovery is not None and not snapshot.profiles_complete) or (
-            not urgent_ready
+        decode_ready = decode_recovery is not None and snapshot.profiles_complete
+        if (urgent is not None and not snapshot.profiles_complete) or (
+            urgent is None
             and (
                 demand.arrivals < controller.min_arrivals
                 or (not recovery and prefill + decode < controller.demand_floor)
                 or (recovery and not recovery_ready)
             )
         ):
-            self.proposal, self.confirmations = None, 0
-            self._release(controller, self.drain)
-            self.drain = None
-            if prefill_recovery is None:
+            if not decode_urgent:
+                self.proposal, self.confirmations = None, 0
+                self._release(controller, self.drain)
+                self.drain = None
+            if urgent is None:
                 self.settled_since = self.balanced_since = None
             details: dict[str, object] = {
                 "prefill_work": rounded(demand.prefill_engines),
@@ -185,13 +204,15 @@ class ReactivePolicy:
                 "observed_decode_ratio": rounded(observed_decode),
                 "recovery_decode_ratio": rounded(snapshot.decode_pressure),
             }
-            if prefill_recovery is not None:
-                details.update(prefill_recovery.details(now))
+            if urgent is not None:
+                details.update(urgent.details(now))
                 details["current_prefill"] = current_p
                 details["current_decode"] = n - current_p
-                details["decision_basis"] = "projected_ttft_recovery"
-                details["eligibility_rule"] = "projected_ttft_recovery"
-            proposed_p = min(current_p + 1, n) if prefill_recovery is not None else current_p
+                details["decision_basis"] = urgent_rule
+                details["eligibility_rule"] = urgent_rule
+            proposed_p = (
+                min(max(current_p + urgent_heading, 0), n) if urgent is not None else current_p
+            )
             controller.scheduler.roles.record_decision(
                 prefill=proposed_p,
                 decode=n - proposed_p,
@@ -199,6 +220,8 @@ class ReactivePolicy:
                 reason=(
                     "projected TTFT recovery requires fleet profiles"
                     if prefill_recovery is not None
+                    else "early decode recovery requires fleet profiles"
+                    if decode_recovery is not None
                     else (
                         "incomplete demand requires observed phase pressure and fleet profiles"
                         if recovery
@@ -220,7 +243,7 @@ class ReactivePolicy:
         )
         steady_work: tuple[float, float] | None = None
         # Urgent evaluations leave the settled and steady runs and the departure unchanged.
-        if not urgent_ready:
+        if urgent is None:
             if not recovery:
                 steady_work = controller._demand(
                     now, horizon_s=confirmation_s, estimates=estimates, correction=correction
@@ -239,7 +262,7 @@ class ReactivePolicy:
         # Steady load has stayed balanced for one evidence span.
         steady_s = (
             now - self.balanced_since
-            if self.balanced_since is not None and not urgent_ready
+            if self.balanced_since is not None and urgent is None
             else None
         )
         steady = (
@@ -247,7 +270,9 @@ class ReactivePolicy:
             and steady_s is not None
             and steady_s >= controller.safety.evidence_span_s
         )
-        candidate_prefills = (current_p + 1,) if urgent_ready else (current_p - 1, current_p + 1)
+        candidate_prefills = (
+            (current_p + urgent_heading,) if urgent is not None else (current_p - 1, current_p + 1)
+        )
         adjacent = [
             snapshot.score(
                 candidate_p,
@@ -256,7 +281,7 @@ class ReactivePolicy:
             for candidate_p in candidate_prefills
             if 0 < candidate_p < n
             and (
-                urgent_ready
+                urgent is not None
                 or not recovery
                 or (recovery_prefill if candidate_p > current_p else snapshot.decode_pressure)
                 >= controller.scheduler.th.expand
@@ -264,12 +289,12 @@ class ReactivePolicy:
         ]
         short = (
             None
-            if urgent_ready or recovery
+            if urgent is not None or recovery
             else self._short_view(
                 controller, now, current_p, confirmation_s, observed_load, estimates, correction
             )
         )
-        if not urgent_ready:
+        if urgent is None:
             self._track_departure(
                 controller, now, current, adjacent, demand, short, confirmation_s=confirmation_s
             )
@@ -380,7 +405,7 @@ class ReactivePolicy:
                             < short_ttft.get(candidate.prefill, 0.0)
                             <= controller.scheduler.th.expand
                         )
-                        and decode_need >= controller.scheduler.th.expand
+                        and (decode_need >= controller.scheduler.th.expand or decode_ready)
                     )
                 ),
                 controller.within_floors(candidate.prefill),
@@ -410,8 +435,8 @@ class ReactivePolicy:
 
         def rule(row: Evaluation) -> str:
             candidate, source_ratio, mixed = row[0], row[1], row[5]
-            if urgent_ready:
-                return "projected_ttft_recovery"
+            if urgent_ready or decode_ready:
+                return urgent_rule
             if mixed:
                 return "mixed_pressure"
             if candidate.prefill in departure_moves:
@@ -425,8 +450,29 @@ class ReactivePolicy:
                 return "steady_demand"
             return "source_shrink"
 
+        def decode_ratio(score: SplitScore) -> float:
+            return max(score.tpot_ratio, score.decode_queue_ratio)
+
         def source_safe(row: Evaluation) -> bool:
             return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand" or surge_move(row)
+
+        # For one confirmation span, a move to prefill holds an early decode move, and an early
+        # decode move holds a `source_shrink` move to prefill other than a surge move.
+        reverses_prefill_move = decode_ready and any(
+            flip.to is Role.PREFILL and now - flip.at < confirmation_s
+            for flip in controller.scheduler.roles.flips
+        )
+        early_decode_recent = (
+            self.early_decode_at is not None and now - self.early_decode_at < confirmation_s
+        )
+
+        def reverses_early_decode(row: Evaluation) -> bool:
+            return (
+                early_decode_recent
+                and row[0].prefill > current_p
+                and rule(row) == "source_shrink"
+                and not surge_move(row)
+            )
 
         def admitted(row: Evaluation) -> bool:
             candidate, source_ratio, improvement, capacity_safe, covered, mixed, floors = row
@@ -436,6 +482,7 @@ class ReactivePolicy:
                 and floors
                 and (candidate.prefill < current_p or evidence.allowed or prefill_relief)
                 and (candidate.prefill not in held_reverse or surge_move(row))
+                and not reverses_early_decode(row)
             ):
                 return False
             if urgent_ready and recovery_projection is not None:
@@ -445,6 +492,13 @@ class ReactivePolicy:
                     else 0.0
                 )
                 return ttft_improvement > 0.0 and (
+                    (mixed and improvement > 0.0)
+                    or (not mixed and source_ratio <= controller.scheduler.th.shrink)
+                )
+            if decode_ready:
+                return (
+                    not reverses_prefill_move and decode_ratio(candidate) < decode_ratio(current)
+                ) and (
                     (mixed and improvement > 0.0)
                     or (not mixed and source_ratio <= controller.scheduler.th.shrink)
                 )
@@ -497,25 +551,47 @@ class ReactivePolicy:
                             ),
                         }
                     )
+            if decode_recovery is not None:
+                details.update(decode_recovery.details(now))
+                details["decision_basis"] = "early_decode_recovery"
+                details["current_decode_ratio"] = rounded(decode_ratio(current))
+                details["candidate_decode_ratio"] = rounded(decode_ratio(candidate))
+                details["projected_decode_improvement"] = rounded(
+                    decode_ratio(current) - decode_ratio(candidate)
+                )
             return details
 
         eligible = [row for row in evaluations if admitted(row)]
         # An approval's donor stays held only while each pass asks for the move.
         approved = self.drain
-        drain = self._standing_drain(controller, now, current_p, evaluations, eligible)
+        drain = (
+            None
+            if decode_urgent
+            else self._standing_drain(controller, now, current_p, evaluations, eligible)
+        )
         if drain is not None:
             eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
-            self._release(controller, approved)
-            # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
-            if controller.scheduler.held_for_switch():
-                controller.scheduler.renew_draining_holds()
-            else:
-                self.proposal, self.confirmations = None, 0
+            if not decode_urgent:
+                self._release(controller, approved)
+                # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
+                if controller.scheduler.held_for_switch():
+                    controller.scheduler.renew_draining_holds()
+                else:
+                    self.proposal, self.confirmations = None, 0
             held: Evaluation = (
                 min(evaluations, key=lambda row: (row[0].objective, row[0].prefill))
                 if evaluations
-                else (current, 0.0, 0.0, True, current.decode_profile_covered, False, True)
+                else (
+                    current,
+                    0.0,
+                    0.0,
+                    True,
+                    current.decode_profile_covered,
+                    False,
+                    # Without a split one decode engine larger, the prefill floor holds the move.
+                    not decode_urgent,
+                )
             )
             (
                 candidate,
@@ -532,6 +608,10 @@ class ReactivePolicy:
             elif candidate.prefill in held_reverse and not surge_move(held):
                 toward = "decode" if candidate.prefill > current_p else "prefill"
                 reason = f"departure toward {toward} holds the reverse move"
+            elif reverses_prefill_move:
+                reason = "early decode recovery holds the reverse of a recent move to prefill"
+            elif reverses_early_decode(held):
+                reason = "a recent early decode recovery move holds the reverse move to prefill"
             elif candidate.prefill > current_p and not (evidence.allowed or prefill_relief):
                 reason = evidence.reason
             elif mixed_pressure and not snapshot.profiles_complete:
@@ -545,11 +625,13 @@ class ReactivePolicy:
                 )
             ):
                 reason = "projected TTFT recovery requires a strict prefill improvement"
+            elif decode_ready and decode_ratio(candidate) >= decode_ratio(current):
+                reason = "early decode recovery requires a strict decode improvement"
             elif not profile_covered:
                 reason = "decode profile does not cover proposed work"
             elif not capacity_safe:
                 reason = "projected decode work exceeds KV capacity"
-            elif urgent_ready and mixed_pressure and improvement <= 0.0:
+            elif (urgent_ready or decode_ready) and mixed_pressure and improvement <= 0.0:
                 reason = "mixed pressure requires a lower projected objective"
             elif not source_safe(held):
                 source = "decode" if candidate.prefill > current_p else "prefill"
@@ -581,6 +663,7 @@ class ReactivePolicy:
         confirmations = (
             1
             if urgent_ready
+            or decode_ready
             or eligibility_rule == "settled_departure"
             or (
                 not recovery
@@ -594,14 +677,17 @@ class ReactivePolicy:
             )
         )
         proposal = candidate_p, recovery, eligibility_rule
-        if drain is not None:
+        if decode_urgent:
+            # Its one confirmation leaves the scheduled proposal's count unchanged.
+            count = confirmations
+        elif drain is not None:
             # The approved move keeps its confirmations while its donor drains.
-            confirmations = self.confirmations = drain.confirmations
+            count = confirmations = self.confirmations = drain.confirmations
         else:
-            self._confirm(proposal)
-        details["confirmations"] = self.confirmations
+            count = self._confirm(proposal)
+        details["confirmations"] = count
         details["required_confirmations"] = confirmations
-        if self.confirmations < confirmations:
+        if count < confirmations:
             self._release(controller, approved)
             controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
@@ -613,11 +699,12 @@ class ReactivePolicy:
             )
             return None
 
-        self.proposal, self.confirmations = None, 0
+        if not decode_urgent or (self.proposal is not None and self.proposal[0] == candidate_p):
+            self.proposal, self.confirmations = None, 0
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
-        if moved is None and controller.scheduler.held_for_switch():
+        if moved is None and not decode_urgent and controller.scheduler.held_for_switch():
             # The next pass with this proposal moves the donor once it is idle.
             self.proposal, self.confirmations = proposal, confirmations
         donor = controller.scheduler.roles.held_donor
@@ -630,7 +717,7 @@ class ReactivePolicy:
             self.drain = None
         if approved is not None and approved.donor != donor:
             self._release(controller, approved)
-        if moved is not None and departure is not None:
+        if moved is not None and departure is not None and not decode_urgent:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
             elif candidate_p in held_reverse or (
@@ -638,6 +725,8 @@ class ReactivePolicy:
             ):
                 # A window move along the heading or a surge move against it closes the departure.
                 self.departure = None
+        if moved is not None and eligibility_rule == "early_decode_recovery":
+            self.early_decode_at = now
         if moved is not None and target is Role.DECODE:
             # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)

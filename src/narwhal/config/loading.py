@@ -363,6 +363,11 @@ def load(path: str | Path) -> FleetConfig:
             "controller.reactive.decode_correction_min_samples",
             reactive_raw.get("decode_correction_min_samples", 8),
         ),
+        reactive_decode_recovery=_read_bool(
+            problems,
+            "controller.reactive.decode_recovery",
+            reactive_raw.get("decode_recovery", False),
+        ),
         health_window_s=_read_float(
             problems, "recovery.health.window_s", health_raw.get("window_s", 30.0)
         ),

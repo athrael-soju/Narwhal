@@ -219,12 +219,17 @@ def validate(config: FleetConfig, source: str = "config") -> None:
         except ValueError as exc:
             problems.append(str(exc))
         else:
-            if backend.role_switcher(config.connector).model is RoleModel.FIXED and not all(
-                spec.pin for spec in config.engines
-            ):
+            model = backend.role_switcher(config.connector).model
+            if model is RoleModel.FIXED and not all(spec.pin for spec in config.engines):
                 problems.append(
                     f"engine.connector {config.connector!r} keeps {backend.label} engine roles "
                     "fixed; set pin on every engine"
+                )
+            if config.serving.prefill_on_decode is True and model is not RoleModel.ROUTER:
+                problems.append(
+                    f"serving.prefill_on_decode needs engines that serve either leg; "
+                    f"engine.connector {config.connector!r} binds each {backend.label} engine "
+                    "to its role"
                 )
         if config.dialect != backend.dialect.name:
             problems.append(
@@ -233,6 +238,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             )
     if not isinstance(config.advisory, bool):
         problems.append("controller.advisory must be a boolean")
+    if not isinstance(config.reactive_decode_recovery, bool):
+        problems.append("controller.reactive.decode_recovery must be a boolean")
     if not isinstance(config.min_prefill, int) or isinstance(config.min_prefill, bool):
         problems.append("controller.min_prefill must be an integer")
     elif config.min_prefill < 1:

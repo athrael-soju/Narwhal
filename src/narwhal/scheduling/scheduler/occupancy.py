@@ -30,14 +30,23 @@ def decode_span(
     Unknown remaining output holds decode indefinitely.
     """
     held = request.input_len + request.output_len
-    expected = estimate(request)
-    if expected > request.output_len:
-        left = expected - request.output_len
-    elif request.wanted_len > 0:
-        left = max(0, request.wanted_len - request.output_len)
-    else:
+    left = remaining_output(request, estimate)
+    if left is None:
         return start, float("inf"), held
     return start, start + left * token_s, held + left
+
+
+def remaining_output(request: Request, estimate: Callable[[Request], int]) -> int | None:
+    """Return `request`'s remaining output tokens, None when unknown.
+
+    The estimate applies while it exceeds the delivered output, then the requested cap.
+    """
+    expected = estimate(request)
+    if expected > request.output_len:
+        return expected - request.output_len
+    if request.wanted_len > 0:
+        return max(0, request.wanted_len - request.output_len)
+    return None
 
 
 def peak_holds(
@@ -193,6 +202,10 @@ class SlotRefusals:
         """Return the requests refused within the last `seconds`, oldest first."""
         cutoff = self._clock() - seconds
         return [request for at, request in self._rows if at >= cutoff]
+
+    def latest_at(self) -> float | None:
+        """Return the time of the latest retained refusal."""
+        return self._rows[-1][0] if self._rows else None
 
     def busiest(self, step_s: float, span_s: float) -> list[Request]:
         """Return the refusals of the `step_s` interval with the most within the last `span_s`.

@@ -169,6 +169,8 @@ class FleetConfig:
     reactive_decode_correction_max: float = 2.0
     reactive_decode_correction_alpha: float = 0.2
     reactive_decode_correction_min_samples: int = 8
+    # Decode pressure schedules an early evaluation of one move to decode.
+    reactive_decode_recovery: bool = False
     # Reactive breaker threshold and readmission cadence.
     eject_after: int = 3
     readmit_every: int = 10

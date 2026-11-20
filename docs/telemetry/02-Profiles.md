@@ -82,6 +82,8 @@ Each profile row has these fields:
 | `cached_min_suffix_tokens`, `cached_max_suffix_tokens` | integer, optional | Positive measured uncached-suffix range with `min <= max`. |
 | `prefill_min_tokens`, `prefill_max_tokens` | integer, optional | Positive measured prompt-length range with `min <= max`. |
 | `decode_min_output_tokens`, `decode_max_output_tokens` | integer, optional | Positive measured output-length range with `min <= max`. |
+| `decode_prefill_slowdown` | number, optional | Nonnegative slowdown of the [resident decode interval beside prefill legs](#prefill-share-on-decode-engines), set or `null` together with `decode_prefill_max_share`. A row without the fit leaves out both fields. |
+| `decode_prefill_max_share` | number, optional | Largest measured prefill share, above 0 and below 1, set or `null` together with `decode_prefill_slowdown`. |
 | `colocated_group` | string, optional | Nonempty shared-device group of a profile measured under one colocated role mix. |
 | `colocated_target_role` | string | `prefill` or `decode`, required with `colocated_group`. |
 | `colocated_prefill_engines`, `colocated_decode_engines` | integer | Positive engine counts of the measured role mix, at least two engines in total, required with `colocated_group`. |
@@ -128,3 +130,17 @@ When `context_tokens <= 0` or `decode_max_requests` is `null`, the decode reques
 For a profile with `kv_capacity_tokens`, the KV budget is the smaller of `decode_max_kv_tokens` and `kv_capacity_tokens`. Otherwise the KV budget is `decode_max_kv_tokens`.
 
 To price the token interval for decode request capacity, Narwhal counts at least `decode_min_requests` requests and at least `decode_min_kv_tokens` resident KV tokens in the batch.
+
+### Prefill share on decode engines
+
+When the fleet file sets [`serving.prefill_on_decode`](../configuration/02-Serving-and-Role-Control.md#prefill-legs-on-decode-engines), `narwhal-profile` measures each engine's decode interval beside prefill legs after its other sweeps.
+
+The step holds a cohort of half of `decode_max_requests` decode streams, at least one. Each stream holds the middle of the measured KV range divided by the cohort, capped at the engine's `max_model_len`, split evenly between prompt and output tokens. The cohort runs once to warm the engine, then once at each offered prefill share: `0`, `0.25` and `0.5`. During a run, one-token prefill requests with a prompt of `prefill_max_tokens` tokens arrive at Poisson times, at the offered share divided by the prompt's fitted prefill time.
+
+A run's window runs from the whole cohort's first token to the end of its first finished stream. The run's stall is the number of prefill requests that completed in the window times the prompt's fitted prefill time. Its interval is the window divided by the tokens each stream delivered in the window, counting every token of a multi-token chunk. With `base` the interval of the run at offered share `0`, the run's share is `u = stall / (stall + window * base / interval)`: the stall against the window's tokens at the base interval. [Placement](../configuration/02-Serving-and-Role-Control.md#prefill-legs-on-decode-engines) caps the same share.
+
+The profiler fits `decode_prefill_slowdown` in `interval = base * (1 + decode_prefill_slowdown * u / (1 - u))` to each run's interval and share. At a slowdown of `1`, the interval is `base / (1 - u)`. `decode_prefill_max_share` is the largest share.
+
+When the step fails, the profile keeps its other fields without the fit, and the samples file records the reason under `prefill_share`.
+
+`serving.prefill_on_decode` borrows only decode-role engines whose profiles carry both fields.

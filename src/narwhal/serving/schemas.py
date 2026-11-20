@@ -322,6 +322,9 @@ class ControllerDecisionOut(BaseModel):
     candidate_projected_ttft_s: float | None = None
     candidate_projected_ttft_ratio: float | None = None
     projected_ttft_improvement_s: float | None = None
+    current_decode_ratio: float | None = None
+    candidate_decode_ratio: float | None = None
+    projected_decode_improvement: float | None = None
     decode_capacity_safe: bool | None = None
     role_floors_safe: bool | None = None
     source_pressure_safe: bool | None = None

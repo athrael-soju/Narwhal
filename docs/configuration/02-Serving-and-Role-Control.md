@@ -280,6 +280,35 @@ The router prices a request on the cold curve of its full input when any of thes
 
 The request journal records each placement priced with cache evidence in [`cache_placement`](../telemetry/01-Journal.md#cache-placement).
 
+### Prefill legs on decode engines
+
+| Field                       | Default | Meaning                                                                                       | Values                                                              |
+| --------------------------- | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `serving.prefill_on_decode` | `false` | Lets placement send a prefill leg to a decode-role engine inside its measured TPOT envelope. | `true` requires `engine.backend` `"vllm"` or `"llamacpp"` |
+
+With `serving.prefill_on_decode` set, placement borrows a decode-role engine for a prefill leg when the engine is live, unpinned and not held for a role switch, another live decode engine can take the request's decode leg, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit. Prefill legs then go to prefill-role engines and borrowed engines. When placement has neither, it places the leg as with the setting off.
+
+The leg stalls each resident decode stream on the engine for its profiled prefill time plus the engine's resident prefill work. For each resident stream, the router projects its TPOT over its whole output from these terms:
+
+| Term | Value |
+| --- | --- |
+| `left` | The stream's remaining output tokens, as the [decode admission check](#decode-admission-check) computes them |
+| `d` | The profile's token interval at the engine's resident decode requests and tokens, times its [decode correction](#load-definitions) |
+| Projected TPOT | `(seconds since the stream's prefill completed + left * d + decode_prefill_slowdown * stall) / (delivered tokens + left - 1)` |
+
+The engine stays inside its envelope when all of these hold:
+
+1. The engine's resident decode and prefill tokens plus the leg's prompt tokens stay within the profile's `decode_max_kv_tokens`.
+2. Every resident stream has a known remaining output.
+3. Every resident stream with output left projects a TPOT at or below `slo.tpot_s`.
+4. The share `u = stall / (stall + m)` is at or below `decode_prefill_max_share`, where `m` is the mean `left * d` over the resident streams. With no resident streams, `u` is `0`.
+
+`left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))` for a stall beside `left * d` seconds of decode.
+
+Placement chooses a borrowed engine only when no prefill-role engine meets the TTFT budget and a borrowed engine does, or when no prefill-role engine is a candidate. Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first, because the prefill cost starts with them. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
+
+Decode load leaves out the stall the envelope priced for a borrowed leg, and the prefill pool's load counts the leg's prefill work, as [Load definitions](#load-definitions) describes.
+
 
 ## Request deadlines and engine HTTP behaviour
 
@@ -424,15 +453,17 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream.   |
+| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream. Each gap, closed or open, has `decode_prefill_slowdown` times its overlap with the priced spans of the engine's [borrowed prefill legs](#prefill-legs-on-decode-engines) subtracted, down to `0`. A leg's priced span starts when the leg is placed or when the last span of a leg still in prefill on the engine ends, and lasts the leg's profiled prefill time. When a leg leaves prefill, its span ends, and the queued spans after it start again from that moment, or from the end of the earlier spans of legs still in prefill. |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Predicted prefill work                        | The profiled prefill time of the engine's resident requests. A request whose decode leg [waits inside an engine for a seat](#decode-admission-check) adds none. |
-| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. |
+| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. It updates only from monitoring intervals in which the engine ran no prefill. |
 
 When the corrected idle floor reaches the TPOT target, decode load is the raw interval-to-target ratio.
 
 A load of `1.0` means the phase has reached its target.
+
+A pool's load is the mean load of the live engines that hold its role or resident work of its phase. A decode-role engine whose resident prefill legs are all borrowed adds its prefill load to the prefill pool's total but does not count as a prefill engine, unless no other engine is in the prefill pool.
 
 Controller decision details call load "pressure", as in the `mixed_pressure` eligibility rule and the `source_pressure_safe` flag.
 
@@ -517,10 +548,11 @@ Adjacent-split decisions use these spans:
 Each scored decision records in `eligibility_rule` the first of these rules that matches:
 
 1. `projected_ttft_recovery`
-2. `mixed_pressure`
-3. `settled_departure`
-4. `steady_demand`
-5. `source_shrink`
+2. `early_decode_recovery`
+3. `mixed_pressure`
+4. `settled_departure`
+5. `steady_demand`
+6. `source_shrink`
 
 Ordinary consolidation, the `source_shrink` rule, requires both:
 
@@ -610,11 +642,28 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 
 Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
 
+With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one. A refusal schedules an evaluation only while `controller.thresholds.cooldown_s` has elapsed since the last move to decode or the cooldown bypass is armed, and not while every live unpinned prefill engine changed role within the last `controller.thresholds.dwell_s`. Refusals share one evaluation, and early decode recovery evaluations start at least `controller.reactive.step_s` apart. A regular evaluation and a pending projected-TTFT recovery evaluation run first, and the early decode recovery evaluation runs at the next wake. As it starts, the evaluation checks the same cooldown and dwell conditions, and that a slot-wait refusal falls within the last `controller.reactive.step_s`. When either check fails, the role controller drops the evaluation without a decision.
+
+The early decode recovery evaluation scores only the split with one more decode engine, on window demand. It moves the engine with one confirmation when all of these hold:
+
+- every engine has a profile
+- the larger of the candidate's TPOT and decode queueing ratios is below the current split's
+- the candidate's projected TTFT ratio is at or below `controller.thresholds.shrink`, or it is above `controller.thresholds.shrink`, no departure is open, and the move lowers the worst projected SLO ratio by more than zero
+- decode profiles cover the candidate's work
+- the role floors hold, and no departure toward prefill holds the reverse move
+- no engine moved to prefill within the last confirmation span
+
+Pins, `controller.thresholds.cooldown_s`, and `controller.thresholds.dwell_s` apply to the move.
+
+For one confirmation span after an early decode recovery move, a `source_shrink` move to prefill holds, unless it is the move for a prefill demand spike described for `source_shrink` above. Moves to prefill under other rules, including projected-TTFT recovery, proceed.
+
+A held early decode recovery evaluation leaves the settled run, `steady_demand_s`, an open departure, the confirmation sequence, and an approved move to decode unchanged. An early decode recovery move restarts the settled run, as any attempted move does. It leaves `steady_demand_s`, an open departure, and the confirmation sequence of another proposed split unchanged.
+
 A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 
 One confirmation is enough in three cases:
 
-- the move comes from a projected-TTFT recovery evaluation
+- the move comes from a projected-TTFT recovery or early decode recovery evaluation
 - the eligibility rule is `settled_departure`
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
@@ -691,3 +740,4 @@ Live state and metrics expose the short and long demand estimates, the arrival-e
 | `controller.reactive.decode_correction_max`         |  `2.0`  | Upper bound on the live-to-profile decode correction.                                                                                                                                                                                                                                                                   | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       |  `0.2`  | Fraction of each qualifying observation window applied to the correction.                                                                                                                                                                                                                                               | `(0, 1]`                                                 |
 | `controller.reactive.decode_correction_min_samples` |   `8`   | Required decode gaps before a window updates the correction.                                                                                                                                                                                                                                                            | At least 1                                               |
+| `controller.reactive.decode_recovery`               | `false` | Schedules an early decode recovery evaluation on decode slot-wait refusals, as [adjacent-split decisions](#adjacent-split-decisions) describe.                                                                                                                                                                          |                                                          |
