@@ -150,6 +150,7 @@ class NarwhalRouter:
             # Four controller windows cover the deepest evidence horizon any consumer reads.
             outcome_bucket_s=cfg.monitor_interval_s,
             outcome_retained_s=4 * cfg.reactive_window_s,
+            prefill_on_decode=cfg.serving.prefill_on_decode,
             health=DriftTracker(
                 clock=clock,
                 window_s=cfg.health_window_s,
@@ -250,6 +251,7 @@ class NarwhalRouter:
             decode_recovery=cfg.reactive_decode_recovery,
         )
         self.scheduler.switch_hold_s = 3 * cfg.reactive_step_s
+        self.scheduler.output_estimator = self.controller.demand.output_estimator
         self.max_concurrent = max_concurrent if max_concurrent is not None else cfg.max_connections
         self.inflight = 0
         self.admission_queue = AdmissionQueue[bool](

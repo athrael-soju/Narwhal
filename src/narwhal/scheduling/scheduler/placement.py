@@ -41,6 +41,7 @@ class GlobalScheduler:
         on_availability_event: Callable[[dict], None] | None = None,
         outcome_bucket_s: float = 1.0,
         outcome_retained_s: float = 480.0,
+        prefill_on_decode: bool = False,
     ) -> None:
         self.monitor = monitor
         self.profiles = profiles
@@ -51,6 +52,10 @@ class GlobalScheduler:
         self.min_prefill = max(1, min_prefill)
         self.min_decode = max(1, min_decode)
         self.advisory = advisory
+        # Whether a decode-role engine joins the prefill candidates inside its envelope.
+        self.prefill_on_decode = prefill_on_decode
+        # Returns the controller's output estimator; the router sets it.
+        self.output_estimator: Callable[[], Callable[[Request], int]] = lambda: lambda r: 0
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
@@ -268,8 +273,16 @@ class GlobalScheduler:
         live = self.live_instances()
         return [i for i in live if i.role is Role.PREFILL] or live
 
-    def prefill_admission_price(self, request: Request, inst: Instance) -> float:
-        if not self.live_instances(Role.PREFILL) and inst.role is Role.DECODE and inst.decode:
+    def prefill_admission_price(
+        self, request: Request, inst: Instance, borrowed: Collection[str] | None = None
+    ) -> float:
+        """Price `inst`'s prefill for admission; `borrowed` is `prefill_pool`'s set when known."""
+        if (
+            not self.live_instances(Role.PREFILL)
+            and inst.role is Role.DECODE
+            and inst.decode
+            and not (inst.iid in borrowed if borrowed is not None else self.borrows(request, inst))
+        ):
             return float("inf")
         return self.cost(request, inst)[1]
 
@@ -292,7 +305,11 @@ class GlobalScheduler:
         return min(floors) if floors else None
 
     def pool_load(self, role: Role) -> float:
-        """Resident work remains in phase feedback after an engine changes role."""
+        """Resident work remains in phase feedback after an engine changes role.
+
+        A decode-role engine whose resident prefill legs are all borrowed adds its prefill
+        load to the prefill pool without counting as a prefill engine.
+        """
         doing = [
             instance
             for instance in self.live_instances()
@@ -300,7 +317,19 @@ class GlobalScheduler:
             or (instance.prefill if role is Role.PREFILL else instance.decode)
         ]
         phase_load = self.prefill_load if role is Role.PREFILL else self.decode_load
-        return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
+        engines = (
+            sum(
+                not (
+                    instance.role is Role.DECODE
+                    and all(leg.borrowed for leg in instance.prefill.values())
+                )
+                for instance in doing
+            )
+            if role is Role.PREFILL
+            else len(doing)
+        )
+        load = sum(phase_load(instance) for instance in doing)
+        return load / (engines or len(doing)) if doing else 0.0
 
     def decode_exclusion(self, request: Request, exclude: Collection[str] = ()) -> set[str]:
         """A decode leg on its own producer reuses that engine's prefix cache and never pulls
@@ -331,6 +360,127 @@ class GlobalScheduler:
         fresh = [inst for inst in candidates if self.has_fresh_consumer(inst.iid, decodes)]
         return fresh or candidates
 
+    def borrows(self, request: Request, inst: Instance) -> bool:
+        """Return whether placement borrows decode-role `inst` for `request`'s prefill leg.
+
+        With `prefill_on_decode`, it does when the engine is unpinned, not held for a switch,
+        inside its envelope for the leg, and another live decode-pool engine can take the
+        decode leg, which avoids its producer.
+        """
+        return self.lender(request)(inst)
+
+    def lender(self, request: Request) -> Callable[[Instance], bool]:
+        """Return `borrows` for `request`, with the fleet state read once."""
+        if not self.prefill_on_decode:
+            return lambda inst: False
+        unusable = self.held_for_switch() | self.pinned
+        decode_pool = {inst.iid for inst in self.role_pool(Role.DECODE, self.live_instances())}
+        estimate = self.output_estimator()
+
+        def borrows(inst: Instance) -> bool:
+            return (
+                inst.role is Role.DECODE
+                and inst.iid not in unusable
+                and len(decode_pool) > (inst.iid in decode_pool)
+                and costs.decode_engine_prefill(
+                    request,
+                    inst,
+                    monitor=self.monitor,
+                    profiles=self.profiles,
+                    slo=self.slo,
+                    expected_output=estimate,
+                )
+            )
+
+        return borrows
+
+    def prefill_pool(
+        self, request: Request, instances: list[Instance]
+    ) -> tuple[list[Instance], set[str]]:
+        """Return the prefill candidates among live `instances`, and the borrowed ones.
+
+        With `prefill_on_decode`, the candidates are the prefill-role engines and the borrowed
+        decode-role engines. When neither exists, they are the role pool without the setting.
+        """
+        pool = self.role_pool(Role.PREFILL, instances)
+        if not self.prefill_on_decode:
+            return pool, set()
+        own = [inst for inst in pool if inst.role is Role.PREFILL]
+        borrows = self.lender(request)
+        borrowed = [inst for inst in instances if borrows(inst)]
+        if not own and not borrowed:
+            return pool, set()
+        return own + borrowed, {inst.iid for inst in borrowed}
+
+    def prefill_tier(
+        self,
+        request: Request,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        borrowed: Collection[str],
+    ) -> list[Instance]:
+        """Return the candidates placement chooses among.
+
+        Borrowed engines take part only when no other candidate meets the TTFT budget and
+        one of them does, or when every candidate is borrowed.
+        """
+        own = [inst for inst in candidates if inst.iid not in borrowed]
+        if not borrowed or any(self.meets_slo(request, prices[inst.iid]) for inst in own):
+            return own
+        lent = [inst for inst in candidates if inst.iid in borrowed]
+        if not own or any(self.meets_slo(request, prices[inst.iid]) for inst in lent):
+            return lent
+        return own
+
+    def own_prefill(self, instances: list[Instance]) -> list[Instance]:
+        """Return the prefill-role engines `prefill_pool` keeps among `instances`."""
+        return [i for i in self.role_pool(Role.PREFILL, instances) if i.role is Role.PREFILL]
+
+    def own_prefill_meets(
+        self, request: Request, instances: list[Instance], probation: Collection[str] | None
+    ) -> list[Instance] | None:
+        """Return the prefill-role engines when one meets the TTFT budget and the setting is on.
+
+        The prefill tier then holds only them, so no borrow check runs.
+        """
+        if not self.prefill_on_decode:
+            return None
+        own = self.own_prefill(instances)
+        if any(self.meets_slo(request, self.cost(request, i, probation=probation)) for i in own):
+            return own
+        return None
+
+    def settle_on_own(
+        self,
+        request: Request,
+        instances: list[Instance],
+        probation: Collection[str] | None,
+        prices: dict[str, Cost] | None = None,
+    ) -> tuple[list[Instance], dict[str, Cost]] | None:
+        """Return the filtered prefill-role candidates and prices when placement keeps to them.
+
+        With `prefill_on_decode`, placement keeps to the prefill-role engines when, after the
+        switch-hold and fresh-producer filters, one meets the TTFT budget at its warm price
+        and, for a request with cache evidence, at its cold price. No borrowed engine can
+        then change the choice, so no borrow check runs. The warm prices land in `prices`.
+        """
+        if not self.prefill_on_decode:
+            return None
+        held = self.held_for_switch()
+        kept = [i for i in self.own_prefill(instances) if i.iid not in held]
+        if self.stale_handoff is not None:
+            decodes = self.role_pool(Role.DECODE, self.live_instances())
+            kept = [i for i in kept if self.has_fresh_consumer(i.iid, decodes)]
+        prices = {} if prices is None else prices
+        prices.update({i.iid: self.cost(request, i, probation=probation) for i in kept})
+        if not any(self.meets_slo(request, prices[i.iid]) for i in kept):
+            return None
+        if request.cached_tokens:
+            cold = self._cold_prices(request, kept, prices, probation)
+            if not any(self.meets_slo(request, cold[i.iid]) for i in kept):
+                return None
+        return kept, prices
+
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
         exclude = set(exclude or ())
         exclude |= self.decode_exclusion(request, exclude)
@@ -338,28 +488,46 @@ class GlobalScheduler:
         if not instances:
             raise RuntimeError("no schedulable instances")
 
-        # Profiles model sequential prefill and batched decode.
-        want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
-        candidates = self.role_pool(want, instances)
-        if not candidates:
-            raise RuntimeError("no schedulable instances for the pinned roles")
-        held = self.held_for_switch()
-        if held and any(inst.iid not in held for inst in candidates):
-            candidates = [inst for inst in candidates if inst.iid not in held]
-        if request.phase is Phase.PREFILL:
-            candidates = self._fresh_producers(candidates)
-            request.cache_placement = None
-            self.recheck_evidence(request, 0.0)
         probation = self.health.probation_set() if self.health is not None else None
-        prices = {i.iid: self.cost(request, i, probation=probation) for i in candidates}
+        settled = None
+        known: dict[str, Cost] = {}
+        # Profiles model sequential prefill and batched decode.
+        if request.phase is Phase.PREFILL:
+            request.cache_placement = None
+            # The envelope prices the leg with current cache evidence.
+            self.recheck_evidence(request, 0.0)
+            settled = self.settle_on_own(request, instances, probation, known)
+        borrowed: set[str] = set()
+        if settled is not None:
+            candidates, prices = settled
+        else:
+            if request.phase is Phase.PREFILL:
+                candidates, borrowed = self.prefill_pool(request, instances)
+            else:
+                candidates = self.role_pool(Role.DECODE, instances)
+            if not candidates:
+                raise RuntimeError("no schedulable instances for the pinned roles")
+            held = self.held_for_switch()
+            if held and any(inst.iid not in held for inst in candidates):
+                candidates = [inst for inst in candidates if inst.iid not in held]
+            if request.phase is Phase.PREFILL:
+                candidates = self._fresh_producers(candidates)
+            prices = {
+                i.iid: known[i.iid]
+                if i.iid in known
+                else self.cost(request, i, probation=probation)
+                for i in candidates
+            }
 
-        chosen, served = self._cheapest(request, candidates, prices)
+        chosen, served = self._cheapest(request, candidates, prices, borrowed)
+        if request.phase is Phase.PREFILL:
+            request.borrowed = chosen.iid in borrowed
         if not served:
             # Admission decides over-budget placements.
             self.unserved += 1
         if request.phase is Phase.PREFILL and request.cached_tokens:
             request.cache_placement = self._cache_placement(
-                request, chosen, candidates, prices, probation
+                request, chosen, candidates, prices, probation, borrowed
             )
         return chosen
 
@@ -389,10 +557,15 @@ class GlobalScheduler:
             self.recheck_cache_evidence(request, fresh_s)
 
     def _cheapest(
-        self, request: Request, candidates: list[Instance], prices: dict[str, Cost]
+        self,
+        request: Request,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        borrowed: Collection[str] = frozenset(),
     ) -> tuple[Instance, bool]:
-        eligible = [i for i in candidates if self.meets_slo(request, prices[i.iid])]
-        return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
+        tier = self.prefill_tier(request, candidates, prices, borrowed)
+        eligible = [i for i in tier if self.meets_slo(request, prices[i.iid])]
+        return min(eligible or tier, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
 
     def _cache_placement(
         self,
@@ -401,6 +574,7 @@ class GlobalScheduler:
         candidates: list[Instance],
         prices: dict[str, Cost],
         probation: Collection[str] | None,
+        borrowed: Collection[str],
     ) -> dict[str, Any] | None:
         profile = self.profiles.get(chosen.iid)
         if profile is None:
@@ -411,7 +585,7 @@ class GlobalScheduler:
             "evidence_sequence": request.cache_sequences.get(chosen.iid),
             "predicted_prefill_s": prefill_seconds(profile, request),
             "cold_prefill_s": profile.prefill_time(request.input_len),
-            "cold_choice_iid": self._cold_choice(request, candidates, prices, probation),
+            "cold_choice_iid": self._cold_choice(request, candidates, prices, probation, borrowed),
         }
 
     def _cold_choice(
@@ -420,9 +594,20 @@ class GlobalScheduler:
         candidates: list[Instance],
         prices: dict[str, Cost],
         probation: Collection[str] | None,
+        borrowed: Collection[str],
     ) -> str:
+        cold = self._cold_prices(request, candidates, prices, probation)
+        return self._cheapest(request, candidates, cold, borrowed)[0].iid
+
+    def _cold_prices(
+        self,
+        request: Request,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        probation: Collection[str] | None,
+    ) -> dict[str, Cost]:
         # Without positive cache evidence on an engine, its warm price is its cold price.
-        cold = {
+        return {
             i.iid: (
                 self.cost(request, i, warm=False, probation=probation)
                 if _cached_on(i.iid, request, i.prefill.values())
@@ -430,7 +615,6 @@ class GlobalScheduler:
             )
             for i in candidates
         }
-        return self._cheapest(request, candidates, cold)[0].iid
 
     def health_pass(self) -> None:
         if self.health is None:

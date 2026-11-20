@@ -16,6 +16,7 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.profiling.fitting import fit_prefill_slowdown
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS
 from narwhal.profiling.probe import cli as profile_cli
@@ -577,6 +578,21 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             "[DONE]",
         ]
         self.assertEqual(await self.measure(frames, tokens=4), [(1.0, 12.0, 0.25)])
+
+    async def test_the_cohort_window_counts_every_token_of_a_bundled_chunk(self):
+        bundled = {"choices": [{"text": "xx", "token_ids": [2, 3], "finish_reason": "length"}]}
+        stream = MeasuredStream([token(0), token(1), bundled, "[DONE]"])
+        state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": 1}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=stream))
+        ) as client:
+            with patch.object(decode_probe, "time", SimpleNamespace(monotonic=lambda: stream.now)):
+                await decode_probe._one_decode_stream(
+                    client, "http://e", "stub", "prompt", 10, state, [], DIALECT, tokens=4
+                )
+        # The window starts after the first token and ends with the stream.
+        self.assertEqual(state["left_delivered"] - state["join_delivered"], 3)
+        self.assertEqual(state["bundles"], 1)
 
     async def test_invalid_token_identity_aborts_the_profile(self):
         for choice in invalid_token_choices():
@@ -1267,6 +1283,158 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual([round(sample[2], 3) for sample in samples], [0.01, 0.01])
 
+    def test_the_prefill_share_cohort_holds_half_the_requests_at_the_middle_kv_size(self):
+        row = profile(decode_min_kv_tokens=1000, decode_max_kv_tokens=99_000)
+        self.assertEqual(decode_probe.share_cohort(row), (8, 3125, 3125))
+        self.assertEqual(decode_probe.share_cohort(row, max_model_len=4096), (8, 2048, 2048))
+        with self.assertRaisesRegex(ValueError, "at least 6"):
+            decode_probe.share_cohort(replace(row, decode_min_kv_tokens=1, decode_max_kv_tokens=40))
+
+    async def test_prefill_share_step_measures_resident_intervals_beside_poisson_legs(self):
+        """A run's stall counts the legs that completed in the full cohort's window, and its
+        interval is the window over each stream's delivered tokens, bundled ones included."""
+        row = profile(ttft_a=0.0, ttft_b=0.001, ttft_c=0.0, decode_max_requests=4)
+        legs, active = [], []
+
+        class Legs:
+            def __init__(self, client, url, model, prompt, dialect, rate, *, seed, timeout_s):
+                self.rate, self.seed, self.sent, self.done = rate, seed, [], []
+                legs.append(self)
+
+            async def __aenter__(self):
+                # One leg completes before the window and one after it.
+                inside = [i / self.rate for i in range(round(10 * self.rate))]
+                self.sent = [-2.0, *inside]
+                self.done = [-1.0, *inside, 1000.0]
+                active.append(self)
+                return self
+
+            async def __aexit__(self, *exc):
+                active.remove(self)
+
+        runs = []
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            # Each in-window leg costs 0.5 s of prefill, which slows decode by 0.8 s per second
+            # of stall; each stream delivers 1,000 tokens at a 10 ms base interval.
+            legs_in = sum(0 <= at < 100 for at in active[0].done) if active else 0
+            window = 1000 * 0.01 + 0.8 * 0.5 * legs_in
+            runs.append((size, input_len, tokens))
+            state = {
+                "cohort": size,
+                "last_join_at": 0.0,
+                "left_at": window,
+                "join_delivered": 1,
+                "left_delivered": 1 + size * 1000,
+                "bundles": 3,
+            }
+            return [], state
+
+        evidence = []
+        with (
+            patch.object(decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])),
+            patch.object(decode_probe, "PrefillLegs", Legs),
+            patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+            redirect_stdout(io.StringIO()),
+        ):
+            measured = await decode_probe.probe_prefill_share(
+                None, "http://e", "stub", DIALECT, row, 500, evidence=evidence
+            )
+        # A warm cohort runs first, then share 0 without legs.
+        self.assertEqual(runs, [(2, 12_500, 12_500)] * 4)
+        self.assertEqual([leg.rate for leg in legs], [0.5, 1.0])
+        for (stall, window, interval), expected in zip(
+            measured, [(0.0, 10.0, 0.01), (2.5, 12.0, 0.012), (5.0, 14.0, 0.014)], strict=True
+        ):
+            for value, want in zip((stall, window, interval), expected, strict=True):
+                self.assertAlmostEqual(value, want)
+        self.assertEqual([row["legs"] for row in evidence], [0, 5, 10])
+        self.assertEqual([row["legs_sent"] for row in evidence], [0, 6, 11])
+        self.assertEqual({row["bundles"] for row in evidence}, {3})
+        slowdown, largest = fit_prefill_slowdown(measured)
+        self.assertAlmostEqual(slowdown, 0.8)
+        # Five seconds of stall beside ten seconds of decode at the base interval.
+        self.assertAlmostEqual(largest, 1 / 3)
+
+    async def test_prefill_legs_raise_a_failed_leg_only_after_a_complete_cohort(self):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503, text="busy"))
+        ) as client:
+            legs = decode_probe.PrefillLegs(
+                client, "http://e", "stub", "p", DIALECT, 2000.0, seed=0
+            )
+            with self.assertRaisesRegex(decode_probe.DecodeEngineError, r"prefill leg.*503"):
+                async with legs:
+                    await asyncio.sleep(0.05)
+            self.assertTrue(legs.sent)
+            with self.assertRaisesRegex(RuntimeError, "cohort failed"):
+                async with legs:
+                    await asyncio.sleep(0.05)
+                    raise RuntimeError("cohort failed")
+
+    async def test_profile_measures_the_prefill_share_only_with_the_setting(self):
+        prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
+        decode = [
+            (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
+        ]
+        # Ten seconds of decode at a 20 ms base, stalled for 2 s and then for 5 s.
+        shares = [(0.0, 10.0, 0.02), (2.0, 11.2, 0.0224), (5.0, 13.0, 0.026)]
+        for enabled in (False, True):
+            evidence = {}
+            with (
+                self.subTest(enabled=enabled),
+                patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]),
+                patch.object(
+                    instance_probe, "probe_prefill_share", AsyncMock(return_value=shares)
+                ) as probe,
+            ):
+                row = await profile_instance(
+                    None,
+                    "e",
+                    "http://e",
+                    "stub",
+                    DIALECT,
+                    metrics=VLLM_METRICS,
+                    evidence=evidence,
+                    prefill_on_decode=enabled,
+                )
+                if not enabled:
+                    probe.assert_not_awaited()
+                    self.assertIsNone(row.decode_prefill_slowdown)
+                    self.assertNotIn("prefill_share", evidence)
+                    continue
+                # The legs take the longest measured prompt.
+                self.assertEqual(probe.await_args.args[5], 100)
+                self.assertAlmostEqual(row.decode_prefill_slowdown, 0.6)
+                self.assertAlmostEqual(row.decode_prefill_max_share, 1 / 3)
+                self.assertAlmostEqual(evidence["prefill_share"]["slowdown"], 0.6)
+
+    async def test_a_failed_prefill_share_step_keeps_the_profile_without_the_fit(self):
+        prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
+        decode = [
+            (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
+        ]
+        for failure in (RuntimeError("decode probe incomplete"), httpx.ReadError("lost")):
+            evidence = {}
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]),
+                patch.object(instance_probe, "probe_prefill_share", AsyncMock(side_effect=failure)),
+            ):
+                row = await profile_instance(
+                    None,
+                    "e",
+                    "http://e",
+                    "stub",
+                    DIALECT,
+                    metrics=VLLM_METRICS,
+                    evidence=evidence,
+                    prefill_on_decode=True,
+                )
+            self.assertIsNone(row.decode_prefill_slowdown)
+            self.assertEqual(row.decode_max_requests, 16)
+            self.assertEqual(evidence["prefill_share"], {"samples": [], "reason": str(failure)})
+
     async def test_profile_fits_axes_and_retains_raw_evidence(self):
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
         decode = [
@@ -1439,6 +1607,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "new.json"
+            cfg.serving = replace(cfg.serving, prefill_on_decode=True)
             limits_path = Path(folder) / "profiling-limits.json"
             limits_path.write_text(
                 json.dumps(
@@ -1455,6 +1624,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
             async def measured(client, iid, url, model, dialect, sweep, *args, evidence, **kwargs):
                 self.assertEqual(sweep.decode_concurrency, (1, 4, 8))
+                self.assertIs(kwargs["prefill_on_decode"], True)
                 evidence["prefill"] = [[10, 0.1]]
                 return profile(iid)
 
@@ -1781,6 +1951,30 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 await fleet_probe.run(cfg, {"e0"})
             saved = json.loads(cfg.profiles_path.with_suffix(".samples.json").read_text())
             self.assertEqual(saved["engines"]["e0"]["error"], "ReadTimeout: ")
+
+    def test_saved_prefill_refit_keeps_the_share_fit_only_with_unchanged_prefill(self):
+        share = {"decode_prefill_slowdown": 0.6, "decode_prefill_max_share": 0.4}
+        with tempfile.TemporaryDirectory() as folder, redirect_stdout(io.StringIO()):
+            root = Path(folder)
+            raw = [[n, 0.25 + n * 0.0001] for n in (256, 512, 1024, 2048, 4096)]
+            saved = profile("e0", generation_digest="sha256:" + "a" * 64, **share)
+            record = {
+                "engines": {
+                    "e0": {"prefill": raw, "profile": asdict(saved), "generation_evidence": {}}
+                }
+            }
+            (root / "saved.samples.json").write_text(json.dumps(record))
+            refit_saved_prefill(root / "saved.samples.json", root / "first.json", {"e0"})
+            # The new prefill coefficients drop the share fit priced with the old ones.
+            self.assertIsNone(ProfileStore(root / "first.json").get("e0").decode_prefill_slowdown)
+            again = json.loads((root / "first.samples.json").read_text())
+            again["engines"]["e0"]["profile"].update(share)
+            (root / "resaved.samples.json").write_text(json.dumps(again))
+            refit_saved_prefill(root / "resaved.samples.json", root / "second.json", {"e0"})
+            kept = ProfileStore(root / "second.json").get("e0")
+            self.assertEqual(
+                (kept.decode_prefill_slowdown, kept.decode_prefill_max_share), (0.6, 0.4)
+            )
 
     def test_saved_prefill_refit_preserves_decode_and_original_evidence(self):
         with tempfile.TemporaryDirectory() as folder:

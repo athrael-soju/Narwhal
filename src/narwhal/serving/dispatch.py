@@ -83,12 +83,30 @@ class Dispatcher:
             unusable = (exclude or set()) | router.scheduler.decode_exclusion(
                 request, exclude or set()
             )
-            candidates = {
-                inst.iid
-                for inst in router.scheduler.role_pool(role, live)
-                if not (limit := seats(router, inst.iid))
-                or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
-            } - unusable
+
+            def seated(pool: list[Instance]) -> set[str]:
+                return {
+                    inst.iid
+                    for inst in pool
+                    if not (limit := seats(router, inst.iid))
+                    or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
+                } - unusable
+
+            if phase is not Phase.PREFILL:
+                candidates = seated(router.scheduler.role_pool(role, live))
+            else:
+                candidates = set()
+                if router.scheduler.prefill_on_decode:
+                    # Placement keeps to seated prefill-role engines when one meets the budget.
+                    router.scheduler.recheck_evidence(request, 0.0)
+                    own = seated(router.scheduler.own_prefill(live))
+                    health = router.scheduler.health
+                    probation = health.probation_set() if health is not None else None
+                    kept = [inst for inst in live if inst.iid in own]
+                    if router.scheduler.settle_on_own(request, kept, probation) is not None:
+                        candidates = own
+                if not candidates:
+                    candidates = seated(router.scheduler.prefill_pool(request, live)[0])
             if not candidates:
                 return None
             excluded = set(router.monitor.instances) - candidates

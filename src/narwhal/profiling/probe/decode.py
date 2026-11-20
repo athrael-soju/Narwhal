@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import math
+import random
 import statistics
 import time
-from contextlib import aclosing
+from contextlib import aclosing, nullcontext
 
 import httpx
 
 from ...engines.dialect import EngineDialect
 from ...engines.stream import event_choices, sse_events, token_ids
+from ..model import Profile
 from ..tasks import cancel_tasks
-from .engine import make_prompt
-from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS
+from .engine import completion_body, make_prompt
+from .sweep import DECODE_CONCURRENCY, DECODE_INPUT_LENS, DECODE_TOKENS, PREFILL_SHARES
 
 # Each retry sizes the cohort's tokens from the previous attempt's join lag.
 DECODE_RETRIES = 3
@@ -105,8 +107,15 @@ async def _one_decode_stream(
                         state.setdefault("first_at", now)
                         if state["joined"] == state["cohort"]:
                             state["last_join_at"] = now
+                            # The window's count starts after the last joiner's first chunk.
+                            state["join_delivered"] = len(ids)
+                    elif len(ids) > 1 and state["requests"] == state["cohort"]:
+                        state["bundles"] = state.get("bundles", 0) + 1
                     mine += len(ids)
                     state["resident"] += len(ids)
+                    # Tokens since the cohort filled, counting each token of a bundled chunk.
+                    if "last_join_at" in state:
+                        state["delivered"] = state.get("delivered", 0) + len(ids)
                     if (
                         len(ids) == 1
                         and last is not None
@@ -128,9 +137,80 @@ async def _one_decode_stream(
     finally:
         if mine:
             state.setdefault("left_at", time.monotonic())
+            state.setdefault("left_delivered", state.get("delivered", 0))
             state["resident"] -= input_len + mine
             state["requests"] -= 1
             state["epoch"] += 1
+
+
+class PrefillLegs:
+    """Send one-token prefill requests at Poisson times while a decode cohort runs."""
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        model: str,
+        prompt: str,
+        dialect: EngineDialect,
+        rate: float,
+        *,
+        seed: int,
+        timeout_s: float | None = None,
+    ) -> None:
+        self.client = client
+        self.url = url
+        self.model = model
+        self.prompt = prompt
+        self.dialect = dialect
+        self.rate = rate
+        self.seed = seed
+        self.timeout_s = timeout_s
+        # Send and completion times of the current run's legs.
+        self.sent: list[float] = []
+        self.done: list[float] = []
+        self._legs: list[asyncio.Task[None]] = []
+        self._run: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> PrefillLegs:
+        self.sent, self.done, self._legs = [], [], []
+        self._run = asyncio.create_task(self._send())
+        return self
+
+    async def __aexit__(self, kind: object, error: BaseException | None, trace: object) -> None:
+        """Cancel the legs in flight; raise a finished leg's failure when the cohort succeeded."""
+        failed = next(
+            (
+                failure
+                for task in self._legs
+                if task.done() and not task.cancelled() and (failure := task.exception())
+            ),
+            None,
+        )
+        await cancel_tasks([*([self._run] if self._run is not None else []), *self._legs])
+        if error is None and failed is not None:
+            raise failed
+
+    async def _send(self) -> None:
+        # A fixed seed repeats each run's arrival times.
+        rng = random.Random(self.seed)  # noqa: S311
+        while True:
+            await asyncio.sleep(rng.expovariate(self.rate))
+            self.sent.append(time.monotonic())
+            self._legs.append(asyncio.create_task(self._leg()))
+
+    async def _leg(self) -> None:
+        body = completion_body(
+            self.model, self.prompt, 1, self.dialect, self.dialect.cold_probe_extras()
+        )
+        r = await self.client.post(
+            f"{self.url}/v1/completions", json=body, timeout=self.timeout_s or 300.0
+        )
+        if r.status_code != 200:
+            raise DecodeEngineError(
+                f"prefill leg failed on {self.url} ({r.status_code}): {r.text[:200]}"
+            )
+        self.done.append(time.monotonic())
 
 
 async def _decode_cohort(
@@ -169,18 +249,20 @@ async def _retried_cohort(
     cohort: int,
     tokens: int,
     dialect: EngineDialect,
+    beside: PrefillLegs | None = None,
 ) -> tuple[list[tuple[float, float, float]], dict[str, float]]:
     """Run a cohort, rerunning it whole when an engine reports a request error or a stream
     times out or drops.
 
-    A rerun discards the failed attempt's intervals. The last error propagates after
-    `ENGINE_ERROR_RETRIES` reruns.
+    `beside` sends its prefill legs while each run lasts. A rerun discards the failed attempt's
+    intervals. The last error propagates after `ENGINE_ERROR_RETRIES` reruns.
     """
     for attempt in range(ENGINE_ERROR_RETRIES + 1):
         try:
-            return await _decode_cohort(
-                client, url, model, prompt, input_len, cohort, tokens, dialect
-            )
+            async with beside or nullcontext():
+                return await _decode_cohort(
+                    client, url, model, prompt, input_len, cohort, tokens, dialect
+                )
         except (DecodeEngineError, httpx.TransportError) as exc:
             if attempt == ENGINE_ERROR_RETRIES:
                 raise
@@ -511,3 +593,128 @@ async def probe_decode(
     if kv_capacity_tokens is not None and len(measured_lengths) < 2:
         raise _too_few_lengths(url, kv_capacity_tokens, tokens, dropped_lengths)
     return samples
+
+
+def share_cohort(profile: Profile, max_model_len: int | None = None) -> tuple[int, int, int]:
+    """Return the prefill-share step's cohort, and each stream's input and output tokens.
+
+    Half of `decode_max_requests` streams end together at the middle of the measured KV range,
+    each with as many output tokens as input tokens.
+    """
+    requests, low, high = (
+        profile.decode_max_requests,
+        profile.decode_min_kv_tokens,
+        profile.decode_max_kv_tokens,
+    )
+    if requests is None or low is None or high is None:
+        raise ValueError(f"{profile.iid}: the prefill share step needs measured decode bounds")
+    cohort = max(1, requests // 2)
+    stream = (low + high) // 2 // cohort
+    if max_model_len is not None:
+        stream = min(stream, max_model_len)
+    # Two intervals need three output tokens.
+    if stream < 6:
+        raise ValueError(
+            f"{profile.iid}: {cohort} streams in {(low + high) // 2} KV tokens leave "
+            f"{stream} tokens per stream; the prefill share step needs at least 6"
+        )
+    input_len = stream // 2
+    return cohort, input_len, stream - input_len
+
+
+async def probe_prefill_share(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str,
+    dialect: EngineDialect,
+    profile: Profile,
+    prefill_len: int,
+    *,
+    shares: tuple[float, ...] = PREFILL_SHARES,
+    chars_per_token: float = 3.8,
+    max_model_len: int | None = None,
+    observation_timeout_s: float | None = None,
+    evidence: list[dict[str, object]] | None = None,
+) -> list[tuple[float, float, float]]:
+    """Return (prefill stall s, window s, mean resident token interval) for each offered share.
+
+    The `share_cohort` streams decode while prefill legs of `prefill_len` prompt tokens arrive
+    at Poisson times, at the offered share of the engine's time priced with the profile's
+    prefill fit. The window runs from the full cohort's first token to its first stream's
+    end. The stall prices the legs that completed in the window, and the interval is the
+    window over the tokens each stream delivered in it.
+    """
+    cohort, target, tokens = share_cohort(profile, max_model_len)
+    timeout = observation_timeout_s or 30.0
+    prompt, input_len = await make_prompt(
+        client, url, model, target, dialect, chars_per_token, timeout_s=timeout
+    )
+    leg_prompt, leg_len = await make_prompt(
+        client, url, model, prefill_len, dialect, chars_per_token, timeout_s=timeout
+    )
+    if max_model_len is not None and (
+        input_len + tokens > max_model_len or leg_len + 1 > max_model_len
+    ):
+        raise ValueError(
+            f"prefill share streams of {input_len}+{tokens} tokens or legs of {leg_len}+1 "
+            f"tokens exceed {url} max_model_len {max_model_len}"
+        )
+    leg_s = profile.prefill_time(leg_len)
+    if leg_s <= 0:
+        raise ValueError(f"{profile.iid}: the prefill fit prices a {leg_len}-token leg at 0 s")
+    # The cohort's first decode at its batch size can include kernel compilation.
+    await _retried_cohort(client, url, model, prompt, input_len, cohort, tokens, dialect)
+    runs: list[tuple[float, float, float]] = []
+    for index, offered in enumerate(shares):
+        legs = (
+            PrefillLegs(
+                client,
+                url,
+                model,
+                leg_prompt,
+                dialect,
+                offered / leg_s,
+                seed=index,
+                timeout_s=observation_timeout_s,
+            )
+            if offered > 0
+            else None
+        )
+        observed, state = await _retried_cohort(
+            client, url, model, prompt, input_len, cohort, tokens, dialect, legs
+        )
+        start, end = state.get("last_join_at"), state.get("left_at")
+        delivered = state.get("left_delivered", 0) - state.get("join_delivered", 0)
+        if start is None or end is None or end <= start or delivered < 2 * cohort:
+            raise RuntimeError(
+                f"prefill share probe delivered {delivered} tokens with the whole cohort "
+                f"resident, need {2 * cohort}: share={offered}, c={cohort}, tokens={tokens}"
+            )
+        completed = sum(start <= at < end for at in legs.done) if legs is not None else 0
+        stall = completed * leg_s
+        interval = (end - start) * cohort / delivered
+        if evidence is not None:
+            evidence.append(
+                {
+                    "offered_share": offered,
+                    "legs_sent": len(legs.sent) if legs is not None else 0,
+                    "legs": completed,
+                    "leg_tokens": leg_len,
+                    "leg_prefill_s": leg_s,
+                    "stall_s": stall,
+                    "window_s": end - start,
+                    "window_tokens": delivered,
+                    "bundles": state.get("bundles", 0),
+                    "input_tokens": input_len,
+                    "concurrency": cohort,
+                    "tokens": tokens,
+                    "interval_s": interval,
+                    "intervals": observed,
+                }
+            )
+        print(
+            f"    share   u={offered:<4.2f} c={cohort:<3} {completed} legs in "
+            f"{end - start:.1f} s -> {interval * 1000:6.2f} ms/token"
+        )
+        runs.append((stall, end - start, interval))
+    return runs

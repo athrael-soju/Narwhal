@@ -85,6 +85,8 @@ The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lowe
 
 The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
+When the fleet file sets `serving.prefill_on_decode`, each engine's sweep ends with the [prefill-share step](../telemetry/02-Profiles.md#prefill-share-on-decode-engines). When the step fails, the engine's profile is written without the prefill-share fit.
+
 ## Shared-GPU neighbour traffic
 
 With `--colocated`, each target needs at least one neighbour in its `shared_device.group`, and the sweep measures the target while its neighbours serve paced traffic in their configured roles. On an SGLang fleet, each target pairs with the first engine in its group that has the other configured role, and the group keeps its configured prefill and decode counts while the target measures both roles.

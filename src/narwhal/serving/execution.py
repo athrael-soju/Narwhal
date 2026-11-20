@@ -279,15 +279,28 @@ def price_waiting(state: RequestLifecycle) -> float | None:
     if router.cfg.admission != "predictive" or state.attempts:
         return None
     scheduler = router.scheduler
-    candidates = scheduler.role_pool(
-        Role.PREFILL, scheduler.live_instances(exclude=state.failed_engines["prefill"])
-    )
-    if not candidates:
-        return None
+    live = scheduler.live_instances(exclude=state.failed_engines["prefill"])
+    probation = scheduler.health.probation_set() if scheduler.health is not None else None
     phase, req.phase = req.phase, Phase.PREFILL
     try:
-        placements = {inst.iid: scheduler.prefill_admission_price(req, inst) for inst in candidates}
-        cheapest = min(candidates, key=lambda inst: (placements[inst.iid], inst.iid))
+        # Placement takes a borrowed decode engine only in its own tier.
+        tier = scheduler.own_prefill_meets(req, live, probation)
+        if tier is None:
+            candidates, borrowed = scheduler.prefill_pool(req, live)
+            if not candidates:
+                return None
+            prices = (
+                {inst.iid: scheduler.cost(req, inst, probation=probation) for inst in candidates}
+                if borrowed
+                else {}
+            )
+            tier = scheduler.prefill_tier(req, candidates, prices, borrowed)
+        else:
+            borrowed = set()
+        placements = {
+            inst.iid: scheduler.prefill_admission_price(req, inst, borrowed) for inst in tier
+        }
+        cheapest = min(tier, key=lambda inst: (placements[inst.iid], inst.iid))
         priced = _price_admission(state, cheapest)
         _check_ttft(state, priced)
         # A queued request that would wait past its TTFT budget for a decode slot is refused
@@ -364,6 +377,7 @@ async def _prepare_once(
         state.reserve(prefill)
 
     prefill = await _place(state, prefill=True, claim=admit_prefill)
+    prefill_role = prefill.role.value
     handoff = HandoffLegs(router.engines.kv, router.launches.get(prefill.iid, {}))
 
     def prefill_leg(request_id: str) -> PrefillLeg:
@@ -383,6 +397,7 @@ async def _prepare_once(
         decode = await _place(state, prefill=False, claim=state.reserve)
         state.begin_attempt()
         state.prefill_iid, state.decode_iid = prefill.iid, decode.iid
+        state.prefill_role = prefill_role
         router.note_handoff(prefill.iid, decode.iid)
         request_id = state.leg_id("prefill")
         state.phase = "decode"
@@ -390,7 +405,7 @@ async def _prepare_once(
         return PreparedAttempt(prefill, decode, handoff)
     state.phase = "prefill"
     state.begin_attempt()
-    state.prefill_iid = prefill.iid
+    state.prefill_iid, state.prefill_role = prefill.iid, prefill_role
     await handoff.start(prefill_leg(state.leg_id("prefill")))
     # The producer's lease starts when prefill completes.
     bound = handoff_bound(router, prefill.iid)

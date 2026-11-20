@@ -59,6 +59,15 @@ class _Window:
 
 
 @dataclass
+class _LentWindow:
+    """The span a borrowed prefill leg's placement priced on its engine."""
+
+    rid: str | None
+    start: float
+    end: float
+
+
+@dataclass
 class _PriceWindow:
     """Integrate resident prefill cost over one monitoring interval."""
 
@@ -120,6 +129,8 @@ class InstanceMonitor:
         self._decoding_on: dict[str, str] = {}
         self._prices: dict[str, _PriceWindow] = {}
         self._last_token: dict[str, float] = {}
+        # Prefill completion time by request ID.
+        self._prefilled_at: dict[str, float] = {}
         # Latest prefill completion or decode token per engine.
         self._last_output: dict[str, float] = {}
         # Requests past their first decode gap, which includes transfer and queue time.
@@ -127,6 +138,9 @@ class InstanceMonitor:
         # Decode streams whose engine output has ended and await release.
         self._decode_ended: set[str] = set()
         self._last_prefill_activity: dict[str, float] = {}
+        # Priced spans of the borrowed prefill legs on each engine, in dispatch order. A span
+        # stays while a decode gap on the engine can still overlap it.
+        self._lent: dict[str, list[_LentWindow]] = {}
         # Requests the router has sent to each engine: placed legs and its own probes.
         self.requests_sent: dict[str, int] = {}
 
@@ -204,6 +218,8 @@ class InstanceMonitor:
         if request.phase is Phase.PREFILL:
             inst.prefill[request.rid] = request
             request.prefill_instance = iid
+            if request.borrowed:
+                self._lend(iid, request)
             self._prefill_changed(iid)
             self._reprice(iid)
         else:
@@ -222,7 +238,8 @@ class InstanceMonitor:
         """Move a request out of prefill and start its token clock."""
         if self.instances[iid].prefill.pop(rid, None) is not None:
             self._prefill_changed(iid)
-        self._last_token[rid] = self._last_output[iid] = self._clock()
+            self._unlend(iid, rid)
+        self._last_token[rid] = self._last_output[iid] = self._prefilled_at[rid] = self._clock()
         self._reprice(iid)
         self.on_capacity_change()
 
@@ -246,7 +263,7 @@ class InstanceMonitor:
                 if profile is not None and profile.decode_max_requests is not None and requests
                 else None
             )
-            window.add(now - prev, expected)
+            window.add(self._unpriced_gap(iid, prev, now), expected)
         elif prev is not None:
             self._handoffs[iid].add(now - prev)
         self._decode_started.add(rid)
@@ -284,12 +301,93 @@ class InstanceMonitor:
                 self._reprice_prefill(next(islice(inst.decode.values(), limit - 1, None)))
         had_prefill = inst.prefill.pop(rid, None)
         self._last_token.pop(rid, None)
+        self._prefilled_at.pop(rid, None)
         self._decode_started.discard(rid)
         self._decode_ended.discard(rid)
         if had_prefill is not None:
             self._prefill_changed(iid)
+            self._unlend(iid, rid)
             self._reprice(iid)
+        self._prune_lent(iid)
         self.on_capacity_change()
+
+    def _lend(self, iid: str, request: Request) -> None:
+        """Open the span the borrow envelope priced for a borrowed leg.
+
+        The engine prefills its borrowed legs one after another, so a span starts at dispatch
+        or at the end of the last span whose leg is still in prefill, and lasts the leg's
+        profiled prefill time.
+        """
+        profile = self.profiles.get(iid) if self.profiles is not None else None
+        if profile is None:
+            return
+        windows = self._lent.setdefault(iid, [])
+        start = max([self._clock(), *(w.end for w in windows if w.rid is not None)])
+        windows.append(_LentWindow(request.rid, start, start + prefill_seconds(profile, request)))
+
+    def _unlend(self, iid: str, rid: str) -> None:
+        """End a borrowed leg's span when the leg leaves prefill.
+
+        A span that has not started is dropped. The queued spans after it start again from
+        now, or from the end of the spans before it whose legs are still in prefill, each
+        keeping its length.
+        """
+        now = self._clock()
+        windows = self._lent.get(iid)
+        if not windows:
+            return
+        kept: list[_LentWindow] = []
+        cursor: float | None = None
+        running = now
+        for window in windows:
+            if window.rid == rid:
+                window.rid, window.end, cursor = None, min(window.end, now), running
+                if window.end > window.start:
+                    kept.append(window)
+                continue
+            if cursor is not None and window.rid is not None:
+                if window.start > cursor:
+                    length = window.end - window.start
+                    window.start, window.end = cursor, cursor + length
+                cursor = max(cursor, window.end)
+            elif window.rid is not None:
+                running = max(running, window.end)
+            kept.append(window)
+        self._lent[iid] = kept
+        self._prune_lent(iid)
+
+    def _prune_lent(self, iid: str) -> None:
+        windows = self._lent.get(iid)
+        if not windows:
+            self._lent.pop(iid, None)
+            return
+        oldest = min(
+            (
+                self._last_token[rid]
+                for rid in self.instances[iid].decode
+                if rid in self._last_token and rid in self._decode_started
+            ),
+            default=self._clock(),
+        )
+        kept = [w for w in windows if w.rid is not None or w.end > oldest]
+        if kept:
+            self._lent[iid] = kept
+        else:
+            del self._lent[iid]
+
+    def _unpriced_gap(self, iid: str, since: float, until: float) -> float:
+        """Return a decode gap less the stall the borrow envelope priced inside it.
+
+        The envelope prices `decode_prefill_slowdown` seconds of stall per second of a
+        borrowed leg's span.
+        """
+        gap = until - since
+        windows = self._lent.get(iid)
+        profile = self.profiles.get(iid) if self.profiles is not None else None
+        if not windows or profile is None or profile.decode_prefill_slowdown is None:
+            return gap
+        overlap = sum(max(0.0, min(until, w.end) - max(since, w.start)) for w in windows)
+        return max(0.0, gap - profile.decode_prefill_slowdown * overlap)
 
     def _stop_decoding(self, iid: str, leg: Request) -> None:
         if self._decoding_on.get(leg.rid) == iid:
@@ -297,6 +395,11 @@ class InstanceMonitor:
             decoding = self._decoding[iid]
             decoding[0] -= 1
             decoding[1] -= leg.length
+
+    def decode_elapsed(self, rid: str) -> float:
+        """Return the seconds since the request's prefill completed, 0 before it completes."""
+        prefilled = self._prefilled_at.get(rid)
+        return 0.0 if prefilled is None else self._clock() - prefilled
 
     def decoding(self, iid: str) -> tuple[int, int]:
         """Return the requests and tokens of the engine's legs past their first decode token."""
@@ -343,11 +446,11 @@ class InstanceMonitor:
         """Return the longest open inter-token gap on an engine.
 
         Requests awaiting their first decode token and streams whose output has ended are
-        excluded.
+        excluded. A gap leaves out the stall the borrow envelope priced inside it.
         """
         now = self._clock()
         gaps = [
-            now - self._last_token[rid]
+            self._unpriced_gap(iid, self._last_token[rid], now)
             for rid in self.instances[iid].decode
             if rid in self._last_token
             and rid in self._decode_started
@@ -374,3 +477,5 @@ class InstanceMonitor:
             h.total_s, h.count = 0.0, 0
         for p in self._prices.values():
             p.roll(now)
+        for iid in list(self._lent):
+            self._prune_lent(iid)

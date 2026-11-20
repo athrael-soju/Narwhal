@@ -58,6 +58,8 @@ class RequestLifecycle:
         self.terminal: str | None = None
         self.outcome: dict[str, Any] = {"error": None, "status": 200}
         self.prefill_iid: str | None = None
+        # The role `prefill_iid` held when placement chose it.
+        self.prefill_role: str | None = None
         self.decode_iid: str | None = None
         self.prefilled_at: float | None = None
         self.first_at: float | None = None
@@ -145,7 +147,7 @@ class RequestLifecycle:
         self.tokens = 0
         self.reported_tokens = None
         self.first_at = self.last_at = self.prefilled_at = None
-        self.prefill_iid = self.decode_iid = None
+        self.prefill_iid = self.decode_iid = self.prefill_role = None
         self.request.output_len = 0
 
     def leg_id(self, phase: str) -> str:
@@ -337,6 +339,7 @@ class RequestLifecycle:
             ),
             "upstream_seconds": self.upstream_seconds.copy(),
             "prefill_iid": self.prefill_iid,
+            "prefill_role": self.prefill_role,
             "decode_iid": self.decode_iid,
             "crossed": self.decode_iid is not None and self.decode_iid != self.prefill_iid,
             "cached_tokens": dict(req.cached_tokens),

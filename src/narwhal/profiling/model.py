@@ -27,6 +27,8 @@ _FLOAT_FIELDS = (
     "cached_ttft_c",
     "cached_ttft_d",
     "cached_cv_mape",
+    "decode_prefill_slowdown",
+    "decode_prefill_max_share",
 )
 
 
@@ -65,6 +67,10 @@ CACHED_PROFILE_FIELDS = (
     "cached_min_suffix_tokens",
     "cached_max_suffix_tokens",
 )
+
+
+# Fields the prefill-share step sets together.
+PREFILL_SHARE_FIELDS = ("decode_prefill_slowdown", "decode_prefill_max_share")
 
 
 _DECODE_BOUNDS = (
@@ -147,6 +153,12 @@ def _check(raw: Mapping[str, Any], label: str) -> None:
             raise ValueError(f"{where}: {name} is required on a current profile")
     if ("ttft_block_tokens" in values) != ("ttft_split" in values):
         raise ValueError(f"{where}: ttft_block_tokens and ttft_split go together")
+    if ("decode_prefill_slowdown" in values) != ("decode_prefill_max_share" in values):
+        raise ValueError(
+            f"{where}: decode_prefill_slowdown and decode_prefill_max_share go together"
+        )
+    if "decode_prefill_max_share" in values and not 0 < values["decode_prefill_max_share"] < 1:
+        raise ValueError(f"{where}: decode_prefill_max_share must be above 0 and below 1")
     cached = [name for name in CACHED_PROFILE_FIELDS if name in values]
     if cached and len(cached) != len(CACHED_PROFILE_FIELDS):
         missing = sorted(set(CACHED_PROFILE_FIELDS) - set(cached))
@@ -212,6 +224,10 @@ class Profile:
     cached_max_prefix_tokens: int | None = None
     cached_min_suffix_tokens: int | None = None
     cached_max_suffix_tokens: int | None = None
+    # Resident decode interval beside prefill legs that take share u of the engine's time:
+    # interval * (1 + decode_prefill_slowdown * u / (1 - u)), measured up to the max share.
+    decode_prefill_slowdown: float | None = None
+    decode_prefill_max_share: float | None = None
     # Stated rather than measured: bound to no engine process, so generation checks pass it.
     nominal: bool = False
 
@@ -409,10 +425,17 @@ def nominal_profile(
 
 
 def profile_row(profile: Profile) -> dict[str, Any]:
-    """Return the stored row. A measured row leaves `nominal` out, so earlier releases load it."""
+    """Return the stored row.
+
+    A measured row leaves `nominal` out, and a row without a prefill-share fit leaves its
+    fields out, so earlier releases load it.
+    """
     row = asdict(profile)
     if not profile.nominal:
         del row["nominal"]
+    if profile.decode_prefill_slowdown is None:
+        for name in PREFILL_SHARE_FIELDS:
+            del row[name]
     return row
 
 
