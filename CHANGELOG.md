@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/athrael-soju/Narwhal/compare/v0.9.0...v0.10.0) (2026-11-20)
+
+
+### Features
+
+* Arrow scheduling extensions (milestone 24) ([#418](https://github.com/athrael-soju/Narwhal/issues/418)) ([5b8d174](https://github.com/athrael-soju/Narwhal/commit/5b8d1746b9218078506ec92173f88233d0bf56ee))
+
 ## [0.9.0](https://github.com/athrael-soju/Narwhal/compare/v0.8.0...v0.9.0) (2026-11-14)
 
 
