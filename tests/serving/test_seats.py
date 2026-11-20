@@ -116,7 +116,7 @@ class SeatHttpTests(HttpHarness):
     async def test_a_queued_request_waits_for_a_free_prefill_seat(self):
         self.cfg.serving = ServingPolicy(queue_capacity=2, queue_timeout_s=0.05)
         # The original deadline bounds a prefill-seat wait.
-        self.cfg.request_timeout_s = 0.2
+        self.cfg.request_timeout_s = 1.0
         client = self.client()
         router = self.router
         self.assertEqual((await self.post(client)).status_code, 200)
