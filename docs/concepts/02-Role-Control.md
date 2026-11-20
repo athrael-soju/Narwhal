@@ -24,6 +24,10 @@ When a request's projected TTFT exceeds `slo.ttft_s`, the role controller schedu
 
 When projected TTFT still exceeds `slo.ttft_s` after a move, the role controller schedules another evaluation. `/narwhal/state` reports each recovery decision in the [projected-TTFT recovery fields](../http-api/05-Live-State.md#projected-ttft-recovery-fields).
 
+### Early decode recovery
+
+With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one, at most one every `controller.reactive.step_s`. The evaluation moves one prefill engine to decode when that move lowers the larger of the projected TPOT and decode queueing ratios. A pending projected-TTFT recovery evaluation runs first. `/narwhal/state` reports each decision in the [early decode recovery fields](../http-api/05-Live-State.md#early-decode-recovery-fields), and the [adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) list its conditions.
+
 ### Expansion and consolidation
 
 Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds capacity to a role whose load reaches `controller.thresholds.expand`. With complete demand, a move from decode to prefill then needs one confirmation. The [`mixed_pressure` rule](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) allows expansion while the other role's load is above `controller.thresholds.shrink`. Both kinds of move must pass the profile, safety, and confirmation checks.
@@ -83,7 +87,7 @@ Under steady demand, the role controller may take an engine from a role whose so
 
 ### Incomplete demand
 
-While [demand is incomplete](../http-api/06-SLO-and-Demand.md#demand-completeness), the role controller makes two kinds of move, each requiring a measured profile for every live engine: it moves an engine toward a role whose recovery ratio reaches `controller.thresholds.expand`, and it moves an engine to prefill after a projected-TTFT recovery evaluation. Departures and steady-demand moves resume once demand is complete.
+While [demand is incomplete](../http-api/06-SLO-and-Demand.md#demand-completeness), the role controller makes two kinds of move, each requiring a measured profile for every live engine: it moves an engine toward a role whose recovery ratio reaches `controller.thresholds.expand`, and it moves an engine after a projected-TTFT recovery or early decode recovery evaluation. Departures and steady-demand moves resume once demand is complete.
 
 ### Guards on role changes
 
@@ -107,6 +111,8 @@ A move to decode that passes its confirmations while its engine is busy stays ap
 - the move is no longer eligible and fails the decode profile or role floor check, projects prefill load above `controller.thresholds.expand` at the new split, or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, or by zero or less when `mixed_pressure` approved it
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
+
+An early decode recovery evaluation applies every guard above. It also needs a profile for every engine and decode profiles that cover the work of the new split. At the new split, the projected TTFT ratio must be at or below `controller.thresholds.shrink`, or, with no departure open, the move must lower the worst projected SLO ratio. The evaluation holds for one confirmation span after any move to prefill. For one confirmation span after its move, a `source_shrink` move back to prefill holds unless it answers a prefill demand spike.
 
 ### Advisory mode
 

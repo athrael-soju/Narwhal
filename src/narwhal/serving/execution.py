@@ -267,6 +267,13 @@ def _decode_slot_check(
     return check
 
 
+def _note_slot_refusal(router: NarwhalRouter, req: Request) -> None:
+    """Record a slot-wait refusal and arm an early decode evaluation."""
+    router.scheduler.slot_refusals.note(req)
+    if router.controller.note_slot_refusal(at=router._clock()):
+        router.control_wakeup.set()
+
+
 def price_waiting(state: RequestLifecycle) -> float | None:
     router, req = state.router, state.request
     if router.cfg.admission != "predictive" or state.attempts:
@@ -288,7 +295,7 @@ def price_waiting(state: RequestLifecycle) -> float | None:
         check = _decode_slot_check(state, cheapest, priced)
         if check.refusal is not None:
             if check.refusal == "slot_wait":
-                scheduler.slot_refusals.note(req)
+                _note_slot_refusal(router, req)
             raise PlacementRefused(priced, cause=check.refusal)
     finally:
         req.phase = phase
@@ -349,7 +356,7 @@ async def _prepare_once(
             check = _decode_slot_check(state, prefill, None if retry else priced)
             if check.refusal is not None:
                 if check.refusal == "slot_wait" and not retry:
-                    router.scheduler.slot_refusals.note(req)
+                    _note_slot_refusal(router, req)
                 raise PlacementRefused(priced, cause=check.refusal)
             state.slot_wait_first_s = (
                 priced + check.slot_wait_s if check.slot_wait_s > 0 and not retry else None

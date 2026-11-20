@@ -148,6 +148,26 @@ class PredictiveQueueTests(QueueWaitHarness):
         self.assertEqual((await holder).status_code, 200)
         self.assert_released()
 
+    async def test_a_queued_slot_wait_refusal_arms_the_early_decode_evaluation(self):
+        self.cfg.reactive_decode_recovery = True
+        self.cfg.thresholds = replace(self.cfg.thresholds, cooldown_s=0.0)
+        client = self.client()
+        holder = await self.hold_prefill(client)
+        late = DecodeCheck("slot_wait", slot_wait_s=1.5)
+        with (
+            patch.object(execution, "decode_check", return_value=late),
+            patch.object(execution, "price_waiting", wraps=execution.price_waiting) as priced,
+        ):
+            response = await asyncio.wait_for(self.post(client), timeout=2)
+        self.assertEqual(response.status_code, 429, response.text)
+        self.assertIsNotNone(self.row(response.headers["x-request-id"])["queue_waits"]["prefill"])
+        priced.assert_called()
+        self.assertTrue(self.router.controller.decode_risk_pending)
+        self.assertTrue(self.router.control_wakeup.is_set())
+        self.blocked.set()
+        self.assertEqual((await holder).status_code, 200)
+        self.assert_released()
+
     async def test_the_admission_price_records_the_decode_slot_wait(self):
         client = self.client()
         response = await self.post(client)

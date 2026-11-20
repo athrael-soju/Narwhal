@@ -251,6 +251,7 @@
         "decode_correction_max": 2.0,
         "decode_correction_min": 0.5,
         "decode_correction_min_samples": 8,
+        "decode_recovery": false,
         "demand_floor": 0.2,
         "demand_rise_tolerance": 0.25,
         "evidence_max_span_s": 30.0,

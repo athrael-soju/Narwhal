@@ -364,6 +364,27 @@ class RoleChanges:
         )
         self._panic_sustained = self._panic_sustained + 1 if armed else 0
 
+    def decode_move_waits(self) -> bool:
+        """Whether the P-to-D cooldown or the dwell of every unpinned prefill engine blocks a move
+        to decode now.
+        """
+        now = self.scheduler._clock()
+        if now - self._last_p2d_flip < self.scheduler.th.cooldown_s and not self._panic_now():
+            return True
+        pool = [
+            inst
+            for inst in self.scheduler.live_instances(Role.PREFILL)
+            if inst.iid not in self.scheduler.pinned
+        ]
+        return (
+            self.scheduler.th.dwell_s > 0.0
+            and bool(pool)
+            and all(
+                now - self._last_flip.get(inst.iid, float("-inf")) < self.scheduler.th.dwell_s
+                for inst in pool
+            )
+        )
+
     def _panic_now(self) -> bool:
         if self.scheduler.th.panic_ratio <= 0.0:
             return False

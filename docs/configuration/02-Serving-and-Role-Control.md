@@ -517,10 +517,11 @@ Adjacent-split decisions use these spans:
 Each scored decision records in `eligibility_rule` the first of these rules that matches:
 
 1. `projected_ttft_recovery`
-2. `mixed_pressure`
-3. `settled_departure`
-4. `steady_demand`
-5. `source_shrink`
+2. `early_decode_recovery`
+3. `mixed_pressure`
+4. `settled_departure`
+5. `steady_demand`
+6. `source_shrink`
 
 Ordinary consolidation, the `source_shrink` rule, requires both:
 
@@ -610,11 +611,28 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 
 Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
 
+With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one. A refusal schedules an evaluation only while `controller.thresholds.cooldown_s` has elapsed since the last move to decode or the cooldown bypass is armed, and not while every live unpinned prefill engine changed role within the last `controller.thresholds.dwell_s`. Refusals share one evaluation, and early decode recovery evaluations start at least `controller.reactive.step_s` apart. A regular evaluation and a pending projected-TTFT recovery evaluation run first, and the early decode recovery evaluation runs at the next wake. As it starts, the evaluation checks the same cooldown and dwell conditions, and that a slot-wait refusal falls within the last `controller.reactive.step_s`. When either check fails, the role controller drops the evaluation without a decision.
+
+The early decode recovery evaluation scores only the split with one more decode engine, on window demand. It moves the engine with one confirmation when all of these hold:
+
+- every engine has a profile
+- the larger of the candidate's TPOT and decode queueing ratios is below the current split's
+- the candidate's projected TTFT ratio is at or below `controller.thresholds.shrink`, or it is above `controller.thresholds.shrink`, no departure is open, and the move lowers the worst projected SLO ratio by more than zero
+- decode profiles cover the candidate's work
+- the role floors hold, and no departure toward prefill holds the reverse move
+- no engine moved to prefill within the last confirmation span
+
+Pins, `controller.thresholds.cooldown_s`, and `controller.thresholds.dwell_s` apply to the move.
+
+For one confirmation span after an early decode recovery move, a `source_shrink` move to prefill holds, unless it is the move for a prefill demand spike described for `source_shrink` above. Moves to prefill under other rules, including projected-TTFT recovery, proceed.
+
+A held early decode recovery evaluation leaves the settled run, `steady_demand_s`, an open departure, the confirmation sequence, and an approved move to decode unchanged. An early decode recovery move restarts the settled run, as any attempted move does. It leaves `steady_demand_s`, an open departure, and the confirmation sequence of another proposed split unchanged.
+
 A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 
 One confirmation is enough in three cases:
 
-- the move comes from a projected-TTFT recovery evaluation
+- the move comes from a projected-TTFT recovery or early decode recovery evaluation
 - the eligibility rule is `settled_departure`
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
@@ -691,3 +709,4 @@ Live state and metrics expose the short and long demand estimates, the arrival-e
 | `controller.reactive.decode_correction_max`         |  `2.0`  | Upper bound on the live-to-profile decode correction.                                                                                                                                                                                                                                                                   | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       |  `0.2`  | Fraction of each qualifying observation window applied to the correction.                                                                                                                                                                                                                                               | `(0, 1]`                                                 |
 | `controller.reactive.decode_correction_min_samples` |   `8`   | Required decode gaps before a window updates the correction.                                                                                                                                                                                                                                                            | At least 1                                               |
+| `controller.reactive.decode_recovery`               | `false` | Schedules an early decode recovery evaluation on decode slot-wait refusals, as [adjacent-split decisions](#adjacent-split-decisions) describe.                                                                                                                                                                          |                                                          |
