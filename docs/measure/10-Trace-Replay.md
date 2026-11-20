@@ -84,6 +84,8 @@ To sweep rates, convert the same clip once for each time scale.
 
 4. Run the plan as in [Running a plan](05-Benchmark-Runner.md#running-a-plan).
 
+For a trace with `hash_ids`, such as a Mooncake trace, set AIPerf 0.13.0's `--tokenizer` to the model's Hugging Face ID. With a local tokenizer directory, AIPerf fails while it builds the prompts.
+
 Replay the whole file. A point that ends the replay early, such as with `--request-count` or `--benchmark-duration`, counts each unsent request as a miss.
 
 | `attainment` field | Default                                  | Meaning                                                     |
