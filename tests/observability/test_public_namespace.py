@@ -290,7 +290,6 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             "candidate_projected_ttft_s": 0.9,
             "candidate_projected_ttft_ratio": 0.9,
             "projected_ttft_improvement_s": 0.5,
-            "decode_trigger": "slot_wait",
             "current_decode_ratio": 0.6,
             "candidate_decode_ratio": 0.4,
             "projected_decode_improvement": 0.2,

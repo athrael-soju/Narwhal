@@ -395,7 +395,7 @@ These decisions add fields to `control.last_decision`:
 | `eligibility_rule`        | Proposal                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                                  |
-| `early_decode_recovery`   | Urgent prefill-to-decode evaluation triggered by decode pressure                                                                      |
+| `early_decode_recovery`   | Urgent prefill-to-decode evaluation triggered by a decode slot-wait refusal                                                           |
 | `mixed_pressure`          | Source load above `shrink`, and the receiving role at or above `expand`                                                               |
 | `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) first move, priced on confirmation-span demand        |
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
@@ -445,11 +445,10 @@ Scored projected-TTFT recovery decisions set `decision_basis=projected_ttft_reco
 
 An [early decode recovery](../concepts/02-Role-Control.md#early-decode-recovery) evaluation adds these fields to `control.last_decision`:
 
-| Field                   | Meaning                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decode_trigger`        | First signal coalesced into this evaluation: `slot_wait` for a decode slot-wait refusal, `decode_load` for decode load at or above `controller.thresholds.expand` |
-| `urgent_signals`        | Decode-pressure signals coalesced into this evaluation                                                                                                            |
-| `event_to_evaluation_s` | Seconds from the first signal to this evaluation                                                                                                                  |
+| Field                   | Meaning                                                  |
+| ----------------------- | -------------------------------------------------------- |
+| `urgent_signals`        | Decode slot-wait refusals coalesced into this evaluation |
+| `event_to_evaluation_s` | Seconds from the first refusal to this evaluation        |
 
 A scored candidate adds:
 
@@ -482,6 +481,13 @@ A departure's hold sets one of these `reason` values:
 | ------------------------------------------------- | ------------------------------------------------------- |
 | `departure toward decode holds the reverse move`  | Decode-to-prefill move after a departure toward decode  |
 | `departure toward prefill holds the reverse move` | Prefill-to-decode move after a departure toward prefill |
+
+An [early decode recovery](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) hold sets one of these `reason` values:
+
+| `reason`                                                                | Held move                                                                                     |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `early decode recovery holds the reverse of a recent move to prefill`   | Early decode recovery move within one confirmation span of a move to prefill                  |
+| `a recent early decode recovery move holds the reverse move to prefill` | `source_shrink` move to prefill within one confirmation span of an early decode recovery move |
 
 ### Role-change history
 

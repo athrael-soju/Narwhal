@@ -63,6 +63,8 @@ class ReactivePolicy:
         # Start of the current run of evaluations that would end the departure's lead.
         self.lead_break_since: float | None = None
         self.drain: SwitchDrain | None = None
+        # Time of the latest applied early decode recovery move.
+        self.early_decode_at: float | None = None
 
     def interrupt(self) -> None:
         self.settled_since = self.balanced_since = None
@@ -454,6 +456,24 @@ class ReactivePolicy:
         def source_safe(row: Evaluation) -> bool:
             return row[1] <= th.shrink or row[5] or rule(row) == "steady_demand" or surge_move(row)
 
+        # For one confirmation span, a move to prefill holds an early decode move, and an early
+        # decode move holds a `source_shrink` move to prefill other than a surge move.
+        reverses_prefill_move = decode_ready and any(
+            flip.to is Role.PREFILL and now - flip.at < confirmation_s
+            for flip in controller.scheduler.roles.flips
+        )
+        early_decode_recent = (
+            self.early_decode_at is not None and now - self.early_decode_at < confirmation_s
+        )
+
+        def reverses_early_decode(row: Evaluation) -> bool:
+            return (
+                early_decode_recent
+                and row[0].prefill > current_p
+                and rule(row) == "source_shrink"
+                and not surge_move(row)
+            )
+
         def admitted(row: Evaluation) -> bool:
             candidate, source_ratio, improvement, capacity_safe, covered, mixed, floors = row
             if not (
@@ -462,6 +482,7 @@ class ReactivePolicy:
                 and floors
                 and (candidate.prefill < current_p or evidence.allowed or prefill_relief)
                 and (candidate.prefill not in held_reverse or surge_move(row))
+                and not reverses_early_decode(row)
             ):
                 return False
             if urgent_ready and recovery_projection is not None:
@@ -475,7 +496,9 @@ class ReactivePolicy:
                     or (not mixed and source_ratio <= controller.scheduler.th.shrink)
                 )
             if decode_ready:
-                return decode_ratio(candidate) < decode_ratio(current) and (
+                return (
+                    not reverses_prefill_move and decode_ratio(candidate) < decode_ratio(current)
+                ) and (
                     (mixed and improvement > 0.0)
                     or (not mixed and source_ratio <= controller.scheduler.th.shrink)
                 )
@@ -585,6 +608,10 @@ class ReactivePolicy:
             elif candidate.prefill in held_reverse and not surge_move(held):
                 toward = "decode" if candidate.prefill > current_p else "prefill"
                 reason = f"departure toward {toward} holds the reverse move"
+            elif reverses_prefill_move:
+                reason = "early decode recovery holds the reverse of a recent move to prefill"
+            elif reverses_early_decode(held):
+                reason = "a recent early decode recovery move holds the reverse move to prefill"
             elif candidate.prefill > current_p and not (evidence.allowed or prefill_relief):
                 reason = evidence.reason
             elif mixed_pressure and not snapshot.profiles_complete:
@@ -698,6 +725,8 @@ class ReactivePolicy:
             ):
                 # A window move along the heading or a surge move against it closes the departure.
                 self.departure = None
+        if moved is not None and eligibility_rule == "early_decode_recovery":
+            self.early_decode_at = now
         if moved is not None and target is Role.DECODE:
             # A move to decode re-arms the consolidation evidence window.
             controller.safety.note_risk_event("p_to_d_recovery", at=now)

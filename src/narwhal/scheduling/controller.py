@@ -47,26 +47,22 @@ class PrefillRecovery:
 
 @dataclass
 class DecodeUrgency:
-    """Coalesced decode-pressure signals awaiting controller evaluation."""
+    """Coalesced decode slot-wait refusals awaiting controller evaluation."""
 
     signalled_at: float
-    # `slot_wait` or `decode_load`, from the first signal.
-    trigger: str
     signals: int = 1
 
 
 @dataclass(frozen=True)
 class DecodeRecovery:
-    """Revalidated decode pressure consumed by one controller evaluation."""
+    """Revalidated decode slot-wait refusals consumed by one controller evaluation."""
 
     signalled_at: float
-    trigger: str
     signals: int
 
     def details(self, now: float) -> dict[str, object]:
         """Render the urgent trigger fields for a controller decision."""
         return {
-            "decode_trigger": self.trigger,
             "urgent_signals": self.signals,
             "event_to_evaluation_s": rounded(max(0.0, now - self.signalled_at)),
         }
@@ -204,34 +200,20 @@ class ReactiveController:
 
         Returns whether the evaluation is due now.
         """
-        self._note_decode_risk("slot_wait", at)
-        return self.decode_risk_pending
-
-    def note_decode_load(self, load: float, *, at: float | None = None) -> bool:
-        """Arm an early decode evaluation when observed decode load reaches expand.
-
-        Returns whether the evaluation is due now.
-        """
-        if load >= self.scheduler.th.expand:
-            self._note_decode_risk("decode_load", at)
-        return self.decode_risk_pending
-
-    def _note_decode_risk(self, trigger: str, at: float | None) -> None:
         # The P-to-D cooldown or dwell would refuse the move.
-        if not self.decode_recovery_enabled or self.scheduler.roles.decode_move_waits():
-            return
-        if self._decode_urgency is None:
-            self._decode_urgency = DecodeUrgency(
-                signalled_at=self._clock() if at is None else at, trigger=trigger
-            )
-        else:
-            self._decode_urgency.signals += 1
+        if self.decode_recovery_enabled and not self.scheduler.roles.decode_move_waits():
+            if self._decode_urgency is None:
+                self._decode_urgency = DecodeUrgency(
+                    signalled_at=self._clock() if at is None else at
+                )
+            else:
+                self._decode_urgency.signals += 1
+        return self.decode_risk_pending
 
     def consume_decode_risk(self) -> DecodeRecovery | None:
-        """Take the due event; return a recovery while decode pressure persists.
+        """Take the due event; return a recovery after a slot-wait refusal within `step_s`.
 
-        Pressure persists with a slot-wait refusal within the last `step_s`, or with observed
-        decode load at or above expand. A pending P-to-D cooldown or dwell drops the event.
+        A pending P-to-D cooldown or dwell drops the event.
         """
         urgency = self._decode_urgency
         if urgency is None or not self.decode_risk_pending:
@@ -241,19 +223,13 @@ class ReactiveController:
             return None
         now = self._clock()
         refused_at = self.scheduler.slot_refusals.latest_at()
-        if (refused_at is None or refused_at < now - self.step_s) and self.scheduler.pool_load(
-            Role.DECODE
-        ) < self.scheduler.th.expand:
+        if refused_at is None or refused_at < now - self.step_s:
             return None
         self._decode_evaluated_at = now
-        return DecodeRecovery(
-            signalled_at=urgency.signalled_at,
-            trigger=urgency.trigger,
-            signals=urgency.signals,
-        )
+        return DecodeRecovery(signalled_at=urgency.signalled_at, signals=urgency.signals)
 
     def clear_decode_risk(self) -> None:
-        """Drop any pending decode pressure event."""
+        """Drop any pending decode slot-wait event."""
         self._decode_urgency = None
 
     @property

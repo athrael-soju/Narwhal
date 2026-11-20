@@ -394,7 +394,6 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
         ld = router.scheduler.pool_load(Role.DECODE)
-        router.controller.note_decode_load(ld)
         n_prefill = len(router.monitor.pool(Role.PREFILL))
         n_decode = len(router.monitor.pool(Role.DECODE))
         log.info(

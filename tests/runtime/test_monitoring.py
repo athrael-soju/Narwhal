@@ -151,7 +151,8 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         urgent_once.assert_awaited_once_with(self.router)
         periodic.assert_not_awaited()
 
-    async def test_decode_load_at_expand_wakes_control_only_with_decode_recovery(self):
+    async def test_a_pending_refusal_wakes_control_only_with_decode_recovery(self):
+        """Decode load alone arms nothing; a monitoring pass wakes control for a refusal."""
         expand = self.router.scheduler.th.expand
         # The opening move to decode waits out the cooldown, and no early evaluation arms.
         self.router.scheduler.th.cooldown_s = 0.0
@@ -160,6 +161,10 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(decode_recovery=enabled):
                     self.router.controller.decode_recovery_enabled = enabled
                     self.router.control_wakeup.clear()
+                    await monitor_once(self.router)
+                    self.assertFalse(self.router.controller.decode_risk_pending)
+                    self.assertFalse(self.router.control_wakeup.is_set())
+                    self.router.controller.note_slot_refusal()
                     await monitor_once(self.router)
                     self.assertEqual(self.router.controller.decode_risk_pending, enabled)
                     self.assertEqual(self.router.control_wakeup.is_set(), enabled)
