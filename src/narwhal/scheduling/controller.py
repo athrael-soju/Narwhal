@@ -45,6 +45,29 @@ class PrefillRecovery:
         }
 
 
+@dataclass
+class DecodeUrgency:
+    """Coalesced decode slot-wait refusals awaiting controller evaluation."""
+
+    signalled_at: float
+    signals: int = 1
+
+
+@dataclass(frozen=True)
+class DecodeRecovery:
+    """Revalidated decode slot-wait refusals consumed by one controller evaluation."""
+
+    signalled_at: float
+    signals: int
+
+    def details(self, now: float) -> dict[str, object]:
+        """Render the urgent trigger fields for a controller decision."""
+        return {
+            "urgent_signals": self.signals,
+            "event_to_evaluation_s": rounded(max(0.0, now - self.signalled_at)),
+        }
+
+
 class ReactiveController:
     """Evaluate one role change per step while preserving serving floors."""
 
@@ -65,6 +88,7 @@ class ReactiveController:
         evidence_max_span_s: float = 120.0,
         evidence_min_arrivals: int = 10,
         demand_rise_tolerance: float = 0.25,
+        decode_recovery: bool = False,
     ) -> None:
         self.monitor = monitor
         self.scheduler = scheduler
@@ -87,6 +111,9 @@ class ReactiveController:
         self.reactive = ReactivePolicy()
         self.scorer = SplitScorer(self.demand)
         self._prefill_urgency: PrefillUrgency | None = None
+        self.decode_recovery_enabled = decode_recovery
+        self._decode_urgency: DecodeUrgency | None = None
+        self._decode_evaluated_at: float | None = None
         self.safety = ConsolidationSafety(
             self,
             evidence_span_s=evidence_span_s,
@@ -168,6 +195,54 @@ class ReactiveController:
         )
         return True
 
+    def note_slot_refusal(self, *, at: float | None = None) -> bool:
+        """Arm an early decode evaluation for one decode slot-wait refusal.
+
+        Returns whether the evaluation is due now.
+        """
+        # The P-to-D cooldown or dwell would refuse the move.
+        if self.decode_recovery_enabled and not self.scheduler.roles.decode_move_waits():
+            if self._decode_urgency is None:
+                self._decode_urgency = DecodeUrgency(
+                    signalled_at=self._clock() if at is None else at
+                )
+            else:
+                self._decode_urgency.signals += 1
+        return self.decode_risk_pending
+
+    def consume_decode_risk(self) -> DecodeRecovery | None:
+        """Take the due event; return a recovery after a slot-wait refusal within `step_s`.
+
+        A pending P-to-D cooldown or dwell drops the event.
+        """
+        urgency = self._decode_urgency
+        if urgency is None or not self.decode_risk_pending:
+            return None
+        self._decode_urgency = None
+        if self.scheduler.roles.decode_move_waits():
+            return None
+        now = self._clock()
+        refused_at = self.scheduler.slot_refusals.latest_at()
+        if refused_at is None or refused_at < now - self.step_s:
+            return None
+        self._decode_evaluated_at = now
+        return DecodeRecovery(signalled_at=urgency.signalled_at, signals=urgency.signals)
+
+    def clear_decode_risk(self) -> None:
+        """Drop any pending decode slot-wait event."""
+        self._decode_urgency = None
+
+    @property
+    def decode_risk_pending(self) -> bool:
+        """Return whether a coalesced decode event is due for evaluation.
+
+        An event waits `step_s` after the previous early decode evaluation.
+        """
+        return self._decode_urgency is not None and (
+            self._decode_evaluated_at is None
+            or self._clock() - self._decode_evaluated_at >= self.step_s
+        )
+
     def sample(self) -> None:
         """Sample decode residency for demand estimation."""
         self.demand.sample()
@@ -206,9 +281,14 @@ class ReactiveController:
             if urgent or self._prefill_urgency is not None
             else None
         )
+        # A prefill recovery or a scheduled pass takes the evaluation; a decode event waits.
+        decode_recovery = (
+            self.consume_decode_risk() if recovery is None and not advances_cadence else None
+        )
         moved = self.reactive.step(
             self,
             prefill_recovery=recovery,
+            decode_recovery=decode_recovery,
             advance_cadence=advances_cadence,
         )
         if recovery is not None and moved is not None and moved.role is Role.PREFILL:

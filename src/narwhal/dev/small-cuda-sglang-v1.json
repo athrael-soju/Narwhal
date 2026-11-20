@@ -88,7 +88,8 @@
       "decode_correction_min": 0.5,
       "decode_correction_max": 2.0,
       "decode_correction_alpha": 0.2,
-      "decode_correction_min_samples": 8
+      "decode_correction_min_samples": 8,
+      "decode_recovery": false
     }
   },
   "profile": {

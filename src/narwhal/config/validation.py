@@ -238,6 +238,8 @@ def validate(config: FleetConfig, source: str = "config") -> None:
             )
     if not isinstance(config.advisory, bool):
         problems.append("controller.advisory must be a boolean")
+    if not isinstance(config.reactive_decode_recovery, bool):
+        problems.append("controller.reactive.decode_recovery must be a boolean")
     if not isinstance(config.min_prefill, int) or isinstance(config.min_prefill, bool):
         problems.append("controller.min_prefill must be an integer")
     elif config.min_prefill < 1:

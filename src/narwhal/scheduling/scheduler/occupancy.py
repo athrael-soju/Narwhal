@@ -203,6 +203,10 @@ class SlotRefusals:
         cutoff = self._clock() - seconds
         return [request for at, request in self._rows if at >= cutoff]
 
+    def latest_at(self) -> float | None:
+        """Return the time of the latest retained refusal."""
+        return self._rows[-1][0] if self._rows else None
+
     def busiest(self, step_s: float, span_s: float) -> list[Request]:
         """Return the refusals of the `step_s` interval with the most within the last `span_s`.
 

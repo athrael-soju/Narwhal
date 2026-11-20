@@ -166,6 +166,7 @@ async def standby_loop(
 
                                 router.lifecycle.identities_ready = False
                                 router.controller.clear_prefill_risk()
+                                router.controller.clear_decode_risk()
                                 router.control_wakeup.clear()
                                 router.standby = False
                                 try:

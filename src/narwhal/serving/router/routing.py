@@ -248,6 +248,7 @@ class NarwhalRouter:
             evidence_max_span_s=cfg.reactive_evidence_max_span_s,
             evidence_min_arrivals=cfg.reactive_evidence_min_arrivals,
             demand_rise_tolerance=cfg.reactive_demand_rise_tolerance,
+            decode_recovery=cfg.reactive_decode_recovery,
         )
         self.scheduler.switch_hold_s = 3 * cfg.reactive_step_s
         self.scheduler.output_estimator = self.controller.demand.output_estimator
