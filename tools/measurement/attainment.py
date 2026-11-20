@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping
@@ -18,15 +19,17 @@ UNITS = {"ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1.0}
 
 
 def trace_rate(path: Path) -> dict[str, Any]:
-    """Return the request count, replay span and mean offered rate of a `mooncake_trace` file."""
+    """Return the request count, replay span, mean offered rate and SHA-256 of a trace file."""
     stamps = [arrival.at_s for arrival in read_arrivals(path, "mooncake")]
-    if not stamps:
-        raise ValueError(f"{path} holds no request")
-    span = max(stamps) - min(stamps)
+    span = max(stamps) - min(stamps) if stamps else 0.0
+    rate = mean_rate(len(stamps), span)
+    if rate is None:
+        raise ValueError(f"{path} needs at least two requests at different times")
     return {
         "requests": len(stamps),
         "replay_span_s": span,
-        "offered_rps": mean_rate(len(stamps), span),
+        "offered_rps": rate,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     }
 
 
@@ -67,7 +70,7 @@ def within_slo(row: Mapping[str, Any], ttft_s: float, tpot_s: float) -> bool:
     if tpot is not None:
         return tpot <= tpot_s
     tokens = _tokens(metrics)
-    return tokens is not None and tokens < 2
+    return tokens == 1
 
 
 def score(path: Path, offered: int, ttft_s: float, tpot_s: float, share: float) -> dict[str, Any]:
@@ -76,23 +79,31 @@ def score(path: Path, offered: int, ttft_s: float, tpot_s: float, share: float) 
     The attainment rate counts requests within both SLOs over every offered request,
     so a request without a record counts as a miss.
     """
-    recorded = passed = 0
+    recorded = passed = timed = 0
     with path.open(encoding="utf-8") as stream:
         for line, text in enumerate(stream, 1):
             if not text.strip():
                 continue
             try:
                 row = json.loads(text)
-                if not isinstance(row, dict) or not isinstance(row.get("metadata"), dict):
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("metadata"), dict)
+                    or not isinstance(row.get("metrics"), dict)
+                    or not isinstance(row.get("error") or {}, dict)
+                ):
                     raise TypeError("not an AIPerf record")
                 if row["metadata"].get("benchmark_phase") == "warmup":
                     continue
                 recorded += 1
+                timed += _seconds(row["metrics"], "time_to_first_token") is not None
                 passed += within_slo(row, ttft_s, tpot_s)
-            except (ValueError, TypeError) as exc:
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 raise ValueError(f"{path}:{line}: {exc}") from exc
     if recorded > offered:
         raise ValueError(f"{path} holds {recorded} records for a trace of {offered} requests")
+    if recorded and not timed:
+        raise ValueError(f"{path} holds no time_to_first_token: run AIPerf with --streaming")
     attainment = passed / offered
     return {
         "offered": offered,
@@ -107,19 +118,25 @@ def highest_rates(points: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, An
     """Return, for each trace, the scored points by rate and the highest rate that met the share.
 
     Each point holds `id`, `trace` and the `attainment` that `score` returned with the
-    trace's `offered_rps`.
+    trace's `offered_rps`. The highest rate is the highest passing rate below the lowest
+    failing rate, and `monotone` is false when a higher rate passes again.
     """
     traces: dict[str, list[Mapping[str, Any]]] = {}
     for point in points:
         traces.setdefault(point["trace"], []).append(point)
     report = {}
     for name, scored in traces.items():
-        ordered = sorted(scored, key=lambda point: point["attainment"]["offered_rps"] or 0)
-        passing = [point for point in ordered if point["attainment"]["met"]]
+        ordered = sorted(scored, key=lambda point: point["attainment"]["offered_rps"])
+        first_miss = next(
+            (i for i, point in enumerate(ordered) if not point["attainment"]["met"]),
+            len(ordered),
+        )
+        passing = [point for point in ordered[:first_miss] if point["attainment"]["met"]]
         best = passing[-1] if passing else None
         report[name] = {
             "highest_rps": None if best is None else best["attainment"]["offered_rps"],
             "highest_point": None if best is None else best["id"],
+            "monotone": not any(point["attainment"]["met"] for point in ordered[first_miss:]),
             "points": [
                 {
                     "id": point["id"],

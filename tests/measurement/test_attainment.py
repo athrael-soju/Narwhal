@@ -32,6 +32,7 @@ class WithinSloTests(unittest.TestCase):
             (record(itl_ms=60), False),
             (record(itl_ms=None, tokens=1), True),
             (record(itl_ms=None, tokens=5), False),
+            (record(itl_ms=None, tokens=0), False),
             (record(error={"code": 503, "type": "http"}), False),
             (record(cancelled=True), False),
         )
@@ -80,15 +81,47 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, ":2:"):
             attainment.score(path, 2, 0.2, 0.05, 0.9)
 
+    def test_malformed_records_and_records_without_ttft_are_refused(self):
+        cases = (
+            ({"metadata": {}}, "not an AIPerf record"),
+            ({"metadata": {}, "metrics": {}, "error": "boom"}, "not an AIPerf record"),
+        )
+        for row, expected in cases:
+            with self.subTest(row=row):
+                path = self.write("records.jsonl", [row])
+                with self.assertRaisesRegex(ValueError, expected):
+                    attainment.score(path, 1, 0.2, 0.05, 0.9)
+        unstreamed = record()
+        del unstreamed["metrics"]["time_to_first_token"]
+        path = self.write("records.jsonl", [unstreamed, unstreamed])
+        with self.assertRaisesRegex(ValueError, "--streaming"):
+            attainment.score(path, 2, 0.2, 0.05, 0.9)
+
+    def test_failed_and_cancelled_records_count_as_misses(self):
+        path = self.write(
+            "records.jsonl",
+            [record(), record(error={"code": 500, "type": "http"}), record(cancelled=True)],
+        )
+        self.assertEqual(attainment.score(path, 4, 0.2, 0.05, 0.9)["within_slo"], 1)
+
     def test_trace_rate_reads_the_replay_file(self):
         path = self.write(
             "trace.jsonl",
             [{"timestamp": t, "input_length": 5, "output_length": 5} for t in (0, 500, 1000)],
         )
-        self.assertEqual(
-            attainment.trace_rate(path),
-            {"requests": 3, "replay_span_s": 1.0, "offered_rps": 2.0},
-        )
+        rate = attainment.trace_rate(path)
+        self.assertEqual(len(rate.pop("sha256")), 64)
+        self.assertEqual(rate, {"requests": 3, "replay_span_s": 1.0, "offered_rps": 2.0})
+
+    def test_trace_rate_needs_two_arrival_times(self):
+        for stamps in ((0,), (5, 5)):
+            with self.subTest(stamps=stamps):
+                path = self.write(
+                    "trace.jsonl",
+                    [{"timestamp": t, "input_length": 5, "output_length": 5} for t in stamps],
+                )
+                with self.assertRaisesRegex(ValueError, "two requests"):
+                    attainment.trace_rate(path)
 
 
 class HighestRateTests(unittest.TestCase):
@@ -114,6 +147,18 @@ class HighestRateTests(unittest.TestCase):
             [p["id"] for p in report["code"]["points"]], ["code-x1", "code-x2", "code-x4"]
         )
         self.assertIsNone(report["burst"]["highest_rps"])
+        self.assertTrue(report["code"]["monotone"])
+
+    def test_a_pass_above_the_first_miss_is_not_the_highest_rate(self):
+        report = attainment.highest_rates(
+            [
+                self.point("x1", "code", 1.0, True),
+                self.point("x2", "code", 2.0, False),
+                self.point("x3", "code", 3.0, True),
+            ]
+        )["code"]
+        self.assertEqual(report["highest_point"], "x1")
+        self.assertFalse(report["monotone"])
 
 
 if __name__ == "__main__":

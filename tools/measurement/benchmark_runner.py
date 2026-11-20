@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -81,7 +82,7 @@ def load_plan(path: Path) -> dict:
         for field in ("client_timeout_s", "drain_timeout_s"):
             positive(point.get(field), f"{name}.{field}")
         trace = point.get("trace")
-        if trace is not None and (
+        if "trace" in point and (
             not isinstance(trace, dict)
             or not identifier(trace.get("name"))
             or not isinstance(trace.get("file"), str)
@@ -91,6 +92,8 @@ def load_plan(path: Path) -> dict:
                 f"{name}: trace requires a name of letters, digits, hyphens, "
                 "or underscores, and a file"
             )
+        if "trace" in point and trace["file"] not in point["client_argv"]:
+            raise ValueError(f"{name}: client_argv must pass trace.file to the client")
     attainment = plan.get("attainment")
     if attainment is not None or any("trace" in point for point in points):
         if not isinstance(attainment, dict):
@@ -103,6 +106,12 @@ def load_plan(path: Path) -> dict:
         records = attainment.get("client_records", DEFAULT_RECORDS)
         if not isinstance(records, str) or "{point_dir}" not in records:
             raise ValueError("attainment.client_records must contain {point_dir}")
+        unknown = set(re.findall(r"\{([^{}]*)\}", records)) - {"point_dir", "point_id"}
+        if unknown:
+            raise ValueError(
+                "attainment.client_records takes only {point_dir} and {point_id}, not "
+                + ", ".join("{" + name + "}" for name in sorted(unknown))
+            )
     evidence = plan.get("evidence")
     if evidence is not None:
         if not isinstance(evidence, dict):
@@ -245,8 +254,10 @@ def trace_rates(plan: dict) -> dict[str, dict]:
 
 
 def score_point(settings: dict, point: dict, directory: Path, rate: dict) -> dict:
-    records = settings.get("client_records", DEFAULT_RECORDS).format_map(
-        {"point_dir": str(directory), "point_id": point["id"]}
+    records = (
+        settings.get("client_records", DEFAULT_RECORDS)
+        .replace("{point_dir}", str(directory))
+        .replace("{point_id}", point["id"])
     )
     result = score(
         Path(records),
@@ -255,7 +266,12 @@ def score_point(settings: dict, point: dict, directory: Path, rate: dict) -> dic
         settings["tpot_s"],
         settings.get("share", DEFAULT_SHARE),
     )
-    return {"trace": point["trace"]["name"], "offered_rps": rate["offered_rps"], **result}
+    return {
+        "trace": point["trace"]["name"],
+        "trace_sha256": rate["sha256"],
+        "offered_rps": rate["offered_rps"],
+        **result,
+    }
 
 
 def write_attainment(plan: dict, out: Path, scored: list[dict]) -> None:

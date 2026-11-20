@@ -45,6 +45,17 @@ class ConverterTests(unittest.TestCase):
                 )
                 self.assertEqual(result.offered_rps(), 2.0)
 
+    def test_unsorted_arrivals_keep_every_request_from_the_earliest(self):
+        text = "".join(
+            json.dumps({"timestamp": t, "input_length": 5, "output_length": 5}) + "\n"
+            for t in (5000, 0, 1000, 9000)
+        )
+        records, result = self.records("mooncake", text)
+        self.assertEqual([r["timestamp"] for r in records], [0, 1000, 5000, 9000])
+        self.assertEqual((result.requests, result.skipped), (4, 0))
+        clipped, _ = self.records("mooncake", text, start_s=1, duration_s=5)
+        self.assertEqual([r["timestamp"] for r in clipped], [0, 4000])
+
     def test_time_scale_divides_every_gap_and_keeps_the_arrival_shape(self):
         text = "Timestamp,Model,Request tokens,Response tokens,Total tokens,Log Type\n"
         text += "".join(f"{t},ChatGPT,100,10,110,Conversation log\n" for t in (5, 6, 9, 17))

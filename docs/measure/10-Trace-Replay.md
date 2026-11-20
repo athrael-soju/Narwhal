@@ -39,7 +39,7 @@ Output for the 2023 code trace:
 | Option         | Default         | Meaning                                                                                                   |
 | -------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
 | `--time-scale` | `1`             | Factor that divides every gap between arrivals. The offered rate rises by this factor and the arrival shape stays the same |
-| `--start-s`    | `0`             | Start of the clip, in source seconds after the first request in the file                                  |
+| `--start-s`    | `0`             | Start of the clip, in source seconds after the earliest request in the file                               |
 | `--duration-s` | the whole trace | Length of the clip, in source seconds                                                                     |
 | `--max-total-tokens` | none      | Skips requests whose input and output tokens together exceed this count. Set it to the engines' context length |
 
@@ -47,12 +47,10 @@ The first request of the clip replays at time 0. `--out` names a new file. The c
 
 The converter prints the requests written and skipped, the source and replay spans in seconds, and `offered_rps`. `offered_rps` is the replay's mean arrival rate: one less than the request count, divided by the seconds from the first arrival to the last.
 
-To sweep rates, convert the same clip once for each time scale.
-
 ## Finding the highest rate within the SLOs
 
 1. Convert each trace once for each time scale in the sweep.
-2. Write a [benchmark plan](05-Benchmark-Runner.md#running-a-plan) with one AIPerf point for each converted file. Set `trace.name` to the same name on every point of one trace, and `trace.file` to the converted file:
+2. Write a [benchmark plan](05-Benchmark-Runner.md#running-a-plan) with one AIPerf point for each converted file. Set `trace.name` to the same name on every point of one trace, and `trace.file` to the converted file. Pass the same path to AIPerf's `--input-file`:
 
     ```json
     {
@@ -99,14 +97,15 @@ Replay the whole file. A point that ends the replay early, such as with `--reque
 
 A point's attainment rate is the number of requests that completed within both limits, divided by the number of requests in its trace file. A request's TTFT is AIPerf's `time_to_first_token` and its TPOT is AIPerf's `inter_token_latency`. A request with one output token is scored on TTFT alone. Failed and cancelled requests, and requests without a record, count as misses. Warm-up requests are left out.
 
-After a traced point completes, its `result.json` holds an `attainment` object with `trace`, `offered_rps`, `offered`, `recorded`, `within_slo`, `attainment` and `met`. `met` is `true` when `attainment` is at least `share`.
+After a traced point completes, its `result.json` holds an `attainment` object with `trace`, `trace_sha256`, `offered_rps`, `offered`, `recorded`, `within_slo`, `attainment` and `met`. `met` is `true` when `attainment` is at least `share`.
 
-When the run ends, the runner writes `attainment.json` to the output root. It holds the plan's `ttft_s`, `tpot_s` and `share`, and for each trace name:
+When the run ends, the runner writes `attainment.json` to the output root. It holds the plan's `ttft_s`, `tpot_s` and `share`, and `traces`, which maps each trace name to:
 
 | Field           | Value                                                                      |
 | --------------- | -------------------------------------------------------------------------- |
-| `highest_rps`   | Highest `offered_rps` of a point that met the share, or `null`             |
+| `highest_rps`   | Highest `offered_rps` of a point that met the share, below the lowest `offered_rps` that missed it, or `null` |
 | `highest_point` | ID of that point, or `null`                                                |
+| `monotone`      | `false` when a point above the lowest missed rate met the share again       |
 | `points`        | Each scored point's `id`, `offered_rps`, `attainment` and `met`, by rate   |
 
-A point whose records are missing or unreadable ends with condition `attainment_error`, and the run stops.
+A point whose records are missing, unreadable or without `time_to_first_token` ends with condition `attainment_error`, and the run stops. AIPerf records `time_to_first_token` with `--streaming`.

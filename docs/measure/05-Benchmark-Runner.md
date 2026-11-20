@@ -140,7 +140,7 @@ A plan is a JSON object with these fields:
 | `points[].client_argv` | Nonempty argument vector that contains `{base}` and `{model}` |
 | `points[].client_timeout_s` | Positive client deadline in seconds |
 | `points[].drain_timeout_s` | Positive drain deadline in seconds for each drain wait |
-| `points[].trace` | Optional `name` and `file` of the [trace replay](10-Trace-Replay.md) the point scores |
+| `points[].trace` | Optional `name` and `file` of the [trace replay](10-Trace-Replay.md) the point scores. `name` uses letters, digits, hyphens, and underscores, and `client_argv` must contain `file` |
 
 `client_argv` placeholders:
 
@@ -164,7 +164,7 @@ The new private `--out` directory holds:
 | File                             | Location        | Contents                                                                                        |
 | -------------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
 | `manifest.json`                  | Output root     | Plan, its SHA-256 digest, runner digest, model, URL, and invocation                             |
-| `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, and evidence diagnostic count |
+| `result.json`                    | Point directory | Readiness, client exit status, initial and final drain condition, timestamps, last state snapshot, evidence diagnostic count, and a traced point's [attainment](10-Trace-Replay.md#attainment-rate) |
 | `client.stdout`, `client.stderr` | Point directory | External client output                                                                          |
 | `attainment.json`                | Output root     | Highest rate within the SLOs for each trace, when the plan has traced points                    |
 

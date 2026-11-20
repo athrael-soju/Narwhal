@@ -119,7 +119,10 @@ def _mooncake_rows(path: Path) -> Iterator[Arrival]:
 
 
 def read_arrivals(path: Path, kind: str) -> Iterator[Arrival]:
-    """Yield the requests of a source trace in file order."""
+    """Yield the requests of a source trace in file order.
+
+    Azure arrivals are seconds after the file's first row, so an earlier row is negative.
+    """
     if kind == "mooncake":
         return _mooncake_rows(path)
     if kind in COLUMNS:
@@ -137,7 +140,7 @@ def convert(
     """Return the clipped, rebased and time-scaled `mooncake_trace` records.
 
     The clip keeps requests that arrive from `start_s` to before `start_s + duration_s`
-    seconds after the first source request. The first kept request replays at 0, and
+    seconds after the earliest source request. The first kept request replays at 0, and
     each gap is divided by `time_scale`, so the offered rate rises by that factor.
     Requests whose input and output tokens together exceed `max_total_tokens` are skipped.
     """
@@ -149,11 +152,11 @@ def convert(
         raise ValueError("duration must be a positive number of seconds")
     if max_total_tokens is not None and max_total_tokens < 2:
         raise ValueError("max total tokens must be at least 2")
+    rows = list(arrivals)
+    origin = min((arrival.at_s for arrival in rows), default=0.0)
     kept: list[Arrival] = []
     skipped = 0
-    origin: float | None = None
-    for arrival in arrivals:
-        origin = arrival.at_s if origin is None else origin
+    for arrival in rows:
         offset = arrival.at_s - origin
         if offset < start_s or (duration_s is not None and offset >= start_s + duration_s):
             continue
@@ -208,7 +211,12 @@ def main(argv: list[str] | None = None) -> int:
         default=1.0,
         help="factor that divides every arrival gap and multiplies the offered rate",
     )
-    parser.add_argument("--start-s", type=float, default=0.0, help="clip start, in source seconds")
+    parser.add_argument(
+        "--start-s",
+        type=float,
+        default=0.0,
+        help="clip start, in source seconds after the earliest request",
+    )
     parser.add_argument("--duration-s", type=float, help="clip length, in source seconds")
     parser.add_argument(
         "--max-total-tokens",

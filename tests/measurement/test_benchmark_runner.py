@@ -186,6 +186,7 @@ class RunnerTests(unittest.TestCase):
                 "{point_id}",
                 "{point_dir}/aiperf",
                 json.dumps(ttfts[point["id"]]),
+                str(trace),
             ]
         plan["attainment"] = {"ttft_s": 0.2, "tpot_s": 0.05, "share": 0.75}
         return plan
@@ -198,11 +199,23 @@ class RunnerTests(unittest.TestCase):
         slow = json.loads((out / "slow/result.json").read_text())["attainment"]
         self.assertEqual(slow["offered_rps"], 1.0)
         self.assertEqual(slow["attainment"], 0.75)
+        self.assertEqual(len(slow["trace_sha256"]), 64)
         report = json.loads((out / "attainment.json").read_text())
         self.assertEqual(report["share"], 0.75)
         self.assertEqual(report["traces"]["code"]["highest_rps"], 1.0)
         self.assertEqual(report["traces"]["code"]["highest_point"], "slow")
         self.assertEqual([p["offered_rps"] for p in report["traces"]["code"]["points"]], [1.0, 2.0])
+
+    def test_a_malformed_record_stops_with_an_attainment_error(self):
+        plan = self.traced_plan({"slow": [100], "fast": [100]})
+        records = Path(self.temp.name, "bad.jsonl")
+        records.write_text(json.dumps({"metadata": {}, "error": "boom"}) + "\n")
+        plan["attainment"]["client_records"] = "{point_dir}/../../bad.jsonl"
+        status, out = self.execute(plan)
+        self.assertEqual(status, 1)
+        record = json.loads((out / "slow/result.json").read_text())
+        self.assertEqual(record["condition"], "attainment_error")
+        self.assertIn("not an AIPerf record", record["attainment_error"])
 
     def test_missing_client_records_stop_with_an_attainment_error(self):
         plan = self.traced_plan({"slow": [100], "fast": [100]})
@@ -219,15 +232,25 @@ class RunnerTests(unittest.TestCase):
             ("attainment", None, "require an attainment object"),
             ("share", 1.5, "attainment.share"),
             ("client_records", "records.jsonl", "{point_dir}"),
+            ("client_records", "{point_dir}/{x}.jsonl", "not {x}"),
             ("file", "missing.jsonl", "slow: trace file"),
+            ("argv", "other.jsonl", "must pass trace.file"),
+            ("trace", None, "trace requires a name"),
         )
         for key, value, expected in cases:
-            with self.subTest(key=key):
+            with self.subTest(key=key, value=value):
                 plan = self.traced_plan({"slow": [], "fast": []})
+                point = plan["points"][0]
                 if key == "attainment":
                     del plan["attainment"]
                 elif key == "file":
-                    plan["points"][0]["trace"]["file"] = str(Path(self.temp.name, value))
+                    point["client_argv"].remove(point["trace"]["file"])
+                    point["trace"]["file"] = str(Path(self.temp.name, value))
+                    point["client_argv"].append(point["trace"]["file"])
+                elif key == "argv":
+                    point["trace"]["file"] = str(Path(self.temp.name, value))
+                elif key == "trace":
+                    point["trace"] = None
                 else:
                     plan["attainment"][key] = value
                 path = Path(self.temp.name, "plan.json")
