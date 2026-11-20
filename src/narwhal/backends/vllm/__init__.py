@@ -13,6 +13,7 @@ from .kv_events import VllmKvEvents
 from .metrics import VllmMetrics
 
 if TYPE_CHECKING:
+    from ...deployment.allocation_start import AllocationStart
     from ...deployment.launch_engine.backend import EngineLauncher
 
 
@@ -33,6 +34,12 @@ def _launcher() -> EngineLauncher:
     return VllmLauncher()
 
 
+def _allocation() -> AllocationStart:
+    from .allocation import VllmAllocation
+
+    return VllmAllocation()
+
+
 def backend() -> EngineBackend:
     return EngineBackend(
         name="vllm",
@@ -45,6 +52,7 @@ def backend() -> EngineBackend:
         metrics=VllmMetrics(),
         fabric=VllmFabric(),
         launcher=_launcher,
+        allocation=_allocation,
         role_switch=RouterRoleSwitch(),
         icon=resources.files(__name__).joinpath("icon.png").read_bytes(),
     )

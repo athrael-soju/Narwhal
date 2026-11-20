@@ -40,7 +40,8 @@ def _main(argv: list[str]) -> int:
             "  narwhal-check    Run deployment preflight gates\n"
             "  narwhal-attest   Serve engine identity and attestation for one engine\n"
             "  narwhal-serve    Run a Narwhal router\n"
-            "  narwhal-profile  Measure engine service curves and write router profiles"
+            "  narwhal-profile  Measure engine service curves and write router profiles\n"
+            "  narwhal-slurm    Start a fleet inside one Slurm allocation, one task per node"
         ),
     )
     add_version_argument(parser)

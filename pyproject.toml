@@ -69,6 +69,7 @@ narwhal-check = "narwhal.diagnostics.check.cli:main"
 narwhal-attest = "narwhal.engines.attestation:main"
 narwhal-serve = "narwhal.cli:serve"
 narwhal-profile = "narwhal.profiling.probe.cli:main"
+narwhal-slurm = "narwhal.deployment.slurm.cli:main"
 
 [project.entry-points."narwhal.backends"]
 llamacpp = "narwhal.backends.llamacpp:backend"

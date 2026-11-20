@@ -95,7 +95,7 @@ narwhal-serve --version
 narwhal --help
 ```
 
-The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. To verify the installation, follow [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/). For each command's options, use the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/).
+The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, `narwhal-check`, and `narwhal-slurm`. To verify the installation, follow [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/). For each command's options, use the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/).
 
 ## Trying it on one workstation
 

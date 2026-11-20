@@ -19,6 +19,7 @@ REFERENCES = {
     "narwhal-attest": "Attest.md",
     "narwhal-serve": "Serve.md",
     "narwhal-profile": "Profile.md",
+    "narwhal-slurm": "Slurm.md",
 }
 
 

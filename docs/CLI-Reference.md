@@ -1,10 +1,10 @@
 ---
-description: Reference for the narwhal command and the five narwhal-* commands in the narwhal-inference package.
+description: Reference for the narwhal command and the six narwhal-* commands in the narwhal-inference package.
 ---
 
 # Narwhal CLI reference
 
-`narwhal-inference` installs `narwhal` and the five `narwhal-*` commands.
+`narwhal-inference` installs `narwhal` and the six `narwhal-*` commands.
 
 - Each executable accepts `-h`, `--help`, and `--version`.
 - Relative paths resolve from the process working directory.
@@ -60,11 +60,17 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
     Run deployment preflight gates.
 
+-   [`narwhal-slurm`](cli/Slurm.md)
+
+    ---
+
+    Start a fleet inside one Slurm allocation.
+
 </div>
 
 ## Text-mode exit codes
 
-`narwhal config`, `narwhal dev`, `narwhal-engine`, `narwhal-attest`, `narwhal-serve`, `narwhal-profile`, and `narwhal-check` use these codes in text mode:
+`narwhal config`, `narwhal dev`, `narwhal-engine`, `narwhal-attest`, `narwhal-serve`, `narwhal-profile`, `narwhal-check`, and `narwhal-slurm` use these codes in text mode:
 
 | Exit code | Outcome                                                                                               |
 | :-------: | ----------------------------------------------------------------------------------------------------- |
