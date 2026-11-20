@@ -274,12 +274,11 @@ class GlobalScheduler:
         return [i for i in live if i.role is Role.PREFILL] or live
 
     def prefill_admission_price(self, request: Request, inst: Instance) -> float:
-        # With `prefill_on_decode`, a decode-role candidate is a borrowed engine.
         if (
-            not self.prefill_on_decode
-            and not self.live_instances(Role.PREFILL)
+            not self.live_instances(Role.PREFILL)
             and inst.role is Role.DECODE
             and inst.decode
+            and not self.borrows(request, inst)
         ):
             return float("inf")
         return self.cost(request, inst)[1]
@@ -342,38 +341,46 @@ class GlobalScheduler:
         fresh = [inst for inst in candidates if self.has_fresh_consumer(inst.iid, decodes)]
         return fresh or candidates
 
-    def prefill_pool(
-        self, request: Request, instances: list[Instance]
-    ) -> tuple[list[Instance], set[str]]:
-        """Return the prefill candidates among live `instances`, and the borrowed ones.
+    def borrows(self, request: Request, inst: Instance) -> bool:
+        """Return whether placement borrows decode-role `inst` for `request`'s prefill leg.
 
-        With `prefill_on_decode`, the candidates are the prefill-role engines and the borrowed
-        decode-role engines. A decode-role engine is borrowed when it is unpinned, not held
-        for a switch, inside its envelope for `request`'s leg, and another live decode-pool
-        engine can take the decode leg, which avoids its producer.
+        With `prefill_on_decode`, it does when the engine is unpinned, not held for a switch,
+        inside its envelope for the leg, and another live decode-pool engine can take the
+        decode leg, which avoids its producer.
         """
-        pool = self.role_pool(Role.PREFILL, instances)
-        if not self.prefill_on_decode:
-            return pool, set()
-        unusable = self.held_for_switch() | self.pinned
-        decode_pool = self.role_pool(Role.DECODE, self.live_instances())
-        estimate = self.output_estimator()
-        borrowed = [
-            inst
-            for inst in instances
-            if inst.role is Role.DECODE
-            and inst.iid not in unusable
-            and any(other.iid != inst.iid for other in decode_pool)
+        return (
+            self.prefill_on_decode
+            and inst.role is Role.DECODE
+            and inst.iid not in self.held_for_switch() | self.pinned
+            and any(
+                other.iid != inst.iid
+                for other in self.role_pool(Role.DECODE, self.live_instances())
+            )
             and costs.decode_engine_prefill(
                 request,
                 inst,
                 monitor=self.monitor,
                 profiles=self.profiles,
                 slo=self.slo,
-                expected_output=estimate,
+                expected_output=self.output_estimator(),
             )
-        ]
+        )
+
+    def prefill_pool(
+        self, request: Request, instances: list[Instance]
+    ) -> tuple[list[Instance], set[str]]:
+        """Return the prefill candidates among live `instances`, and the borrowed ones.
+
+        With `prefill_on_decode`, the candidates are the prefill-role engines and the borrowed
+        decode-role engines. When neither exists, they are the role pool without the setting.
+        """
+        pool = self.role_pool(Role.PREFILL, instances)
+        if not self.prefill_on_decode:
+            return pool, set()
         own = [inst for inst in pool if inst.role is Role.PREFILL]
+        borrowed = [inst for inst in instances if self.borrows(request, inst)]
+        if not own and not borrowed:
+            return pool, set()
         return own + borrowed, {inst.iid for inst in borrowed}
 
     def prefill_tier(

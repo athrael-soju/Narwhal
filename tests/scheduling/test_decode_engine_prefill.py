@@ -100,24 +100,42 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.profiles.put(profile("d"))
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
 
-    def test_without_a_live_prefill_engine_only_decode_engines_inside_the_envelope_prefill(self):
+    def test_without_a_prefill_engine_a_borrowed_engine_takes_the_leg(self):
         self.scheduler.eject("p", "liveness")
         self.resident("d", "short", delivered=2, wanted=12, decoding_s=0.01)
         self.assertEqual(self.hosts(Request("leg", 10)), ["d"])
-        with self.assertRaises(RuntimeError):
-            self.scheduler.schedule(Request("leg", 1000))
+        self.assertEqual(self.scheduler.schedule(Request("leg", 10)).iid, "d")
         # Admission prices the borrowed engine at its placement cost.
         d = self.monitor.instances["d"]
         self.assertAlmostEqual(self.scheduler.prefill_admission_price(Request("leg", 10), d), 0.02)
-        # With the setting off, the role pool falls back to every decode engine.
-        self.scheduler.prefill_on_decode = False
-        pool, borrowed = self.scheduler.prefill_pool(
-            Request("leg", 1000), self.scheduler.live_instances()
-        )
-        self.assertEqual(([inst.iid for inst in pool], borrowed), (["d", "q"], set()))
-        self.assertEqual(
-            self.scheduler.prefill_admission_price(Request("leg", 10), d), float("inf")
-        )
+
+    def test_without_a_prefill_or_borrowed_engine_placement_falls_back_as_with_the_setting_off(
+        self,
+    ):
+        self.scheduler.eject("p", "liveness")
+        self.resident("d", "short", delivered=2, wanted=12, decoding_s=0.01)
+        d, q = self.monitor.instances["d"], self.monitor.instances["q"]
+        placed = {}
+        for enabled in (False, True):
+            self.scheduler.prefill_on_decode = enabled
+            pool, borrowed = self.scheduler.prefill_pool(
+                Request("leg", 1000), self.scheduler.live_instances()
+            )
+            self.assertEqual(([inst.iid for inst in pool], borrowed), (["d", "q"], set()))
+            placed[enabled] = (
+                self.scheduler.schedule(Request("leg", 1000)).iid,
+                # A fallback decode engine with residents keeps its infinite admission price.
+                self.scheduler.prefill_admission_price(Request("leg", 1000), d),
+                self.scheduler.prefill_admission_price(Request("leg", 1000), q),
+            )
+        self.assertEqual(placed[True], placed[False])
+        self.assertEqual(placed[True][:2], ("q", float("inf")))
+
+    def test_a_retry_that_excludes_the_prefill_engine_falls_back_with_the_setting_on(self):
+        self.profiles.put(profile("d"))
+        for enabled in (False, True):
+            self.scheduler.prefill_on_decode = enabled
+            self.assertEqual(self.scheduler.schedule(Request("r", 1000), exclude={"p"}).iid, "d")
 
     def test_held_pinned_and_unavailable_decode_engines_take_no_leg(self):
         self.backlog()
@@ -190,6 +208,9 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
         self.assertEqual(self.hosts(Request("leg", 900)), ["p", "d"])
+        # Resident prefill tokens count toward the range.
+        self.monitor.dispatched("d", Request("queued", 100))
+        self.assertEqual(self.hosts(Request("leg", 900)), ["p"])
 
     def test_placement_caps_the_share_the_profiler_measured(self):
         """The profiler's share and placement's share agree on one stall beside one span."""

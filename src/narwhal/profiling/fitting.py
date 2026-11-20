@@ -199,7 +199,7 @@ def prefill_share(stall_s: float, decode_s: float) -> float:
 def fit_prefill_slowdown(runs: Sequence[tuple[float, float, float]]) -> tuple[float, float]:
     """Fit `k` in `interval = base * (1 + k*u/(1-u))` from (stall s, window s, interval) runs.
 
-    `base` is the mean interval of the runs without stall. A run's share `u` is
+    The first run has no stall, and its interval is `base`. A run's share `u` is
     `prefill_share` of its stall and its window's tokens at `base`. Return the nonnegative
     least-squares `k` and the largest share.
     """
@@ -209,18 +209,15 @@ def fit_prefill_slowdown(runs: Sequence[tuple[float, float, float]]) -> tuple[fl
         raise ValueError(
             "prefill share runs need a nonnegative stall and a positive window and interval"
         )
-    base = [interval for stall, _, interval in runs if stall == 0]
-    if not base or all(stall == 0 for stall, _, _ in runs):
-        raise ValueError("a prefill slowdown fit needs a run without stall and one with it")
-    floor = statistics.mean(base)
+    if not runs or runs[0][0] != 0 or all(stall == 0 for stall, _, _ in runs):
+        raise ValueError("a prefill slowdown fit needs a first run without stall and one with it")
+    base = runs[0][2]
     shares = [
-        (prefill_share(stall, window * floor / interval), interval)
+        (prefill_share(stall, window * base / interval), interval)
         for stall, window, interval in runs
     ]
     loaded = [(share / (1 - share), interval) for share, interval in shares if share > 0]
-    slope = sum(x * (interval / floor - 1) for x, interval in loaded) / sum(
-        x * x for x, _ in loaded
-    )
+    slope = sum(x * (interval / base - 1) for x, interval in loaded) / sum(x * x for x, _ in loaded)
     return max(0.0, slope), max(share for share, _ in shares)
 
 

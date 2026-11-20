@@ -47,7 +47,7 @@ class ProfileFittingTests(unittest.TestCase):
         self.assertAlmostEqual(split, 0.05, places=6)
 
     def test_prefill_slowdown_scales_the_stall_against_unslowed_decode_time(self):
-        """A run's window is its tokens at the base interval plus k seconds per stall second."""
+        """A run's window is its tokens at the first run's interval plus k s per stall second."""
         base, tokens = 0.013, 1000
 
         def run(stall, k):
@@ -55,16 +55,24 @@ class ProfileFittingTests(unittest.TestCase):
             return stall, window, window / tokens
 
         for k in (0.0, 0.6, 1.0):
+            # A loaded run whose legs all finished outside its window adds no stall.
             runs = [run(0.0, k), run(0.0, k), run(3.0, k), run(6.0, k)]
             slowdown, largest = fit_prefill_slowdown(runs)
             self.assertAlmostEqual(slowdown, k)
             # The share sets the stall against the window's tokens at the base interval.
             self.assertAlmostEqual(largest, prefill_share(6.0, tokens * base))
+        # Only the first run sets the base.
+        self.assertAlmostEqual(
+            fit_prefill_slowdown([(0.0, 10.0, 0.01), (0.0, 20.0, 0.02), (5.0, 14.0, 0.014)])[0],
+            0.8,
+        )
         # A loaded interval below the base clamps the slowdown at zero.
         self.assertEqual(fit_prefill_slowdown([(0.0, 10.0, 0.02), (1.0, 9.5, 0.019)])[0], 0.0)
         for runs in (
             [(0.0, 10.0, 0.02)],
             [(1.0, 10.0, 0.02), (2.0, 10.0, 0.03)],
+            [(1.0, 10.0, 0.02), (0.0, 10.0, 0.02), (2.0, 10.0, 0.03)],
+            [],
             [(0.0, 10.0, 0.0), (1.0, 10.0, 0.03)],
             [(0.0, 0.0, 0.02), (1.0, 10.0, 0.03)],
             [(0.0, 10.0, 0.02), (-1.0, 10.0, 0.03)],

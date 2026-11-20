@@ -286,7 +286,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | --------------------------- | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `serving.prefill_on_decode` | `false` | Lets placement send a prefill leg to a decode-role engine inside its measured TPOT envelope. | `true` requires `engine.backend` `"vllm"` or `"llamacpp"` |
 
-With `serving.prefill_on_decode` set, placement borrows a decode-role engine for a prefill leg when the engine is live, unpinned and not held for a role switch, another live decode engine can take the request's decode leg, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit. Prefill legs then go only to prefill-role engines and borrowed engines.
+With `serving.prefill_on_decode` set, placement borrows a decode-role engine for a prefill leg when the engine is live, unpinned and not held for a role switch, another live decode engine can take the request's decode leg, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit. Prefill legs then go to prefill-role engines and borrowed engines. When placement has neither, it places the leg as with the setting off.
 
 The leg stalls each resident decode stream on the engine for its profiled prefill time plus the engine's resident prefill work. For each resident stream, the router projects its TPOT over its whole output from these terms:
 
@@ -298,7 +298,7 @@ The leg stalls each resident decode stream on the engine for its profiled prefil
 
 The engine stays inside its envelope when all of these hold:
 
-1. The engine's resident decode tokens plus the leg's prompt tokens stay within the profile's `decode_max_kv_tokens`.
+1. The engine's resident decode and prefill tokens plus the leg's prompt tokens stay within the profile's `decode_max_kv_tokens`.
 2. Every resident stream has a known remaining output.
 3. Every resident stream with output left projects a TPOT at or below `slo.tpot_s`.
 4. The share `u = stall / (stall + m)` is at or below `decode_prefill_max_share`, where `m` is the mean `left * d` over the resident streams. With no resident streams, `u` is `0`.

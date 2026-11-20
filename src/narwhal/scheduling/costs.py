@@ -139,8 +139,8 @@ def decode_engine_prefill(
     `left * d + slowdown * stall`. Every resident with output left must keep its whole-output
     TPOT within `slo.tpot_s`, and `prefill_share` of the stall and the residents' mean
     `left * d` must stay within the measured share. An unknown remaining output keeps the
-    engine out, and so does a leg whose prompt would take the engine's KV tokens past the
-    profile's measured decode range.
+    engine out, and so does a leg whose prompt, with the engine's resident decode and prefill
+    tokens, would pass the profile's measured decode range.
     """
     profile = profiles.get(inst.iid)
     if (
@@ -148,7 +148,8 @@ def decode_engine_prefill(
         or profile.decode_prefill_slowdown is None
         or profile.decode_prefill_max_share is None
         or profile.decode_max_kv_tokens is None
-        or inst.decode_tokens() + request.input_len > profile.decode_max_kv_tokens
+        or inst.decode_tokens() + inst.prefill_tokens() + request.input_len
+        > profile.decode_max_kv_tokens
     ):
         return False
     stall = resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
