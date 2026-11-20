@@ -416,6 +416,55 @@ class GlobalScheduler:
             return lent
         return own
 
+    def own_prefill(self, instances: list[Instance]) -> list[Instance]:
+        """Return the prefill-role engines `prefill_pool` keeps among `instances`."""
+        return [i for i in self.role_pool(Role.PREFILL, instances) if i.role is Role.PREFILL]
+
+    def own_prefill_meets(
+        self, request: Request, instances: list[Instance], probation: Collection[str] | None
+    ) -> list[Instance] | None:
+        """Return the prefill-role engines when one meets the TTFT budget and the setting is on.
+
+        The prefill tier then holds only them, so no borrow check runs.
+        """
+        if not self.prefill_on_decode:
+            return None
+        own = self.own_prefill(instances)
+        if any(self.meets_slo(request, self.cost(request, i, probation=probation)) for i in own):
+            return own
+        return None
+
+    def settle_on_own(
+        self,
+        request: Request,
+        instances: list[Instance],
+        probation: Collection[str] | None,
+        prices: dict[str, Cost] | None = None,
+    ) -> tuple[list[Instance], dict[str, Cost]] | None:
+        """Return the filtered prefill-role candidates and prices when placement keeps to them.
+
+        With `prefill_on_decode`, placement keeps to the prefill-role engines when, after the
+        switch-hold and fresh-producer filters, one meets the TTFT budget at its warm price
+        and, for a request with cache evidence, at its cold price. No borrowed engine can
+        then change the choice, so no borrow check runs. The warm prices land in `prices`.
+        """
+        if not self.prefill_on_decode:
+            return None
+        held = self.held_for_switch()
+        kept = [i for i in self.own_prefill(instances) if i.iid not in held]
+        if self.stale_handoff is not None:
+            decodes = self.role_pool(Role.DECODE, self.live_instances())
+            kept = [i for i in kept if self.has_fresh_consumer(i.iid, decodes)]
+        prices = {} if prices is None else prices
+        prices.update({i.iid: self.cost(request, i, probation=probation) for i in kept})
+        if not any(self.meets_slo(request, prices[i.iid]) for i in kept):
+            return None
+        if request.cached_tokens:
+            cold = self._cold_prices(request, kept, prices, probation)
+            if not any(self.meets_slo(request, cold[i.iid]) for i in kept):
+                return None
+        return kept, prices
+
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
         exclude = set(exclude or ())
         exclude |= self.decode_exclusion(request, exclude)
@@ -423,23 +472,36 @@ class GlobalScheduler:
         if not instances:
             raise RuntimeError("no schedulable instances")
 
+        probation = self.health.probation_set() if self.health is not None else None
+        settled = None
+        known: dict[str, Cost] = {}
         # Profiles model sequential prefill and batched decode.
         if request.phase is Phase.PREFILL:
             request.cache_placement = None
             # The envelope prices the leg with current cache evidence.
             self.recheck_evidence(request, 0.0)
-            candidates, borrowed = self.prefill_pool(request, instances)
+            settled = self.settle_on_own(request, instances, probation, known)
+        borrowed: set[str] = set()
+        if settled is not None:
+            candidates, prices = settled
         else:
-            candidates, borrowed = self.role_pool(Role.DECODE, instances), set()
-        if not candidates:
-            raise RuntimeError("no schedulable instances for the pinned roles")
-        held = self.held_for_switch()
-        if held and any(inst.iid not in held for inst in candidates):
-            candidates = [inst for inst in candidates if inst.iid not in held]
-        if request.phase is Phase.PREFILL:
-            candidates = self._fresh_producers(candidates)
-        probation = self.health.probation_set() if self.health is not None else None
-        prices = {i.iid: self.cost(request, i, probation=probation) for i in candidates}
+            if request.phase is Phase.PREFILL:
+                candidates, borrowed = self.prefill_pool(request, instances)
+            else:
+                candidates = self.role_pool(Role.DECODE, instances)
+            if not candidates:
+                raise RuntimeError("no schedulable instances for the pinned roles")
+            held = self.held_for_switch()
+            if held and any(inst.iid not in held for inst in candidates):
+                candidates = [inst for inst in candidates if inst.iid not in held]
+            if request.phase is Phase.PREFILL:
+                candidates = self._fresh_producers(candidates)
+            prices = {
+                i.iid: known[i.iid]
+                if i.iid in known
+                else self.cost(request, i, probation=probation)
+                for i in candidates
+            }
 
         chosen, served = self._cheapest(request, candidates, prices, borrowed)
         if not served:
@@ -516,8 +578,18 @@ class GlobalScheduler:
         probation: Collection[str] | None,
         borrowed: Collection[str],
     ) -> str:
+        cold = self._cold_prices(request, candidates, prices, probation)
+        return self._cheapest(request, candidates, cold, borrowed)[0].iid
+
+    def _cold_prices(
+        self,
+        request: Request,
+        candidates: list[Instance],
+        prices: dict[str, Cost],
+        probation: Collection[str] | None,
+    ) -> dict[str, Cost]:
         # Without positive cache evidence on an engine, its warm price is its cold price.
-        cold = {
+        return {
             i.iid: (
                 self.cost(request, i, warm=False, probation=probation)
                 if _cached_on(i.iid, request, i.prefill.values())
@@ -525,7 +597,6 @@ class GlobalScheduler:
             )
             for i in candidates
         }
-        return self._cheapest(request, candidates, cold, borrowed)[0].iid
 
     def health_pass(self) -> None:
         if self.health is None:

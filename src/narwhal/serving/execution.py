@@ -272,24 +272,27 @@ def price_waiting(state: RequestLifecycle) -> float | None:
     if router.cfg.admission != "predictive" or state.attempts:
         return None
     scheduler = router.scheduler
-    candidates, borrowed = scheduler.prefill_pool(
-        req, scheduler.live_instances(exclude=state.failed_engines["prefill"])
-    )
-    if not candidates:
-        return None
+    live = scheduler.live_instances(exclude=state.failed_engines["prefill"])
+    probation = scheduler.health.probation_set() if scheduler.health is not None else None
     phase, req.phase = req.phase, Phase.PREFILL
     try:
-        placements = {
-            inst.iid: scheduler.prefill_admission_price(req, inst, borrowed) for inst in candidates
-        }
         # Placement takes a borrowed decode engine only in its own tier.
-        probation = scheduler.health.probation_set() if scheduler.health is not None else None
-        prices = (
-            {inst.iid: scheduler.cost(req, inst, probation=probation) for inst in candidates}
-            if borrowed
-            else {}
-        )
-        tier = scheduler.prefill_tier(req, candidates, prices, borrowed)
+        tier = scheduler.own_prefill_meets(req, live, probation)
+        if tier is None:
+            candidates, borrowed = scheduler.prefill_pool(req, live)
+            if not candidates:
+                return None
+            prices = (
+                {inst.iid: scheduler.cost(req, inst, probation=probation) for inst in candidates}
+                if borrowed
+                else {}
+            )
+            tier = scheduler.prefill_tier(req, candidates, prices, borrowed)
+        else:
+            borrowed = set()
+        placements = {
+            inst.iid: scheduler.prefill_admission_price(req, inst, borrowed) for inst in tier
+        }
         cheapest = min(tier, key=lambda inst: (placements[inst.iid], inst.iid))
         priced = _price_admission(state, cheapest)
         _check_ttft(state, priced)

@@ -1,5 +1,6 @@
 """Check prefill placement on decode-role engines inside their measured TPOT envelope."""
 
+import random
 import tempfile
 import unittest
 from dataclasses import replace
@@ -18,7 +19,7 @@ from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.types import Instance, Phase, Request, Role
-from tests.fixtures import fleet, profile
+from tests.fixtures import fleet, profile, warm
 from tests.serving.test_http_accounting import HttpHarness
 
 # Prefill takes 0.001 s per prompt token plus 0.01 s; one resident of 1,100 tokens decodes at
@@ -220,6 +221,51 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.monitor.dispatched("d", Request("queued", 100))
         self.assertEqual(self.hosts(Request("leg", 900)), ["p"])
 
+    def test_placement_skips_the_borrow_check_only_when_it_cannot_change_the_choice(self):
+        rng = random.Random(7)
+        checked = settled = 0
+        for trial in range(300):
+            with self.subTest(trial=trial):
+                self.setUp()
+                self.profiles.put(
+                    warm("p", cached_max_prefix_tokens=2000, cached_max_suffix_tokens=2000)
+                    if rng.random() < 0.5
+                    else profile("p", ttft_b=0.002)
+                )
+                for k in range(rng.randrange(4)):
+                    self.monitor.dispatched("p", Request(f"b{k}", rng.choice((100, 600, 1500))))
+                for k in range(rng.randrange(3)):
+                    left = rng.choice((10, 400, 1000))
+                    self.resident("d", f"r{k}", delivered=50, wanted=50 + left, decoding_s=0.2)
+                if rng.random() < 0.2:
+                    self.scheduler.hold_for_switch(rng.choice(("p", "d")))
+                leg = rng.choice((10, 300, 700, 1200))
+                cached = {"p": rng.choice((32, 300))} if rng.random() < 0.5 else {}
+                lazy = Request("leg", leg, cached_tokens=dict(cached))
+                full = Request("leg", leg, cached_tokens=dict(cached))
+                settled += (
+                    self.scheduler.settle_on_own(lazy, self.scheduler.live_instances(), None)
+                    is not None
+                )
+                before = self.scheduler.unserved
+                chosen = self.scheduler.schedule(lazy).iid
+                lazy_unserved = self.scheduler.unserved - before
+                with patch.object(GlobalScheduler, "settle_on_own", return_value=None):
+                    expected = self.scheduler.schedule(full).iid
+                self.assertEqual(
+                    (chosen, lazy_unserved, lazy.cache_placement),
+                    (
+                        expected,
+                        self.scheduler.unserved - before - lazy_unserved,
+                        full.cache_placement,
+                    ),
+                )
+                checked += 1
+        # Both paths ran: some placements settle on the prefill engine and some do not.
+        self.assertEqual(checked, 300)
+        self.assertGreater(settled, 30)
+        self.assertLess(settled, 270)
+
     def test_placement_caps_the_share_the_profiler_measured(self):
         """The profiler's share and placement's share agree on one stall beside one span."""
         base, tokens, slowdown, stall = 0.0031, 1000, 0.8, 1.01
@@ -317,6 +363,11 @@ class DecodeEnginePrefillRouterTests(unittest.IsolatedAsyncioTestCase):
             # The idle decode engine is cheaper, and the prefill engine still meets the budget.
             router.monitor.dispatched("e0", Request("backlog", 200))
             execution.price_waiting(state)
+            with patch.object(GlobalScheduler, "own_prefill_meets", return_value=None):
+                execution.price_waiting(state)
             router.monitor.dispatched("e0", Request("more", 3000))
             execution.price_waiting(state)
-        self.assertEqual(priced, ["e0", "e3"])
+            with patch.object(GlobalScheduler, "own_prefill_meets", return_value=None):
+                execution.price_waiting(state)
+        # The check that skips the borrowed engines prices as the full tier does.
+        self.assertEqual(priced, ["e0", "e0", "e3", "e3"])
