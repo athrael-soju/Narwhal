@@ -108,6 +108,14 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         # Admission prices the borrowed engine at its placement cost.
         d = self.monitor.instances["d"]
         self.assertAlmostEqual(self.scheduler.prefill_admission_price(Request("leg", 10), d), 0.02)
+        # Queued pricing passes the pool's borrowed set and prices the same way.
+        for leg in (10, 1000):
+            request = Request("leg", leg)
+            _, borrowed = self.scheduler.prefill_pool(request, self.scheduler.live_instances())
+            self.assertEqual(
+                self.scheduler.prefill_admission_price(request, d, borrowed),
+                self.scheduler.prefill_admission_price(request, d),
+            )
 
     def test_without_a_prefill_or_borrowed_engine_placement_falls_back_as_with_the_setting_off(
         self,

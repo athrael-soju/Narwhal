@@ -273,12 +273,15 @@ class GlobalScheduler:
         live = self.live_instances()
         return [i for i in live if i.role is Role.PREFILL] or live
 
-    def prefill_admission_price(self, request: Request, inst: Instance) -> float:
+    def prefill_admission_price(
+        self, request: Request, inst: Instance, borrowed: Collection[str] | None = None
+    ) -> float:
+        """Price `inst`'s prefill for admission; `borrowed` is `prefill_pool`'s set when known."""
         if (
             not self.live_instances(Role.PREFILL)
             and inst.role is Role.DECODE
             and inst.decode
-            and not self.borrows(request, inst)
+            and not (inst.iid in borrowed if borrowed is not None else self.borrows(request, inst))
         ):
             return float("inf")
         return self.cost(request, inst)[1]
@@ -348,23 +351,32 @@ class GlobalScheduler:
         inside its envelope for the leg, and another live decode-pool engine can take the
         decode leg, which avoids its producer.
         """
-        return (
-            self.prefill_on_decode
-            and inst.role is Role.DECODE
-            and inst.iid not in self.held_for_switch() | self.pinned
-            and any(
-                other.iid != inst.iid
-                for other in self.role_pool(Role.DECODE, self.live_instances())
+        return self.lender(request)(inst)
+
+    def lender(self, request: Request) -> Callable[[Instance], bool]:
+        """Return `borrows` for `request`, with the fleet state read once."""
+        if not self.prefill_on_decode:
+            return lambda inst: False
+        unusable = self.held_for_switch() | self.pinned
+        decode_pool = {inst.iid for inst in self.role_pool(Role.DECODE, self.live_instances())}
+        estimate = self.output_estimator()
+
+        def borrows(inst: Instance) -> bool:
+            return (
+                inst.role is Role.DECODE
+                and inst.iid not in unusable
+                and len(decode_pool) > (inst.iid in decode_pool)
+                and costs.decode_engine_prefill(
+                    request,
+                    inst,
+                    monitor=self.monitor,
+                    profiles=self.profiles,
+                    slo=self.slo,
+                    expected_output=estimate,
+                )
             )
-            and costs.decode_engine_prefill(
-                request,
-                inst,
-                monitor=self.monitor,
-                profiles=self.profiles,
-                slo=self.slo,
-                expected_output=self.output_estimator(),
-            )
-        )
+
+        return borrows
 
     def prefill_pool(
         self, request: Request, instances: list[Instance]
@@ -378,7 +390,8 @@ class GlobalScheduler:
         if not self.prefill_on_decode:
             return pool, set()
         own = [inst for inst in pool if inst.role is Role.PREFILL]
-        borrowed = [inst for inst in instances if self.borrows(request, inst)]
+        borrows = self.lender(request)
+        borrowed = [inst for inst in instances if borrows(inst)]
         if not own and not borrowed:
             return pool, set()
         return own + borrowed, {inst.iid for inst in borrowed}

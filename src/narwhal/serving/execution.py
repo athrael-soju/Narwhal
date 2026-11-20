@@ -279,7 +279,9 @@ def price_waiting(state: RequestLifecycle) -> float | None:
         return None
     phase, req.phase = req.phase, Phase.PREFILL
     try:
-        placements = {inst.iid: scheduler.prefill_admission_price(req, inst) for inst in candidates}
+        placements = {
+            inst.iid: scheduler.prefill_admission_price(req, inst, borrowed) for inst in candidates
+        }
         # Placement takes a borrowed decode engine only in its own tier.
         probation = scheduler.health.probation_set() if scheduler.health is not None else None
         prices = (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import statistics
+import math
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING
 
@@ -173,7 +173,7 @@ def decode_engine_prefill(
         if decoding_s / max(1, resident.output_len + left - 1) > slo.tpot_s:
             return False
     return not spans or (
-        prefill_share(stall, statistics.mean(spans)) <= profile.decode_prefill_max_share
+        prefill_share(stall, math.fsum(spans) / len(spans)) <= profile.decode_prefill_max_share
     )
 
 
