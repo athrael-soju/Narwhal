@@ -446,6 +446,26 @@ class HttpAccountingTests(HttpHarness):
             self.router.monitor.finished(decode.iid, f"d{index}")
         self.assertEqual((await self.post(client)).status_code, 200)
 
+    async def test_a_slot_wait_refusal_wakes_role_control_only_with_decode_recovery(self):
+        self.cfg.admission = "predictive"
+        for enabled in (False, True):
+            with self.subTest(decode_recovery=enabled):
+                self.cfg.reactive_decode_recovery = enabled
+                client = self.client()
+                decode = next(
+                    i for i in self.router.monitor.instances.values() if i.role is Role.DECODE
+                )
+                limit = self.router.scheduler.profiles.get(decode.iid).decode_max_requests
+                for index in range(limit):
+                    self.router.monitor.dispatched(
+                        decode.iid, Request(f"d{index}", 10, phase=Phase.DECODE)
+                    )
+                response = await self.post(client)
+                self.assertEqual(response.status_code, 429)
+                self.assertEqual(len(self.router.scheduler.slot_refusals.since(60.0)), 1)
+                self.assertEqual(self.router.controller.decode_risk_pending, enabled)
+                self.assertEqual(self.router.control_wakeup.is_set(), enabled)
+
     async def test_predictive_admission_projects_decode_from_prefill_completion(self):
         self.cfg.admission = "predictive"
         client = self.client()

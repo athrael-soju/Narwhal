@@ -360,7 +360,7 @@ async def urgent_control_once(router: NarwhalRouter) -> Instance | None:
     if flipped is not None:
         with router.monitoring.stage("handoff"):
             handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
-    if router.controller.prefill_risk_pending:
+    if router.controller.prefill_risk_pending or router.controller.decode_risk_pending:
         router.control_wakeup.set()
     router.dispatcher.notify()
     router.admission_queue.notify()
@@ -394,6 +394,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
         router.scheduler.refresh_floor_state()
         lp = router.scheduler.pool_load(Role.PREFILL)
         ld = router.scheduler.pool_load(Role.DECODE)
+        router.controller.note_decode_load(ld)
         n_prefill = len(router.monitor.pool(Role.PREFILL))
         n_decode = len(router.monitor.pool(Role.DECODE))
         log.info(
@@ -408,7 +409,7 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     with router.monitoring.stage("handoff"):
         handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
     router.monitoring.finish_pass(router.cfg.monitor_failure_limit)
-    if router.controller.prefill_risk_pending:
+    if router.controller.prefill_risk_pending or router.controller.decode_risk_pending:
         router.control_wakeup.set()
     router.dispatcher.notify()
     router.admission_queue.notify()

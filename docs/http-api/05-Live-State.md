@@ -348,38 +348,38 @@ The `below_floor` and `decode_floor` fields hold these values:
 
 When demand history is incomplete or fleet health changes before scoring, `control.last_decision` holds the inputs available at that stage. Depending on the stage, it can carry these fields:
 
-| Field                                             | Meaning                                                                                                                                                           |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `current_prefill`, `current_decode`               | Current prefill and decode split                                                                                                                                  |
-| `prefill_work`, `decode_work`                     | Estimated prefill and decode demand over the [demand spans](#demand-spans), in engines                                                                            |
-| `arrivals`                                        | Arrivals in the prefill demand span                                                                                                                               |
-| `output_observations`                             | Completed-output observations in demand history                                                                                                                   |
-| `demand_complete`                                 | Whether demand over `controller.reactive.window_s` is [complete](06-SLO-and-Demand.md#demand-completeness)                                                        |
-| `arrivals_beyond_profile`                         | Offers in `controller.reactive.window_s` with a prompt longer than some engine profile's prefill sweep                                                            |
-| `unsized_offers`                                  | [Unsized offers](06-SLO-and-Demand.md#unsized-offers) in `controller.reactive.window_s`                                                                           |
-| `projected_ttft_ratio`                            | Demand model's projected TTFT for the candidate split, as a ratio to the TTFT target                                                                              |
-| `projected_tpot_ratio`                            | Demand model's projected TPOT for the candidate split, as a ratio to the TPOT target                                                                              |
-| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions)                                               |
-| `objective`                                       | Candidate split's objective                                                                                                                                       |
-| `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                                                                                          |
-| `decode_request_limit`                            | Applied decode request limit                                                                                                                                      |
-| `decode_profile_covered`                          | Whether decode profiles cover the candidate split                                                                                                                 |
-| `decode_correction`                               | Fleet median of each engine's bounded ratio of live to profiled decode latency                                                                                    |
-| `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, or `projected_ttft_recovery`                                                        |
-| `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                                                                           |
-| `recovery_prefill_ratio`, `queued_prefill_s`      | The [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio) and its queued prefill seconds                                                          |
-| `recovery_decode_ratio`                           | Value of the [decode recovery ratio](06-SLO-and-Demand.md#decode-recovery-ratio)                                                                                  |
-| `eligibility_rule`                                | Rule applied to a scored proposal                                                                                                                                 |
-| `demand_horizon_s`                                | Demand span that priced the proposal, in seconds                                                                                                                  |
-| `steady_horizon_s`                                | Confirmation span, in seconds                                                                                                                                     |
-| `steady_prefill_work`, `steady_decode_work`       | Prefill and decode demand over `steady_horizon_s` in engines, `null` with incomplete demand or on a projected-TTFT recovery evaluation                            |
-| `steady_demand_s`                                 | Seconds since confirmation-span demand began to match window demand, `null` while they differ, with incomplete demand, or on a projected-TTFT recovery evaluation |
-| `departure_age_s`                                 | Seconds since the open departure began                                                                                                                            |
-| `departure_reverses`                              | Whether the open departure reverses the role controller's recent moves                                                                                            |
-| `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                                                                          |
-| `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                      |
-| `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                     |
-| `source_pressure_safe`                            | Whether source pool load is low enough to safely remove an engine, or meets an exception rule                                                                     |
+| Field                                             | Meaning                                                                                                                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `current_prefill`, `current_decode`               | Current prefill and decode split                                                                                                                                                  |
+| `prefill_work`, `decode_work`                     | Estimated prefill and decode demand over the [demand spans](#demand-spans), in engines                                                                                            |
+| `arrivals`                                        | Arrivals in the prefill demand span                                                                                                                                               |
+| `output_observations`                             | Completed-output observations in demand history                                                                                                                                   |
+| `demand_complete`                                 | Whether demand over `controller.reactive.window_s` is [complete](06-SLO-and-Demand.md#demand-completeness)                                                                        |
+| `arrivals_beyond_profile`                         | Offers in `controller.reactive.window_s` with a prompt longer than some engine profile's prefill sweep                                                                            |
+| `unsized_offers`                                  | [Unsized offers](06-SLO-and-Demand.md#unsized-offers) in `controller.reactive.window_s`                                                                                           |
+| `projected_ttft_ratio`                            | Demand model's projected TTFT for the candidate split, as a ratio to the TTFT target                                                                                              |
+| `projected_tpot_ratio`                            | Demand model's projected TPOT for the candidate split, as a ratio to the TPOT target                                                                                              |
+| `projected_decode_wait_ratio`                     | Candidate split's [decode queueing ratio](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions)                                                               |
+| `objective`                                       | Candidate split's objective                                                                                                                                                       |
+| `objective_delta`                                 | Current objective minus candidate objective, positive for an improvement                                                                                                          |
+| `decode_request_limit`                            | Applied decode request limit                                                                                                                                                      |
+| `decode_profile_covered`                          | Whether decode profiles cover the candidate split                                                                                                                                 |
+| `decode_correction`                               | Fleet median of each engine's bounded ratio of live to profiled decode latency                                                                                                    |
+| `decision_basis`                                  | `demand_projection`, `prefill_pressure_recovery`, `decode_pressure_recovery`, `projected_ttft_recovery`, or `early_decode_recovery`                                               |
+| `observed_prefill_ratio`, `observed_decode_ratio` | Observed phase pressure                                                                                                                                                           |
+| `recovery_prefill_ratio`, `queued_prefill_s`      | The [prefill recovery ratio](06-SLO-and-Demand.md#prefill-recovery-ratio) and its queued prefill seconds                                                                          |
+| `recovery_decode_ratio`                           | Value of the [decode recovery ratio](06-SLO-and-Demand.md#decode-recovery-ratio)                                                                                                  |
+| `eligibility_rule`                                | Rule applied to a scored proposal                                                                                                                                                 |
+| `demand_horizon_s`                                | Demand span that priced the proposal, in seconds                                                                                                                                  |
+| `steady_horizon_s`                                | Confirmation span, in seconds                                                                                                                                                     |
+| `steady_prefill_work`, `steady_decode_work`       | Prefill and decode demand over `steady_horizon_s` in engines, `null` with incomplete demand or on a projected-TTFT or early decode recovery evaluation                            |
+| `steady_demand_s`                                 | Seconds since confirmation-span demand began to match window demand, `null` while they differ, with incomplete demand, or on a projected-TTFT or early decode recovery evaluation |
+| `departure_age_s`                                 | Seconds since the open departure began                                                                                                                                            |
+| `departure_reverses`                              | Whether the open departure reverses the role controller's recent moves                                                                                                            |
+| `confirmations`, `required_confirmations`         | Consecutive confirmations of an eligible proposal and the required count                                                                                                          |
+| `decode_capacity_safe`                            | Whether the candidate's decode work fits its decode capacity                                                                                                                      |
+| `role_floors_safe`                                | Whether the candidate respects `min_prefill` and `min_decode`                                                                                                                     |
+| `source_pressure_safe`                            | Whether source pool load is low enough to safely remove an engine, or meets an exception rule                                                                                     |
 
 These decisions add fields to `control.last_decision`:
 
@@ -395,6 +395,7 @@ These decisions add fields to `control.last_decision`:
 | `eligibility_rule`        | Proposal                                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `projected_ttft_recovery` | Urgent decode-to-prefill evaluation triggered by an arriving request                                                                  |
+| `early_decode_recovery`   | Urgent prefill-to-decode evaluation triggered by decode pressure                                                                      |
 | `mixed_pressure`          | Source load above `shrink`, and the receiving role at or above `expand`                                                               |
 | `settled_departure`       | A [departure's](../concepts/02-Role-Control.md#departures-from-a-settled-split) first move, priced on confirmation-span demand        |
 | `steady_demand`           | [Steady-demand](../concepts/02-Role-Control.md#steady-demand) move with projected source load above `shrink` and at or below `expand` |
@@ -439,6 +440,26 @@ A scored candidate that moves one engine from decode to prefill adds:
 | `projected_ttft_improvement_s`   | `projected_ttft_s` minus `candidate_projected_ttft_s`                                             |
 
 Scored projected-TTFT recovery decisions set `decision_basis=projected_ttft_recovery`.
+
+#### Early decode recovery fields
+
+An [early decode recovery](../concepts/02-Role-Control.md#early-decode-recovery) evaluation adds these fields to `control.last_decision`:
+
+| Field                   | Meaning                                                                                                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decode_trigger`        | First signal coalesced into this evaluation: `slot_wait` for a decode slot-wait refusal, `decode_load` for decode load at or above `controller.thresholds.expand` |
+| `urgent_signals`        | Decode-pressure signals coalesced into this evaluation                                                                                                            |
+| `event_to_evaluation_s` | Seconds from the first signal to this evaluation                                                                                                                  |
+
+A scored candidate adds:
+
+| Field                          | Meaning                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `current_decode_ratio`         | Larger of the current split's projected TPOT and decode queueing ratios   |
+| `candidate_decode_ratio`       | Larger of the candidate split's projected TPOT and decode queueing ratios |
+| `projected_decode_improvement` | `current_decode_ratio` minus `candidate_decode_ratio`                     |
+
+Scored early decode recovery decisions set `decision_basis=early_decode_recovery`.
 
 Blocked and held decisions keep the proposed split and objective change.
 

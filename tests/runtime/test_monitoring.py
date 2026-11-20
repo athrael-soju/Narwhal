@@ -151,6 +151,17 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
         urgent_once.assert_awaited_once_with(self.router)
         periodic.assert_not_awaited()
 
+    async def test_decode_load_at_expand_wakes_control_only_with_decode_recovery(self):
+        expand = self.router.scheduler.th.expand
+        with patch.object(self.router.scheduler, "pool_load", return_value=expand):
+            for enabled in (False, True):
+                with self.subTest(decode_recovery=enabled):
+                    self.router.controller.decode_recovery_enabled = enabled
+                    self.router.control_wakeup.clear()
+                    await monitor_once(self.router)
+                    self.assertEqual(self.router.controller.decode_risk_pending, enabled)
+                    self.assertEqual(self.router.control_wakeup.is_set(), enabled)
+
     async def test_periodic_monitor_records_event_loop_deadline_lag(self):
         self.router.cfg.monitor_interval_s = 0.01
         called = asyncio.Event()

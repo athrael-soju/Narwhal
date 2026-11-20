@@ -517,10 +517,11 @@ Adjacent-split decisions use these spans:
 Each scored decision records in `eligibility_rule` the first of these rules that matches:
 
 1. `projected_ttft_recovery`
-2. `mixed_pressure`
-3. `settled_departure`
-4. `steady_demand`
-5. `source_shrink`
+2. `early_decode_recovery`
+3. `mixed_pressure`
+4. `settled_departure`
+5. `steady_demand`
+6. `source_shrink`
 
 Ordinary consolidation, the `source_shrink` rule, requires both:
 
@@ -608,13 +609,22 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 - projected source load above `controller.thresholds.shrink` and at or below `controller.thresholds.expand`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
+Projected-TTFT recovery and early decode recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
+
+With `controller.reactive.decode_recovery` set to `true`, decode pressure schedules an early decode recovery evaluation ahead of the next regular one. Decode pressure is a request that admission refuses for its decode slot wait, or an engine monitoring pass that observes decode load at or above `controller.thresholds.expand`. Signals that arrive before the evaluation runs share one evaluation. As it starts, the evaluation checks that a slot-wait refusal falls within the last `controller.reactive.step_s` or that decode load is still at or above `controller.thresholds.expand`. When neither holds, the role controller drops the evaluation without a decision. A pending projected-TTFT recovery evaluation runs first, and the early decode recovery evaluation waits for the next one.
+
+The early decode recovery evaluation scores only the split with one more decode engine. The move needs a profile for every engine, and the larger of the candidate's TPOT and decode queueing ratios must be below the current split's. It also needs one of these:
+
+- the `mixed_pressure` conditions, with the triggering decode pressure in place of current decode load at or above `controller.thresholds.expand`, and a worst projected SLO ratio improvement above zero
+- projected source load at or below `controller.thresholds.shrink`
+
+The role floors, decode profile coverage, a departure's hold on the reverse move, `controller.thresholds.cooldown_s`, `controller.thresholds.dwell_s`, and pins apply.
 
 A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 
 One confirmation is enough in three cases:
 
-- the move comes from a projected-TTFT recovery evaluation
+- the move comes from a projected-TTFT recovery or early decode recovery evaluation
 - the eligibility rule is `settled_departure`
 - all of these hold:
   - [demand](../http-api/06-SLO-and-Demand.md#demand-completeness) is complete
@@ -691,3 +701,4 @@ Live state and metrics expose the short and long demand estimates, the arrival-e
 | `controller.reactive.decode_correction_max`         |  `2.0`  | Upper bound on the live-to-profile decode correction.                                                                                                                                                                                                                                                                   | At least `decode_correction_min`                         |
 | `controller.reactive.decode_correction_alpha`       |  `0.2`  | Fraction of each qualifying observation window applied to the correction.                                                                                                                                                                                                                                               | `(0, 1]`                                                 |
 | `controller.reactive.decode_correction_min_samples` |   `8`   | Required decode gaps before a window updates the correction.                                                                                                                                                                                                                                                            | At least 1                                               |
+| `controller.reactive.decode_recovery`               | `false` | Schedules an early decode recovery evaluation on decode pressure, as [adjacent-split decisions](#adjacent-split-decisions) describe.                                                                                                                                                                                    |                                                          |

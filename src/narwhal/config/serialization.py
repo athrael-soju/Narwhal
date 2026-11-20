@@ -55,6 +55,7 @@ def document(config: FleetConfig) -> dict[str, Any]:
                 "decode_correction_max": config.reactive_decode_correction_max,
                 "decode_correction_alpha": config.reactive_decode_correction_alpha,
                 "decode_correction_min_samples": config.reactive_decode_correction_min_samples,
+                "decode_recovery": config.reactive_decode_recovery,
             },
         },
         "serving": {
