@@ -117,6 +117,7 @@ class ReactiveController:
         self._prefill_urgency: PrefillUrgency | None = None
         self.decode_recovery_enabled = decode_recovery
         self._decode_urgency: DecodeUrgency | None = None
+        self._decode_evaluated_at: float | None = None
         self.safety = ConsolidationSafety(
             self,
             evidence_span_s=evidence_span_s,
@@ -199,41 +200,50 @@ class ReactiveController:
         return True
 
     def note_slot_refusal(self, *, at: float | None = None) -> bool:
-        """Arm an early decode evaluation for one decode slot-wait refusal."""
-        return self._note_decode_risk("slot_wait", at)
+        """Arm an early decode evaluation for one decode slot-wait refusal.
+
+        Returns whether the evaluation is due now.
+        """
+        self._note_decode_risk("slot_wait", at)
+        return self.decode_risk_pending
 
     def note_decode_load(self, load: float, *, at: float | None = None) -> bool:
-        """Arm an early decode evaluation when observed decode load reaches expand."""
-        if load < self.scheduler.th.expand:
-            return False
-        return self._note_decode_risk("decode_load", at)
+        """Arm an early decode evaluation when observed decode load reaches expand.
 
-    def _note_decode_risk(self, trigger: str, at: float | None) -> bool:
-        if not self.decode_recovery_enabled:
-            return False
+        Returns whether the evaluation is due now.
+        """
+        if load >= self.scheduler.th.expand:
+            self._note_decode_risk("decode_load", at)
+        return self.decode_risk_pending
+
+    def _note_decode_risk(self, trigger: str, at: float | None) -> None:
+        # The P-to-D cooldown or dwell would refuse the move.
+        if not self.decode_recovery_enabled or self.scheduler.roles.decode_move_waits():
+            return
         if self._decode_urgency is None:
             self._decode_urgency = DecodeUrgency(
                 signalled_at=self._clock() if at is None else at, trigger=trigger
             )
         else:
             self._decode_urgency.signals += 1
-        return True
 
     def consume_decode_risk(self) -> DecodeRecovery | None:
-        """Take the pending event; return a recovery while decode pressure persists.
+        """Take the due event; return a recovery while decode pressure persists.
 
         Pressure persists with a slot-wait refusal within the last `step_s`, or with observed
         decode load at or above expand.
         """
         urgency = self._decode_urgency
-        if urgency is None:
+        if urgency is None or not self.decode_risk_pending:
             return None
         self._decode_urgency = None
-        if (
-            not self.scheduler.slot_refusals.since(self.step_s)
-            and self.scheduler.pool_load(Role.DECODE) < self.scheduler.th.expand
-        ):
+        now = self._clock()
+        refused_at = self.scheduler.slot_refusals.latest_at()
+        if (refused_at is None or refused_at < now - self.step_s) and self.scheduler.pool_load(
+            Role.DECODE
+        ) < self.scheduler.th.expand:
             return None
+        self._decode_evaluated_at = now
         return DecodeRecovery(
             signalled_at=urgency.signalled_at,
             trigger=urgency.trigger,
@@ -246,8 +256,14 @@ class ReactiveController:
 
     @property
     def decode_risk_pending(self) -> bool:
-        """Return whether a coalesced decode event awaits evaluation."""
-        return self._decode_urgency is not None
+        """Return whether a coalesced decode event is due for evaluation.
+
+        An event waits `step_s` after the previous early decode evaluation.
+        """
+        return self._decode_urgency is not None and (
+            self._decode_evaluated_at is None
+            or self._clock() - self._decode_evaluated_at >= self.step_s
+        )
 
     def sample(self) -> None:
         """Sample decode residency for demand estimation."""
@@ -287,11 +303,9 @@ class ReactiveController:
             if urgent or self._prefill_urgency is not None
             else None
         )
-        # A prefill recovery takes the evaluation; a pending decode event waits for the next.
+        # A prefill recovery or a scheduled pass takes the evaluation; a decode event waits.
         decode_recovery = (
-            self.consume_decode_risk()
-            if recovery is None and (urgent or self._decode_urgency is not None)
-            else None
+            self.consume_decode_risk() if recovery is None and not advances_cadence else None
         )
         moved = self.reactive.step(
             self,

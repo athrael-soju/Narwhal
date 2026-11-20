@@ -153,6 +153,8 @@ class MonitoringPassTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_decode_load_at_expand_wakes_control_only_with_decode_recovery(self):
         expand = self.router.scheduler.th.expand
+        # The opening move to decode waits out the cooldown, and no early evaluation arms.
+        self.router.scheduler.th.cooldown_s = 0.0
         with patch.object(self.router.scheduler, "pool_load", return_value=expand):
             for enabled in (False, True):
                 with self.subTest(decode_recovery=enabled):

@@ -178,6 +178,26 @@ class MixedPressureTests(unittest.TestCase):
         self.assertEqual(len(fleet.monitor.pool(Role.DECODE)), 3)
         ControllerDecisionOut.model_validate(row)
 
+    def test_early_decode_passes_keep_the_scheduled_proposal_and_its_count(self) -> None:
+        """Early decode evaluations between scheduled passes leave moves to prefill on schedule."""
+        splits = {}
+        for enabled in (False, True):
+            directory = tempfile.TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+            fleet = Fleet(directory.name)
+            self.addCleanup(fleet.telemetry.stop)
+            fleet.controller.decode_recovery_enabled = enabled
+            urgent = []
+            for _ in range(6):
+                fleet.step()
+                if fleet.controller.note_decode_load(fleet.scheduler.pool_load(Role.DECODE)):
+                    fleet.controller.step(urgent=True, scheduled=False)
+                    urgent.append(fleet.scheduler.roles._last_decision["eligibility_rule"])
+            self.assertEqual(bool(urgent), enabled)
+            self.assertEqual(set(urgent), {"early_decode_recovery"} if enabled else set())
+            splits[enabled] = len(fleet.monitor.pool(Role.PREFILL))
+        self.assertEqual(splits, {False: 3, True: 3})
+
     def test_configured_confirmation_count_and_transient_reset(self) -> None:
         fleet = self.fleet
         fleet.controller.confirmations_needed = 4
@@ -1270,6 +1290,10 @@ class EarlyDecodeRecoveryTests(unittest.TestCase):
     def reason(self) -> str:
         return str(self.fleet.scheduler.roles._last_decision["reason"])
 
+    def next_evaluation(self) -> None:
+        """Advance past the spacing between early decode evaluations."""
+        self.fleet.now += self.fleet.controller.step_s + 0.5
+
     def test_off_by_default_arms_nothing(self) -> None:
         fleet = self.fleet
         default = ReactiveController(
@@ -1398,37 +1422,156 @@ class EarlyDecodeRecoveryTests(unittest.TestCase):
         )
         fleet.profiles.put(profile)
 
+        self.next_evaluation()
         fleet.scheduler.min_prefill = 3
         self.refuse()
         self.assertIsNone(fleet.controller.step(urgent=True))
         self.assertEqual(self.reason(), "min_prefill blocks the adjacent split")
         fleet.scheduler.min_prefill = 1
 
+        self.next_evaluation()
         fleet.controller.reactive.departure = Departure(1, fleet.now, moved=True)
         self.refuse()
         self.assertIsNone(fleet.controller.step(urgent=True))
         self.assertEqual(self.reason(), "departure toward prefill holds the reverse move")
         self.assertEqual(fleet.scheduler.roles.flips, [])
 
-    def test_urgent_move_retains_cooldown_dwell_and_pin_guards(self) -> None:
+    def test_cooldown_and_dwell_arm_no_evaluation_and_pins_hold_the_move(self) -> None:
         fleet = self.fleet
-        fleet.scheduler.roles._last_p2d_flip = fleet.now
-        self.refuse()
-        self.assertIsNone(fleet.controller.step(urgent=True))
-        self.assertEqual(self.reason(), "decode cooldown has not elapsed")
-        fleet.scheduler.roles._last_p2d_flip = 0.0
+        roles = fleet.scheduler.roles
+        fleet.scheduler.slot_refusals.note(Request("refused", 100, wanted_len=400))
+        roles._last_p2d_flip = fleet.now
+        self.assertFalse(fleet.controller.note_slot_refusal())
+        self.assertFalse(fleet.controller.note_decode_load(fleet.scheduler.th.expand))
+        self.assertFalse(fleet.controller.decode_risk_pending)
+        roles._last_p2d_flip = 0.0
 
-        fleet.scheduler.roles._last_flip = dict.fromkeys(("e0", "e1", "e2"), fleet.now)
-        self.refuse()
-        self.assertIsNone(fleet.controller.step(urgent=True))
-        self.assertEqual(self.reason(), "source engine dwell has not elapsed")
-        fleet.scheduler.roles._last_flip.clear()
+        roles._last_flip = dict.fromkeys(("e0", "e1", "e2"), fleet.now)
+        self.assertFalse(fleet.controller.note_slot_refusal())
+        self.assertFalse(fleet.controller.decode_risk_pending)
+        roles._last_flip.clear()
 
         fleet.scheduler.pinned = frozenset({"e0", "e1", "e2"})
         self.refuse()
         self.assertIsNone(fleet.controller.step(urgent=True))
         self.assertIn("pins", self.reason())
         self.assertEqual(fleet.scheduler.roles.flips, [])
+
+    def test_no_split_with_one_more_decode_engine_reports_the_prefill_floor(self) -> None:
+        fleet = self.fleet
+        for iid in ("e1", "e2"):
+            fleet.monitor.instances[iid].role = Role.DECODE
+        self.refuse()
+        self.assertIsNone(fleet.controller.step(urgent=True))
+        self.assertEqual(self.reason(), "min_prefill blocks the adjacent split")
+
+    def test_mixed_pressure_without_a_lower_objective_holds_the_move(self) -> None:
+        fleet = self.fleet
+        # Prefill load above shrink at 2P makes the move mixed, at a higher objective.
+        fleet.pressure[Role.PREFILL] = 1.8
+        self.refuse()
+        self.assertIsNone(fleet.controller.step(urgent=True))
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["reason"], "mixed pressure requires a lower projected objective")
+        self.assertGreater(decision["projected_ttft_ratio"], fleet.scheduler.th.shrink)
+        self.assertGreater(decision["projected_decode_improvement"], 0)
+        self.assertLessEqual(decision["objective_delta"], 0)
+
+    def test_a_scheduled_pass_runs_the_regular_evaluation_and_leaves_the_event(self) -> None:
+        fleet = self.fleet
+        self.refuse()
+        fleet.advance()
+        fleet.scheduler.slot_refusals.note(Request("refused-late", 100, wanted_len=400))
+        fleet.controller.step(urgent=True, scheduled=True)
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(decision["at"], fleet.now)
+        self.assertNotEqual(decision.get("eligibility_rule"), "early_decode_recovery")
+        self.assertEqual(fleet.controller._last_step, fleet.now)
+        self.assertTrue(fleet.controller.decode_risk_pending)
+        self.assertIsNotNone(fleet.controller.step(urgent=True))
+        self.assertEqual(
+            fleet.scheduler.roles._last_decision["eligibility_rule"], "early_decode_recovery"
+        )
+
+    def test_persistent_pressure_evaluates_once_per_step(self) -> None:
+        fleet = self.fleet
+        fleet.pressure[Role.DECODE] = 3.3
+        for advisory in (True, False):
+            with self.subTest(advisory=advisory):
+                fleet.scheduler.advisory = advisory
+                fleet.controller._decode_evaluated_at = None
+                events: list[dict] = []
+                fleet.scheduler.on_control_event = events.append
+                # Each second, a monitor pass with a refusal and loaded decode wakes control.
+                for _ in range(20):
+                    fleet.advance(1)
+                    fleet.controller.step()
+                    fleet.scheduler.slot_refusals.note(Request("refused", 100, wanted_len=400))
+                    fleet.controller.note_slot_refusal()
+                    fleet.controller.note_decode_load(fleet.scheduler.pool_load(Role.DECODE))
+                    fleet.controller.step(urgent=True, scheduled=False)
+                decisions = [
+                    row
+                    for row in events
+                    if row["event"] == "controller_decision"
+                    and row.get("eligibility_rule") == "early_decode_recovery"
+                ]
+                self.assertLessEqual(len(decisions), 20 // int(fleet.controller.step_s))
+                self.assertTrue(decisions)
+                if advisory:
+                    self.assertEqual(len(decisions), 4)
+                    self.assertEqual({row["result"] for row in decisions}, {"advisory"})
+                else:
+                    self.assertNotIn(
+                        "decode cooldown has not elapsed", {row["reason"] for row in decisions}
+                    )
+
+    def test_early_decode_passes_leave_the_panic_count(self) -> None:
+        fleet = self.fleet
+        fleet.scheduler.th.panic_ratio = 1.0
+        fleet.pressure[Role.DECODE] = 6.0
+        roles = fleet.scheduler.roles
+        roles._panic_sustained = 2
+        fleet.scheduler.min_prefill = 3
+        self.refuse()
+        self.assertIsNone(fleet.controller.step(urgent=True))
+        self.assertEqual(roles._panic_sustained, 2)
+
+    def test_an_applied_early_decode_move_keeps_an_open_departure(self) -> None:
+        fleet = self.fleet
+        policy = fleet.controller.reactive
+        departure = Departure(-1, fleet.now, moved=True)
+        policy.departure = departure
+        self.refuse()
+        self.assertIsNotNone(fleet.controller.step(urgent=True))
+        self.assertIs(policy.departure, departure)
+
+    def test_an_approved_early_decode_move_waits_for_its_draining_donor(self) -> None:
+        fleet = self.fleet
+        policy = fleet.controller.reactive
+        fleet.scheduler.switch_requires_idle = True
+        for iid in ("e0", "e1", "e2"):
+            fleet.monitor.dispatched(iid, Request(f"busy-{iid}", 100, wanted_len=10))
+        policy.proposal, policy.confirmations = (4, False, "mixed_pressure"), 2
+        self.refuse()
+        self.assertIsNone(fleet.controller.step(urgent=True))
+        self.assertIn("holding", self.reason())
+        drain = policy.drain
+        self.assertEqual(
+            (drain.prefill, drain.rule, drain.confirmations), (2, "early_decode_recovery", 1)
+        )
+        self.assertEqual(fleet.scheduler.held_for_switch(), {drain.donor})
+        self.assertEqual((policy.proposal, policy.confirmations), ((4, False, "mixed_pressure"), 2))
+        # The next scheduled pass asks for the approved move and switches the idle donor.
+        fleet.monitor.finished(drain.donor, f"busy-{drain.donor}")
+        fleet.scheduler.slot_refusals.note(Request("refused-late", 100, wanted_len=400))
+        moved = fleet.step()
+        self.assertIsNotNone(moved)
+        self.assertEqual(moved.iid, drain.donor)
+        decision = fleet.scheduler.roles._last_decision
+        self.assertEqual(
+            (decision["result"], decision["eligibility_rule"]), ("applied", "early_decode_recovery")
+        )
 
     def test_no_strict_decode_improvement_holds_the_move(self) -> None:
         fleet = self.fleet

@@ -26,7 +26,7 @@ When projected TTFT still exceeds `slo.ttft_s` after a move, the role controller
 
 ### Early decode recovery
 
-With `controller.reactive.decode_recovery` set to `true`, decode pressure schedules an early decode recovery evaluation ahead of the next regular one. Decode pressure is a request that admission refuses for its decode slot wait, or decode load at or above `controller.thresholds.expand`. The evaluation moves one prefill engine to decode when that move lowers the larger of the projected TPOT and decode queueing ratios. A pending projected-TTFT recovery evaluation runs first. `/narwhal/state` reports each decision in the [early decode recovery fields](../http-api/05-Live-State.md#early-decode-recovery-fields), and the [adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) list its conditions.
+With `controller.reactive.decode_recovery` set to `true`, decode pressure schedules an early decode recovery evaluation ahead of the next regular one, at most one every `controller.reactive.step_s`. Decode pressure is a request that admission refuses for its decode slot wait, or decode load at or above `controller.thresholds.expand`. The evaluation moves one prefill engine to decode when that move lowers the larger of the projected TPOT and decode queueing ratios. A pending projected-TTFT recovery evaluation runs first. `/narwhal/state` reports each decision in the [early decode recovery fields](../http-api/05-Live-State.md#early-decode-recovery-fields), and the [adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) list its conditions.
 
 ### Expansion and consolidation
 
@@ -112,7 +112,7 @@ A move to decode that passes its confirmations while its engine is busy stays ap
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 
-An early decode recovery evaluation applies every guard above. It also needs a profile for every engine and decode profiles that cover the work of the new split.
+An early decode recovery evaluation applies every guard above. It also needs a profile for every engine and decode profiles that cover the work of the new split. At the new split, the projected TTFT ratio must be at or below `controller.thresholds.shrink`, or, with no departure open, the move must lower the worst projected SLO ratio.
 
 ### Advisory mode
 

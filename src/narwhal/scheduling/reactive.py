@@ -82,6 +82,10 @@ class ReactivePolicy:
         urgent_rule = (
             "projected_ttft_recovery" if prefill_recovery is not None else "early_decode_recovery"
         )
+        # An early decode evaluation leaves the panic count, steady run, departure, and the
+        # proposal and confirmations of another split unchanged. Held, it also leaves the settled
+        # run and a drain approval unchanged.
+        decode_urgent = decode_recovery is not None
         adjusted = controller.restore_floor()
         if adjusted:
             controller._last_step = now
@@ -91,7 +95,8 @@ class ReactivePolicy:
             controller.scheduler.pool_load(Role.PREFILL),
             controller.scheduler.pool_load(Role.DECODE),
         )
-        controller.scheduler.roles.observe_control_load(*observed_load)
+        if not decode_urgent:
+            controller.scheduler.roles.observe_control_load(*observed_load)
         if now - controller._last_step < controller.step_s and urgent is None:
             return None
         if advance_cadence:
@@ -103,10 +108,11 @@ class ReactivePolicy:
             controller.monitor.pool(role) and not controller.scheduler.live_instances(role)
             for role in (Role.PREFILL, Role.DECODE)
         ):
-            self.proposal, self.confirmations = None, 0
-            self._release(controller, self.drain)
-            self.drain = None
-            self.settled_since = self.balanced_since = None
+            if not decode_urgent:
+                self.proposal, self.confirmations = None, 0
+                self._release(controller, self.drain)
+                self.drain = None
+                self.settled_since = self.balanced_since = None
             current_p = len(controller.monitor.pool(Role.PREFILL))
             n = len(controller.monitor.instances)
             proposed_p = (
@@ -176,9 +182,10 @@ class ReactivePolicy:
                 or (recovery and not recovery_ready)
             )
         ):
-            self.proposal, self.confirmations = None, 0
-            self._release(controller, self.drain)
-            self.drain = None
+            if not decode_urgent:
+                self.proposal, self.confirmations = None, 0
+                self._release(controller, self.drain)
+                self.drain = None
             if urgent is None:
                 self.settled_since = self.balanced_since = None
             details: dict[str, object] = {
@@ -534,20 +541,34 @@ class ReactivePolicy:
         eligible = [row for row in evaluations if admitted(row)]
         # An approval's donor stays held only while each pass asks for the move.
         approved = self.drain
-        drain = self._standing_drain(controller, now, current_p, evaluations, eligible)
+        drain = (
+            None
+            if decode_urgent
+            else self._standing_drain(controller, now, current_p, evaluations, eligible)
+        )
         if drain is not None:
             eligible = [row for row in evaluations if row[0].prefill == drain.prefill]
         if not eligible:
-            self._release(controller, approved)
-            # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
-            if controller.scheduler.held_for_switch():
-                controller.scheduler.renew_draining_holds()
-            else:
-                self.proposal, self.confirmations = None, 0
+            if not decode_urgent:
+                self._release(controller, approved)
+                # A donor draining for a move to prefill keeps the confirmed proposal and its hold.
+                if controller.scheduler.held_for_switch():
+                    controller.scheduler.renew_draining_holds()
+                else:
+                    self.proposal, self.confirmations = None, 0
             held: Evaluation = (
                 min(evaluations, key=lambda row: (row[0].objective, row[0].prefill))
                 if evaluations
-                else (current, 0.0, 0.0, True, current.decode_profile_covered, False, True)
+                else (
+                    current,
+                    0.0,
+                    0.0,
+                    True,
+                    current.decode_profile_covered,
+                    False,
+                    # Without a split one decode engine larger, the prefill floor holds the move.
+                    not decode_urgent,
+                )
             )
             (
                 candidate,
@@ -629,14 +650,17 @@ class ReactivePolicy:
             )
         )
         proposal = candidate_p, recovery, eligibility_rule
-        if drain is not None:
+        if decode_urgent:
+            # Its one confirmation leaves the scheduled proposal's count unchanged.
+            count = confirmations
+        elif drain is not None:
             # The approved move keeps its confirmations while its donor drains.
-            confirmations = self.confirmations = drain.confirmations
+            count = confirmations = self.confirmations = drain.confirmations
         else:
-            self._confirm(proposal)
-        details["confirmations"] = self.confirmations
+            count = self._confirm(proposal)
+        details["confirmations"] = count
         details["required_confirmations"] = confirmations
-        if self.confirmations < confirmations:
+        if count < confirmations:
             self._release(controller, approved)
             controller.scheduler.roles.record_decision(
                 prefill=candidate.prefill,
@@ -648,11 +672,12 @@ class ReactivePolicy:
             )
             return None
 
-        self.proposal, self.confirmations = None, 0
+        if not decode_urgent or (self.proposal is not None and self.proposal[0] == candidate_p):
+            self.proposal, self.confirmations = None, 0
         self.settled_since = None
         target = Role.PREFILL if direction > 0 else Role.DECODE
         moved = controller.scheduler.roles.flip(target, "reactive", decision_details=details)
-        if moved is None and controller.scheduler.held_for_switch():
+        if moved is None and not decode_urgent and controller.scheduler.held_for_switch():
             # The next pass with this proposal moves the donor once it is idle.
             self.proposal, self.confirmations = proposal, confirmations
         donor = controller.scheduler.roles.held_donor
@@ -665,7 +690,7 @@ class ReactivePolicy:
             self.drain = None
         if approved is not None and approved.donor != donor:
             self._release(controller, approved)
-        if moved is not None and departure is not None:
+        if moved is not None and departure is not None and not decode_urgent:
             if candidate_p in departure_moves:
                 self.departure = replace(departure, moved=True)
             elif candidate_p in held_reverse or (

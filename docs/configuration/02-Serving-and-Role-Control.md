@@ -609,16 +609,21 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 - projected source load above `controller.thresholds.shrink` and at or below `controller.thresholds.expand`
 - reduction in the worst projected SLO ratio of at least `controller.reactive.movement_margin`
 
-Projected-TTFT recovery and early decode recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
+Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
 
-With `controller.reactive.decode_recovery` set to `true`, decode pressure schedules an early decode recovery evaluation ahead of the next regular one. Decode pressure is a request that admission refuses for its decode slot wait, or an engine monitoring pass that observes decode load at or above `controller.thresholds.expand`. Signals that arrive before the evaluation runs share one evaluation. As it starts, the evaluation checks that a slot-wait refusal falls within the last `controller.reactive.step_s` or that decode load is still at or above `controller.thresholds.expand`. When neither holds, the role controller drops the evaluation without a decision. A pending projected-TTFT recovery evaluation runs first, and the early decode recovery evaluation waits for the next one.
+With `controller.reactive.decode_recovery` set to `true`, decode pressure schedules an early decode recovery evaluation ahead of the next regular one. Decode pressure is a request that admission refuses for its decode slot wait, or an engine monitoring pass that observes decode load at or above `controller.thresholds.expand`. Pressure schedules an evaluation only while `controller.thresholds.cooldown_s` has elapsed since the last move to decode or the cooldown bypass is armed, and not while every unpinned prefill engine changed role within the last `controller.thresholds.dwell_s`. Signals share one evaluation, and early decode recovery evaluations start at least `controller.reactive.step_s` apart. A regular evaluation and a pending projected-TTFT recovery evaluation run first, and the early decode recovery evaluation runs at the next wake. As it starts, the evaluation checks that a slot-wait refusal falls within the last `controller.reactive.step_s` or that decode load is still at or above `controller.thresholds.expand`. When neither holds, the role controller drops the evaluation without a decision.
 
-The early decode recovery evaluation scores only the split with one more decode engine. The move needs a profile for every engine, and the larger of the candidate's TPOT and decode queueing ratios must be below the current split's. It also needs one of these:
+The early decode recovery evaluation scores only the split with one more decode engine, on window demand. It moves the engine with one confirmation when all of these hold:
 
-- the `mixed_pressure` conditions, with the triggering decode pressure in place of current decode load at or above `controller.thresholds.expand`, and a worst projected SLO ratio improvement above zero
-- projected source load at or below `controller.thresholds.shrink`
+- every engine has a profile
+- the larger of the candidate's TPOT and decode queueing ratios is below the current split's
+- the candidate's projected TTFT ratio is at or below `controller.thresholds.shrink`, or it is above `controller.thresholds.shrink`, no departure is open, and the move lowers the worst projected SLO ratio by more than zero
+- decode profiles cover the candidate's work
+- the role floors hold, and no departure toward prefill holds the reverse move
 
-The role floors, decode profile coverage, a departure's hold on the reverse move, `controller.thresholds.cooldown_s`, `controller.thresholds.dwell_s`, and pins apply.
+Pins, `controller.thresholds.cooldown_s`, and `controller.thresholds.dwell_s` apply to the move.
+
+A held early decode recovery evaluation leaves the settled run, `steady_demand_s`, an open departure, the confirmation sequence, and an approved move to decode unchanged. An early decode recovery move restarts the settled run, as any attempted move does. It leaves `steady_demand_s`, an open departure, and the confirmation sequence of another proposed split unchanged.
 
 A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 

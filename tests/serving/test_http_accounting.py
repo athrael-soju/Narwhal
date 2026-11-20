@@ -448,6 +448,8 @@ class HttpAccountingTests(HttpHarness):
 
     async def test_a_slot_wait_refusal_wakes_role_control_only_with_decode_recovery(self):
         self.cfg.admission = "predictive"
+        # The opening move to decode waits out the cooldown, and no early evaluation arms.
+        self.cfg.thresholds = replace(self.cfg.thresholds, cooldown_s=0.0)
         for enabled in (False, True):
             with self.subTest(decode_recovery=enabled):
                 self.cfg.reactive_decode_recovery = enabled
