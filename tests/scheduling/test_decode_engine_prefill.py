@@ -403,6 +403,21 @@ class BorrowedStallTests(unittest.TestCase):
         # Each 1.01 s gap keeps 1.01 - 0.8 * 1.01 s of unpriced stall.
         self.assertAlmostEqual(self.monitor.mean_token_interval("d"), 0.202)
 
+    def test_a_queued_leg_leaving_behind_a_running_leg_restarts_the_queue_after_it(self):
+        for rid in "abc":
+            self.monitor.dispatched("d", Request(rid, 1000, borrowed=True))
+        start = self.now[0]
+        self.now[0] += 0.25
+        # b leaves while a still runs, so c starts when a's span ends, not now.
+        self.monitor.first_token("d", "b")
+        spans = {w.rid: (w.start - start, w.end - start) for w in self.monitor._lent["d"]}
+        self.assertEqual(set(spans), {"a", "c"})
+        for got, want in zip(spans["c"], (1.01, 2.02), strict=True):
+            self.assertAlmostEqual(got, want)
+        # A 1.26 s open gap overlaps priced spans for 1.26 s, each second once.
+        self.now[0] += 1.01
+        self.assertAlmostEqual(self.monitor.stalled_gap("d"), 1.26 - 0.8 * 1.26)
+
     def test_borrowed_prefill_counts_toward_the_prefill_pool_but_not_its_engine_count(self):
         case = DecodeEnginePrefillTests(
             "test_held_pinned_and_unavailable_decode_engines_take_no_leg"

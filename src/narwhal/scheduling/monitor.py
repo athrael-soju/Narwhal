@@ -329,7 +329,8 @@ class InstanceMonitor:
         """End a borrowed leg's span when the leg leaves prefill.
 
         A span that has not started is dropped. The queued spans after it start again from
-        now, each keeping its length.
+        now, or from the end of the spans before it whose legs are still in prefill, each
+        keeping its length.
         """
         now = self._clock()
         windows = self._lent.get(iid)
@@ -337,9 +338,10 @@ class InstanceMonitor:
             return
         kept: list[_LentWindow] = []
         cursor: float | None = None
+        running = now
         for window in windows:
             if window.rid == rid:
-                window.rid, window.end, cursor = None, min(window.end, now), now
+                window.rid, window.end, cursor = None, min(window.end, now), running
                 if window.end > window.start:
                     kept.append(window)
                 continue
@@ -348,6 +350,8 @@ class InstanceMonitor:
                     length = window.end - window.start
                     window.start, window.end = cursor, cursor + length
                 cursor = max(cursor, window.end)
+            elif window.rid is not None:
+                running = max(running, window.end)
             kept.append(window)
         self._lent[iid] = kept
         self._prune_lent(iid)
