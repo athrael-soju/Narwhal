@@ -9,6 +9,7 @@ from narwhal.profiling.fitting import (
     fit_prefill_samples,
     fit_prefill_slowdown,
     fit_quadratic,
+    prefill_share,
     splits_prefill,
 )
 
@@ -45,28 +46,32 @@ class ProfileFittingTests(unittest.TestCase):
         (_, _, _, split), _, _ = fit_prefill_samples([(n, curve(n)) for n in six], 16)
         self.assertAlmostEqual(split, 0.05, places=6)
 
-    def test_prefill_slowdown_scales_the_time_sharing_model(self):
-        """k = 1 is pure time sharing, interval / (1 - u); overlap measures below it."""
+    def test_prefill_slowdown_scales_the_stall_against_unslowed_decode_time(self):
+        """A run's window is its tokens at the base interval plus k seconds per stall second."""
+        base, tokens = 0.013, 1000
 
-        def interval(share, k):
-            return 0.013 * (1 + k * share / (1 - share))
+        def run(stall, k):
+            window = tokens * base + k * stall
+            return stall, window, window / tokens
 
         for k in (0.0, 0.6, 1.0):
-            samples = [(u, interval(u, k)) for u in (0.0, 0.0, 0.24, 0.52)]
-            slowdown, largest = fit_prefill_slowdown(samples)
+            runs = [run(0.0, k), run(0.0, k), run(3.0, k), run(6.0, k)]
+            slowdown, largest = fit_prefill_slowdown(runs)
             self.assertAlmostEqual(slowdown, k)
-            self.assertEqual(largest, 0.52)
+            # The share sets the stall against the window's tokens at the base interval.
+            self.assertAlmostEqual(largest, prefill_share(6.0, tokens * base))
         # A loaded interval below the base clamps the slowdown at zero.
-        self.assertEqual(fit_prefill_slowdown([(0.0, 0.02), (0.3, 0.019)]), (0.0, 0.3))
-        for samples in (
-            [(0.0, 0.02)],
-            [(0.25, 0.02), (0.5, 0.03)],
-            [(0.0, 0.02), (1.0, 0.03)],
-            [(0.0, 0.0), (0.5, 0.03)],
-            [(0.0, 0.02), (0.5, float("nan"))],
+        self.assertEqual(fit_prefill_slowdown([(0.0, 10.0, 0.02), (1.0, 9.5, 0.019)])[0], 0.0)
+        for runs in (
+            [(0.0, 10.0, 0.02)],
+            [(1.0, 10.0, 0.02), (2.0, 10.0, 0.03)],
+            [(0.0, 10.0, 0.0), (1.0, 10.0, 0.03)],
+            [(0.0, 0.0, 0.02), (1.0, 10.0, 0.03)],
+            [(0.0, 10.0, 0.02), (-1.0, 10.0, 0.03)],
+            [(0.0, 10.0, 0.02), (1.0, 10.0, float("nan"))],
         ):
-            with self.subTest(samples=samples), self.assertRaises(ValueError):
-                fit_prefill_slowdown(samples)
+            with self.subTest(runs=runs), self.assertRaises(ValueError):
+                fit_prefill_slowdown(runs)
 
     def test_quadratic_recovers_coefficients_at_token_scale(self):
         """Input scaling preserves the coefficients in original token units."""

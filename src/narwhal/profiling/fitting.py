@@ -188,25 +188,40 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
     return sum(errors) / len(errors)
 
 
-def fit_prefill_slowdown(samples: Sequence[tuple[float, float]]) -> tuple[float, float]:
-    """Fit `k` in `interval = base * (1 + k*u/(1-u))` from (share u, interval) samples.
+def prefill_share(stall_s: float, decode_s: float) -> float:
+    """Return a prefill stall's share of the stall plus the unslowed decode time it interrupts.
 
-    `base` is the mean interval at share 0. Return the nonnegative least-squares `k` and the
-    largest measured share.
+    The profiler's fit and placement measure `decode_prefill_max_share` on this share.
     """
-    if any(not math.isfinite(v) for sample in samples for v in sample):
-        raise ValueError("prefill share samples must be finite")
-    if any(not 0 <= share < 1 or interval <= 0 for share, interval in samples):
-        raise ValueError("prefill share samples need shares in [0, 1) and positive intervals")
-    base = [interval for share, interval in samples if share == 0]
-    loaded = [(share / (1 - share), interval) for share, interval in samples if share > 0]
-    if not base or not loaded:
-        raise ValueError("a prefill slowdown fit needs a sample at share 0 and one above it")
+    return stall_s / (stall_s + decode_s) if stall_s > 0 else 0.0
+
+
+def fit_prefill_slowdown(runs: Sequence[tuple[float, float, float]]) -> tuple[float, float]:
+    """Fit `k` in `interval = base * (1 + k*u/(1-u))` from (stall s, window s, interval) runs.
+
+    `base` is the mean interval of the runs without stall. A run's share `u` is
+    `prefill_share` of its stall and its window's tokens at `base`. Return the nonnegative
+    least-squares `k` and the largest share.
+    """
+    if any(not math.isfinite(v) for run in runs for v in run):
+        raise ValueError("prefill share runs must be finite")
+    if any(stall < 0 or window <= 0 or interval <= 0 for stall, window, interval in runs):
+        raise ValueError(
+            "prefill share runs need a nonnegative stall and a positive window and interval"
+        )
+    base = [interval for stall, _, interval in runs if stall == 0]
+    if not base or all(stall == 0 for stall, _, _ in runs):
+        raise ValueError("a prefill slowdown fit needs a run without stall and one with it")
     floor = statistics.mean(base)
+    shares = [
+        (prefill_share(stall, window * floor / interval), interval)
+        for stall, window, interval in runs
+    ]
+    loaded = [(share / (1 - share), interval) for share, interval in shares if share > 0]
     slope = sum(x * (interval / floor - 1) for x, interval in loaded) / sum(
         x * x for x, _ in loaded
     )
-    return max(0.0, slope), max(share for share, _ in samples)
+    return max(0.0, slope), max(share for share, _ in shares)
 
 
 def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> list[float]:

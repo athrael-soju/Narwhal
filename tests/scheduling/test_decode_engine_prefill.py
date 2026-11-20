@@ -4,11 +4,16 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from narwhal.profiling.fitting import fit_prefill_slowdown, prefill_share
 from narwhal.profiling.store import ProfileStore
 from narwhal.scheduling.control import SLO, Thresholds
 from narwhal.scheduling.monitor import InstanceMonitor
+from narwhal.scheduling.scheduler.occupancy import DecodeCheck
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
+from narwhal.serving import execution
 from narwhal.serving.admission import QueueExpired
 from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
@@ -59,17 +64,30 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.monitor.dispatched("p", Request("backlog", tokens))
 
     def hosts(self, request):
-        pool = self.scheduler.prefill_pool(request, self.scheduler.live_instances())
+        pool, borrowed = self.scheduler.prefill_pool(request, self.scheduler.live_instances())
+        self.assertEqual(borrowed, {inst.iid for inst in pool if inst.role is Role.DECODE})
         return [inst.iid for inst in pool]
 
     def test_a_decode_engine_takes_a_leg_inside_its_envelope_only_when_prefill_misses_ttft(self):
         self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
-        # The prefill engine meets the TTFT budget and orders first: the decode engine holds
-        # resident decode tokens.
         self.assertEqual(self.scheduler.schedule(Request("leg", 1000)).iid, "p")
         self.backlog()
         self.assertEqual(self.scheduler.schedule(Request("leg", 1000)).iid, "d")
+        self.assertEqual(self.scheduler.unserved, 0)
+
+    def test_an_idle_decode_engine_ranks_after_a_prefill_engine_that_meets_ttft(self):
+        # A 0.21 s backlog leaves the prefill engine at 1.22 s, inside the 2 s budget, while the
+        # idle decode engine prices the leg at 1.01 s with no resident decode tokens.
+        self.backlog(200)
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
+        self.assertEqual(self.scheduler.schedule(Request("leg", 1000)).iid, "p")
+        # A borrowed engine that also misses the budget leaves the leg on the prefill engine.
+        self.monitor.dispatched("p", Request("more", 3000))
+        self.monitor.dispatched("d", Request("queued", 1500))
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
+        self.assertEqual(self.scheduler.schedule(Request("leg", 1000)).iid, "p")
+        self.assertEqual(self.scheduler.unserved, 1)
 
     def test_the_setting_off_or_a_profile_without_the_fit_keeps_decode_engines_out(self):
         self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
@@ -81,6 +99,25 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.scheduler.prefill_on_decode = True
         self.profiles.put(profile("d"))
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+
+    def test_without_a_live_prefill_engine_only_decode_engines_inside_the_envelope_prefill(self):
+        self.scheduler.eject("p", "liveness")
+        self.resident("d", "short", delivered=2, wanted=12, decoding_s=0.01)
+        self.assertEqual(self.hosts(Request("leg", 10)), ["d"])
+        with self.assertRaises(RuntimeError):
+            self.scheduler.schedule(Request("leg", 1000))
+        # Admission prices the borrowed engine at its placement cost.
+        d = self.monitor.instances["d"]
+        self.assertAlmostEqual(self.scheduler.prefill_admission_price(Request("leg", 10), d), 0.02)
+        # With the setting off, the role pool falls back to every decode engine.
+        self.scheduler.prefill_on_decode = False
+        pool, borrowed = self.scheduler.prefill_pool(
+            Request("leg", 1000), self.scheduler.live_instances()
+        )
+        self.assertEqual(([inst.iid for inst in pool], borrowed), (["d", "q"], set()))
+        self.assertEqual(
+            self.scheduler.prefill_admission_price(Request("leg", 10), d), float("inf")
+        )
 
     def test_held_pinned_and_unavailable_decode_engines_take_no_leg(self):
         self.backlog()
@@ -96,25 +133,46 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.assertEqual(self.scheduler.schedule(Request("leg", 1000), exclude={"d"}).iid, "p")
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
 
+    def test_a_decode_engine_with_no_other_decode_engine_takes_no_leg(self):
+        # Its own decode leg would land on it and hold the handoff blocks until the lease ends.
+        self.backlog()
+        self.scheduler.eject("q", "liveness")
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+        self.assertEqual(self.scheduler.schedule(Request("leg", 1000)).iid, "p")
+        self.scheduler.availability.ejected.pop("q")
+        producer = self.scheduler.schedule(Request("leg", 1000))
+        self.assertEqual(producer.iid, "d")
+        decode = Request("leg", 1000, phase=Phase.DECODE, prefill_instance="d")
+        self.assertEqual(self.scheduler.schedule(decode).iid, "q")
+
     def test_a_short_output_resident_blocks_a_long_leg_and_admits_a_short_one(self):
         self.backlog()
-        # Ten tokens left at 3 ms: a 1.01 s leg takes 97% of that span.
+        # Ten tokens left at 3 ms: a 1.01 s leg lifts the mean TPOT to
+        # (0.01 + 0.03 + 0.8 * 1.01) / 11 = 77 ms.
         self.resident("d", "short", delivered=2, wanted=12, decoding_s=0.01)
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
-        # A 0.02 s leg takes 40% of it and keeps the mean TPOT at 5 ms.
-        self.assertEqual(self.hosts(Request("leg", 10)), ["p", "d"])
-        # Inside a wider measured share, the long leg lifts the mean TPOT to
-        # (0.01 + 0.03 + 0.8 * 1.01) / 11 = 77 ms.
         self.profiles.put(profile("d", decode_prefill_slowdown=0.8, decode_prefill_max_share=0.99))
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+        # A 0.02 s leg keeps the mean TPOT at 5 ms.
+        self.assertEqual(self.hosts(Request("leg", 10)), ["p", "d"])
 
-    def test_resident_prefill_on_the_engine_adds_to_the_stall(self):
+    def test_the_share_cap_uses_the_residents_mean_remaining_decode_time(self):
         self.backlog()
         self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
-        # A queued 4 s prefill on the decode engine lifts the stall to 62% of the span.
+        # A queued 4 s prefill lifts the stall to 5.02 s, 61% beside the 3.2 s mean span.
         self.monitor.dispatched("d", Request("queued", 4000))
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+
+    def test_a_resident_at_its_cap_counts_zero_decode_time_toward_the_share(self):
+        self.backlog()
+        ending = self.resident("d", "ending", delivered=100, wanted=100, decoding_s=0.31)
+        # Alone, it leaves the stall with no decode time beside it.
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+        # Beside a resident with 3.2 s left, the mean span is 1.6 s and the share 39%.
+        self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
+        self.assertEqual(ending.output_len, ending.wanted_len)
 
     def test_the_controller_output_estimate_sets_each_residents_remaining_output(self):
         self.backlog()
@@ -125,20 +183,37 @@ class DecodeEnginePrefillTests(unittest.TestCase):
         self.scheduler.output_estimator = lambda: lambda r: 0
         long.wanted_len = 0
         self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
-        # A resident at its requested cap has no output left to slow.
-        long.wanted_len = long.output_len
-        self.assertEqual(self.hosts(Request("leg", 1000)), ["p", "d"])
 
-    def test_the_decode_leg_of_a_decode_engine_prefill_avoids_its_producer(self):
+    def test_the_leg_keeps_the_engine_inside_its_measured_kv_range(self):
         self.backlog()
-        producer = self.scheduler.schedule(Request("leg", 1000))
-        self.assertEqual(producer.iid, "d")
-        decode = Request("leg", 1000, phase=Phase.DECODE, prefill_instance="d")
-        self.assertEqual(self.scheduler.schedule(decode).iid, "q")
+        self.profiles.put(profile("d", decode_max_kv_tokens=2000, **ENVELOPE))
+        self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
+        self.assertEqual(self.hosts(Request("leg", 1000)), ["p"])
+        self.assertEqual(self.hosts(Request("leg", 900)), ["p", "d"])
+
+    def test_placement_caps_the_share_the_profiler_measured(self):
+        """The profiler's share and placement's share agree on one stall beside one span."""
+        base, tokens, slowdown, stall = 0.0031, 1000, 0.8, 1.01
+        window = tokens * base + slowdown * stall
+        fitted, measured = fit_prefill_slowdown(
+            [(0.0, 10.0, base), (stall, window, window / tokens)]
+        )
+        self.assertAlmostEqual(fitted, slowdown)
+        # The resident has 1,000 tokens left at 3.1 ms and the leg costs 1.01 s.
+        self.assertAlmostEqual(measured, prefill_share(stall, tokens * base))
+        self.backlog()
+        self.resident("d", "long", delivered=100, wanted=1100, decoding_s=0.31)
+        for cap, hosts in ((measured + 1e-9, ["p", "d"]), (measured - 1e-9, ["p"])):
+            self.profiles.put(
+                profile("d", decode_prefill_slowdown=fitted, decode_prefill_max_share=cap)
+            )
+            self.assertEqual(self.hosts(Request("leg", 1000)), hosts)
 
 
 class DecodeEnginePrefillJournalTests(HttpHarness):
     async def test_the_journal_records_the_role_of_the_engine_that_ran_prefill(self):
+        # A second decode engine takes the decode leg the borrowed engine produces.
+        self.cfg.engines = fleet(self.root, engines=("e0", "e3", "e4")).engines
         self.cfg.serving = ServingPolicy(prefill_on_decode=True)
         ProfileStore(self.cfg.profiles_path).put(profile("e3", **ENVELOPE))
         client = self.client()
@@ -160,7 +235,7 @@ class DecodeEnginePrefillRouterTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(enabled=enabled):
                 folder = tempfile.TemporaryDirectory()
                 self.addCleanup(folder.cleanup)
-                cfg = fleet(Path(folder.name))
+                cfg = fleet(Path(folder.name), engines=("e0", "e3", "e4"))
                 ProfileStore(cfg.profiles_path).put(profile("e3", **ENVELOPE))
                 cfg.serving = replace(
                     ServingPolicy(queue_capacity=4, queue_timeout_s=5.0),
@@ -183,3 +258,36 @@ class DecodeEnginePrefillRouterTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     with self.assertRaises(QueueExpired):
                         await place
+
+    async def test_a_waiting_leg_is_priced_on_the_engine_placement_would_choose(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        cfg = fleet(Path(folder.name), engines=("e0", "e3", "e4"))
+        ProfileStore(cfg.profiles_path).put(profile("e3", **ENVELOPE))
+        cfg.admission = "predictive"
+        cfg.slo = replace(cfg.slo, ttft_s=2.0, tpot_s=0.05)
+        cfg.serving = ServingPolicy(prefill_on_decode=True)
+        router = create_app(cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        state = SimpleNamespace(
+            router=router,
+            request=Request("r", 1000),
+            attempts=0,
+            failed_engines={"prefill": set()},
+            arrived=router._clock(),
+            admission_price=None,
+        )
+        priced = []
+        with (
+            patch.object(
+                execution, "_price_admission", side_effect=lambda s, inst: priced.append(inst.iid)
+            ),
+            patch.object(execution, "_check_ttft"),
+            patch.object(execution, "_decode_slot_check", return_value=DecodeCheck(None)),
+        ):
+            # The idle decode engine is cheaper, and the prefill engine still meets the budget.
+            router.monitor.dispatched("e0", Request("backlog", 200))
+            execution.price_waiting(state)
+            router.monitor.dispatched("e0", Request("more", 3000))
+            execution.price_waiting(state)
+        self.assertEqual(priced, ["e0", "e3"])

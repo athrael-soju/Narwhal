@@ -272,7 +272,7 @@ def price_waiting(state: RequestLifecycle) -> float | None:
     if router.cfg.admission != "predictive" or state.attempts:
         return None
     scheduler = router.scheduler
-    candidates = scheduler.prefill_pool(
+    candidates, borrowed = scheduler.prefill_pool(
         req, scheduler.live_instances(exclude=state.failed_engines["prefill"])
     )
     if not candidates:
@@ -280,7 +280,15 @@ def price_waiting(state: RequestLifecycle) -> float | None:
     phase, req.phase = req.phase, Phase.PREFILL
     try:
         placements = {inst.iid: scheduler.prefill_admission_price(req, inst) for inst in candidates}
-        cheapest = min(candidates, key=lambda inst: (placements[inst.iid], inst.iid))
+        # Placement takes a borrowed decode engine only in its own tier.
+        probation = scheduler.health.probation_set() if scheduler.health is not None else None
+        prices = (
+            {inst.iid: scheduler.cost(req, inst, probation=probation) for inst in candidates}
+            if borrowed
+            else {}
+        )
+        tier = scheduler.prefill_tier(req, candidates, prices, borrowed)
+        cheapest = min(tier, key=lambda inst: (placements[inst.iid], inst.iid))
         priced = _price_admission(state, cheapest)
         _check_ttft(state, priced)
         # A queued request that would wait past its TTFT budget for a decode slot is refused

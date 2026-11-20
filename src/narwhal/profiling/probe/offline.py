@@ -12,7 +12,13 @@ from typing import Any
 from ...contracts import PROFILES, versioned
 from ...provenance import stamp
 from ..fitting import fit_prefill_samples
-from ..model import CACHED_PROFILE_FIELDS, Profile, evidence_matches, profile_row
+from ..model import (
+    CACHED_PROFILE_FIELDS,
+    PREFILL_SHARE_FIELDS,
+    Profile,
+    evidence_matches,
+    profile_row,
+)
 from ..store import ProfileStore, measured_evidence
 from .instance import prefill_fields
 from .warm import apply_cached_fit
@@ -68,11 +74,15 @@ def refit_saved_prefill(samples_path: Path, output_path: Path, engine_ids: set[s
         if block_tokens is not None and (type(block_tokens) is not int or block_tokens < 1):
             raise ValueError(f"{iid}: saved prefill block size is invalid")
         prefill_fit, representatives, error = fit_prefill_samples(samples, block_tokens)
+        cold = prefill_fields(prefill_fit, block_tokens)
+        # The prefill-share fit priced its stalls with the saved prefill coefficients.
+        stale = any(getattr(old, name) != value for name, value in cold.items())
         updated = Profile(
             **{
                 **asdict(old),
-                **prefill_fields(prefill_fit, block_tokens),
+                **cold,
                 **dict.fromkeys(CACHED_PROFILE_FIELDS),
+                **(dict.fromkeys(PREFILL_SHARE_FIELDS) if stale else {}),
             }
         )
         cached = row.get("cached_prefill") or {}

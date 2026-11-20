@@ -199,29 +199,36 @@ async def profile_instance(
     if prefill_on_decode:
         await serve_as(Role.DECODE)
         share_samples: list[dict[str, object]] = []
-        shares = await probe_prefill_share(
-            client,
-            url,
-            model,
-            dialect,
-            profile,
-            longest_prefill,
-            chars_per_token=chars_per_token,
-            max_model_len=max_model_len,
-            observation_timeout_s=observation_timeout_s,
-            evidence=share_samples,
-        )
-        slowdown, max_share = fit_prefill_slowdown(shares)
-        if evidence is not None:
-            evidence["prefill_share"] = {
-                "samples": share_samples,
-                "slowdown": slowdown,
-                "max_share": max_share,
-            }
-        print(f"    prefill share slowdown {slowdown:.2f} up to share {max_share:.2f}")
-        profile = replace(
-            profile, decode_prefill_slowdown=slowdown, decode_prefill_max_share=max_share
-        )
+        try:
+            runs = await probe_prefill_share(
+                client,
+                url,
+                model,
+                dialect,
+                profile,
+                longest_prefill,
+                chars_per_token=chars_per_token,
+                max_model_len=max_model_len,
+                observation_timeout_s=observation_timeout_s,
+                evidence=share_samples,
+            )
+            slowdown, max_share = fit_prefill_slowdown(runs)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            # The engine keeps its profile without the fit, so placement never borrows it.
+            print(f"    prefill share left unfitted: {exc}")
+            if evidence is not None:
+                evidence["prefill_share"] = {"samples": share_samples, "reason": str(exc)}
+        else:
+            if evidence is not None:
+                evidence["prefill_share"] = {
+                    "samples": share_samples,
+                    "slowdown": slowdown,
+                    "max_share": max_share,
+                }
+            print(f"    prefill share slowdown {slowdown:.2f} up to share {max_share:.2f}")
+            profile = replace(
+                profile, decode_prefill_slowdown=slowdown, decode_prefill_max_share=max_share
+            )
     try:
         if reason is not None:
             raise ValueError(reason)

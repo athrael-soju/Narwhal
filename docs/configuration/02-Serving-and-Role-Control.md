@@ -286,7 +286,7 @@ The request journal records each placement priced with cache evidence in [`cache
 | --------------------------- | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `serving.prefill_on_decode` | `false` | Lets placement send a prefill leg to a decode-role engine inside its measured TPOT envelope. | `true` requires `engine.backend` `"vllm"` or `"llamacpp"` |
 
-With `serving.prefill_on_decode` set, placement adds a decode-role engine to a prefill leg's candidates when the engine is live, unpinned and not held for a role switch, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit.
+With `serving.prefill_on_decode` set, placement borrows a decode-role engine for a prefill leg when the engine is live, unpinned and not held for a role switch, another live decode engine can take the request's decode leg, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit. Prefill legs then go only to prefill-role engines and borrowed engines.
 
 The leg stalls each resident decode stream on the engine for its profiled prefill time plus the engine's resident prefill work. For each resident stream, the router projects its TPOT over its whole output from these terms:
 
@@ -294,14 +294,18 @@ The leg stalls each resident decode stream on the engine for its profiled prefil
 | --- | --- |
 | `left` | The stream's remaining output tokens, as the [decode admission check](#decode-admission-check) computes them |
 | `d` | The profile's token interval at the engine's resident decode requests and tokens, times its [decode correction](#load-definitions) |
-| `u` | `stall / (stall + left * d)`, the stall's share of the stream's remaining decode time |
 | Projected TPOT | `(seconds since the stream's prefill completed + left * d + decode_prefill_slowdown * stall) / (delivered tokens + left - 1)` |
 
-`left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))`.
+The engine stays inside its envelope when all of these hold:
 
-The engine stays inside its envelope when every resident stream with output left projects a TPOT at or below `slo.tpot_s` and a `u` at or below `decode_prefill_max_share`. A resident stream whose remaining output is unknown keeps the engine out.
+1. The engine's resident decode tokens plus the leg's prompt tokens stay within the profile's `decode_max_kv_tokens`.
+2. Every resident stream has a known remaining output.
+3. Every resident stream with output left projects a TPOT at or below `slo.tpot_s`.
+4. The share `u = stall / (stall + m)` is at or below `decode_prefill_max_share`, where `m` is the mean `left * d` over the resident streams. With no resident streams, `u` is `0`.
 
-The prefill cost starts with the engine's resident decode tokens, so a decode engine with resident streams takes the leg only when no engine with fewer resident decode tokens meets the TTFT budget. The request's decode leg avoids its producer, as for any request. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
+`left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))` for a stall beside `left * d` seconds of decode.
+
+Placement chooses a borrowed engine only when no prefill-role engine meets the TTFT budget and a borrowed engine does, or when no prefill-role engine is a candidate. Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first, because the prefill cost starts with them. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
 
 
 ## Request deadlines and engine HTTP behaviour

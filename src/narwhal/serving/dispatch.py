@@ -84,7 +84,7 @@ class Dispatcher:
                 request, exclude or set()
             )
             pool = (
-                router.scheduler.prefill_pool(request, live)
+                router.scheduler.prefill_pool(request, live)[0]
                 if phase is Phase.PREFILL
                 else router.scheduler.role_pool(role, live)
             )

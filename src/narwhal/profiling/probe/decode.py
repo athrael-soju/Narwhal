@@ -107,8 +107,15 @@ async def _one_decode_stream(
                         state.setdefault("first_at", now)
                         if state["joined"] == state["cohort"]:
                             state["last_join_at"] = now
+                            # The window's count starts after the last joiner's first chunk.
+                            state["join_delivered"] = len(ids)
+                    elif len(ids) > 1 and state["requests"] == state["cohort"]:
+                        state["bundles"] = state.get("bundles", 0) + 1
                     mine += len(ids)
                     state["resident"] += len(ids)
+                    # Tokens since the cohort filled, counting each token of a bundled chunk.
+                    if "last_join_at" in state:
+                        state["delivered"] = state.get("delivered", 0) + len(ids)
                     if (
                         len(ids) == 1
                         and last is not None
@@ -130,6 +137,7 @@ async def _one_decode_stream(
     finally:
         if mine:
             state.setdefault("left_at", time.monotonic())
+            state.setdefault("left_delivered", state.get("delivered", 0))
             state["resident"] -= input_len + mine
             state["requests"] -= 1
             state["epoch"] += 1
@@ -158,13 +166,14 @@ class PrefillLegs:
         self.rate = rate
         self.seed = seed
         self.timeout_s = timeout_s
-        # Send times of the current run's legs.
+        # Send and completion times of the current run's legs.
         self.sent: list[float] = []
+        self.done: list[float] = []
         self._legs: list[asyncio.Task[None]] = []
         self._run: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> PrefillLegs:
-        self.sent, self._legs = [], []
+        self.sent, self.done, self._legs = [], [], []
         self._run = asyncio.create_task(self._send())
         return self
 
@@ -201,6 +210,7 @@ class PrefillLegs:
             raise DecodeEngineError(
                 f"prefill leg failed on {self.url} ({r.status_code}): {r.text[:200]}"
             )
+        self.done.append(time.monotonic())
 
 
 async def _decode_cohort(
@@ -625,12 +635,14 @@ async def probe_prefill_share(
     max_model_len: int | None = None,
     observation_timeout_s: float | None = None,
     evidence: list[dict[str, object]] | None = None,
-) -> list[tuple[float, float]]:
-    """Return (prefill share, mean resident token interval) for each offered share.
+) -> list[tuple[float, float, float]]:
+    """Return (prefill stall s, window s, mean resident token interval) for each offered share.
 
     The `share_cohort` streams decode while prefill legs of `prefill_len` prompt tokens arrive
     at Poisson times, at the offered share of the engine's time priced with the profile's
-    prefill fit. The returned share counts the legs sent while the whole cohort was resident.
+    prefill fit. The window runs from the full cohort's first token to its first stream's
+    end. The stall prices the legs that completed in the window, and the interval is the
+    window over the tokens each stream delivered in it.
     """
     cohort, target, tokens = share_cohort(profile, max_model_len)
     timeout = observation_timeout_s or 30.0
@@ -652,7 +664,7 @@ async def probe_prefill_share(
         raise ValueError(f"{profile.iid}: the prefill fit prices a {leg_len}-token leg at 0 s")
     # The cohort's first decode at its batch size can include kernel compilation.
     await _retried_cohort(client, url, model, prompt, input_len, cohort, tokens, dialect)
-    samples: list[tuple[float, float]] = []
+    runs: list[tuple[float, float, float]] = []
     for index, offered in enumerate(shares):
         legs = (
             PrefillLegs(
@@ -672,24 +684,27 @@ async def probe_prefill_share(
             client, url, model, prompt, input_len, cohort, tokens, dialect, legs
         )
         start, end = state.get("last_join_at"), state.get("left_at")
-        if len(observed) < 2 * cohort or start is None or end is None or end <= start:
+        delivered = state.get("left_delivered", 0) - state.get("join_delivered", 0)
+        if start is None or end is None or end <= start or delivered < 2 * cohort:
             raise RuntimeError(
-                f"prefill share probe has insufficient complete-cohort intervals: got "
-                f"{len(observed)}, need {2 * cohort}, share={offered}, c={cohort}, "
-                f"tokens={tokens}"
+                f"prefill share probe delivered {delivered} tokens with the whole cohort "
+                f"resident, need {2 * cohort}: share={offered}, c={cohort}, tokens={tokens}"
             )
-        sent = sum(start <= at < end for at in legs.sent) if legs is not None else 0
-        share = sent * leg_s / (end - start)
-        interval = statistics.mean(gap for _, _, gap in observed)
+        completed = sum(start <= at < end for at in legs.done) if legs is not None else 0
+        stall = completed * leg_s
+        interval = (end - start) * cohort / delivered
         if evidence is not None:
             evidence.append(
                 {
                     "offered_share": offered,
-                    "share": share,
-                    "legs": sent,
+                    "legs_sent": len(legs.sent) if legs is not None else 0,
+                    "legs": completed,
                     "leg_tokens": leg_len,
                     "leg_prefill_s": leg_s,
+                    "stall_s": stall,
                     "window_s": end - start,
+                    "window_tokens": delivered,
+                    "bundles": state.get("bundles", 0),
                     "input_tokens": input_len,
                     "concurrency": cohort,
                     "tokens": tokens,
@@ -698,8 +713,8 @@ async def probe_prefill_share(
                 }
             )
         print(
-            f"    share   u={offered:<4.2f} c={cohort:<3} measured u={share:.2f}, {sent} legs "
-            f"-> {interval * 1000:6.2f} ms/token"
+            f"    share   u={offered:<4.2f} c={cohort:<3} {completed} legs in "
+            f"{end - start:.1f} s -> {interval * 1000:6.2f} ms/token"
         )
-        samples.append((share, interval))
-    return samples
+        runs.append((stall, end - start, interval))
+    return runs
