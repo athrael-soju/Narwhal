@@ -129,6 +129,9 @@ class InstanceMonitor:
         # Decode streams whose engine output has ended and await release.
         self._decode_ended: set[str] = set()
         self._last_prefill_activity: dict[str, float] = {}
+        # Borrowed prefill legs resident on each engine, and when the last one left it.
+        self._lent: dict[str, set[str]] = {}
+        self._lent_until: dict[str, float] = {}
         # Requests the router has sent to each engine: placed legs and its own probes.
         self.requests_sent: dict[str, int] = {}
 
@@ -206,6 +209,8 @@ class InstanceMonitor:
         if request.phase is Phase.PREFILL:
             inst.prefill[request.rid] = request
             request.prefill_instance = iid
+            if request.borrowed:
+                self._lent.setdefault(iid, set()).add(request.rid)
             self._prefill_changed(iid)
             self._reprice(iid)
         else:
@@ -224,6 +229,7 @@ class InstanceMonitor:
         """Move a request out of prefill and start its token clock."""
         if self.instances[iid].prefill.pop(rid, None) is not None:
             self._prefill_changed(iid)
+            self._unlend(iid, rid)
         self._last_token[rid] = self._last_output[iid] = self._prefilled_at[rid] = self._clock()
         self._reprice(iid)
         self.on_capacity_change()
@@ -248,7 +254,9 @@ class InstanceMonitor:
                 if profile is not None and profile.decode_max_requests is not None and requests
                 else None
             )
-            window.add(now - prev, expected)
+            # The borrow envelope priced the stall of a borrowed prefill leg.
+            if not self._lent_overlap(iid, prev):
+                window.add(now - prev, expected)
         elif prev is not None:
             self._handoffs[iid].add(now - prev)
         self._decode_started.add(rid)
@@ -291,8 +299,19 @@ class InstanceMonitor:
         self._decode_ended.discard(rid)
         if had_prefill is not None:
             self._prefill_changed(iid)
+            self._unlend(iid, rid)
             self._reprice(iid)
         self.on_capacity_change()
+
+    def _unlend(self, iid: str, rid: str) -> None:
+        lent = self._lent.get(iid)
+        if lent is not None and rid in lent:
+            lent.discard(rid)
+            self._lent_until[iid] = self._clock()
+
+    def _lent_overlap(self, iid: str, since: float) -> bool:
+        """Return whether a borrowed prefill leg ran on the engine after `since`."""
+        return bool(self._lent.get(iid)) or since < self._lent_until.get(iid, float("-inf"))
 
     def _stop_decoding(self, iid: str, leg: Request) -> None:
         if self._decoding_on.get(leg.rid) == iid:
@@ -350,8 +369,8 @@ class InstanceMonitor:
     def stalled_gap(self, iid: str) -> float:
         """Return the longest open inter-token gap on an engine.
 
-        Requests awaiting their first decode token and streams whose output has ended are
-        excluded.
+        Requests awaiting their first decode token, streams whose output has ended and gaps
+        that overlap a borrowed prefill leg are excluded.
         """
         now = self._clock()
         gaps = [
@@ -360,6 +379,7 @@ class InstanceMonitor:
             if rid in self._last_token
             and rid in self._decode_started
             and rid not in self._decode_ended
+            and not self._lent_overlap(iid, self._last_token[rid])
         ]
         return max(gaps, default=0.0)
 

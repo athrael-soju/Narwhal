@@ -305,7 +305,11 @@ class GlobalScheduler:
         return min(floors) if floors else None
 
     def pool_load(self, role: Role) -> float:
-        """Resident work remains in phase feedback after an engine changes role."""
+        """Resident work remains in phase feedback after an engine changes role.
+
+        A decode-role engine whose resident prefill legs are all borrowed adds its prefill
+        load to the prefill pool without counting as a prefill engine.
+        """
         doing = [
             instance
             for instance in self.live_instances()
@@ -313,7 +317,19 @@ class GlobalScheduler:
             or (instance.prefill if role is Role.PREFILL else instance.decode)
         ]
         phase_load = self.prefill_load if role is Role.PREFILL else self.decode_load
-        return sum(phase_load(instance) for instance in doing) / len(doing) if doing else 0.0
+        engines = (
+            sum(
+                not (
+                    instance.role is Role.DECODE
+                    and all(leg.borrowed for leg in instance.prefill.values())
+                )
+                for instance in doing
+            )
+            if role is Role.PREFILL
+            else len(doing)
+        )
+        load = sum(phase_load(instance) for instance in doing)
+        return load / (engines or len(doing)) if doing else 0.0
 
     def decode_exclusion(self, request: Request, exclude: Collection[str] = ()) -> set[str]:
         """A decode leg on its own producer reuses that engine's prefix cache and never pulls
@@ -504,6 +520,8 @@ class GlobalScheduler:
             }
 
         chosen, served = self._cheapest(request, candidates, prices, borrowed)
+        if request.phase is Phase.PREFILL:
+            request.borrowed = chosen.iid in borrowed
         if not served:
             # Admission decides over-budget placements.
             self.unserved += 1

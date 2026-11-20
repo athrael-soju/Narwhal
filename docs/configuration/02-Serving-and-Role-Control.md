@@ -307,6 +307,8 @@ The engine stays inside its envelope when all of these hold:
 
 Placement chooses a borrowed engine only when no prefill-role engine meets the TTFT budget and a borrowed engine does, or when no prefill-role engine is a candidate. Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first, because the prefill cost starts with them. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
 
+Decode load leaves out the token gaps a borrowed leg stalls, and the prefill pool's load counts the leg's prefill work, as [Load definitions](#load-definitions) describes.
+
 
 ## Request deadlines and engine HTTP behaviour
 
@@ -451,15 +453,17 @@ max(0, observed token interval - corrected idle floor) / remaining TPOT budget
 
 | Term                                          | Meaning                                                                                                                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream.   |
+| Observed token interval                       | The engine's average time between tokens. If no tokens completed during the monitoring interval, it uses the time since the last token on an active stream. Both leave out each gap during which a [borrowed prefill leg](#prefill-legs-on-decode-engines) ran on the engine. |
 | Corrected idle floor                          | The profile's [zero-contention decode interval](../telemetry/02-Profiles.md#profile-fields) times the decode correction                                       |
 | Remaining time per output token (TPOT) budget | TPOT target minus the corrected idle floor                                                                                                                    |
 | Predicted prefill work                        | The profiled prefill time of the engine's resident requests. A request whose decode leg [waits inside an engine for a seat](#decode-admission-check) adds none. |
-| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. |
+| Decode correction                             | The engine's ratio of live to profiled decode latency, bounded by `controller.reactive.decode_correction_min` and `controller.reactive.decode_correction_max`. The profile prices the legs that have produced a decode token. It updates only from monitoring intervals in which the engine ran no prefill. |
 
 When the corrected idle floor reaches the TPOT target, decode load is the raw interval-to-target ratio.
 
 A load of `1.0` means the phase has reached its target.
+
+A pool's load is the mean load of the live engines that hold its role or resident work of its phase. A decode-role engine whose resident prefill legs are all borrowed adds its prefill load to the prefill pool's total but does not count as a prefill engine, unless no other engine is in the prefill pool.
 
 Controller decision details call load "pressure", as in the `mixed_pressure` eligibility rule and the `source_pressure_safe` flag.
 

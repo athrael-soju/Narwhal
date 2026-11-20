@@ -20,6 +20,7 @@ from narwhal.serving.app import create_app
 from narwhal.serving.policy import ServingPolicy
 from narwhal.types import Instance, Phase, Request, Role
 from tests.fixtures import fleet, profile, warm
+from tests.scheduling.test_reactive import Fleet
 from tests.serving.test_http_accounting import HttpHarness
 
 # Prefill takes 0.001 s per prompt token plus 0.01 s; one resident of 1,100 tokens decodes at
@@ -285,6 +286,101 @@ class DecodeEnginePrefillTests(unittest.TestCase):
             self.assertEqual(self.hosts(Request("leg", 1000)), hosts)
 
 
+class BorrowedStallTests(unittest.TestCase):
+    def stall(self, borrowed):
+        """Decode on d, stall it for 1 s with a prefill leg, then decode again."""
+        case = DecodeEnginePrefillTests(
+            "test_held_pinned_and_unavailable_decode_engines_take_no_leg"
+        )
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        monitor, scheduler, now = case.monitor, case.scheduler, case.now
+        d = monitor.instances["d"]
+        for k in range(4):
+            monitor.dispatched("d", Request(f"r{k}", 1000, phase=Phase.DECODE, wanted_len=500))
+            monitor.first_token("d", f"r{k}")
+
+        def decode(intervals):
+            for _ in range(intervals):
+                for _ in range(10):
+                    now[0] += 0.004
+                    for k in range(4):
+                        monitor.output_token("d", f"r{k}")
+                monitor.roll_interval()
+
+        # The correction settles at its lower bound before the stall.
+        decode(60)
+        before = (scheduler.decode_load(d), monitor.decode_correction("d"))
+        monitor.dispatched("d", Request("leg", 1000, borrowed=borrowed))
+        now[0] += 1.0
+        monitor.roll_interval()
+        during = (scheduler.decode_load(d), monitor.stalled_gap("d"))
+        monitor.first_token("d", "leg")
+        monitor.finished("d", "leg")
+        decode(1)
+        after = (scheduler.decode_load(d), monitor.decode_correction("d"))
+        decode(10)
+        return before, during, after, monitor.decode_correction("d")
+
+    def test_a_borrowed_legs_stall_raises_neither_decode_load_nor_the_correction(self):
+        before, during, after, settled = self.stall(borrowed=True)
+        self.assertEqual(during, (before[0], 0.0))
+        self.assertEqual(after, before)
+        self.assertAlmostEqual(settled, before[1], places=4)
+        # The same stall from a prefill leg placed without the envelope counts as decode load.
+        unpriced = self.stall(borrowed=False)
+        self.assertGreater(unpriced[1][0], 10 * before[0])
+        self.assertAlmostEqual(unpriced[1][1], 1.0)
+        self.assertGreater(unpriced[2][0], before[0])
+
+    def test_borrowed_prefill_counts_toward_the_prefill_pool_but_not_its_engine_count(self):
+        case = DecodeEnginePrefillTests(
+            "test_held_pinned_and_unavailable_decode_engines_take_no_leg"
+        )
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.monitor.dispatched("p", Request("own", 990))
+        case.monitor.dispatched("d", Request("lent", 990, borrowed=True))
+        # Each engine holds one second of prefill against a 2 s TTFT target.
+        self.assertAlmostEqual(case.scheduler.pool_load(Role.PREFILL), 1.0)
+        case.monitor.dispatched("q", Request("fallback", 990))
+        self.assertAlmostEqual(case.scheduler.pool_load(Role.PREFILL), 1.5 / 2)
+
+    def test_a_controller_pass_with_borrowed_stalls_does_not_move_toward_decode(self):
+        moves = {}
+        for borrowed in (False, True):
+            folder = tempfile.TemporaryDirectory()
+            self.addCleanup(folder.cleanup)
+            fleet = Fleet(folder.name)
+            fleet.telemetry.stop()
+            fleet.monitor.instances["e1"].role = Role.PREFILL
+            monitor = fleet.monitor
+            for k in range(4):
+                monitor.dispatched("e2", Request(f"r{k}", 100, phase=Phase.DECODE, wanted_len=100))
+                monitor.first_token("e2", f"r{k}")
+            for _ in range(20):
+                fleet.now += 0.002
+                for k in range(4):
+                    monitor.output_token("e2", f"r{k}")
+            monitor.roll_interval()
+            # A long prefill leg on the decode engine stalls its streams.
+            monitor.dispatched("e2", Request("leg", 5000, wanted_len=10, borrowed=borrowed))
+            moves[borrowed] = []
+            with patch.object(fleet.scheduler, "prefill_load", return_value=0.7):
+                for _ in range(6):
+                    fleet.advance(5)
+                    monitor.roll_interval()
+                    before = len(monitor.pool(Role.PREFILL))
+                    fleet.controller.step()
+                    after = len(monitor.pool(Role.PREFILL))
+                    if after != before:
+                        moves[borrowed].append(after - before)
+        # The unpriced stall reads as decode pressure and moves a prefill engine to decode.
+        self.assertEqual(moves[False][0], -1)
+        self.assertTrue(moves[True])
+        self.assertTrue(all(step > 0 for step in moves[True]))
+
+
 class DecodeEnginePrefillJournalTests(HttpHarness):
     async def test_the_journal_records_the_role_of_the_engine_that_ran_prefill(self):
         # A second decode engine takes the decode leg the borrowed engine produces.
@@ -301,6 +397,8 @@ class DecodeEnginePrefillJournalTests(HttpHarness):
             [(row["prefill_iid"], row["prefill_role"]) for row in rows],
             [("e0", "prefill"), ("e3", "decode")],
         )
+        # The monitor saw the second leg as borrowed on e3.
+        self.assertEqual(set(self.router.monitor._lent_until), {"e3"})
         self.assert_released()
 
 
