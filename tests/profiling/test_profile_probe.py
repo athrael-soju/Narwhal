@@ -16,6 +16,7 @@ import httpx
 
 from narwhal.backends import load as load_backend
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.profiling.fitting import fit_prefill_slowdown
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import CACHED_PROFILE_FIELDS
 from narwhal.profiling.probe import cli as profile_cli
@@ -1267,6 +1268,116 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual([round(sample[2], 3) for sample in samples], [0.01, 0.01])
 
+    def test_the_prefill_share_cohort_holds_half_the_requests_at_the_middle_kv_size(self):
+        row = profile(decode_min_kv_tokens=1000, decode_max_kv_tokens=99_000)
+        self.assertEqual(decode_probe.share_cohort(row), (8, 3125, 3125))
+        self.assertEqual(decode_probe.share_cohort(row, max_model_len=4096), (8, 2048, 2048))
+        with self.assertRaisesRegex(ValueError, "at least 6"):
+            decode_probe.share_cohort(replace(row, decode_min_kv_tokens=1, decode_max_kv_tokens=40))
+
+    async def test_prefill_share_step_measures_resident_intervals_beside_poisson_legs(self):
+        """Each share's legs run beside the cohort; legs sent outside the full cohort's window
+        do not count toward its share."""
+        row = profile(ttft_a=0.0, ttft_b=0.001, ttft_c=0.0, decode_max_requests=4)
+        legs, active = [], []
+
+        class Legs:
+            def __init__(self, client, url, model, prompt, dialect, rate, *, seed, timeout_s):
+                self.rate, self.seed, self.sent = rate, seed, []
+                legs.append(self)
+
+            async def __aenter__(self):
+                # One leg before the 10 s window, then one per 1/rate seconds inside it.
+                self.sent = [-1.0, *(i / self.rate for i in range(round(10 * self.rate)))]
+                active.append(self)
+                return self
+
+            async def __aexit__(self, *exc):
+                active.remove(self)
+
+        runs = []
+
+        async def cohort(client, url, model, prompt, input_len, size, tokens, dialect):
+            # Each in-window leg costs 0.5 s of prefill.
+            share = (len(active[0].sent) - 1) * 0.5 / 10 if active else 0.0
+            runs.append((size, input_len, tokens))
+            gap = 0.01 * (1 + 0.8 * share / (1 - share))
+            state = {"cohort": size, "first_at": 0.0, "last_join_at": 0.0, "left_at": 10.0}
+            return [(float(size), float(input_len), gap)] * (2 * size), state
+
+        evidence = []
+        with (
+            patch.object(decode_probe, "make_prompt", side_effect=lambda *a, **k: ("p", a[3])),
+            patch.object(decode_probe, "PrefillLegs", Legs),
+            patch.object(decode_probe, "_decode_cohort", side_effect=cohort),
+            redirect_stdout(io.StringIO()),
+        ):
+            samples = await decode_probe.probe_prefill_share(
+                None, "http://e", "stub", DIALECT, row, 500, evidence=evidence
+            )
+        # A warm cohort runs first, then share 0 without legs.
+        self.assertEqual(runs, [(2, 12_500, 12_500)] * 4)
+        self.assertEqual([leg.rate for leg in legs], [0.5, 1.0])
+        self.assertEqual([round(share, 3) for share, _ in samples], [0.0, 0.25, 0.5])
+        slowdown, largest = fit_prefill_slowdown(samples)
+        self.assertAlmostEqual(slowdown, 0.8)
+        self.assertAlmostEqual(largest, 0.5)
+        self.assertEqual([round(row["share"], 3) for row in evidence], [0.0, 0.25, 0.5])
+        self.assertEqual([row["legs"] for row in evidence], [0, 5, 10])
+        self.assertEqual({row["leg_prefill_s"] for row in evidence}, {0.5})
+
+    async def test_prefill_legs_raise_a_failed_leg_only_after_a_complete_cohort(self):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503, text="busy"))
+        ) as client:
+            legs = decode_probe.PrefillLegs(
+                client, "http://e", "stub", "p", DIALECT, 2000.0, seed=0
+            )
+            with self.assertRaisesRegex(decode_probe.DecodeEngineError, r"prefill leg.*503"):
+                async with legs:
+                    await asyncio.sleep(0.05)
+            self.assertTrue(legs.sent)
+            with self.assertRaisesRegex(RuntimeError, "cohort failed"):
+                async with legs:
+                    await asyncio.sleep(0.05)
+                    raise RuntimeError("cohort failed")
+
+    async def test_profile_measures_the_prefill_share_only_with_the_setting(self):
+        prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
+        decode = [
+            (r, k, 0.001 * r + 0.000001 * k + 0.01) for r in (1, 4, 16) for k in (100, 1000, 10000)
+        ]
+        shares = [(0.0, 0.02), (0.25, 0.02 * (1 + 0.6 / 3)), (0.5, 0.02 * 1.6)]
+        for enabled in (False, True):
+            evidence = {}
+            with (
+                self.subTest(enabled=enabled),
+                patched_profile_sweeps(prefill, decode, hits=[7, 7, 7]),
+                patch.object(
+                    instance_probe, "probe_prefill_share", AsyncMock(return_value=shares)
+                ) as probe,
+            ):
+                row = await profile_instance(
+                    None,
+                    "e",
+                    "http://e",
+                    "stub",
+                    DIALECT,
+                    metrics=VLLM_METRICS,
+                    evidence=evidence,
+                    prefill_on_decode=enabled,
+                )
+                if not enabled:
+                    probe.assert_not_awaited()
+                    self.assertIsNone(row.decode_prefill_slowdown)
+                    self.assertNotIn("prefill_share", evidence)
+                    continue
+                # The legs take the longest measured prompt.
+                self.assertEqual(probe.await_args.args[5], 100)
+                self.assertAlmostEqual(row.decode_prefill_slowdown, 0.6)
+                self.assertEqual(row.decode_prefill_max_share, 0.5)
+                self.assertAlmostEqual(evidence["prefill_share"]["slowdown"], 0.6)
+
     async def test_profile_fits_axes_and_retains_raw_evidence(self):
         prefill = [(x, 0.001 * x + 0.01) for x in (1, 10, 100)]
         decode = [
@@ -1439,6 +1550,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             cfg = fleet(Path(folder))
             cfg.profiles_path = Path(folder) / "new.json"
+            cfg.serving = replace(cfg.serving, prefill_on_decode=True)
             limits_path = Path(folder) / "profiling-limits.json"
             limits_path.write_text(
                 json.dumps(
@@ -1455,6 +1567,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
 
             async def measured(client, iid, url, model, dialect, sweep, *args, evidence, **kwargs):
                 self.assertEqual(sweep.decode_concurrency, (1, 4, 8))
+                self.assertIs(kwargs["prefill_on_decode"], True)
                 evidence["prefill"] = [[10, 0.1]]
                 return profile(iid)
 

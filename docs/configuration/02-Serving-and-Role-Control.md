@@ -280,6 +280,29 @@ The router prices a request on the cold curve of its full input when any of thes
 
 The request journal records each placement priced with cache evidence in [`cache_placement`](../telemetry/01-Journal.md#cache-placement).
 
+### Prefill legs on decode engines
+
+| Field                       | Default | Meaning                                                                                       | Values                                                              |
+| --------------------------- | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `serving.prefill_on_decode` | `false` | Lets placement send a prefill leg to a decode-role engine inside its measured TPOT envelope. | `true` requires `engine.backend` `"vllm"` or `"llamacpp"` |
+
+With `serving.prefill_on_decode` set, placement adds a decode-role engine to a prefill leg's candidates when the engine is live, unpinned and not held for a role switch, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit.
+
+The leg stalls each resident decode stream on the engine for its profiled prefill time plus the engine's resident prefill work. For each resident stream, the router projects its TPOT over its whole output from these terms:
+
+| Term | Value |
+| --- | --- |
+| `left` | The stream's remaining output tokens, as the [decode admission check](#decode-admission-check) computes them |
+| `d` | The profile's token interval at the engine's resident decode requests and tokens, times its [decode correction](#load-definitions) |
+| `u` | `stall / (stall + left * d)`, the stall's share of the stream's remaining decode time |
+| Projected TPOT | `(seconds since the stream's prefill completed + left * d + decode_prefill_slowdown * stall) / (delivered tokens + left - 1)` |
+
+`left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))`.
+
+The engine stays inside its envelope when every resident stream with output left projects a TPOT at or below `slo.tpot_s` and a `u` at or below `decode_prefill_max_share`. A resident stream whose remaining output is unknown keeps the engine out.
+
+The prefill cost starts with the engine's resident decode tokens, so a decode engine with resident streams takes the leg only when no engine with fewer resident decode tokens meets the TTFT budget. The request's decode leg avoids its producer, as for any request. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
+
 
 ## Request deadlines and engine HTTP behaviour
 

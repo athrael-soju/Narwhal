@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING
 
 from ..profiling.model import Profile
@@ -11,6 +11,7 @@ from ..types import Instance, Phase, Request
 from .health import DriftTracker
 from .monitor import InstanceMonitor
 from .prefill import prefill_seconds, resident_prefill_seconds
+from .scheduler.occupancy import remaining_output
 
 if TYPE_CHECKING:
     from .control import SLO
@@ -117,6 +118,53 @@ def _decode_price(
 ) -> float:
     headroom = profile.max_tokens(slo.tpot_s / correction, requests + 1)
     return float(tokens + request.length) - headroom + penalty / slo.tpot_s
+
+
+def decode_engine_prefill(
+    request: Request,
+    inst: Instance,
+    *,
+    monitor: InstanceMonitor,
+    profiles: ProfileStore,
+    slo: SLO,
+    expected_output: Callable[[Request], int],
+) -> bool:
+    """Return whether decode-role `inst` takes `request`'s prefill leg inside its envelope.
+
+    The leg's prefill and the engine's resident prefill stall each resident decode stream. A
+    resident with `left` output tokens at the corrected profile interval `d` decodes for
+    `left * d` more seconds, and the stall takes share `u = stall / (stall + left * d)` of
+    that span. The profile's slowdown at `u` raises the span to `left * d + slowdown * stall`.
+    Every resident with output left must keep its whole-output TPOT within `slo.tpot_s` and
+    its share within the measured share. An unknown remaining output keeps the engine out.
+    """
+    profile = profiles.get(inst.iid)
+    if (
+        profile is None
+        or profile.decode_prefill_slowdown is None
+        or profile.decode_prefill_max_share is None
+    ):
+        return False
+    stall = resident_prefill_seconds(profile, inst) + prefill_seconds(profile, request)
+    interval = profile.token_interval(
+        inst.decode_tokens(), len(inst.decode)
+    ) * monitor.decode_correction(inst.iid)
+    for resident in inst.decode.values():
+        left = remaining_output(resident, expected_output)
+        if left is None:
+            return False
+        if left == 0:
+            continue
+        span = left * interval
+        if stall > 0 and stall / (stall + span) > profile.decode_prefill_max_share:
+            return False
+        decoding_s = (
+            monitor.decode_elapsed(resident.rid) + span + profile.decode_prefill_slowdown * stall
+        )
+        # The journal's TPOT divides by the output tokens less the first.
+        if decoding_s / max(1, resident.output_len + left - 1) > slo.tpot_s:
+            return False
+    return True
 
 
 def meets_slo(request: Request, cost: Cost, *, slo: SLO, ttft_margin: float = 0.0) -> bool:

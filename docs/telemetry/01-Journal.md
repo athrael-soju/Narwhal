@@ -55,6 +55,7 @@ Each original completion request and its retries share one terminal row.
 | `first_byte_s`                 | Seconds from arrival to the first visible output.                                                                  |
 | `decode_tpot_s`                | Time from first to last observed output token divided by `output_len - 1`.                                         |
 | `prefill_iid`, `decode_iid`    | Engines of the final attempt's prefill and decode legs.                                                            |
+| `prefill_role`                 | Role of `prefill_iid` when placement chose it: `prefill`, or `decode` for a [prefill leg on a decode engine](../configuration/02-Serving-and-Role-Control.md#prefill-legs-on-decode-engines). Null when no prefill leg was placed. |
 | `crossed`                      | `true` when `decode_iid` differs from `prefill_iid`.                                                               |
 | `cached_tokens`                | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
 | `cache_placement`              | The prefill placement priced with [cache evidence](#cache-placement).                                              |

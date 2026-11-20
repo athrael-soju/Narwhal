@@ -174,6 +174,7 @@ Keep `profiles.json` and `profiles.samples.json` from `narwhal-profile` with the
     - fit points
     - `cv_mape`, `suffix_on_cold_curve_mape`, `full_prompt_cold_mape`, and `cold_control_curve_mape`
     - `reason` for an engine that keeps cold pricing
+- `prefill_share`: with `serving.prefill_on_decode`, each run of the [prefill-share step](../telemetry/02-Profiles.md#prefill-share-on-decode-engines) with its offered and measured share, prefill requests counted, span and resident token intervals, and the fitted `slowdown` and `max_share`
 - `prefix_cache_hit_tokens`: prefix-cache hits per engine cold sweep
     - `null` when the prefix-cache hit counter is absent from engine metrics or decreases
 - the attestation response or process identity per fit

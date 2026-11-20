@@ -17,6 +17,8 @@ PREFILL_REPEATS = 3
 CACHED_PREFIX_LENS = (2048, 4096, 8192)
 CACHED_SUFFIX_LENS = (700, 1300, 2600)
 CACHED_REPEATS = 3
+# Offered prefill shares of a decode engine's time; share 0 sets the base interval.
+PREFILL_SHARES = (0.0, 0.25, 0.5)
 
 
 @dataclass(frozen=True)

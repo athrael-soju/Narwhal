@@ -83,9 +83,14 @@ class Dispatcher:
             unusable = (exclude or set()) | router.scheduler.decode_exclusion(
                 request, exclude or set()
             )
+            pool = (
+                router.scheduler.prefill_pool(request, live)
+                if phase is Phase.PREFILL
+                else router.scheduler.role_pool(role, live)
+            )
             candidates = {
                 inst.iid
-                for inst in router.scheduler.role_pool(role, live)
+                for inst in pool
                 if not (limit := seats(router, inst.iid))
                 or len(inst.prefill if phase is Phase.PREFILL else inst.decode) < limit
             } - unusable

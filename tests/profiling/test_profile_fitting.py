@@ -7,6 +7,7 @@ from narwhal.profiling.fitting import (
     decode_mape,
     fit_decode_plane,
     fit_prefill_samples,
+    fit_prefill_slowdown,
     fit_quadratic,
     splits_prefill,
 )
@@ -43,6 +44,29 @@ class ProfileFittingTests(unittest.TestCase):
         six = (*five, 4096)
         (_, _, _, split), _, _ = fit_prefill_samples([(n, curve(n)) for n in six], 16)
         self.assertAlmostEqual(split, 0.05, places=6)
+
+    def test_prefill_slowdown_scales_the_time_sharing_model(self):
+        """k = 1 is pure time sharing, interval / (1 - u); overlap measures below it."""
+
+        def interval(share, k):
+            return 0.013 * (1 + k * share / (1 - share))
+
+        for k in (0.0, 0.6, 1.0):
+            samples = [(u, interval(u, k)) for u in (0.0, 0.0, 0.24, 0.52)]
+            slowdown, largest = fit_prefill_slowdown(samples)
+            self.assertAlmostEqual(slowdown, k)
+            self.assertEqual(largest, 0.52)
+        # A loaded interval below the base clamps the slowdown at zero.
+        self.assertEqual(fit_prefill_slowdown([(0.0, 0.02), (0.3, 0.019)]), (0.0, 0.3))
+        for samples in (
+            [(0.0, 0.02)],
+            [(0.25, 0.02), (0.5, 0.03)],
+            [(0.0, 0.02), (1.0, 0.03)],
+            [(0.0, 0.0), (0.5, 0.03)],
+            [(0.0, 0.02), (0.5, float("nan"))],
+        ):
+            with self.subTest(samples=samples), self.assertRaises(ValueError):
+                fit_prefill_slowdown(samples)
 
     def test_quadratic_recovers_coefficients_at_token_scale(self):
         """Input scaling preserves the coefficients in original token units."""

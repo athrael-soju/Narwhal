@@ -538,6 +538,7 @@ async def run(
                     max_model_len=max_model_len,
                     observation_timeout_s=observation_timeout_s,
                     roles=roles,
+                    prefill_on_decode=cfg.serving.prefill_on_decode,
                 )
                 if neighbour_load is not None:
                     # An engine keeps serving a request whose client went away, and would refuse

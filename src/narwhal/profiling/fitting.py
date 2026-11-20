@@ -188,6 +188,27 @@ def decode_cross_validation_mape(samples: list[tuple[float, float, float]]) -> f
     return sum(errors) / len(errors)
 
 
+def fit_prefill_slowdown(samples: Sequence[tuple[float, float]]) -> tuple[float, float]:
+    """Fit `k` in `interval = base * (1 + k*u/(1-u))` from (share u, interval) samples.
+
+    `base` is the mean interval at share 0. Return the nonnegative least-squares `k` and the
+    largest measured share.
+    """
+    if any(not math.isfinite(v) for sample in samples for v in sample):
+        raise ValueError("prefill share samples must be finite")
+    if any(not 0 <= share < 1 or interval <= 0 for share, interval in samples):
+        raise ValueError("prefill share samples need shares in [0, 1) and positive intervals")
+    base = [interval for share, interval in samples if share == 0]
+    loaded = [(share / (1 - share), interval) for share, interval in samples if share > 0]
+    if not base or not loaded:
+        raise ValueError("a prefill slowdown fit needs a sample at share 0 and one above it")
+    floor = statistics.mean(base)
+    slope = sum(x * (interval / floor - 1) for x, interval in loaded) / sum(
+        x * x for x, _ in loaded
+    )
+    return max(0.0, slope), max(share for share, _ in samples)
+
+
 def _nonnegative_fit(rows: Sequence[Sequence[float]], ys: Sequence[float]) -> list[float]:
     """Fit `y = sum(w_i f_i)` with nonnegative weights by checking every face."""
     n = len(rows[0])

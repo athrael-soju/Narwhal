@@ -85,6 +85,8 @@ The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lowe
 
 The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
+When the fleet file sets `serving.prefill_on_decode`, each engine's sweep ends with the [prefill-share step](../telemetry/02-Profiles.md#prefill-share-on-decode-engines).
+
 ## Shared-GPU neighbour traffic
 
 With `--colocated`, each target needs at least one neighbour in its `shared_device.group`, and the sweep measures the target while its neighbours serve paced traffic in their configured roles. On an SGLang fleet, each target pairs with the first engine in its group that has the other configured role, and the group keeps its configured prefill and decode counts while the target measures both roles.
@@ -127,6 +129,7 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 - on SGLang, neighbour requests still run `--observation-timeout-s` seconds, 300 by default, after neighbour traffic pauses
 - a neighbour's input plus output exceeds the neighbour's context limit
 - the prefill fit exceeds 20% mean error or 50% worst-point error
+- the prefill-share step leaves fewer than six tokens per stream, measures no share above `0`, or measures a share of `1` or more
 - an engine's attestation fails verification, or its process changes during its measurement
 - on SGLang, `POST /pd_role_switch` fails or the engine refuses the switch, or `POST /flush_cache` fails or returns a status other than 200
 

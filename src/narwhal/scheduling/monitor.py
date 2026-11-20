@@ -120,6 +120,8 @@ class InstanceMonitor:
         self._decoding_on: dict[str, str] = {}
         self._prices: dict[str, _PriceWindow] = {}
         self._last_token: dict[str, float] = {}
+        # Prefill completion time by request ID.
+        self._prefilled_at: dict[str, float] = {}
         # Latest prefill completion or decode token per engine.
         self._last_output: dict[str, float] = {}
         # Requests past their first decode gap, which includes transfer and queue time.
@@ -222,7 +224,7 @@ class InstanceMonitor:
         """Move a request out of prefill and start its token clock."""
         if self.instances[iid].prefill.pop(rid, None) is not None:
             self._prefill_changed(iid)
-        self._last_token[rid] = self._last_output[iid] = self._clock()
+        self._last_token[rid] = self._last_output[iid] = self._prefilled_at[rid] = self._clock()
         self._reprice(iid)
         self.on_capacity_change()
 
@@ -284,6 +286,7 @@ class InstanceMonitor:
                 self._reprice_prefill(next(islice(inst.decode.values(), limit - 1, None)))
         had_prefill = inst.prefill.pop(rid, None)
         self._last_token.pop(rid, None)
+        self._prefilled_at.pop(rid, None)
         self._decode_started.discard(rid)
         self._decode_ended.discard(rid)
         if had_prefill is not None:
@@ -297,6 +300,11 @@ class InstanceMonitor:
             decoding = self._decoding[iid]
             decoding[0] -= 1
             decoding[1] -= leg.length
+
+    def decode_elapsed(self, rid: str) -> float:
+        """Return the seconds since the request's prefill completed, 0 before it completes."""
+        prefilled = self._prefilled_at.get(rid)
+        return 0.0 if prefilled is None else self._clock() - prefilled
 
     def decoding(self, iid: str) -> tuple[int, int]:
         """Return the requests and tokens of the engine's legs past their first decode token."""

@@ -41,6 +41,7 @@ class GlobalScheduler:
         on_availability_event: Callable[[dict], None] | None = None,
         outcome_bucket_s: float = 1.0,
         outcome_retained_s: float = 480.0,
+        prefill_on_decode: bool = False,
     ) -> None:
         self.monitor = monitor
         self.profiles = profiles
@@ -51,6 +52,10 @@ class GlobalScheduler:
         self.min_prefill = max(1, min_prefill)
         self.min_decode = max(1, min_decode)
         self.advisory = advisory
+        # Whether a decode-role engine joins the prefill candidates inside its envelope.
+        self.prefill_on_decode = prefill_on_decode
+        # Returns the controller's output estimator; the router sets it.
+        self.output_estimator: Callable[[], Callable[[Request], int]] = lambda: lambda r: 0
         self.on_floor_event = on_floor_event
         self.on_control_event = on_control_event
         self.on_eject: Callable[[str], None] | None = None
@@ -331,6 +336,33 @@ class GlobalScheduler:
         fresh = [inst for inst in candidates if self.has_fresh_consumer(inst.iid, decodes)]
         return fresh or candidates
 
+    def prefill_pool(self, request: Request, instances: list[Instance]) -> list[Instance]:
+        """Return the prefill candidates among live `instances`.
+
+        With `prefill_on_decode`, each unpinned decode-role engine that is not held for a
+        switch joins the prefill role pool while `request`'s leg keeps it inside its envelope.
+        """
+        pool = self.role_pool(Role.PREFILL, instances)
+        if not self.prefill_on_decode:
+            return pool
+        pooled = {inst.iid for inst in pool}
+        unusable = pooled | self.held_for_switch() | self.pinned
+        estimate = self.output_estimator()
+        return pool + [
+            inst
+            for inst in instances
+            if inst.role is Role.DECODE
+            and inst.iid not in unusable
+            and costs.decode_engine_prefill(
+                request,
+                inst,
+                monitor=self.monitor,
+                profiles=self.profiles,
+                slo=self.slo,
+                expected_output=estimate,
+            )
+        ]
+
     def schedule(self, request: Request, exclude: set[str] | None = None) -> Instance:
         exclude = set(exclude or ())
         exclude |= self.decode_exclusion(request, exclude)
@@ -339,8 +371,13 @@ class GlobalScheduler:
             raise RuntimeError("no schedulable instances")
 
         # Profiles model sequential prefill and batched decode.
-        want = Role.PREFILL if request.phase is Phase.PREFILL else Role.DECODE
-        candidates = self.role_pool(want, instances)
+        if request.phase is Phase.PREFILL:
+            request.cache_placement = None
+            # The envelope prices the leg with current cache evidence.
+            self.recheck_evidence(request, 0.0)
+            candidates = self.prefill_pool(request, instances)
+        else:
+            candidates = self.role_pool(Role.DECODE, instances)
         if not candidates:
             raise RuntimeError("no schedulable instances for the pinned roles")
         held = self.held_for_switch()
@@ -348,8 +385,6 @@ class GlobalScheduler:
             candidates = [inst for inst in candidates if inst.iid not in held]
         if request.phase is Phase.PREFILL:
             candidates = self._fresh_producers(candidates)
-            request.cache_placement = None
-            self.recheck_evidence(request, 0.0)
         probation = self.health.probation_set() if self.health is not None else None
         prices = {i.iid: self.cost(request, i, probation=probation) for i in candidates}
 
