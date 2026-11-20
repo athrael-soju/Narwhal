@@ -21,7 +21,7 @@ COLUMNS = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Arrival:
     """One source request: its arrival in source seconds and its token counts."""
 

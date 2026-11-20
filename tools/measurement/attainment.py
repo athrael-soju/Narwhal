@@ -79,7 +79,7 @@ def score(path: Path, offered: int, ttft_s: float, tpot_s: float, share: float) 
     The attainment rate counts requests within both SLOs over every offered request,
     so a request without a record counts as a miss.
     """
-    recorded = passed = timed = 0
+    recorded = passed = completed = timed = 0
     with path.open(encoding="utf-8") as stream:
         for line, text in enumerate(stream, 1):
             if not text.strip():
@@ -96,14 +96,18 @@ def score(path: Path, offered: int, ttft_s: float, tpot_s: float, share: float) 
                 if row["metadata"].get("benchmark_phase") == "warmup":
                     continue
                 recorded += 1
-                timed += _seconds(row["metrics"], "time_to_first_token") is not None
+                if client_row(dict(row))["outcome"] == "completed":
+                    completed += 1
+                    timed += _seconds(row["metrics"], "time_to_first_token") is not None
                 passed += within_slo(row, ttft_s, tpot_s)
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 raise ValueError(f"{path}:{line}: {exc}") from exc
     if recorded > offered:
         raise ValueError(f"{path} holds {recorded} records for a trace of {offered} requests")
-    if recorded and not timed:
-        raise ValueError(f"{path} holds no time_to_first_token: run AIPerf with --streaming")
+    if completed and not timed:
+        raise ValueError(
+            f"{path}: no completed record has time_to_first_token; run AIPerf with --streaming"
+        )
     attainment = passed / offered
     return {
         "offered": offered,
@@ -126,7 +130,11 @@ def highest_rates(points: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, An
         traces.setdefault(point["trace"], []).append(point)
     report = {}
     for name, scored in traces.items():
-        ordered = sorted(scored, key=lambda point: point["attainment"]["offered_rps"])
+        # A miss sorts before a pass at the same rate.
+        ordered = sorted(
+            scored,
+            key=lambda point: (point["attainment"]["offered_rps"], point["attainment"]["met"]),
+        )
         first_miss = next(
             (i for i, point in enumerate(ordered) if not point["attainment"]["met"]),
             len(ordered),

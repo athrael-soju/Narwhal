@@ -97,6 +97,16 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--streaming"):
             attainment.score(path, 2, 0.2, 0.05, 0.9)
 
+    def test_a_replay_where_every_request_failed_scores_zero(self):
+        failed = {
+            "metadata": {"benchmark_phase": "profiling"},
+            "metrics": {},
+            "error": {"code": 503},
+        }
+        path = self.write("records.jsonl", [failed] * 3)
+        result = attainment.score(path, 3, 0.2, 0.05, 0.9)
+        self.assertEqual((result["attainment"], result["met"]), (0.0, False))
+
     def test_failed_and_cancelled_records_count_as_misses(self):
         path = self.write(
             "records.jsonl",
@@ -159,6 +169,14 @@ class HighestRateTests(unittest.TestCase):
         )["code"]
         self.assertEqual(report["highest_point"], "x1")
         self.assertFalse(report["monotone"])
+
+    def test_a_miss_at_the_same_rate_as_a_pass_bounds_the_highest_rate(self):
+        for order in ((True, False), (False, True)):
+            with self.subTest(order=order):
+                points = [self.point("x1", "code", 1.0, True)] + [
+                    self.point(f"x2-{met}", "code", 2.0, met) for met in order
+                ]
+                self.assertEqual(attainment.highest_rates(points)["code"]["highest_point"], "x1")
 
 
 if __name__ == "__main__":

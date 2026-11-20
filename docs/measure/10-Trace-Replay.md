@@ -108,4 +108,4 @@ When the run ends, the runner writes `attainment.json` to the output root. It ho
 | `monotone`      | `false` when a point above the lowest missed rate met the share again       |
 | `points`        | Each scored point's `id`, `offered_rps`, `attainment` and `met`, by rate   |
 
-A point whose records are missing, unreadable or without `time_to_first_token` ends with condition `attainment_error`, and the run stops. AIPerf records `time_to_first_token` with `--streaming`.
+A point whose records are missing or unreadable, or whose completed records all lack `time_to_first_token`, ends with condition `attainment_error`, and the run stops. AIPerf records `time_to_first_token` with `--streaming`.
