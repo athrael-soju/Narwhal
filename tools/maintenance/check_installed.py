@@ -395,7 +395,7 @@ def main(argv=None):
             text=True,
             timeout=30,
         )
-        assert result.returncode == 2 and "instance.json" in result.stderr
+        assert result.returncode == 2 and "no instance here" in result.stderr
     for module in ("narwhal.benchmarking", "narwhal.diagnostics.qualification", "narwhal.fleet"):
         assert importlib.util.find_spec(module) is None, module
     check_offline_config()

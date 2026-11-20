@@ -244,9 +244,13 @@ class StreamRelayTests(unittest.IsolatedAsyncioTestCase):
         self.chunks.append("data: [DONE]\n\n")
         app = self.app()
         call = asyncio.create_task(self.call(app))
-        await asyncio.sleep(0.2)
         monitor = self.router.monitor
-        iid = next(iid for iid, inst in monitor.instances.items() if inst.decode)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            iid = next((iid for iid, inst in monitor.instances.items() if inst.decode), None)
+            if iid is not None:
+                break
+        self.assertIsNotNone(iid)
         self.assertIn(iid, {i for i, inst in monitor.instances.items() if inst.decode})
         self.assertEqual(monitor.stalled_gap(iid), 0.0)
         status, _ = await call
