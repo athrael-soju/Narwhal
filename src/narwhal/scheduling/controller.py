@@ -231,12 +231,14 @@ class ReactiveController:
         """Take the due event; return a recovery while decode pressure persists.
 
         Pressure persists with a slot-wait refusal within the last `step_s`, or with observed
-        decode load at or above expand.
+        decode load at or above expand. A pending P-to-D cooldown or dwell drops the event.
         """
         urgency = self._decode_urgency
         if urgency is None or not self.decode_risk_pending:
             return None
         self._decode_urgency = None
+        if self.scheduler.roles.decode_move_waits():
+            return None
         now = self._clock()
         refused_at = self.scheduler.slot_refusals.latest_at()
         if (refused_at is None or refused_at < now - self.step_s) and self.scheduler.pool_load(

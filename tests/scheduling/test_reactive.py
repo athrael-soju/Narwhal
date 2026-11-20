@@ -1457,6 +1457,16 @@ class EarlyDecodeRecoveryTests(unittest.TestCase):
         self.assertIn("pins", self.reason())
         self.assertEqual(fleet.scheduler.roles.flips, [])
 
+    def test_a_cooldown_that_starts_after_arming_drops_the_event(self) -> None:
+        fleet = self.fleet
+        self.refuse()
+        self.assertTrue(fleet.controller.decode_risk_pending)
+        last = fleet.scheduler.roles._last_decision
+        fleet.scheduler.roles._last_p2d_flip = fleet.now
+        self.assertIsNone(fleet.controller.step(urgent=True, scheduled=False))
+        self.assertIsNone(fleet.controller._decode_urgency)
+        self.assertIs(fleet.scheduler.roles._last_decision, last)
+
     def test_no_split_with_one_more_decode_engine_reports_the_prefill_floor(self) -> None:
         fleet = self.fleet
         for iid in ("e1", "e2"):
