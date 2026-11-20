@@ -12,7 +12,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 narwhal-slurm \
   --run-dir <shared-dir> --slo-ttft-s 2 --slo-tpot-s 0.05
 ```
 
-Each task reads its node's rank from `SLURM_NODEID` and the node names from `SLURM_JOB_NODELIST`, and resolves each node name to its IPv4 address. The task refuses to start unless the step runs one task on each node.
+Each task reads its node's rank from `SLURM_NODEID` and the step's node names from `SLURM_STEP_NODELIST`, or from `SLURM_JOB_NODELIST` when the step variable is unset, and resolves each node name to its IPv4 address. The task refuses to start unless the step runs one task on each node.
 
 Every node starts its engines with the engine image's Python, outside Narwhal's own environment. The head node, rank 0, then runs these stages:
 

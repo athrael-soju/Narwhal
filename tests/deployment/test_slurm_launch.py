@@ -96,6 +96,17 @@ class AllocationTests(unittest.TestCase):
         )
         self.assertFalse(allocation.head)
 
+    def test_a_step_on_part_of_the_job_uses_the_step_nodes(self):
+        env = {
+            **ENV,
+            "SLURM_JOB_NODELIST": "gpu[01-04]",
+            "SLURM_JOB_NUM_NODES": "4",
+            "SLURM_STEP_NODELIST": "gpu[03-04]",
+            "SLURM_STEP_NUM_NODES": "2",
+        }
+        allocation = from_environment(env, "CUDA_VISIBLE_DEVICES")
+        self.assertEqual((allocation.rank, allocation.nodes), (1, ("gpu03", "gpu04")))
+
     def test_an_environment_outside_one_task_per_node_is_refused(self):
         cases = (
             ({"SLURM_JOB_ID": None}, "SLURM_JOB_ID"),

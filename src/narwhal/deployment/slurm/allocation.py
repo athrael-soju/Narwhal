@@ -92,19 +92,19 @@ def _integer(env: Mapping[str, str], name: str) -> int:
 def from_environment(env: Mapping[str, str], device_env: str) -> Allocation:
     """Return the allocation of the task this environment belongs to.
 
-    The launch runs one task per node, so the node's rank is `SLURM_NODEID` and the task count
-    equals the node count.
+    The launch runs one task per node of its job step, so the node's rank is `SLURM_NODEID`, the
+    nodes are the step's, and the task count equals the node count.
     """
     job = env.get("SLURM_JOB_ID")
     if not job:
         raise ValueError("SLURM_JOB_ID is not set: run the launch under srun inside an allocation")
-    listed = env.get("SLURM_JOB_NODELIST") or env.get("SLURM_NODELIST")
+    listed = env.get("SLURM_STEP_NODELIST") or env.get("SLURM_JOB_NODELIST")
     if not listed:
-        raise ValueError("SLURM_JOB_NODELIST is not set")
+        raise ValueError("SLURM_STEP_NODELIST and SLURM_JOB_NODELIST are not set")
     nodes = tuple(expand_hostlist(listed))
     if len(set(nodes)) != len(nodes):
         raise ValueError(f"the node list {listed!r} names a node twice")
-    count = env.get("SLURM_JOB_NUM_NODES") or env.get("SLURM_NNODES")
+    count = env.get("SLURM_STEP_NUM_NODES") or env.get("SLURM_JOB_NUM_NODES")
     if count is not None and int(count) != len(nodes):
         raise ValueError(f"the node list has {len(nodes)} nodes, but the allocation has {count}")
     tasks = env.get("SLURM_NTASKS")
