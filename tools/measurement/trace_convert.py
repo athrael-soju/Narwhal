@@ -132,12 +132,14 @@ def convert(
     time_scale: float = 1.0,
     start_s: float = 0.0,
     duration_s: float | None = None,
+    max_total_tokens: int | None = None,
 ) -> tuple[list[dict], Conversion]:
     """Return the clipped, rebased and time-scaled `mooncake_trace` records.
 
     The clip keeps requests that arrive from `start_s` to before `start_s + duration_s`
     seconds after the first source request. The first kept request replays at 0, and
     each gap is divided by `time_scale`, so the offered rate rises by that factor.
+    Requests whose input and output tokens together exceed `max_total_tokens` are skipped.
     """
     if not (math.isfinite(time_scale) and time_scale > 0):
         raise ValueError("time scale must be finite and positive")
@@ -145,6 +147,8 @@ def convert(
         raise ValueError("start must be a non-negative number of seconds")
     if duration_s is not None and not (math.isfinite(duration_s) and duration_s > 0):
         raise ValueError("duration must be a positive number of seconds")
+    if max_total_tokens is not None and max_total_tokens < 2:
+        raise ValueError("max total tokens must be at least 2")
     kept: list[Arrival] = []
     skipped = 0
     origin: float | None = None
@@ -155,7 +159,14 @@ def convert(
             continue
         # AIPerf needs at least one input token, and a request that produced no
         # output tokens failed at the source.
-        if arrival.input_length < 1 or arrival.output_length < 1:
+        if (
+            arrival.input_length < 1
+            or arrival.output_length < 1
+            or (
+                max_total_tokens is not None
+                and arrival.input_length + arrival.output_length > max_total_tokens
+            )
+        ):
             skipped += 1
             continue
         kept.append(arrival)
@@ -199,10 +210,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--start-s", type=float, default=0.0, help="clip start, in source seconds")
     parser.add_argument("--duration-s", type=float, help="clip length, in source seconds")
+    parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        help="skip requests whose input and output tokens together exceed this count",
+    )
     args = parser.parse_args(argv)
     try:
         records, result = convert(
-            read_arrivals(args.input, args.format), args.time_scale, args.start_s, args.duration_s
+            read_arrivals(args.input, args.format),
+            args.time_scale,
+            args.start_s,
+            args.duration_s,
+            args.max_total_tokens,
         )
         write_trace(args.out, records)
     except (OSError, ValueError) as error:

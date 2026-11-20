@@ -16,7 +16,7 @@ description: Convert public LLM inference traces to replay files and find the hi
 
 Keep source and converted traces under `runs/traces/`.
 
-The converter skips requests with no input tokens or no output tokens. BurstGPT records a failed request with zero response tokens.
+The converter skips requests with no input tokens or no output tokens, and requests over `--max-total-tokens`. BurstGPT records a failed request with zero response tokens.
 
 ## Converting a trace
 
@@ -41,6 +41,7 @@ Output for the 2023 code trace:
 | `--time-scale` | `1`             | Factor that divides every gap between arrivals. The offered rate rises by this factor and the arrival shape stays the same |
 | `--start-s`    | `0`             | Start of the clip, in source seconds after the first request in the file                                  |
 | `--duration-s` | the whole trace | Length of the clip, in source seconds                                                                     |
+| `--max-total-tokens` | none      | Skips requests whose input and output tokens together exceed this count. Set it to the engines' context length |
 
 The first request of the clip replays at time 0. `--out` names a new file. The converter keeps `hash_ids` from a Mooncake trace.
 

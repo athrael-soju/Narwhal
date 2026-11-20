@@ -68,6 +68,15 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual([r["input_length"] for r in records], [472, 1360])
         self.assertEqual(result.skipped, 2)
 
+    def test_requests_over_the_token_cap_are_skipped(self):
+        text = "".join(
+            json.dumps({"timestamp": t, "input_length": n, "output_length": 10}) + "\n"
+            for t, n in ((0, 90), (1000, 91), (2000, 50))
+        )
+        records, result = self.records("mooncake", text, max_total_tokens=100)
+        self.assertEqual([r["input_length"] for r in records], [90, 50])
+        self.assertEqual(result.skipped, 1)
+
     def test_clip_keeps_a_window_after_the_first_request_and_rebases_it(self):
         text = "".join(
             json.dumps({"timestamp": t, "input_length": 10, "output_length": 2, "hash_ids": [t]})
