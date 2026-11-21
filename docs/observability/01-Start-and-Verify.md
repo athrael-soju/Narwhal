@@ -17,7 +17,7 @@ Run these commands in the [installed router-role shell](../deploy/02-Install.md#
 
 ## Configuring the monitored deployment
 
-`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves.
+`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves. When the router moves to another origin, set the new value and rerun `make observe`, which recreates Prometheus with the new targets.
 
 Set it in the router-role shell:
 
