@@ -1098,6 +1098,39 @@ class DevTests(unittest.TestCase):
             self.assertNotEqual(state["verification"], str(evidence))
             self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
 
+    def test_verification_reads_engine_metrics_from_the_backend_route(self):
+        run = self.launched_instance()
+        fleet = lifecycle.read(run / "fleet.json")
+        fleet["engine"]["backend"] = "trtllm"
+        (run / "fleet.json").write_text(json.dumps(fleet))
+        paths = []
+
+        def reply(request):
+            paths.append((request.url.port, request.url.path))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "5"}}]})
+
+        client = httpx.Client
+        with (
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run"),
+            patch.object(
+                lifecycle.httpx,
+                "Client",
+                side_effect=lambda **kwargs: client(transport=httpx.MockTransport(reply)),
+            ),
+            patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 0)
+        engines = {httpx.URL(e["url"]).port for e in fleet["engines"]}
+        self.assertEqual(
+            {path for port, path in paths if port in engines and "metrics" in path},
+            {"/prometheus/metrics"},
+        )
+        router = httpx.URL(lifecycle.read(self.root / "instance.json")["router_url"]).port
+        self.assertIn((router, "/metrics"), paths)
+
     def test_subprocess_failure_retains_diagnostic_after_progress(self):
         run = self.launched_instance()
         profile = run / "profiles.json"

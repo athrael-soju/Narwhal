@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import load as load_backend
 from narwhal.config import FleetConfig
 from narwhal.deployment import native_engine, stages
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
@@ -623,11 +625,15 @@ def verify(root: Path) -> dict:
                         raise LifecycleOperationError(
                             "routed arithmetic canary expected 5; inspect completion.json"
                         )
+                    # Each engine serves its metrics on its backend's route.
+                    engine_metrics = load_backend(
+                        fleet.get("engine", {}).get("backend", DEFAULT_BACKEND)
+                    ).metrics.path
                     for name, url in [
-                        ("router", config["router_url"]),
-                        *[(e["iid"], e["url"]) for e in fleet["engines"]],
+                        ("router", config["router_url"] + "/metrics"),
+                        *[(e["iid"], e["url"] + engine_metrics) for e in fleet["engines"]],
                     ]:
-                        metrics = client.get(url + "/metrics")
+                        metrics = client.get(url)
                         metrics.raise_for_status()
                         (evidence / f"{name}-metrics.txt").write_text(metrics.text)
                     client.get(config["router_url"] + "/ready").raise_for_status()
