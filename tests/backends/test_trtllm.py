@@ -218,6 +218,19 @@ class TrtllmDialectTests(unittest.TestCase):
         self.assertEqual(reply["choices"][0]["text"], " four five")
         self.assertEqual(reply["choices"][0]["finish_reason"], "length")
 
+    def test_a_generation_leg_reports_its_kv_transfer_after_done(self):
+        dialect = BACKEND.dialect
+        self.assertEqual(dict(dialect.transfer_report_headers), {"X-TRTLLM-return-metrics": "1"})
+        # The trailing event as a live generation leg sent it.
+        report = {
+            "Server-Timing": "server_queue;dur=75.444000, server_ttft;dur=153.694000, "
+            "server_e2e;dur=211.858000, server_kv_transfer;dur=71.117000",
+            "X-TRTLLM-Start-End-Time": "server-kv-start;ts=146441.575306000",
+        }
+        self.assertAlmostEqual(dialect.leg_transfer_seconds([{"choices": []}, report]), 0.071117)
+        self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "server_e2e;dur=2"}]))
+        self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "x_kv_transfer;dur=0"}]))
+
     def test_the_usage_frame_reports_the_output_count(self):
         dialect = BACKEND.dialect
         frame = {"choices": [], "usage": {"completion_tokens": 7, "prompt_tokens": 5}}
