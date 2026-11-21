@@ -583,6 +583,11 @@ async def serve_request(
     return JSONResponse(content=out)
 
 
+def _usage_frame(event: SseEvent) -> bool:
+    data = event.data
+    return isinstance(data, dict) and "usage" in data and not data.get("choices")
+
+
 async def _decode_attempt(
     state: RequestLifecycle,
     prepared: PreparedAttempt,
@@ -604,6 +609,20 @@ async def _decode_attempt(
     strip = () if body.get("return_token_ids") else dialect.engine_output_fields
     streams_ids = dialect.token_ids and dialect.streams_token_ids(endpoint)
     engine_body = {**body, **dialect.token_id_fields()} if streams_ids else body
+    options = body.get("stream_options")
+    # Only a streamed client can ask for the usage frame.
+    asked_usage = bool(
+        body.get("stream") and isinstance(options, dict) and options.get("include_usage")
+    )
+    added_usage = dialect.usage_frame_counts and not asked_usage
+    if added_usage:
+        engine_body = {
+            **engine_body,
+            "stream_options": {
+                **(options if isinstance(options, dict) else {}),
+                "include_usage": True,
+            },
+        }
     handoff = prepared.handoff
     upstream = router.engines.decode(
         prepared.decode.url,
@@ -661,6 +680,8 @@ async def _decode_attempt(
                             state.reported_tokens = reported
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n
+                    if added_usage and _usage_frame(event):
+                        continue
                     frame = rewrite_sse(event, strip=strip) + "\n\n"
                     if state.first_at is None:
                         # Before output commits the attempt, metadata buffers and keepalives drop.
