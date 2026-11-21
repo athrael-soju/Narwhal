@@ -79,14 +79,14 @@ class EngineTargetTests(unittest.TestCase):
             ],
         )
 
-    def test_a_backend_whose_metrics_drain_on_read_has_no_engine_targets(self) -> None:
-        class Draining(type(load_backend("vllm").metrics)):  # type: ignore[misc]
-            path = "/stats"
-            drains = True
+    def test_the_scrape_path_is_the_backends_metrics_route(self) -> None:
+        class Elsewhere(type(load_backend("vllm").metrics)):  # type: ignore[misc]
+            path = "/prometheus/metrics"
 
-        backend = replace(load_backend("vllm"), metrics=Draining())
+        backend = replace(load_backend("vllm"), metrics=Elsewhere())
         with patch("narwhal.observability.targets.load_backend", return_value=backend):
-            self.assertEqual(scrape_targets(fleet(EngineSpec("e0", "http://127.0.0.2:8002"))), [])
+            [group] = scrape_targets(fleet(EngineSpec("e0", "http://127.0.0.2:8002/n1")))
+        self.assertEqual(group["labels"]["__metrics_path__"], "/n1/prometheus/metrics")
 
     def test_targets_keep_the_engine_scheme_and_path_without_credentials(self) -> None:
         cfg = fleet(EngineSpec("e0", "https://user:secret@engine.internal:8443/n1"))

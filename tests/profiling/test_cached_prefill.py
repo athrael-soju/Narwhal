@@ -217,12 +217,10 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         leak=False,
         sent=None,
         blind_after_cold=False,
-        drain=False,
+        path="/metrics",
     ):
         cache: dict[str, int] = {}
         hits = [0]
-        # `drain`: each read of /stats returns the hits since the previous read.
-        drained = [0]
         # `blind_after_cold`: /metrics fails after the first cold control.
         blind, reused = [False], [False]
 
@@ -233,11 +231,10 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
             return tokens // 16 * 16
 
         def handle(request):
-            if request.url.path == ("/stats" if drain else "/metrics"):
+            if request.url.path == path:
                 if blind[0]:
                     return httpx.Response(503)
-                count = hits[0] - drained[0] if drain else hits[0]
-                drained[0] = hits[0]
+                count = hits[0]
                 return httpx.Response(
                     200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {count}\n'
                 )
@@ -305,19 +302,17 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(s["prefix_tokens"] == 0 for s in cold))
         self.assertTrue(all(s["cache_evidence"] == "prefix_cache_hits" for s in samples))
 
-    async def test_a_draining_metrics_route_gives_the_same_samples(self):
-        class Draining(type(VLLM_METRICS)):  # type: ignore[misc]
-            path = "/stats"
-            drains = True
+    async def test_the_probe_reads_the_backends_metrics_route(self):
+        class Elsewhere(type(VLLM_METRICS)):  # type: ignore[misc]
+            path = "/prometheus/metrics"
 
         expected, _ = await self.run_probe(self.engine())
-        samples, reason = await self.run_probe(self.engine(drain=True), metrics=Draining())
+        moved = self.engine(path="/prometheus/metrics")
+        samples, reason = await self.run_probe(moved, metrics=Elsewhere())
         self.assertIsNone(reason)
         self.assertEqual(
             [s["prefix_tokens"] for s in samples], [s["prefix_tokens"] for s in expected]
         )
-        with self.assertRaisesRegex(RuntimeError, "cold control reused"):
-            await self.run_probe(self.engine(leak=True, drain=True), metrics=Draining())
 
     async def test_a_block_aligned_prefix_stays_reusable_on_a_hybrid_engine(self):
         samples, _ = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))

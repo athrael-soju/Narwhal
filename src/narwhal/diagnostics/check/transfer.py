@@ -143,14 +143,11 @@ async def gate_consume(
                     raise ValueError(f"{src} process or attestation changed during transfer")
                 if not same_generation(before_dst, after_dst):
                     raise ValueError(f"{dst} process or attestation changed during transfer")
-                reader = load_backend(cfg.backend).metrics
-                count_delta = reader.gained(
-                    cast(float, before_dst["transfer_count"]),
-                    cast(float, after_dst["transfer_count"]),
+                count_delta = cast(float, after_dst["transfer_count"]) - cast(
+                    float, before_dst["transfer_count"]
                 )
-                transfer_seconds = reader.gained(
-                    cast(float, before_dst["transfer_seconds_sum"]),
-                    cast(float, after_dst["transfer_seconds_sum"]),
+                transfer_seconds = cast(float, after_dst["transfer_seconds_sum"]) - cast(
+                    float, before_dst["transfer_seconds_sum"]
                 )
                 if count_delta < 1 or transfer_seconds <= 0:
                     raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
