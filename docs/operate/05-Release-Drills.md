@@ -103,7 +103,7 @@ Use `recovery.engine_restart_policy = whole_wave` and the setup in [Engine resta
     PY
     ```
 
-5. Confirm the stopped sidecar's member reports an attestation failure.
+5. Confirm the stopped sidecar's member reports `attestation unreadable`, or `process identity unreadable` on SGLang, whose process identity comes from the sidecar.
 6. Confirm every other member reports `another engine in the wave failed validation`.
 
 #### Sampling the hold
