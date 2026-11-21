@@ -18,6 +18,7 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | On SGLang, a `/v1/chat/completions` body sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | Unsupported non-streaming audio, modality, or tool request; `param` names the option | `400` | `invalid_request_error` | `null` | |
 | `n > 1` or `best_of > 1` | `400` | `invalid_request_error` | | |
+| On TensorRT-LLM, `max_completion_tokens`, or else `max_tokens`, is `1`; the decode leg returns at least 2 tokens | `400` | `invalid_request_error` | | |
 | Requested model differs from the configured model | `404` | `invalid_request_error` | `model_not_found` | |
 | Request exceeds `serving.max_request_bytes` | `413` | `request_too_large` | | |
 | Requests counted against the [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`; message `router in-flight limit reached` | `429` | `server_overloaded_error` | | `1` |
