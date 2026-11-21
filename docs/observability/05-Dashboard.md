@@ -123,9 +123,9 @@ The engine table shows each engine's backend, current role, state and load, 8 en
 | Role           | Current pool assignment: Prefill, Decode or Colocated                                                                                                                                                  |
 | State          | The most serious [engine state](#engine-states)                                                                                                                                                        |
 | Resident       | Narwhal requests currently on the engine                                                                                                                                                               |
-| Engine running | Requests the engine reports as running in `vllm:num_requests_running` or `sglang:num_running_reqs`                                                                                                     |
-| KV cache       | KV cache use from `vllm:kv_cache_usage_perc` or `sglang:token_usage`, amber from 80% and red from 95%                                                                                                  |
-| Prefix hits    | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, or `sglang:cached_tokens_total` over `sglang:prompt_tokens_total` |
+| Engine running | Requests the engine reports as running in `vllm:num_requests_running`, `sglang:num_running_reqs` or `trtllm_num_requests_running`                                                                                                     |
+| KV cache       | KV cache use from `vllm:kv_cache_usage_perc`, `sglang:token_usage` or `trtllm_kv_cache_utilization`, amber from 80% and red from 95%                                                                                                  |
+| Prefix hits    | Share of prompt tokens served from the engine's prefix cache: `vllm:prefix_cache_hits_total` over `vllm:prefix_cache_queries_total`, `sglang:cached_tokens_total` over `sglang:prompt_tokens_total`, or `trtllm_prompt_cached_tokens_total` over `trtllm_prompt_tokens_total` |
 | Tokens/s       | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
@@ -165,7 +165,7 @@ These panels show how long requests take and how much work the engines complete.
 
 Both panels draw the selected router's SLO as a dashed red line. When p95 crosses it, more than 5% of requests in that window missed the SLO.
 
-**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). On vLLM, Prefill/s counts the `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total. On SGLang, it counts `sglang:prompt_tokens_total` on engines outside the decode and colocated roles.
+**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). On vLLM, Prefill/s counts the `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total. On SGLang and TensorRT-LLM, it counts `sglang:prompt_tokens_total` or `trtllm_prompt_tokens_total` on engines outside the decode and colocated roles.
 
 ## Pool pressure, admission and queue depth
 
@@ -219,7 +219,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | ----------- | ------------------------------------------------------------------------------------------------------------------ | -------------- |
 | Serving     | Normal operation                                                                                                   | In service     |
 | Switching   | The engine finishes requests from its previous role after a flip                                                   | In service     |
-| Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting` or `sglang:num_queue_reqs`                      | In service     |
+| Backlogged  | The engine reports waiting requests in `vllm:num_requests_waiting`, `sglang:num_queue_reqs` or `trtllm_num_requests_waiting`                      | In service     |
 | Probing     | The engine serves requests from a client other than a router or a Narwhal tool that reports it                     | In service     |
 | Calibrating | `narwhal-check --calibrate-first-token` reports the engine in its tool metrics                                     | In service     |
 | Profiling   | `narwhal-profile` reports the engine in its tool metrics                                                           | In service     |

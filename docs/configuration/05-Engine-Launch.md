@@ -179,7 +179,7 @@ The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_ser
 - the C++ cache transceiver, with the connector's backend and `kv_transfer_timeout_ms`
 - chunked prefill, so a prompt longer than `--max_num_tokens` is served
 - the overlap scheduler off
-- iteration statistics on, which `/metrics` reports
+- iteration statistics and `return_perf_metrics` on, so the engine serves Prometheus metrics at `/prometheus/metrics`
 - CUDA graphs for every batch size up to `max_sequences`
 - the first KV cache manager, which the C++ transceiver requires
 

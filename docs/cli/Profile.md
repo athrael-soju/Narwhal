@@ -83,7 +83,7 @@ Every mode validates these options:
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`. On TensorRT-LLM, it is `--max_seq_len` in the engine's attested launch.
 
-The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. A TensorRT-LLM engine exports none, so its profile keeps cold prefill only. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
+The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM, `sglang:cached_tokens_total` on SGLang or `trtllm_prompt_cached_tokens_total` on TensorRT-LLM. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 When the fleet file sets `serving.prefill_on_decode`, each engine's sweep ends with the [prefill-share step](../telemetry/02-Profiles.md#prefill-share-on-decode-engines). When the step fails, the engine's profile is written without the prefill-share fit.
 

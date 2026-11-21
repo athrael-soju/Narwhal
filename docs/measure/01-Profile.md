@@ -66,7 +66,7 @@ The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
 | `n` | Prompt token count |
 | `s` | 1 for a prompt that ends inside a cache block past the first, otherwise 0 |
 
-The cache block size comes from `vllm:cache_config_info` on vLLM, `sglang:page_size` on SGLang, and `kvCacheStats.tokensPerBlock` in the `/metrics` iteration statistics on TensorRT-LLM.
+The cache block size comes from `vllm:cache_config_info` on vLLM, `sglang:page_size` on SGLang, and `trtllm_kv_cache_tokens_per_block` on TensorRT-LLM.
 
 The profiler sets `ttft_split` when all of these hold:
 
@@ -128,7 +128,7 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit. Before then, the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs`. TensorRT-LLM exports no prefix-cache hit counter.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, `sglang:cached_tokens_total` summed across its cache sources on SGLang, or `trtllm_prompt_cached_tokens_total` on TensorRT-LLM. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit. Before then, the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs`.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
@@ -183,7 +183,7 @@ If the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and
 
 ### KV capacity source
 
-The KV capacity source is the physical KV constraint when the engine reports its KV capacity, and the TPOT-derived limit otherwise. vLLM reports it as `kv_cache_size_tokens` in `vllm:cache_config_info`, SGLang as `sglang:max_total_num_tokens`, and TensorRT-LLM as `kvCacheStats.maxNumBlocks` times `kvCacheStats.tokensPerBlock` in the `/metrics` iteration statistics. When the engine exports several values, the profiler takes the smallest.
+The KV capacity source is the physical KV constraint when the engine reports its KV capacity, and the TPOT-derived limit otherwise. vLLM reports it as `kv_cache_size_tokens` in `vllm:cache_config_info`, SGLang as `sglang:max_total_num_tokens`, and TensorRT-LLM as `trtllm_kv_cache_max_blocks` times `trtllm_kv_cache_tokens_per_block`. When the engine exports several values, the profiler takes the smallest.
 
 ## Validating the profile before using it
 

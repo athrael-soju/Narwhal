@@ -289,7 +289,7 @@ Before you reuse a failed deployment:
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
     sglang = plan.get("engine") == "sglang"
-    # TensorRT-LLM's /metrics serves JSON iteration statistics with no process start.
+    # TensorRT-LLM's /metrics serves JSON iteration statistics, with no process start.
     trtllm = plan.get("engine") == "trtllm"
     expected_version = checked["engine_version"]
     headers = {"Content-Type": "application/json"}
