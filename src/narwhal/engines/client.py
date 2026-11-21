@@ -690,10 +690,9 @@ class EngineClient:
                 handoff.close()
                 return InferenceProbe(prefill=prefill, decode=ProbeLeg(inconclusive=True))
             try:
+                # The connector decides what a decode on the producer takes from its handoff.
                 decode = await _bounded(
-                    self._probe_decode(
-                        url, kv_params=handoff.result if prefill_url else None, prompt=prompt
-                    ),
+                    self._probe_decode(url, kv_params=handoff.result, prompt=prompt),
                     deadline_s,
                     LEG_STREAM,
                 )
