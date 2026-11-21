@@ -95,39 +95,39 @@ When preparation reports an error in an `.env` input or a remote prerequisite:
 
 Each launch record holds a `runtime` object that [`narwhal-engine`](../cli/Engine.md) reads.
 
-These `runtime` fields apply to both backends:
+These `runtime` fields apply to every backend:
 
 | Runtime field       | Value                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `backend`           | `vllm`, the default, or `sglang`.                                                                             |
+| `backend`           | `vllm`, the default, `sglang` or `trtllm`.                                                                    |
 | `expected_packages` | Exact installed versions that `narwhal-engine check` verifies, including the engine and its transfer package. |
-| `model_dtype`       | `bfloat16` or `float16`, passed as `--dtype`.                                                                 |
-| `kv_cache_dtype`    | `auto`, passed as `--kv-cache-dtype`.                                                                         |
+| `model_dtype`       | `bfloat16` or `float16`, passed as `--dtype`, or as `dtype` in the TensorRT-LLM configuration file.          |
+| `kv_cache_dtype`    | `auto`, passed as `--kv-cache-dtype`, or as `--kv_cache_dtype` on TensorRT-LLM.                               |
 | `environment`       | Image-local `LD_LIBRARY_PATH`, `PYTHONPATH`, and variables with one of the backend's prefixes.                |
 | `extra_args`        | Engine options from the backend's allowlist.                                                                  |
 
 Variable names in `environment` must be uppercase, and values must fit on one line. The launcher sets the model path, served model name, bind address, HTTP port, TP size, KV transfer settings, GPU visibility, advertised addresses and ports, `UCX_TLS`, `UCX_TCP_PORT_RANGE` and the engine credential. [Engine environment](../cli/Engine.md#engine-environment) lists the variables it writes.
 
-When the model's `config.json` or `tokenizer_config.json` contains an `auto_map`, discovery adds `--trust-remote-code` to the engine arguments.
+When the model's `config.json` or `tokenizer_config.json` contains an `auto_map`, discovery adds `--trust-remote-code` to the engine arguments, or `--trust_remote_code` on TensorRT-LLM.
 
 ### Launch settings for every backend
 
 These `runtime` fields apply to every backend, and the launcher passes each one with that backend's flag:
 
-| Runtime field    | Value                                                     | vLLM                                                                                         | SGLang                                                                 |
-| ---------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `context_length` | Most tokens in one request, prompt and output together    | `--max-model-len`                                                                            | `--context-length`                                                     |
-| `max_sequences`  | Most requests the engine runs at once                     | `--max-num-seqs`                                                                             | `--max-running-requests`, from 1 to 256, `256` when unset              |
-| `prefix_caching` | `true` or `false`                                         | `--enable-prefix-caching` or `--no-enable-prefix-caching`                                    | `--disable-radix-cache` when `false`                                   |
-| `kv_events`      | `true` or `false`. `true` requires prefix caching.        | `--kv-events-config` with `{"enable_kv_cache_events": false}` when `false` and prefix caching is on | No `--kv-events-config` when `false`                                   |
-| `tokenizer`      | Tokenizer path                                            | `--tokenizer`                                                                                | `--tokenizer-path`                                                     |
-| `block_size`     | Tokens per KV cache block                                 | `--block-size`, required                                                                     | `--page-size`, fixed at `1`                                            |
+| Runtime field    | Value                                                  | vLLM                                                                                                | SGLang                                                    | TensorRT-LLM                                                                  |
+| ---------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `context_length` | Most tokens in one request, prompt and output together | `--max-model-len`                                                                                   | `--context-length`                                        | `--max_seq_len`, required                                                     |
+| `max_sequences`  | Most requests the engine runs at once                  | `--max-num-seqs`                                                                                    | `--max-running-requests`, from 1 to 256, `256` when unset | `--max_batch_size`, `64` when unset                                           |
+| `prefix_caching` | `true` or `false`                                      | `--enable-prefix-caching` or `--no-enable-prefix-caching`                                           | `--disable-radix-cache` when `false`                      | `--set kv_cache_config.enable_block_reuse=true` or `=false`                   |
+| `kv_events`      | `true` or `false`. `true` requires prefix caching.     | `--kv-events-config` with `{"enable_kv_cache_events": false}` when `false` and prefix caching is on | No `--kv-events-config` when `false`                      | `false` or unset. The engine publishes no cache events.                       |
+| `tokenizer`      | Tokenizer path                                         | `--tokenizer`                                                                                       | `--tokenizer-path`                                        | `--tokenizer`                                                                 |
+| `block_size`     | Tokens per KV cache block                              | `--block-size`, required                                                                            | `--page-size`, fixed at `1`                               | `kv_cache_config.tokens_per_block` in the configuration file: 8, 16, 32, 64 or 128 |
 
-If you leave a field unset and the table gives no default, the engine uses its own default. Prefix caching and cache events are on unless their field is `false`.
+If you leave a field unset and the table gives no default, the engine uses its own default. Prefix caching is on unless its field is `false`. Cache events are on unless `kv_events` is `false`, except on TensorRT-LLM.
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
-Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`.
+Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset.
 
 ### vLLM runtime fields
 
@@ -164,6 +164,29 @@ For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buff
 
 `narwhal-engine prepare` rejects a native SGLang launch whose model path is a file.
 
+### TensorRT-LLM runtime fields
+
+With `NARWHAL_ENGINE_BACKEND=trtllm`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) sets `runtime.backend` to `trtllm` and `runtime.connector` to `NARWHAL_ENGINE_CONNECTOR`: `ucx`, the default, or `nixl`. Discovery fails when `NARWHAL_KV_EVENTS` is `true`.
+
+A TensorRT-LLM record adds the optional `kv_lease_s`, the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
+
+`expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
+
+`extra_args` accepts these options, each with a value: `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`. It accepts the flag `--trust_remote_code`.
+
+The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_serve_frontends 1`, and with `--max_num_tokens 8192` unless `extra_args` sets it. It writes `engine.json` into the launch's hook directory and passes it with `--config`. That file sets:
+
+- the C++ cache transceiver, with the connector's backend and `kv_transfer_timeout_ms`
+- chunked prefill, so a prompt longer than `--max_num_tokens` is served
+- the overlap scheduler off
+- iteration statistics on, which `/metrics` reports
+- CUDA graphs for every batch size up to `max_sequences`
+- the first KV cache manager, which the C++ transceiver requires
+
+`trtllm-serve` takes no API key, so the engine serves every caller on its port. Keep the engine port on a private network.
+
+Every engine serves context and generation requests, and the router assigns each engine's role without calling the engine.
+
 ### Runtime check
 
 `narwhal-engine check` runs these checks before model startup:
@@ -175,13 +198,14 @@ For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buff
 - the cache-event endpoints that the serving arguments resolve to
 - on vLLM, KV connector configuration and import, checkpoint tokenizer construction, the convolutional-state layout of the pinned image for SSM models, and resolution of the serving arguments into vLLM's engine configuration
 - on SGLang, parsing of the serving arguments by SGLang's server argument parser
+- on TensorRT-LLM, the `trtllm-serve` executable, the `--config` file, and block reuse as the file and any `--set` override resolve it
 
 The check fails when the resolved cache-event endpoints differ from `launch.json`. It writes `checked.json` with these values:
 
 | Field               | Value                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `plan_sha256`       | SHA-256 of `launch.json`                                                                                      |
-| `engine_version`    | Value of `vllm.version.__version__` on vLLM, or of `sglang.__version__` on SGLang                             |
+| `engine_version`    | Value of `vllm.version.__version__` on vLLM, of `sglang.__version__` on SGLang, or the installed `tensorrt_llm` version on TensorRT-LLM |
 | `prefix_caching`    | `true` when the resolved serving arguments keep prefix caching on                                             |
 | `kv_events`         | The resolved event and replay endpoints, or `null` when cache-event publishing is off                         |
 | `ucx_version`       | vLLM only: version of the `libucp` bundled with the NIXL package, otherwise of the system `libucp`, or `null` |
@@ -193,7 +217,7 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 
 `peer_release` is `true` for an engine without CUDA IPC peers. For an engine with CUDA IPC peers, it is `true` only when UCX is 1.22 or later and `UCX_CUDA_IPC_CACHE` is off. When it is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 
-On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM, or from `/server_info` on SGLang, with the checked version.
+On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
 
 Record the application revision, launcher digest and container ID with each deployment.
 
@@ -222,7 +246,7 @@ To keep prefix caching on and turn event publishing off, set `runtime.kv_events`
 
 ### Resetting prefix caches
 
-An SGLang engine empties its cache on `POST /flush_cache`.
+An SGLang engine empties its cache on `POST /flush_cache`. A TensorRT-LLM engine has no cache reset route.
 
 vLLM serves `POST /reset_prefix_cache` only on an engine started with `VLLM_SERVER_DEV_MODE=1`. The route empties the engine's prefix cache. To enable it:
 
