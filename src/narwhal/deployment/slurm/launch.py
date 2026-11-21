@@ -48,6 +48,8 @@ class Settings:
     router_host: str = "0.0.0.0"
     router_port: int = 8000
     profile_args: tuple[str, ...] = ()
+    # Extra fleet fields by dotted path, such as {"serving.admission": "open"}.
+    fleet_settings: Mapping[str, Any] = field(default_factory=dict)
     health_timeout_s: float = 1800.0
     ready_timeout_s: float = 600.0
     stop_grace_s: float = 30.0
@@ -122,9 +124,47 @@ def opening_prefill(settings: Settings, placements: list[Placement]) -> int:
     return len(placements) // 2 if settings.prefill is None else settings.prefill
 
 
+# Fleet fields the launch writes itself; --fleet-setting cannot replace them.
+LAUNCH_FIELDS = (
+    "schema",
+    "schema_version",
+    "model",
+    "engines",
+    "slo.ttft_s",
+    "slo.tpot_s",
+    "engine.backend",
+    "profiles.path",
+    "recovery.state_path",
+)
+
+
+def check_fleet_setting(path: str) -> None:
+    """Refuse a dotted path that names, contains or lies inside a field the launch writes."""
+    parts = path.split(".")
+    if not path or any(not part for part in parts):
+        raise ValueError(f"fleet setting {path!r} must be a dotted field path")
+    for owned in LAUNCH_FIELDS:
+        prefix = owned.split(".")
+        if parts[: len(prefix)] == prefix or prefix[: len(parts)] == parts:
+            raise ValueError(
+                f"fleet setting {path!r} would replace {owned}, which the launch writes"
+            )
+
+
+def _set_field(document: dict, path: str, value: Any) -> None:
+    *parents, leaf = path.split(".")
+    node = document
+    for name in parents:
+        child = node.setdefault(name, {})
+        if not isinstance(child, dict):
+            raise ValueError(f"fleet setting {path!r}: {name} is not an object")
+        node = child
+    node[leaf] = value
+
+
 def fleet_document(settings: Settings, placements: list[Placement], directory: Path) -> dict:
     prefill = opening_prefill(settings, placements)
-    return {
+    document = {
         "schema": "narwhal.fleet",
         "schema_version": 2,
         "model": settings.served_name,
@@ -141,6 +181,10 @@ def fleet_document(settings: Settings, placements: list[Placement], directory: P
         "profiles": {"path": str(directory / "profiles.json")},
         "recovery": {"state_path": str(directory / "router-state.json")},
     }
+    for path, value in settings.fleet_settings.items():
+        check_fleet_setting(path)
+        _set_field(document, path, value)
+    return document
 
 
 def limits_document(settings: Settings, placements: list[Placement]) -> dict | None:

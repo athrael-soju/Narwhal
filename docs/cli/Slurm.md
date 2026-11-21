@@ -58,6 +58,7 @@ Each engine takes `--tensor-parallel` devices from the list in the `--device-env
 | `--router-host HOST` | `0.0.0.0` | Router bind address. |
 | `--router-port PORT` | `8000` | Router port. |
 | `--profile-arg ARG` | none | Extra `narwhal-profile` argument, repeatable. |
+| `--fleet-setting PATH=VALUE` | none | Fleet field by dotted path, repeatable, such as `serving.admission=open`. `VALUE` is read as JSON, or else as a string. |
 | `--health-timeout-s SECONDS` | `1800` | Time limit for every engine to answer `/health`. |
 | `--ready-timeout-s SECONDS` | `600` | Time limit for the router's `/ready`. |
 | `--stop-grace-s SECONDS` | `30` | Time each process has to exit after SIGTERM before SIGKILL. |
@@ -73,6 +74,8 @@ The head node writes these files to `<run-dir>/slurm-<job id>/`:
 | `journal.jsonl` | Router journal. |
 | `router-state.json` | Router recovery state. |
 | `logs/` | One log for each engine, and `profile.log` and `router.log`. |
+
+`--fleet-setting` cannot set a field the launch writes: `schema`, `schema_version`, `model`, `engines`, `slo.ttft_s`, `slo.tpot_s`, `engine.backend`, `profiles.path` or `recovery.state_path`. The `fleet` stage fails when the fleet file does not load, and names the field.
 
 The launch refuses a run directory that already holds `fleet.json`. Profiles bind to each engine's process start time, so every allocation profiles its engines again.
 

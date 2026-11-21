@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -14,7 +15,7 @@ from typing import Any
 from ... import backends
 from ...cli_support import add_version_argument
 from .allocation import from_environment, resolve
-from .launch import Launch, Settings, StageFailed, Stopped
+from .launch import Launch, Settings, StageFailed, Stopped, check_fleet_setting
 
 COMMAND = "narwhal-slurm"
 
@@ -24,6 +25,17 @@ def _pair(text: str) -> tuple[str, str]:
     if not sep or not key or "\n" in value:
         raise argparse.ArgumentTypeError(f"expected NAME=VALUE, not {text!r}")
     return key, value
+
+
+def _setting(text: str) -> tuple[str, Any]:
+    path, sep, raw = text.partition("=")
+    if not sep or not path:
+        raise argparse.ArgumentTypeError(f"expected PATH=VALUE, not {text!r}")
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        value = raw
+    return path, value
 
 
 def _positive(kind: Callable[[str], float]) -> Callable[[str], Any]:
@@ -95,6 +107,15 @@ def parser() -> argparse.ArgumentParser:
         help="extra narwhal-profile argument, repeatable",
     )
     p.add_argument(
+        "--fleet-setting",
+        action="append",
+        default=[],
+        type=_setting,
+        metavar="PATH=VALUE",
+        help="fleet field by dotted path, repeatable, such as serving.admission=open; "
+        "VALUE is read as JSON, or else as a string",
+    )
+    p.add_argument(
         "--health-timeout-s",
         type=_positive(float),
         default=1800.0,
@@ -119,6 +140,9 @@ def settings_from(args: argparse.Namespace) -> Settings:
     env = dict(args.engine_env)
     if args.device_env in env:
         raise ValueError(f"--engine-env must not set {args.device_env}; the launch sets it")
+    fleet_settings = dict(args.fleet_setting)
+    for path in fleet_settings:
+        check_fleet_setting(path)
     return Settings(
         model=args.model,
         served_name=args.served_model_name,
@@ -139,6 +163,7 @@ def settings_from(args: argparse.Namespace) -> Settings:
         router_host=args.router_host,
         router_port=args.router_port,
         profile_args=tuple(args.profile_arg),
+        fleet_settings=fleet_settings,
         health_timeout_s=args.health_timeout_s,
         ready_timeout_s=args.ready_timeout_s,
         stop_grace_s=args.stop_grace_s,
