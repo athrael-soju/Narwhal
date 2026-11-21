@@ -279,7 +279,7 @@ class Launch:
         except OSError as error:
             raise StageFailed("prepare", f"{self.directory}: {error}") from error
         if self.allocation.head and self.fleet_path.exists():
-            raise StageFailed("prepare", f"{self.fleet_path} exists from an earlier launch")
+            raise StageFailed("prepare", f"{self.fleet_path} already exists")
 
     def _start_engines(self) -> None:
         local = [p for p in self.placements if p.rank == self.allocation.rank]
@@ -429,7 +429,16 @@ class Launch:
 
     def _wait_ready(self) -> None:
         url = self._router_url() + "/ready"
-        self._wait("ready", lambda: self._ok(url), self.settings.ready_timeout_s)
+        try:
+            self._wait("ready", lambda: self._ok(url), self.settings.ready_timeout_s)
+        except StageFailed as error:
+            if error.detail.startswith("not done"):
+                raise StageFailed(
+                    "ready",
+                    f"no /ready 200 from the router after "
+                    f"{self.settings.ready_timeout_s:g} seconds",
+                ) from None
+            raise
         head = self.placements[0].engine.host if self.placements else "127.0.0.1"
         self.say(f"ready: the router serves at http://{head}:{self.settings.router_port}")
 
