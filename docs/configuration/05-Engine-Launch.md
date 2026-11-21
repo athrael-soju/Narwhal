@@ -123,7 +123,7 @@ These `runtime` fields apply to every backend, and the launcher passes each one 
 | `tokenizer`      | Tokenizer path                                         | `--tokenizer`                                                                                       | `--tokenizer-path`                                        | `--tokenizer`                                                                 |
 | `block_size`     | Tokens per KV cache block                              | `--block-size`, required                                                                            | `--page-size`, fixed at `1`                               | `kv_cache_config.tokens_per_block` in the configuration file: 8, 16, 32, 64 or 128 |
 
-If you leave a field unset and the table gives no default, the engine uses its own default. Prefix caching is on unless its field is `false`. Cache events are on unless `kv_events` is `false`.
+If you leave a field unset and the table gives no default, the engine uses its own default. Prefix caching is on unless its field is `false`. Cache events are on unless `kv_events` is `false`, except on TensorRT-LLM.
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
