@@ -5,6 +5,9 @@ services:
     image: prom/prometheus:v3.14.0
     network_mode: host
     restart: always
+    labels:
+      # make observe sets this from the staged config and rules; a new value recreates Prometheus.
+      narwhal.prometheus-config-digest: "${NARWHAL_PROMETHEUS_CONFIG_DIGEST:-}"
     volumes:
       # Startup stages readable configs and targets before Compose launches services.
       - ../../runs/observability/mounts/prometheus:/etc/prometheus:ro

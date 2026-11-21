@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -26,6 +27,11 @@ BASE = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BASE / "compose.yml"
 RENDERER_PORT = 8081
 RENDERER_TOKEN = MOUNTS.parent / "renderer-token"
+# Prometheus reads these staged files only at start.
+PROMETHEUS_CONFIG = (
+    MOUNTS / "prometheus" / "prometheus.yml",
+    MOUNTS / "prometheus" / "prometheus-alerts.yml",
+)
 COMPOSE_UP_TIMEOUT_S = 300.0
 
 
@@ -50,8 +56,10 @@ class ComposeStack:
         runner: Runner = subprocess.run,
         env: Mapping[str, str] | None = None,
         token_path: Path = RENDERER_TOKEN,
+        prometheus_config: Sequence[Path] = PROMETHEUS_CONFIG,
     ) -> None:
         self._runner = runner
+        self._prometheus_config = prometheus_config
         self._compose_env = dict(os.environ if env is None else env)
         prometheus, grafana = configured_services(self._compose_env)
         self._compose_env["NARWHAL_PROMETHEUS_URL"] = prometheus.listener.url
@@ -85,6 +93,9 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
+        self._compose_env["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] = config_digest(
+            self._prometheus_config
+        )
         result = self._run("up", "-d", timeout_s=COMPOSE_UP_TIMEOUT_S)
         if result.stdout:
             print(result.stdout, end="")
@@ -120,6 +131,18 @@ class ComposeStack:
             restarting=bool(state.get("Restarting", False)),
             listener=configured_listener(config, service),
         )
+
+
+def config_digest(paths: Sequence[Path]) -> str:
+    """Return the SHA-256 of the staged files, or an empty string before staging."""
+    if not any(path.exists() for path in paths):
+        return ""
+    digest = hashlib.sha256()
+    for path in paths:
+        data = path.read_bytes() if path.exists() else b""
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
 
 
 def renderer_token(path: Path) -> str:
