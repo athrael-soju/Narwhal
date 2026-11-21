@@ -750,6 +750,8 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         report = Report()
         produced = await gate_produce(self.cfg, {"e0", "e3"}, client, report)
         self.assertEqual(set(produced), {"e0"})
+        # A probe that the model would end at once still hands off.
+        self.assertTrue(client.prefill.await_args_list[0].args[2]["ignore_eos"])
         self.assertEqual(len(report.failed), 1)
 
         async def empty(*args, **kwargs):

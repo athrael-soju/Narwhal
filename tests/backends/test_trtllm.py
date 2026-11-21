@@ -79,6 +79,27 @@ class TransceiverConnectorTests(unittest.TestCase):
         )
         self.assertEqual(leg, {"model": "m", "prompt": "x", "stream": True})
 
+    def test_a_context_leg_that_ends_the_reply_hands_off_a_recompute(self):
+        ended = json.loads(json.dumps(CONTEXT))
+        choice = ended["choices"][0]
+        choice.update(text="", finish_reason="stop")
+        choice["disaggregated_params"].update(
+            ctx_request_id=None, first_gen_tokens=None, encoded_opaque_state=None
+        )
+        ended["prompt_token_ids"] = None
+        found = self.kv.prefill_result(
+            ended, url="http://ctx", endpoint="/v1/completions", request_id=None
+        )
+        self.assertEqual(found.parameters(), {"recompute": True})
+        body = {"model": "m", "prompt": "x", "max_tokens": 6}
+        leg = self.kv.decode_body(body, result=found, url="http://gen", endpoint="/v1/completions")
+        # The generation engine serves the prompt as an ordinary request.
+        self.assertEqual(leg, {**body, "stream": True})
+        cut = json.loads(json.dumps(ended))
+        cut["choices"][0]["finish_reason"] = "length"
+        with self.assertRaises(ValueError):
+            self.kv.extract(cut)
+
     def test_a_context_response_without_complete_parameters_is_refused(self):
         for broken in (
             {"ctx_request_id": "1"},
@@ -160,6 +181,40 @@ class SharedGpuTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "leaves no KV cache"):
                 shared_gpu_args(args, total=50 * MIB)
 
+    def test_the_weight_count_reads_each_shard_once(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from narwhal.backends.trtllm.runtime import MIB, weight_bytes
+
+        with tempfile.TemporaryDirectory() as folder:
+            model = Path(folder)
+            for name, size in (
+                ("model-00001-of-00002.safetensors", 3),
+                ("model-00002-of-00002.safetensors", 4),
+                # The same weights in a second form, and a draft model in a subfolder.
+                ("consolidated.safetensors", 7),
+                ("training_args.bin", 1),
+            ):
+                (model / name).write_bytes(b"\0" * (size * MIB))
+            (model / "draft").mkdir()
+            (model / "draft" / "model.safetensors").write_bytes(b"\0" * MIB)
+            self.assertEqual(weight_bytes(folder), 7 * MIB)
+            index = {
+                "weight_map": {
+                    "a": "model-00001-of-00002.safetensors",
+                    "b": "model-00002-of-00002.safetensors",
+                    "c": "model-00002-of-00002.safetensors",
+                }
+            }
+            (model / "model.safetensors.index.json").write_text(json.dumps(index))
+            self.assertEqual(weight_bytes(folder), 7 * MIB)
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "pytorch_model.bin").write_bytes(b"\0" * (2 * MIB))
+            (Path(folder) / "training_args.bin").write_bytes(b"\0" * MIB)
+            self.assertEqual(weight_bytes(folder), 2 * MIB)
+
     def test_only_a_shared_launch_carries_the_reserve(self):
         from narwhal.backends.trtllm.plan import serve_args
         from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
@@ -230,6 +285,13 @@ class TrtllmDialectTests(unittest.TestCase):
         self.assertAlmostEqual(dialect.leg_transfer_seconds([{"choices": []}, report]), 0.071117)
         self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "server_e2e;dur=2"}]))
         self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "x_kv_transfer;dur=0"}]))
+        for timing in ('server_kv_transfer;desc="kv";dur=5', "server_kv_transfer;dur=5;desc=kv"):
+            self.assertEqual(dialect.leg_transfer_seconds([{"Server-Timing": timing}]), 0.005)
+        later = [
+            {"Server-Timing": "server_kv_transfer;dur=0"},
+            {"Server-Timing": "server_kv_transfer;dur=2"},
+        ]
+        self.assertEqual(dialect.leg_transfer_seconds(later), 0.002)
 
     def test_the_usage_frame_reports_the_output_count(self):
         dialect = BACKEND.dialect

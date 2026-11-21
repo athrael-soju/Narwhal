@@ -8,6 +8,9 @@ from ...engines.connector import KvConnector, PrefillResult
 PARAMS = "disaggregated_params"
 # The prompt as the context worker tokenized it; the generation leg continues from it.
 PROMPT_IDS = "prompt_token_ids"
+# A context leg whose first token ends the reply exports no KV cache. Its handoff carries
+# only this marker, and the decode engine computes the prompt again to answer the request.
+RECOMPUTE = "recompute"
 
 
 def _ints(values: object) -> bool:
@@ -48,7 +51,7 @@ class TransceiverConnector(KvConnector):
             params = payload.get(PARAMS) or {}
             if not isinstance(params, dict):
                 raise ValueError("handoff parameters must be an object")
-            if params:
+            if params and params != {RECOMPUTE: True}:
                 self._validate(params)
             return params
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
@@ -58,6 +61,8 @@ class TransceiverConnector(KvConnector):
             return {}
         if not isinstance(exported, dict):
             raise ValueError("handoff parameters must be an object")
+        if exported.get("ctx_request_id") is None and choices[0].get("finish_reason") == "stop":
+            return {RECOMPUTE: True}
         params = {**exported, PROMPT_IDS: payload.get(PROMPT_IDS)}
         self._validate(params)
         return params
@@ -75,6 +80,8 @@ class TransceiverConnector(KvConnector):
             raise ValueError("encoded_opaque_state must be a string")
 
     def attach(self, body: dict[str, Any], params: dict[str, Any]) -> None:
+        if params == {RECOMPUTE: True}:
+            return
         self._validate(params)
         exported = {key: value for key, value in params.items() if key != PROMPT_IDS}
         body[PARAMS] = {**exported, "request_type": "generation_only"}

@@ -33,7 +33,14 @@ async def gate_produce(
             else:
                 rep.skip(f"{spec.iid} produce: unreachable")
         return handoffs
-    body = {"model": cfg.model, "prompt": PROBE_PROMPT, "max_tokens": 1, "temperature": 0.0}
+    # A model may end the probe prompt at once, and a leg that ends there hands off nothing.
+    body = {
+        "model": cfg.model,
+        "prompt": PROBE_PROMPT,
+        "max_tokens": 1,
+        "temperature": 0.0,
+        **load_backend(cfg.backend).dialect.decode_probe_extras(1),
+    }
     for spec in cfg.engines:
         if spec.iid not in live:
             rep.skip(f"{spec.iid} produce: unreachable")

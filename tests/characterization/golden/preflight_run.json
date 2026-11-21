@@ -413,6 +413,7 @@
     },
     {
       "body": {
+        "ignore_eos": true,
         "kv_transfer_params": {
           "do_remote_decode": true
         },
@@ -429,6 +430,7 @@
     },
     {
       "body": {
+        "ignore_eos": true,
         "kv_transfer_params": {
           "do_remote_decode": true
         },

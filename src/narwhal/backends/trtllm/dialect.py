@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, ClassVar
@@ -47,19 +48,26 @@ class TrtllmDialect(EngineDialect):
         return count if type(count) is int and count >= 0 else None
 
     def leg_transfer_seconds(self, payloads: list[dict[str, Any]]) -> float | None:
-        # Server-Timing lists "<phase>_kv_transfer;dur=<ms>" among the leg's timings.
+        # Server-Timing lists "<phase>_kv_transfer;dur=<ms>" among the leg's timings, and an
+        # entry may carry other parameters.
         for payload in payloads:
             timing = payload.get("Server-Timing")
             if not isinstance(timing, str):
                 continue
             for entry in timing.split(","):
-                name, _, duration = entry.strip().partition(";dur=")
-                if name.endswith("kv_transfer"):
+                name, *params = (part.strip() for part in entry.split(";"))
+                if not name.endswith("kv_transfer"):
+                    continue
+                for param in params:
+                    key, _, value = param.partition("=")
+                    if key.strip() != "dur":
+                        continue
                     try:
-                        seconds = float(duration) / 1000
+                        seconds = float(value) / 1000
                     except ValueError:
-                        return None
-                    return seconds if seconds > 0 else None
+                        continue
+                    if seconds > 0 and math.isfinite(seconds):
+                        return seconds
         return None
 
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
