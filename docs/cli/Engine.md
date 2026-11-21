@@ -1,5 +1,5 @@
 ---
-description: Prepare and run vLLM and SGLang engines from engine launch records with narwhal-engine.
+description: Prepare and run vLLM, SGLang and TensorRT-LLM engines from engine launch records with narwhal-engine.
 ---
 
 # `narwhal-engine`

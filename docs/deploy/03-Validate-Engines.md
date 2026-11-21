@@ -204,7 +204,7 @@ Validate the image and plan:
 narwhal-engine check --run "$ENGINE_RUN"
 ```
 
-A passing check confirms, for both backends:
+A passing check confirms, for every backend:
 
 - the immutable image identity and runtime identity
 - the pinned package versions

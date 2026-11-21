@@ -122,8 +122,10 @@ On vLLM, every decode request includes:
 
 On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true`, and the launcher sets `--stream-interval 1`. A `/v1/chat/completions` decode request on SGLang carries no token-ID field, and the router counts one token for each streamed chunk that carries text, reasoning content, or tool calls.
 
+On TensorRT-LLM, a decode request carries no token-ID field and sets `stream_options.include_usage`. The router counts one token for each streamed chunk until the final usage frame reports the output count. It removes that frame from a streamed reply whose client did not set `include_usage`. A non-streamed reply carries the engine's `usage`.
+
 When the decode request asks for token IDs, every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-The router reports `token_accounting: token_ids` on vLLM and SGLang, and `token_accounting: reported` on llama.cpp.
+The router reports `token_accounting: token_ids` on vLLM and SGLang, and `token_accounting: reported` on llama.cpp and TensorRT-LLM.
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`.
