@@ -63,6 +63,9 @@ class NeutralSettingsTests(unittest.TestCase):
     def test_a_launch_turns_off_cache_events_with_prefix_caching_on(self):
         for name in with_launcher():
             mapping = load(name).launcher().launch_settings
+            if mapping.settings["kv_events"].default is False:
+                # A backend whose engine publishes no event stream has none to turn off.
+                continue
             with self.subTest(backend=name):
                 on = self.built(name, {})
                 self.assertIsNotNone(on["kv_events"])

@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from ...config import EngineContract
 from ...engines.attestation import (
     EngineIdentity,
     EngineIdentityReader,
@@ -37,7 +38,16 @@ def transfer_timeout_ms(config: str) -> int | None:
 
 class TrtllmIdentity(EngineIdentityReader):
     reports_process_start = False
-    contract_fields = frozenset()
+    # The cache manager, handshake and attention fields have no TensorRT-LLM counterpart.
+    contract_fields = frozenset(EngineContract().fields()) - {
+        "connector_version",
+        "attention_backend",
+        "cross_layers_blocks",
+        "hybrid_kv_cache_manager",
+        "kv_role",
+        "transfer_mode",
+        "enforce_handshake_compat",
+    }
     sequence_flag = "--max_batch_size"
 
     async def version(

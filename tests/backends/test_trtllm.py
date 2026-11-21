@@ -7,6 +7,8 @@ from narwhal.backends import load
 from narwhal.backends.trtllm.connector import TransceiverConnector
 from narwhal.backends.trtllm.identity import TrtllmIdentity, transfer_timeout_ms
 from narwhal.engines.connector import PrefillResult
+from narwhal.engines.stream import parse_event
+from narwhal.serving.completion import reassemble
 from narwhal.serving.execution import request_error
 
 BACKEND = load("trtllm")
@@ -156,6 +158,22 @@ class TrtllmDialectTests(unittest.TestCase):
             dialect.tokenize_request("m", {"prompt": "hi", "add_special_tokens": False}),
             {"model": "m", "prompt": "hi"},
         )
+
+    def test_a_non_streaming_reply_reassembles_from_the_server_stream(self):
+        def frame(choice):
+            body = {"id": "cmpl-2", "object": "text_completion", "choices": [choice]}
+            return parse_event("data: " + json.dumps(body))
+
+        chunk = {"index": 0, "text": " four", "token_ids": None, "finish_reason": None}
+        events = [
+            frame({**chunk, "avg_decoded_tokens_per_iter": 1.0}),
+            frame({**chunk, "text": " five", "finish_reason": "length"}),
+        ]
+        reply = reassemble(
+            events, endpoint="/v1/completions", choice_fields=BACKEND.dialect.choice_fields
+        )
+        self.assertEqual(reply["choices"][0]["text"], " four five")
+        self.assertEqual(reply["choices"][0]["finish_reason"], "length")
 
     def test_the_usage_frame_reports_the_output_count(self):
         dialect = BACKEND.dialect

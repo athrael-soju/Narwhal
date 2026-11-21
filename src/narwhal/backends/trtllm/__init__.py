@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import resources
+from typing import TYPE_CHECKING
 
 from ...runtime.fabric import FabricLifecycle
 from ...runtime.role_switch import RouterRoleSwitch
@@ -10,6 +11,15 @@ from .dialect import TrtllmDialect
 from .identity import TrtllmIdentity
 from .kv_events import NoKvEvents
 from .metrics import TrtllmMetrics
+
+if TYPE_CHECKING:
+    from ...deployment.launch_engine.backend import EngineLauncher
+
+
+def _launcher() -> EngineLauncher:
+    from .launch import TrtllmLauncher
+
+    return TrtllmLauncher()
 
 
 def backend() -> EngineBackend:
@@ -26,7 +36,7 @@ def backend() -> EngineBackend:
         kv_events=NoKvEvents(),
         metrics=TrtllmMetrics(),
         fabric=FabricLifecycle(),
-        launcher=None,
+        launcher=_launcher,
         # A worker launched with the context settings serves both leg types, so the router
         # alone holds each engine's role.
         role_switch=RouterRoleSwitch(),

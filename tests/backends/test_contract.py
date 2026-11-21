@@ -503,7 +503,8 @@ class BackendFlows(Launched, unittest.TestCase):
                     self.check(run, plan, stages)
                     self.assertTrue((run / "checked.json").exists())
                     continue
-                with self.assertRaisesRegex(ValueError, "^Model metadata requires --trust-remote"):
+                flag = re.escape(self.launcher.launch_settings.remote_code_flag)
+                with self.assertRaisesRegex(ValueError, f"^Model metadata requires {flag}"):
                     self.check(run, plan, stages)
                 self.assertEqual(stages.calls, [])
 
@@ -537,6 +538,9 @@ class BackendFlows(Launched, unittest.TestCase):
             self.assertRaisesRegex(ValueError, "^native runtime check exited 1: boom; inspect"),
         ):
             check(run, plan)
+        if plan["kv_events"] is None:
+            # A launch that publishes no cache events has no endpoints to move.
+            return
         moved = copy.deepcopy(plan)
         moved["kv_events"]["endpoint"] = "tcp://*:5557"
         stages = Stages(plan, self.fixtures.check_output(moved))
@@ -570,9 +574,17 @@ class BackendFlows(Launched, unittest.TestCase):
                 engine_document(run, log)
 
     def test_the_attested_launch_carries_engine_configuration_files(self):
-        files = {"engine.yaml": "timeout: 30\n"}
         launcher = type(self.backend.engine_launcher())
-        with patch.object(launcher, "config_files", lambda self, record, directory: (files, [])):
+        own = launcher.config_files
+        added: dict[str, str] = {}
+
+        def config_files(self, record, directory):
+            # The backend's own files stay beside the added one.
+            found, args = own(self, record, directory)
+            added.update(found, **{"extra.yaml": "timeout: 30\n"})
+            return dict(added), args
+
+        with patch.object(launcher, "config_files", config_files):
             run, plan, _ = self.prepared()
         self.check(run, plan)
         self.start(run)
@@ -583,7 +595,7 @@ class BackendFlows(Launched, unittest.TestCase):
         image = json.loads((run / "checked.json").read_text())["image_id"]
         with running_container(image):
             document = engine_document(run, log)
-        self.assertEqual(document["launch"]["config_files"], files)
+        self.assertEqual(document["launch"]["config_files"], added)
 
 
 class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):

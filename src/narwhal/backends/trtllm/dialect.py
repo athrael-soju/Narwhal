@@ -17,6 +17,8 @@ class TrtllmDialect(EngineDialect):
     token_ids = False
     one_token_chunks = True
     reports_output_tokens = True
+    # Each stream chunk's choice reports the tokens the iteration decoded.
+    choice_fields = ("avg_decoded_tokens_per_iter",)
     # The connector sets both fields for the generation leg.
     reserved_fields = (PARAMS, PROMPT_IDS)
 

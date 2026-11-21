@@ -1,0 +1,104 @@
+{
+  "container": {
+    "calls": [
+      {
+        "command": [
+          "docker",
+          "image",
+          "inspect",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "log": "<root>/container/launch/image-check.log",
+        "stage": "docker-image"
+      },
+      {
+        "command": [
+          "docker",
+          "run",
+          "--label",
+          "io.narwhal.launch=<hex>",
+          "--label",
+          "io.narwhal.operation=<hex>",
+          "--rm",
+          "--network",
+          "host",
+          "--ipc",
+          "host",
+          "--ulimit",
+          "memlock=-1:-1",
+          "--env-file",
+          "<root>/container/launch/container.env",
+          "--mount",
+          "type=bind,src=<root>/container/model,dst=/model,readonly",
+          "--mount",
+          "type=bind,src=<root>/container/launch/cache,dst=/root/.cache",
+          "--mount",
+          "type=bind,src=<root>/container/launch/hook,dst=/narwhal-hooks,readonly",
+          "--device",
+          "/dev/nvidiactl",
+          "--device",
+          "/dev/nvidia0",
+          "--device",
+          "/dev/nvidia1",
+          "--gpus",
+          "all",
+          "--entrypoint",
+          "python3",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "/narwhal-hooks/launch_engine.py",
+          "_check",
+          "{\"tensorrt_llm\": \"1.4.0rc3\"}",
+          "[\"serve\", \"/model\", \"--backend\", \"pytorch\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\", \"--served_model_name\", \"synthetic\", \"--tensor_parallel_size\", \"2\", \"--kv_cache_dtype\", \"auto\", \"--max_seq_len\", \"4096\", \"--max_batch_size\", \"64\", \"--num_serve_frontends\", \"1\", \"--max_num_tokens\", \"8192\", \"--config\", \"/narwhal-hooks/engine.json\"]"
+        ],
+        "log": "<root>/container/launch/image-check.log",
+        "stage": "docker-run"
+      }
+    ],
+    "checked": {
+      "engine_version": "1.4.0rc3",
+      "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kv_events": null,
+      "plan_sha256": "<sha256>",
+      "prefix_caching": true
+    },
+    "printed": "Runtime identity, package pins and server configuration passed.\nKV block reuse is on; cache-event publication is disabled.\n"
+  },
+  "native": {
+    "calls": [
+      {
+        "command": [
+          "<python>",
+          "<root>/native/launch/hook/launch_engine.py",
+          "_check",
+          "{\"tensorrt_llm\": \"1.4.0rc3\"}",
+          "[\"serve\", \"<root>/native/model\", \"--backend\", \"pytorch\", \"--host\", \"192.0.2.11\", \"--port\", \"8000\", \"--served_model_name\", \"synthetic\", \"--tensor_parallel_size\", \"1\", \"--kv_cache_dtype\", \"auto\", \"--max_seq_len\", \"4096\", \"--max_batch_size\", \"64\", \"--num_serve_frontends\", \"1\", \"--max_num_tokens\", \"8192\", \"--free_gpu_memory_fraction\", \"0.4\", \"--config\", \"<root>/native/launch/hook/engine.json\"]"
+        ],
+        "env": {
+          "CUDA_VISIBLE_DEVICES": "0",
+          "NARWHAL_TRTLLM_API_KEY": "engine-only-secret",
+          "NARWHAL_TRTLLM_TRANSFER_HOST": "192.0.2.11",
+          "NARWHAL_TRTLLM_TRANSFER_PORT": "5600",
+          "PYTHONPATH": "<root>/native/launch/hook",
+          "TRTLLM_FIXTURE_FLAG": "1",
+          "UCX_NET_DEVICES": "fabric0",
+          "UCX_TCP_PORT_RANGE": "39000-39999",
+          "UCX_TLS": "tcp,sm,self,cuda"
+        },
+        "log": "<root>/native/launch/runtime-check.log",
+        "stage": "native-runtime-check"
+      }
+    ],
+    "checked": {
+      "backend": "native",
+      "engine_version": "1.4.0rc3",
+      "expected_packages": {
+        "tensorrt_llm": "1.4.0rc3"
+      },
+      "kv_events": null,
+      "plan_sha256": "<sha256>",
+      "prefix_caching": true,
+      "python_executable": "<python>"
+    },
+    "printed": "Runtime identity, package pins and server configuration passed.\nKV block reuse is on; cache-event publication is disabled.\n"
+  }
+}
