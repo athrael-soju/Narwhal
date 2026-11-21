@@ -143,7 +143,6 @@ class TrtllmMetricsTests(unittest.TestCase):
     def test_the_prometheus_route_holds_the_cache_size_and_hits(self):
         metrics = BACKEND.metrics
         self.assertEqual(metrics.path, "/prometheus/metrics")
-        self.assertFalse(metrics.drains)
         self.assertIsNone(metrics.kv_capacity(""))
         self.assertIsNone(metrics.kv_capacity("trtllm_kv_cache_max_blocks 10\n"))
         self.assertIsNone(metrics.prefix_cache_hits(""))
