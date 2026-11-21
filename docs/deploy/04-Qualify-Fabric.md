@@ -20,7 +20,7 @@ The `calculate` command sizes the budget from these initial trial parameters:
 
 Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
-1. In the representative's engine-role shell, calculate the budget. On vLLM, calculate it from the captured cache layout:
+1. In the representative's engine-role shell, calculate the budget. On vLLM and TensorRT-LLM, calculate it from the captured cache layout:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
@@ -295,7 +295,7 @@ For every edge, retain:
 - The budget digest.
 - The sample path and exit status.
 
-When the runtime layout changes, recalculate the budget from the new `cache-layout.json` on vLLM, or from new measured handoffs on SGLang.
+When the runtime layout changes, recalculate the budget from the new `cache-layout.json` on vLLM and TensorRT-LLM, or from new measured handoffs on SGLang.
 
 Link inputs:
 

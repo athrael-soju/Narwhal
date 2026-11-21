@@ -12,6 +12,8 @@ from narwhal.backends import load
 from narwhal.deployment.launch_engine import cli
 from narwhal.deployment.launch_engine.backend import (
     CacheCapture,
+    CacheMeasurement,
+    CacheRegistration,
     EngineLauncher,
     LiveModelDimensions,
     ModelFormats,
@@ -19,7 +21,13 @@ from narwhal.deployment.launch_engine.backend import (
 from narwhal.deployment.launch_engine.check import check
 from tests.backends.contract import Stages, fixtures, prepared
 
-CAPABILITIES = (CacheCapture, LiveModelDimensions, ModelFormats)
+CAPABILITIES = (
+    CacheCapture,
+    CacheMeasurement,
+    CacheRegistration,
+    LiveModelDimensions,
+    ModelFormats,
+)
 
 
 class LaunchCapabilityTests(unittest.TestCase):
@@ -36,10 +44,20 @@ class LaunchCapabilityTests(unittest.TestCase):
             self.assertFalse(required & capability.__abstractmethods__, capability.__name__)
 
     def test_sglang_declares_no_optional_capability(self):
-        self.assertIsInstance(load("vllm").launcher(), CAPABILITIES)
+        launcher = load("vllm").launcher()
+        for capability in CAPABILITIES:
+            self.assertIsInstance(launcher, capability)
         launcher = load("sglang").launcher()
         for capability in CAPABILITIES:
             self.assertNotIsInstance(launcher, capability)
+
+    def test_tensorrt_llm_captures_its_cache_and_declares_no_other_capability(self):
+        launcher = load("trtllm").launcher()
+        self.assertIsInstance(launcher, CacheCapture)
+        for capability in CAPABILITIES[1:]:
+            self.assertNotIsInstance(launcher, capability)
+        self.assertCountEqual(cli.capture_backends(CacheCapture), ["vLLM", "TensorRT-LLM"])
+        self.assertEqual(cli.capture_backends(CacheMeasurement), ["vLLM"])
 
     def test_the_cli_lists_capture_actions_for_backends_with_cache_capture(self):
         with contextlib.redirect_stdout(io.StringIO()) as shown, self.assertRaises(SystemExit):
@@ -65,9 +83,7 @@ class LaunchCapabilityTests(unittest.TestCase):
         ):
             cli.main(["measure-cache", "--run", str(run)])
         self.assertEqual(exited.exception.code, 1)
-        self.assertIn(
-            "SGLang has no cache capture; measure-cache applies to vLLM", error.getvalue()
-        )
+        self.assertIn("SGLang does not support measure-cache; it applies to vLLM", error.getvalue())
         self.assertFalse((run / "cache-layout.json").exists())
 
     def test_a_backend_without_model_formats_takes_a_model_directory(self):

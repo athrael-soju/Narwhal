@@ -89,7 +89,7 @@ Record each gate's result before the next gate.
 | Router restart with unchanged fleet configuration | Restart the router. |
 | Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration). |
 | Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, [profile the new process generation](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles), [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), then run full preflight. |
-| Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM or from measured handoffs on SGLang. |
+| Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM and TensorRT-LLM or from measured handoffs on SGLang. |
 | Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), and exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index

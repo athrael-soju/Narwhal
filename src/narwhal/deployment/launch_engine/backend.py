@@ -110,10 +110,18 @@ class CacheCapture(ABC):
     cache_hook: ClassVar[Path]
 
     @abstractmethod
-    def measure_cache(self, run: Path, plan: dict) -> None: ...
+    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+
+class CacheMeasurement(ABC):
+    """Optional capability: the KV cache layout from a temporary sizing container."""
 
     @abstractmethod
-    def capture_cache(self, run: Path, plan: dict) -> None: ...
+    def measure_cache(self, run: Path, plan: dict) -> None: ...
+
+
+class CacheRegistration(ABC):
+    """Optional capability: the connector's cache block registration and handshake policy."""
 
     @abstractmethod
     def registration_layout(

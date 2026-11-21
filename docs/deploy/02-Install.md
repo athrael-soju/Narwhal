@@ -52,9 +52,9 @@ Helper snapshots under `runs/deployment-tools/` on the engine hosts:
 | Helper snapshot                                        | Path variable                | SHA-256 variable                    |
 | ------------------------------------------------------ | ---------------------------- | ----------------------------------- |
 | `tools/deployment/fabric_budget.py`                    | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256`      |
-| `src/narwhal/backends/vllm/cache_capture_hook.py`      | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
+| `src/narwhal/backends/<backend>/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
 
-Deployment includes the cache-capture hook only when the fleet's `engine.backend` is `vllm`, the default.
+Deployment includes the cache-capture hook of the fleet's `engine.backend` when it is `vllm`, the default, or `trtllm`.
 
 ## Installing engine 1 and the remaining hosts
 

@@ -42,18 +42,18 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 
 | Action | Backend | Input | Output |
 | --- | --- | --- | --- |
-| `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and on vLLM the cache-capture hook |
+| `prepare` | container, native | `NARWHAL_ENGINE_LAUNCH_CONFIG` and the [deployment environment](../deploy/02-Install.md) | New launch directory with `launch.json`, `container.env` or `engine.env`, and on vLLM and TensorRT-LLM the cache-capture hook |
 | `check` | container, native | Prepared launch directory | `checked.json`, and `image-check.log` or `runtime-check.log` |
 | `measure-cache` | container, vLLM | Checked plan with no started container | `cache-layout.json` from a sizing container, removed once it succeeds |
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
 | `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
 | `start` | container | Checked plan | One serving container and `container.id` |
-| `capture-cache` | container, vLLM | Running container of a checked plan | `cache-layout.json` with the live cache pages |
+| `capture-cache` | container, vLLM, TensorRT-LLM | Running container of a checked plan | `cache-layout.json` with the live cache pages |
 | `cache-registration` | container, native, vLLM | Checked plan and one of `--startup-log` or `--runtime-layout` | `cache-registration.json` with the resolved block grouping |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
 
-SGLang and TensorRT-LLM plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`.
+SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`. TensorRT-LLM plans reject all of them except `capture-cache`.
 
 These actions check their inputs:
 

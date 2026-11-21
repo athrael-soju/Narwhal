@@ -344,7 +344,7 @@ If the probe reports another version, compare the container that serves the endp
 
 ## Capturing the live cache layout
 
-For a vLLM engine, capture the cache layout in each engine-role shell:
+For a vLLM or TensorRT-LLM engine, capture the cache layout in each engine-role shell:
 
 ```bash
 narwhal-engine capture-cache --run "$ENGINE_RUN"
@@ -354,7 +354,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang or TensorRT-LLM plan. For those engines, skip the capture and size their fabric budgets from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+`narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 
