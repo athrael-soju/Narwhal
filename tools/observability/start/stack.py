@@ -93,7 +93,6 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
-        # Prometheus reads its config and rules only at start, so a change recreates it.
         self._compose_env["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] = config_digest(
             self._prometheus_config
         )
