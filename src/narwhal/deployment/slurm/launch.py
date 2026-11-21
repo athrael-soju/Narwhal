@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -219,7 +220,7 @@ def engine_environment(
 
 def _write(path: Path, value: object) -> None:
     with open(path, "x", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2)
+        json.dump(value, stream, indent=2, allow_nan=False)
         stream.write("\n")
 
 
@@ -304,6 +305,14 @@ class Launch:
                 f"engines: started {engine.iid} at http://{engine.host}:{engine.port} "
                 f"on devices {','.join(placement.devices)} (pid {child.pid})"
             )
+
+    def check_fleet(self) -> None:
+        """Raise ValueError when the fleet file this launch would write does not load."""
+        document = fleet_document(self.settings, self.placements, self.directory)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "fleet.json"
+            _write(path, document)
+            load_fleet(path)
 
     def _write_fleet(self) -> None:
         try:

@@ -27,12 +27,22 @@ def _pair(text: str) -> tuple[str, str]:
     return key, value
 
 
+class _NonFinite(ValueError):
+    pass
+
+
+def _refuse_constant(name: str) -> Any:
+    raise _NonFinite(name)
+
+
 def _setting(text: str) -> tuple[str, Any]:
     path, sep, raw = text.partition("=")
     if not sep or not path:
         raise argparse.ArgumentTypeError(f"expected PATH=VALUE, not {text!r}")
     try:
-        value = json.loads(raw)
+        value = json.loads(raw, parse_constant=_refuse_constant)
+    except _NonFinite as error:
+        raise argparse.ArgumentTypeError(f"{path}: {error} is not a finite number") from error
     except ValueError:
         value = raw
     return path, value
@@ -140,9 +150,15 @@ def settings_from(args: argparse.Namespace) -> Settings:
     env = dict(args.engine_env)
     if args.device_env in env:
         raise ValueError(f"--engine-env must not set {args.device_env}; the launch sets it")
-    fleet_settings = dict(args.fleet_setting)
-    for path in fleet_settings:
+    paths = [path for path, _ in args.fleet_setting]
+    for path in paths:
         check_fleet_setting(path)
+    for path in paths:
+        # A setting inside another would be replaced by it, or replace part of it.
+        for other in paths:
+            if other is not path and (other == path or other.startswith(f"{path}.")):
+                raise ValueError(f"fleet setting {other!r} is also set by {path!r}")
+    fleet_settings = dict(args.fleet_setting)
     return Settings(
         model=args.model,
         served_name=args.served_model_name,
@@ -181,6 +197,12 @@ def main(argv: list[str] | None = None, stop: threading.Event | None = None) -> 
         launch = Launch(settings, allocation, start, addresses, stop=stop)
     except ValueError as error:
         print(f"{COMMAND}: allocation: {error}", file=sys.stderr)
+        return 2
+    try:
+        # Every node checks the fleet file before any engine starts.
+        launch.check_fleet()
+    except ValueError as error:
+        print(f"{COMMAND}: fleet: {error}", file=sys.stderr)
         return 2
     if threading.current_thread() is threading.main_thread():
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):

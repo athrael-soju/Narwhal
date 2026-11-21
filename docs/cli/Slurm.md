@@ -75,7 +75,7 @@ The head node writes these files to `<run-dir>/slurm-<job id>/`:
 | `router-state.json` | Router recovery state. |
 | `logs/` | One log for each engine, and `profile.log` and `router.log`. |
 
-`--fleet-setting` cannot set a field the launch writes: `schema`, `schema_version`, `model`, `engines`, `slo.ttft_s`, `slo.tpot_s`, `engine.backend`, `profiles.path` or `recovery.state_path`. The `fleet` stage fails when the fleet file does not load, and names the field.
+`--fleet-setting` cannot set a field the launch writes, or an object that holds one: `schema`, `schema_version`, `model`, `engines`, `slo.ttft_s`, `slo.tpot_s`, `engine.backend`, `profiles.path` or `recovery.state_path`. It also refuses a path given twice, a path inside another given path, and `NaN` or `Infinity` values. Every node checks the fleet file before it starts its engines, and exits with code `2` naming the field when the file does not load.
 
 The launch refuses a run directory that already holds `fleet.json`. Profiles bind to each engine's process start time, so every allocation profiles its engines again.
 

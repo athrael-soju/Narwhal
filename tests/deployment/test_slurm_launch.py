@@ -1,5 +1,6 @@
 """Launch a fleet in a stubbed Slurm allocation with stub engine, profiler and router processes."""
 
+import argparse
 import io
 import json
 import os
@@ -456,6 +457,65 @@ class CliTests(unittest.TestCase):
         code, _, stderr = self.run_cli(ENV, ["--fleet-setting", "slo.ttft_s=3"])
         self.assertEqual(code, 2)
         self.assertIn("slo.ttft_s, which the launch writes", stderr)
+
+    def test_a_fleet_setting_that_does_not_load_exits_2_before_any_engine_starts(self):
+        for value, expected in (
+            ("serving.admision=open", "admision"),
+            ("serving.max_connections=many", "max_connections"),
+        ):
+            with (
+                self.subTest(value=value),
+                patch.object(cli, "resolve", return_value="10.0.0.1"),
+                patch.object(Launch, "run") as run,
+            ):
+                code, _, stderr = self.run_cli(ENV, ["--fleet-setting", value])
+                self.assertEqual(code, 2)
+                self.assertIn("narwhal-slurm: fleet: ", stderr)
+                self.assertIn(expected, stderr)
+                run.assert_not_called()
+
+    def test_a_non_finite_fleet_setting_exits_2_naming_the_path(self):
+        for value, expected in (
+            ("engine.first_token_timeout_s=NaN", "engine.first_token_timeout_s: NaN is not a"),
+            ('serving={"max_connections":-Infinity}', "serving: -Infinity is not a finite"),
+        ):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(argparse.ArgumentTypeError, expected):
+                    cli._setting(value)
+                with self.assertRaises(SystemExit) as exit:
+                    self.run_cli(ENV, ["--fleet-setting", value])
+                self.assertEqual(exit.exception.code, 2)
+
+    def test_a_fleet_setting_path_may_be_given_once_and_not_inside_another(self):
+        for values, expected in (
+            (
+                ["serving.admission=open", "serving.admission=predictive"],
+                "'serving.admission' is also set by 'serving.admission'",
+            ),
+            (
+                ["serving.admission=open", 'serving={"max_connections":128}'],
+                "'serving.admission' is also set by 'serving'",
+            ),
+            (
+                ["serving.admission=open", "serving.admission.mode=open"],
+                "'serving.admission.mode' is also set by 'serving.admission'",
+            ),
+        ):
+            with self.subTest(values=values):
+                argv = [arg for value in values for arg in ("--fleet-setting", value)]
+                code, _, stderr = self.run_cli(ENV, argv)
+                self.assertEqual(code, 2)
+                self.assertIn(expected, stderr)
+
+    def test_a_fleet_setting_value_may_hold_an_equals_sign(self):
+        args = cli.parser().parse_args(
+            [
+                *("--model", "/m", "--served-model-name", "m", "--run-dir", "/tmp"),
+                *("--slo-ttft-s", "2", "--slo-tpot-s", "0.05"),
+                *("--fleet-setting", "engine.headers=a=b"),
+            ]
+        )
+        self.assertEqual(cli.settings_from(args).fleet_settings, {"engine.headers": "a=b"})
 
     def test_the_device_variable_cannot_be_set_through_engine_env(self):
         code, _, stderr = self.run_cli(ENV, ["--engine-env", "CUDA_VISIBLE_DEVICES=0"])
