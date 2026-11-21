@@ -105,7 +105,10 @@
         ],
         "model": "stub",
         "prompt_token_ids": "<token IDs of 'contract probe'>",
-        "stream": true
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
       },
       "engine": "stub-1",
       "headers": {
@@ -155,7 +158,10 @@
         "max_tokens": 4,
         "model": "stub",
         "prompt": "<token IDs of 'contract probe'>",
-        "stream": true
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
       },
       "engine": "stub-1",
       "headers": {
