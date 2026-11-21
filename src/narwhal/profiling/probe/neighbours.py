@@ -41,6 +41,7 @@ class NeighbourLoad:
         observation_timeout_s: float | None = None,
         *,
         peerless: bool = False,
+        launches: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self.client = client
         self.peers = peers
@@ -51,6 +52,7 @@ class NeighbourLoad:
         self.observation_timeout_s = observation_timeout_s
         # Requests carry fields that let each neighbour serve its role without a KV peer.
         self.peerless = peerless
+        self.launches = launches or {}
         self.tasks: list[asyncio.Task[None]] = []
         self.roles = {iid: role for iid, _, role in peers}
         self._index = {iid: index for index, (iid, _, _) in enumerate(peers)}
@@ -98,6 +100,7 @@ class NeighbourLoad:
             self.model,
             self.dialect,
             timeout_s=self.observation_timeout_s or 30.0,
+            launch=self.launches.get(iid),
         )
         if count + output > limit:
             raise ValueError(f"neighbour {iid}: {count}+{output} exceeds max_model_len {limit}")

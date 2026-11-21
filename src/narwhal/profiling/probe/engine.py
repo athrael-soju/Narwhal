@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
 
+from ...engines.attestation import attested_option
 from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
 
@@ -105,7 +106,15 @@ async def engine_context_limit(
     model: str,
     dialect: EngineDialect,
     timeout_s: float = 30.0,
+    *,
+    launch: Mapping[str, Any] | None = None,
 ) -> int:
+    flag = dialect.context_limit_flag
+    if flag is not None:
+        value = attested_option({"launch": launch}, flag)
+        if value is None or not value.isdigit() or int(value) < 1:
+            raise RuntimeError(f"the attested launch of {url} sets no valid {flag}")
+        return int(value)
     path = dialect.context_limit_path
     if path is None:
         body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)

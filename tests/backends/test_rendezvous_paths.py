@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.backends import load
-from narwhal.config import EngineContract
+from narwhal.config import EngineContract, EngineSpec
 from narwhal.config.validation import validate
 from narwhal.diagnostics.check import engines as engine_gates
 from narwhal.diagnostics.check import transfer
@@ -419,3 +419,25 @@ class ProcessRouteTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SequentialLaunchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_sequential_fleet_reads_launches_only_for_a_context_flag(self):
+        backend = load("vllm")
+        kv = backend.connector(backend.default_connector)
+
+        class Launched(type(backend.dialect)):  # type: ignore[misc]
+            context_limit_flag = "--max-model-len"
+
+        specs = [EngineSpec("e0", "http://127.0.0.1:1")]
+        with patch.object(
+            pairing_probe, "attested_launches", AsyncMock(return_value={"e0": LAUNCH})
+        ) as fetch:
+            plain = await pairing_probe.paired_transport(
+                httpx.AsyncHTTPTransport, kv, backend.dialect, specs, timeout_s=1
+            )
+            launched = await pairing_probe.paired_transport(
+                httpx.AsyncHTTPTransport, kv, Launched(), specs, timeout_s=1
+            )
+        self.assertEqual((plain, launched), ((None, {}), (None, {"e0": LAUNCH})))
+        fetch.assert_awaited_once()

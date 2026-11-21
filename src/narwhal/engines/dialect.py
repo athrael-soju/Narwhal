@@ -20,6 +20,9 @@ class EngineDialect(ABC):
     tokenize_messages: ClassVar[bool] = True
     # None reads the context limit from the tokenize response.
     context_limit_path: ClassVar[str | None] = None
+    # The launch flag that sets the context limit, for an engine that reports none. Callers
+    # then read the limit from the engine's attested launch.
+    context_limit_flag: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.
     cache_reset_path: ClassVar[str | None] = None
     # These client fields conflict with the forced one-token prefill request.

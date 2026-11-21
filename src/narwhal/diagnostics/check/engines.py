@@ -307,7 +307,9 @@ async def gate_pace(
                     break
                 if r.status_code == 400 and body["prompt"] == PACE_PROMPT:
                     try:
-                        limit = await engine_context_limit(c, spec.url, cfg.model, dialect)
+                        limit = await engine_context_limit(
+                            c, spec.url, cfg.model, dialect, launch=launches.get(spec.iid)
+                        )
                         if limit < 2:
                             raise ValueError(f"engine context limit {limit} leaves no output token")
                         prompt, count = await make_prompt(

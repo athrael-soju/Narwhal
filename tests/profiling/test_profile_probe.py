@@ -497,6 +497,29 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(max(sent), 16300)
         self.assertEqual(max(bounded_sweep(Sweep(), 8192).prefill_lens), 4300)
 
+    async def test_a_dialect_with_a_context_flag_reads_the_attested_launch(self):
+        class Launched(type(DIALECT)):  # type: ignore[misc]
+            context_limit_flag = "--max_seq_len"
+
+        def refuse(request):
+            raise AssertionError(f"the engine was asked for {request.url.path}")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
+            for args in (["--max_seq_len", "32768"], ["--max_seq_len=32768"]):
+                with self.subTest(args=args):
+                    limit = await engine_context_limit(
+                        client, "http://e", "stub", Launched(), launch={"args": args}
+                    )
+                    self.assertEqual(limit, 32768)
+            for launch in (None, {"args": []}, {"args": ["--max_seq_len", "0"]}):
+                with (
+                    self.subTest(launch=launch),
+                    self.assertRaisesRegex(RuntimeError, "sets no valid --max_seq_len"),
+                ):
+                    await engine_context_limit(
+                        client, "http://e", "stub", Launched(), launch=launch
+                    )
+
     async def test_tokenizer_must_report_live_context_limit(self):
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"count": 1}))

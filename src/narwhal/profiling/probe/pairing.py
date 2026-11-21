@@ -129,7 +129,10 @@ async def paired_transport(
     timeout_s: float,
 ) -> tuple[PairedTransport | None, dict[str, dict[str, Any]]]:
     if not kv.concurrent:
-        return None, {}
+        # A dialect whose engine reports no context limit reads it from the attested launch.
+        if dialect.context_limit_flag is None:
+            return None, {}
+        return None, await attested_launches(specs, timeout_s=timeout_s)
     pairing = PairedTransport(inner(), kv, dialect)
     return pairing, await attested_launches(specs, timeout_s=timeout_s)
 

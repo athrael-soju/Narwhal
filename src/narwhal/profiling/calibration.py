@@ -711,11 +711,23 @@ async def calibrate(
                 timeout=observation_timeout_s, headers=cfg.engine_headers()
             ) as sizing:
                 context_limits: dict[str, int] = {}
+                attested = (
+                    await attested_launches(
+                        [by_id[iid] for iid in sorted(used)], timeout_s=observation_timeout_s
+                    )
+                    if dialect.context_limit_flag is not None
+                    else {}
+                )
                 for iid in sorted(used):
                     spec = by_id[iid]
                     async with asyncio.timeout(observation_timeout_s):
                         context_limit = await engine_context_limit(
-                            sizing, spec.url, cfg.model, dialect, observation_timeout_s
+                            sizing,
+                            spec.url,
+                            cfg.model,
+                            dialect,
+                            observation_timeout_s,
+                            launch=attested.get(iid),
                         )
                     for target in input_tokens:
                         if target + 1 > context_limit:
