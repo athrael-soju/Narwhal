@@ -498,6 +498,8 @@ class EngineLauncherTests(unittest.TestCase):
             record["runtime"]["extra_args"].extend(["--gpu-memory-utilization", "0.4"])
             plan, _ = build(record, env, Path(folder) / "launch")
             self.assertEqual(plan["shared_device"], record["shared_device"])
+            # Engines on one GPU need distinct host PIDs for UCX CUDA IPC.
+            self.assertEqual(plan["common"][plan["common"].index("--pid") + 1], "host")
             self.assertEqual(plan["ucx_tls"], "tcp,sm,self,cuda")
             self.assertEqual(plan["attestation_port"], 8010)
             self.assertEqual(plan["side_channel_port"], 5600)
