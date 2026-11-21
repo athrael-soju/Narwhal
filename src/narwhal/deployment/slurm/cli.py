@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -14,7 +15,7 @@ from typing import Any
 from ... import backends
 from ...cli_support import add_version_argument
 from .allocation import from_environment, resolve
-from .launch import Launch, Settings, StageFailed, Stopped
+from .launch import Launch, Settings, StageFailed, Stopped, check_fleet_setting
 
 COMMAND = "narwhal-slurm"
 
@@ -24,6 +25,27 @@ def _pair(text: str) -> tuple[str, str]:
     if not sep or not key or "\n" in value:
         raise argparse.ArgumentTypeError(f"expected NAME=VALUE, not {text!r}")
     return key, value
+
+
+class _NonFinite(ValueError):
+    pass
+
+
+def _refuse_constant(name: str) -> Any:
+    raise _NonFinite(name)
+
+
+def _setting(text: str) -> tuple[str, Any]:
+    path, sep, raw = text.partition("=")
+    if not sep or not path:
+        raise argparse.ArgumentTypeError(f"expected PATH=VALUE, not {text!r}")
+    try:
+        value = json.loads(raw, parse_constant=_refuse_constant)
+    except _NonFinite as error:
+        raise argparse.ArgumentTypeError(f"{path}: {error} is not a finite number") from error
+    except ValueError:
+        value = raw
+    return path, value
 
 
 def _positive(kind: Callable[[str], float]) -> Callable[[str], Any]:
@@ -95,6 +117,15 @@ def parser() -> argparse.ArgumentParser:
         help="extra narwhal-profile argument, repeatable",
     )
     p.add_argument(
+        "--fleet-setting",
+        action="append",
+        default=[],
+        type=_setting,
+        metavar="PATH=VALUE",
+        help="fleet field by dotted path, repeatable, such as serving.admission=open; "
+        "VALUE is read as JSON, or else as a string",
+    )
+    p.add_argument(
         "--health-timeout-s",
         type=_positive(float),
         default=1800.0,
@@ -119,6 +150,15 @@ def settings_from(args: argparse.Namespace) -> Settings:
     env = dict(args.engine_env)
     if args.device_env in env:
         raise ValueError(f"--engine-env must not set {args.device_env}; the launch sets it")
+    paths = [path for path, _ in args.fleet_setting]
+    for path in paths:
+        check_fleet_setting(path)
+    for path in paths:
+        # A setting inside another would be replaced by it, or replace part of it.
+        for other in paths:
+            if other is not path and (other == path or other.startswith(f"{path}.")):
+                raise ValueError(f"fleet setting {other!r} is also set by {path!r}")
+    fleet_settings = dict(args.fleet_setting)
     return Settings(
         model=args.model,
         served_name=args.served_model_name,
@@ -139,6 +179,7 @@ def settings_from(args: argparse.Namespace) -> Settings:
         router_host=args.router_host,
         router_port=args.router_port,
         profile_args=tuple(args.profile_arg),
+        fleet_settings=fleet_settings,
         health_timeout_s=args.health_timeout_s,
         ready_timeout_s=args.ready_timeout_s,
         stop_grace_s=args.stop_grace_s,
@@ -156,6 +197,12 @@ def main(argv: list[str] | None = None, stop: threading.Event | None = None) -> 
         launch = Launch(settings, allocation, start, addresses, stop=stop)
     except ValueError as error:
         print(f"{COMMAND}: allocation: {error}", file=sys.stderr)
+        return 2
+    try:
+        # Every node checks the fleet file before any engine starts.
+        launch.check_fleet()
+    except ValueError as error:
+        print(f"{COMMAND}: fleet: {error}", file=sys.stderr)
         return 2
     if threading.current_thread() is threading.main_thread():
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
