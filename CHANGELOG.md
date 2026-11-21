@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.0](https://github.com/athrael-soju/Narwhal/compare/v0.9.0...v0.10.0) (2026-11-21)
+
+
+### Features
+
+* `controller.reactive.decode_recovery` schedules an early evaluation of a move to decode after a `slot_wait` refusal ([5b8d174](https://github.com/athrael-soju/Narwhal/commit/5b8d1746b9218078506ec92173f88233d0bf56ee))
+* `serving.prefill_on_decode` lets placement borrow a decode-role engine for a prefill leg when every prefill-role engine misses the TTFT budget, and the journal records `prefill_role` ([5b8d174](https://github.com/athrael-soju/Narwhal/commit/5b8d1746b9218078506ec92173f88233d0bf56ee))
+* `tools/measurement/trace_convert.py` writes public timestamped traces as `mooncake_trace` files ([5b8d174](https://github.com/athrael-soju/Narwhal/commit/5b8d1746b9218078506ec92173f88233d0bf56ee))
+* a queued request whose decode-slot wait would pass its TTFT budget is refused with reason `slot_wait`, and the journal's admission price records the wait ([2bbe619](https://github.com/athrael-soju/Narwhal/commit/2bbe619378151473650d90b68c29387321f4e3b6))
+* decode profiles reach each engine's sequence limit, and preflight warns when a profile stops short of it ([2bbe619](https://github.com/athrael-soju/Narwhal/commit/2bbe619378151473650d90b68c29387321f4e3b6))
+
+
+### Fixes
+
+* a concurrent decode leg holds its decode seat from placement until its prefill completes plus its decode time, and refused or queued decode work counts as decode demand ([2bbe619](https://github.com/athrael-soju/Narwhal/commit/2bbe619378151473650d90b68c29387321f4e3b6))
+* **observability:** recreate Prometheus when make observe stages a new config ([#428](https://github.com/athrael-soju/Narwhal/issues/428)) ([9b649f8](https://github.com/athrael-soju/Narwhal/commit/9b649f883063f70c5a1b5f2f8ad8650b8d604533))
+* role control sees a decode shortfall on the confirmation span as well as the window, and prices arriving prefill work by each prompt's share of a batch ([2bbe619](https://github.com/athrael-soju/Narwhal/commit/2bbe619378151473650d90b68c29387321f4e3b6))
+
 ## [0.9.0](https://github.com/athrael-soju/Narwhal/compare/v0.8.0...v0.9.0) (2026-11-14)
 
 
