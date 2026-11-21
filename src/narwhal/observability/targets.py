@@ -11,9 +11,6 @@ if TYPE_CHECKING:
 
 def scrape_targets(cfg: FleetConfig) -> list[dict[str, Any]]:
     metrics = load_backend(cfg.backend).metrics
-    # A scrape of a draining engine would take the counts that profiling and checks read.
-    if metrics.drains:
-        return []
     groups = []
     for spec in cfg.engines:
         url = urlsplit(spec.url)

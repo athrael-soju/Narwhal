@@ -412,6 +412,8 @@ class TrtllmWire:
                 "reusedBlocks": 0,
             }
             return Reply(200, body=compact([{"iter": 0, "kvCacheStats": stats}]))
+        if (method, path) == ("GET", "/prometheus/metrics"):
+            return Reply(200, METRICS_TYPE, engine.metrics())
         if (method, path) != ("POST", "/_internal/tokenize"):
             return None
         try:
@@ -424,7 +426,12 @@ class TrtllmWire:
         return Reply(200, body=compact({"count": len(tokens), "tokens": tokens}))
 
     def engine_metrics(self, engine: SimulatedEngine) -> str:
-        return ""
+        labels = 'engine_type="pytorch",model_name="simulated",pid="1"'
+        return (
+            f'trtllm_kv_cache_max_blocks{{dp_rank="0",{labels}}} {MAX_MODEL_LEN // BLOCK_TOKENS}\n'
+            f'trtllm_kv_cache_tokens_per_block{{dp_rank="0",{labels}}} {BLOCK_TOKENS}\n'
+            f"trtllm_prompt_cached_tokens_total{{{labels}}} 0\n"
+        )
 
     def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
         return headers.get("x-request-id")

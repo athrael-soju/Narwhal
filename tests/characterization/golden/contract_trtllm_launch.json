@@ -73,7 +73,7 @@
           "all"
         ],
         "config_files": {
-          "engine.json": "{\n  \"cache_transceiver_config\": {\n    \"backend\": \"UCX\",\n    \"kv_transfer_timeout_ms\": 60000,\n    \"transceiver_runtime\": \"CPP\"\n  },\n  \"cuda_graph_config\": {\n    \"enable_padding\": true,\n    \"max_batch_size\": 64\n  },\n  \"disable_overlap_scheduler\": true,\n  \"dtype\": \"bfloat16\",\n  \"enable_chunked_prefill\": true,\n  \"enable_iter_perf_stats\": true,\n  \"kv_cache_config\": {\n    \"use_kv_cache_manager_v2\": false\n  }\n}\n"
+          "engine.json": "{\n  \"cache_transceiver_config\": {\n    \"backend\": \"UCX\",\n    \"kv_transfer_timeout_ms\": 60000,\n    \"transceiver_runtime\": \"CPP\"\n  },\n  \"cuda_graph_config\": {\n    \"enable_padding\": true,\n    \"max_batch_size\": 64\n  },\n  \"disable_overlap_scheduler\": true,\n  \"dtype\": \"bfloat16\",\n  \"enable_chunked_prefill\": true,\n  \"enable_iter_perf_stats\": true,\n  \"kv_cache_config\": {\n    \"use_kv_cache_manager_v2\": false\n  },\n  \"return_perf_metrics\": true\n}\n"
         },
         "connector": {
           "kv_lease_s": 60,
@@ -238,7 +238,7 @@
         "backend": "native",
         "common": [],
         "config_files": {
-          "engine.json": "{\n  \"cache_transceiver_config\": {\n    \"backend\": \"UCX\",\n    \"kv_transfer_timeout_ms\": 60000,\n    \"transceiver_runtime\": \"CPP\"\n  },\n  \"cuda_graph_config\": {\n    \"enable_padding\": true,\n    \"max_batch_size\": 64\n  },\n  \"disable_overlap_scheduler\": true,\n  \"dtype\": \"bfloat16\",\n  \"enable_chunked_prefill\": true,\n  \"enable_iter_perf_stats\": true,\n  \"kv_cache_config\": {\n    \"use_kv_cache_manager_v2\": false\n  }\n}\n"
+          "engine.json": "{\n  \"cache_transceiver_config\": {\n    \"backend\": \"UCX\",\n    \"kv_transfer_timeout_ms\": 60000,\n    \"transceiver_runtime\": \"CPP\"\n  },\n  \"cuda_graph_config\": {\n    \"enable_padding\": true,\n    \"max_batch_size\": 64\n  },\n  \"disable_overlap_scheduler\": true,\n  \"dtype\": \"bfloat16\",\n  \"enable_chunked_prefill\": true,\n  \"enable_iter_perf_stats\": true,\n  \"kv_cache_config\": {\n    \"use_kv_cache_manager_v2\": false\n  },\n  \"return_perf_metrics\": true\n}\n"
         },
         "connector": {
           "kv_lease_s": 60,

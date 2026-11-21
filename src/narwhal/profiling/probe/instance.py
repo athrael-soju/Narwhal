@@ -50,8 +50,7 @@ async def _require_cold(
     evidence: dict[str, object] | None,
 ) -> None:
     after = await prefix_cache_hits(client, url, metrics, timeout_s or 30.0)
-    gained = None if before is None or after is None else metrics.gained(before, after)
-    hit_tokens = None if gained is None or gained < 0 else gained
+    hit_tokens = None if before is None or after is None or after < before else after - before
     if evidence is not None:
         evidence["prefix_cache_hit_tokens"] = hit_tokens
     if hit_tokens:

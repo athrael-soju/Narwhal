@@ -102,8 +102,9 @@ def engine_config(runtime: dict) -> dict:
         # scheduler on.
         "disable_overlap_scheduler": True,
         "enable_chunked_prefill": True,
-        # The iteration statistics on /metrics hold the KV cache size.
+        # The iteration statistics feed the Prometheus route that return_perf_metrics serves.
         "enable_iter_perf_stats": True,
+        "return_perf_metrics": True,
         # CUDA graphs cover every batch up to the sequence limit, so larger decode cohorts
         # run as fast as small ones.
         "cuda_graph_config": {

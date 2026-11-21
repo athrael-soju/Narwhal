@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "7f7eba03ec73b2f3132b5512453bebbfec80fd969c2b1a8fc739a175963c1e3a"
+RENDERED_SHA256 = "15278c0fd2aad1bfbaefd97f96435ded60a44912c4ab846e1d2eb90ba207c386"
 
 
 def charted() -> set[str]:
@@ -23,10 +23,13 @@ def charted() -> set[str]:
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
+    # Engine series names start with the backend name and a colon, or an underscore on
+    # TensorRT-LLM.
     return {
-        prefix
+        name
         for expression in _expressions(dashboard["spec"]["elements"])
-        for prefix in re.findall(r"\b([a-z]+):[a-z_]+", expression)
+        for name in names()
+        if re.search(rf"\b{name}[:_][a-z]", expression)
     }
 
 
