@@ -139,6 +139,42 @@ class TrtllmIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(transfer_timeout_ms("not: [json"))
 
 
+class SharedGpuTests(unittest.TestCase):
+    def test_a_shared_engine_bounds_its_kv_cache_to_its_share(self):
+        import tempfile
+        from pathlib import Path
+
+        from narwhal.backends.trtllm.runtime import MIB, SHARED_GPU_FLAG, shared_gpu_args
+
+        with tempfile.TemporaryDirectory() as model:
+            (Path(model) / "model-00001.safetensors").write_bytes(b"\0" * (10 * MIB))
+            (Path(model) / "pytorch_model.bin").write_bytes(b"\0" * (99 * MIB))
+            args = ["serve", model, "--free_gpu_memory_fraction", "0.5", SHARED_GPU_FLAG, "20"]
+            bounded = shared_gpu_args(args, total=100 * MIB)
+            self.assertNotIn(SHARED_GPU_FLAG, bounded)
+            # Half of 100 MiB, less 10 MiB of safetensors weights and the 20 MiB reserve.
+            self.assertEqual(
+                bounded[-2:], ["--set", f"kv_cache_config.max_gpu_total_bytes={20 * MIB}"]
+            )
+            self.assertEqual(shared_gpu_args(args[:4], total=100 * MIB), args[:4])
+            with self.assertRaisesRegex(ValueError, "leaves no KV cache"):
+                shared_gpu_args(args, total=50 * MIB)
+
+    def test_only_a_shared_launch_carries_the_reserve(self):
+        from narwhal.backends.trtllm.plan import serve_args
+        from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
+
+        runtime = {"kv_cache_dtype": "auto", "context_length": 4096, "memory_reserve_mib": 4096}
+        record = {"runtime": runtime, "tensor_parallel_size": 1}
+
+        def args(**fields):
+            return serve_args({**record, **fields}, model="/m", served_name="m", host="h", port=1)
+
+        self.assertNotIn(SHARED_GPU_FLAG, args())
+        shared = args(shared_device={"gpu_memory_utilization": 0.4})
+        self.assertEqual(shared[shared.index(SHARED_GPU_FLAG) + 1], "4096")
+
+
 class TrtllmMetricsTests(unittest.TestCase):
     def test_the_prometheus_route_holds_the_cache_size_and_hits(self):
         metrics = BACKEND.metrics

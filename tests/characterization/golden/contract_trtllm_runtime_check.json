@@ -71,7 +71,7 @@
           "<root>/native/launch/hook/launch_engine.py",
           "_check",
           "{\"tensorrt_llm\": \"1.4.0rc3\"}",
-          "[\"serve\", \"<root>/native/model\", \"--backend\", \"pytorch\", \"--host\", \"192.0.2.11\", \"--port\", \"8000\", \"--served_model_name\", \"synthetic\", \"--tensor_parallel_size\", \"1\", \"--kv_cache_dtype\", \"auto\", \"--max_seq_len\", \"4096\", \"--max_batch_size\", \"64\", \"--num_serve_frontends\", \"1\", \"--max_num_tokens\", \"8192\", \"--free_gpu_memory_fraction\", \"0.4\", \"--config\", \"<root>/native/launch/hook/engine.json\"]"
+          "[\"serve\", \"<root>/native/model\", \"--backend\", \"pytorch\", \"--host\", \"192.0.2.11\", \"--port\", \"8000\", \"--served_model_name\", \"synthetic\", \"--tensor_parallel_size\", \"1\", \"--kv_cache_dtype\", \"auto\", \"--max_seq_len\", \"4096\", \"--max_batch_size\", \"64\", \"--num_serve_frontends\", \"1\", \"--max_num_tokens\", \"8192\", \"--narwhal_shared_gpu_reserve_mib\", \"8192\", \"--free_gpu_memory_fraction\", \"0.4\", \"--config\", \"<root>/native/launch/hook/engine.json\"]"
         ],
         "env": {
           "CUDA_VISIBLE_DEVICES": "0",
