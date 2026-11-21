@@ -157,10 +157,10 @@ def settings_from(args: argparse.Namespace) -> Settings:
     paths = [path for path, _ in args.fleet_setting]
     for path in paths:
         check_fleet_setting(path)
-    for path in paths:
+    for index, path in enumerate(paths):
         # A setting inside another would be replaced by it, or replace part of it.
-        for other in paths:
-            if other is not path and (other == path or other.startswith(f"{path}.")):
+        for position, other in enumerate(paths):
+            if position != index and (other == path or other.startswith(f"{path}.")):
                 raise ValueError(f"fleet setting {other!r} is also set by {path!r}")
     fleet_settings = dict(args.fleet_setting)
     return Settings(

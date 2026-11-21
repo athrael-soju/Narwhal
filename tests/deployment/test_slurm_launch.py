@@ -521,6 +521,7 @@ class CliTests(unittest.TestCase):
                 ["serving.admission=open", "serving.admission.mode=open"],
                 "'serving.admission.mode' is also set by 'serving.admission'",
             ),
+            (["x=1", "x=2"], "'x' is also set by 'x'"),
         ):
             with self.subTest(values=values):
                 argv = [arg for value in values for arg in ("--fleet-setting", value)]

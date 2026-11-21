@@ -27,7 +27,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 narwhal-slurm \
   --engines-per-node 8 --max-sequences 64
 ```
 
-Each task reads its rank and the step's nodes from Slurm, and refuses to start unless the step runs one task on each node. Engines are numbered `n1`, `n2`, ... in node order. The first `--prefill` engines open as prefill, half the engines, rounded down, by default, and the rest as decode.
+Each task reads its rank and the step's nodes from Slurm, and refuses to start unless the step runs one task on each node. Engines are numbered `n1`, `n2`, ... in node order. The first `--prefill` engines open as prefill and the rest as decode. By default, half the engines, rounded down, open as prefill.
 
 Pass engine settings with `--engine-arg` and `--engine-env`, for example `--engine-arg=--max-model-len=32768` or `--engine-env UCX_NET_DEVICES=<device>`. With `--kill-on-bad-exit=1`, a failed stage on one node ends the tasks on every node.
 

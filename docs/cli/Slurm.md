@@ -14,7 +14,7 @@ srun --ntasks-per-node=1 --kill-on-bad-exit=1 narwhal-slurm \
 
 Each task reads its node's rank from `SLURM_NODEID` and the step's node names from `SLURM_STEP_NODELIST`, or from `SLURM_JOB_NODELIST` when the step variable is unset, and resolves each node name to its IPv4 address. The task refuses to start unless the step runs one task on each node.
 
-Every node starts its engines with the engine image's Python, outside Narwhal's own environment. The head node, rank 0, then runs these stages:
+Every node first runs `prepare`, which creates `slurm-<job id>` and its `logs/` directory in the run directory, then `engines`, which starts its engines with the engine image's Python, outside Narwhal's own environment. The head node, rank 0, then runs these stages:
 
 1. `fleet`: writes the fleet file with each engine's `http://<address>:<port>` URL.
 2. `health`: waits for `/health` 200 from every engine.
@@ -22,7 +22,7 @@ Every node starts its engines with the engine image's Python, outside Narwhal's 
 4. `router`: starts `narwhal-serve`.
 5. `ready`: waits for the router's `/ready` 200, then prints the router URL.
 
-Before the head's stages, `prepare` creates `slurm-<job id>` and its `logs/` directory in the run directory, and `engines` starts each node's engines. While serving, a node fails with stage `serve` when one of its engines exits, or on the head node when the router exits.
+While serving, a node fails with stage `serve` when one of its engines exits, or on the head node when the router exits.
 
 The other nodes keep their engines running until the launch stops. A failed stage ends that node's task with exit code `1` and prints `narwhal-slurm: <stage>: <detail>` to standard error. With `--kill-on-bad-exit=1`, `srun` then ends the task on every node.
 
@@ -32,7 +32,7 @@ SIGTERM, SIGINT or SIGHUP stops the launch. Each node stops its profiler and rou
 
 Engines are numbered `n1`, `n2`, ... in node order, then by their index on the node. The engine at index `i` on a node listens on `--engine-port` plus `i` and uses `--transfer-port` plus `i` for its KV side channel. The first `--prefill` engines open as prefill and the rest as decode.
 
-Each engine takes `--tensor-parallel` devices from the list in the `--device-env` variable, in order, and the launch sets that variable for the engine. Without the variable, the node's devices are numbered from `0`. A vLLM engine runs `vllm.entrypoints.openai.api_server` with the `--engine-python` interpreter and the NIXL connector in `kv_both` mode, and its NIXL side channel binds the node address.
+Each engine takes `--tensor-parallel` devices from the list in the `--device-env` variable, in order, and the launch sets that variable for the engine. Without the variable, the node's devices are numbered from `0`. A vLLM engine runs `<engine-python> -m vllm.entrypoints.openai.api_server`, where `<engine-python>` is the `--engine-python` value, with the NIXL connector in `kv_both` mode. Its NIXL side channel binds the node address.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -87,4 +87,4 @@ The head node refuses a `slurm-<job id>` directory that already holds `fleet.jso
 | :-------: | --- |
 | `0` | The launch stopped on a signal. |
 | `1` | A stage failed. The message names the stage. |
-| `2` | Invalid arguments, or the task does not run in a Slurm allocation with one task per node. |
+| `2` | Invalid arguments, the task does not run in a Slurm allocation with one task per node, a node name does not resolve, a node lists too few devices for its engines, the engines do not include at least one prefill and one decode engine, or the fleet file does not load. |

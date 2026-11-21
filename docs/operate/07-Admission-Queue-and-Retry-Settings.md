@@ -52,7 +52,7 @@ A benchmark client that holds a fixed concurrency counts each HTTP 429 as a fail
 
 In predictive mode, the router refuses each request whose priced TTFT exceeds `slo.ttft_s` or that fails the decode admission check, so a run above the concurrency the fleet serves within that target records failed requests. Keep predictive admission to measure what the fleet serves within the SLO. For a run that must record zero failed requests, such as a client or accuracy check, set `serving.admission` to `open`.
 
-Keep the client's concurrency at or below the in-flight limit plus `serving.queue_capacity`. Above it, the router answers each extra request with HTTP 429 `router in-flight limit reached`, and the client sends its next request at once, which the router also refuses.
+Keep the client's concurrency at or below the in-flight limit plus `serving.queue_capacity`. Above it, the router answers each extra request with HTTP 429 `router in-flight limit reached`, and the client sends its next request at once, which the router also refuses while the limit holds.
 
 With [`narwhal-slurm`](../cli/Slurm.md), set these fields with `--fleet-setting serving.admission=open` and `--fleet-setting serving.max_connections=<limit>`.
 
