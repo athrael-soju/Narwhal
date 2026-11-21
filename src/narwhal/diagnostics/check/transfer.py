@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from hashlib import sha256
-from typing import cast
+from typing import Any, cast
 
 import httpx
 
@@ -117,15 +117,21 @@ async def gate_consume(
                 )
                 started = decode_started = time.monotonic()
                 tokens = 0
+                # An engine without a transfer counter reports the leg's transfer in its reply.
+                reported = evidence is not None and bool(dialect.transfer_report_headers)
+                payloads: list[dict[str, Any]] = []
                 async for batch in client.decode_handoff(
                     handoff,
                     by_id[dst].url,
                     "/v1/completions",
                     attempt,
-                    {},
+                    dict(dialect.transfer_report_headers) if reported else {},
                     first_token_timeout_s=cfg.first_token_timeout_s,
+                    trailer=reported,
                 ):
                     for event in batch:
+                        if event.data is not None:
+                            payloads.append(event.data)
                         count = sse_token_count(event)
                         tokens += count
                         if first_token_seconds is None and (
@@ -143,12 +149,17 @@ async def gate_consume(
                     raise ValueError(f"{src} process or attestation changed during transfer")
                 if not same_generation(before_dst, after_dst):
                     raise ValueError(f"{dst} process or attestation changed during transfer")
-                count_delta = cast(float, after_dst["transfer_count"]) - cast(
-                    float, before_dst["transfer_count"]
-                )
-                transfer_seconds = cast(float, after_dst["transfer_seconds_sum"]) - cast(
-                    float, before_dst["transfer_seconds_sum"]
-                )
+                if before_dst["transfer_count"] is None:
+                    leg_seconds = dialect.leg_transfer_seconds(payloads)
+                    count_delta = 1.0 if leg_seconds is not None else 0.0
+                    transfer_seconds = leg_seconds or 0.0
+                else:
+                    count_delta = cast(float, after_dst["transfer_count"]) - cast(
+                        float, before_dst["transfer_count"]
+                    )
+                    transfer_seconds = cast(float, after_dst["transfer_seconds_sum"]) - cast(
+                        float, before_dst["transfer_seconds_sum"]
+                    )
                 if count_delta < 1 or transfer_seconds <= 0:
                     raise ValueError(f"{src} -> {dst} produced no observed consumer KV transfer")
                 record.update(
