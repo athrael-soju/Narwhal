@@ -56,7 +56,7 @@ Under WSL2, every SGLang engine receives the first engine's budget, so the engin
 
 The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
-A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode. `runtime.ready_seconds` sets how long `up` waits for each engine to answer `/health`, `180` seconds by default.
 
 `runtime.max_num_seqs` caps each engine's running requests. An SGLang template accepts 1 to 256 and defaults to 256. If `up` stops at attestation with `The engine serves at most <n> running requests`, set `runtime.max_num_seqs` to `<n>` and initialize a new `--instance` from the template.
 
