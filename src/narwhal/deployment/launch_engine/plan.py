@@ -32,6 +32,8 @@ MAX_SOCKET_PATH_BYTES = 107
 UCX_PEER_RELEASE = (1, 22)
 SECRET_WORDS = ("PASSWORD", "TOKEN", "SECRET", "API_KEY", "SSH")
 MAX_DISCOVERED_CONTEXT = 16384
+# Files the launch itself writes into the hook directory.
+HOOK_FILES = frozenset({"launch_engine.py", "launch.json", "sitecustomize.py"})
 
 
 def validate_runtime(runtime: dict) -> None:
@@ -373,9 +375,10 @@ def build(
             common.extend(["--device", device])
         if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
             common.extend(["--gpus", "all"])
-            # UCX CUDA IPC tells peers apart by PID; colocated engines need distinct host PIDs.
+            # UCX CUDA IPC reaches a colocated engine only from the same PID namespace, and tells
+            # peers apart by host PID. In separate namespaces, UCX 1.23 sends KV over TCP.
             visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
-            if len(visible) > len(record["gpu_ids"]):
+            if len(visible) > len(record["gpu_ids"]) or record.get("shared_device") is not None:
                 common.extend(["--pid", "host"])
         else:
             common.extend(["--security-opt", "seccomp=unconfined"])
@@ -397,6 +400,11 @@ def build(
         kv_events=kv_events,
         evict_peers=evict_peers,
     )
+    config_files, config_args = engine.config_files(record, hook_root)
+    for file_name in config_files:
+        if file_name in HOOK_FILES or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", file_name):
+            raise ValueError(f"engine configuration file name {file_name!r} is not usable")
+    args = [*args, *config_args]
     shared = record.get("shared_device")
     if shared is not None:
         if (
@@ -414,6 +422,7 @@ def build(
         "name": name,
         "common": common,
         "args": args,
+        **({"config_files": config_files} if config_files else {}),
         "connector": connector,
         "kv_events": kv_events,
         "expected_packages": runtime["expected_packages"],
@@ -464,6 +473,9 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     if capture:
         write_private(output / "hook/sitecustomize.py", hook_source.read_text())
     write_private(output / "hook/launch_engine.py", script.read_text())
+    for file_name, content in plan.get("config_files", {}).items():
+        write_private(output / "hook" / file_name, content)
+        (output / "hook" / file_name).chmod(0o644)
     env_file = "container.env" if backend == "container" else "engine.env"
     write_private(output / env_file, "".join(f"{k}={v}\n" for k, v in sorted(values.items())))
     plan.update(
@@ -487,6 +499,15 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     (output / "hook").chmod(0o755)
     check_name = "image" if backend == "container" else "native runtime"
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
+
+
+def config_files_changed(run: Path, plan: dict) -> str | None:
+    """Name the first engine configuration file whose hook copy differs from the plan."""
+    for file_name, content in plan.get("config_files", {}).items():
+        path = run / "hook" / file_name
+        if not path.is_file() or path.read_text() != content:
+            return file_name
+    return None
 
 
 def load(run: Path) -> dict:

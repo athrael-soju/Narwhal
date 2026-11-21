@@ -156,6 +156,8 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "launch_sha256": plan.get("launch_sha256", ""),
         "launcher_code_sha256": plan["launcher_code_sha256"],
     }
+    if "config_files" in plan:
+        launch["config_files"] = plan["config_files"]
     if cache_capture(engine) is not None:
         launch["cache_capture_code_sha256"] = plan["cache_capture_code_sha256"]
     launch.update(evidence.launch)

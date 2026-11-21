@@ -64,6 +64,12 @@ class EngineLauncher(ABC):
         evict_peers: bool,
     ) -> tuple[list[str], dict]: ...
 
+    def config_files(self, record: dict, directory: str) -> tuple[dict[str, str], list[str]]:
+        """Engine configuration files for this launch, by file name, and the arguments that
+        pass them to the engine from `directory`.
+        """
+        return {}, []
+
     @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...
 

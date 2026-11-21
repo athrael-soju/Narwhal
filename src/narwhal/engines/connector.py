@@ -71,6 +71,8 @@ class KvHandoff(ABC):
 
     # True when the router runs the steps below on the engines around a sequential handoff's legs.
     staged: ClassVar[bool] = False
+    # The fewest output tokens a decode leg returns, whatever output limit the request sets.
+    min_output_tokens: ClassVar[int] = 1
 
     @property
     def concurrent(self) -> bool:

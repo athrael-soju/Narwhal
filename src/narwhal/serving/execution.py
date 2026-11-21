@@ -25,7 +25,7 @@ from ..scheduling.prefill import prefill_seconds
 from ..scheduling.scheduler.occupancy import DecodeCheck, decode_check, decode_occupancy
 from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
-from .completion import reassemble
+from .completion import output_cap, reassemble
 from .dispatch import placement_hold
 from .handoff import handoff_bound
 from .lifecycle import RequestLifecycle
@@ -82,6 +82,14 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
                 f"{field} > 1 cannot be served across a split: the prefill leg "
                 "runs with max_tokens=1 and the two legs would disagree on sampling width",
             )
+    least = router.engines.kv.min_output_tokens
+    if 0 < output_cap(body) < least:
+        return error_response(
+            400,
+            "invalid_request_error",
+            f"an output limit below {least} tokens cannot be served across a split: "
+            f"the decode leg returns at least {least}",
+        )
     return None
 
 
@@ -575,6 +583,11 @@ async def serve_request(
     return JSONResponse(content=out)
 
 
+def _usage_frame(event: SseEvent) -> bool:
+    data = event.data
+    return isinstance(data, dict) and "usage" in data and not data.get("choices")
+
+
 async def _decode_attempt(
     state: RequestLifecycle,
     prepared: PreparedAttempt,
@@ -596,6 +609,20 @@ async def _decode_attempt(
     strip = () if body.get("return_token_ids") else dialect.engine_output_fields
     streams_ids = dialect.token_ids and dialect.streams_token_ids(endpoint)
     engine_body = {**body, **dialect.token_id_fields()} if streams_ids else body
+    options = body.get("stream_options")
+    # Only a streamed client can ask for the usage frame.
+    asked_usage = bool(
+        body.get("stream") and isinstance(options, dict) and options.get("include_usage")
+    )
+    added_usage = dialect.usage_frame_counts and not asked_usage
+    if added_usage:
+        engine_body = {
+            **engine_body,
+            "stream_options": {
+                **(options if isinstance(options, dict) else {}),
+                "include_usage": True,
+            },
+        }
     handoff = prepared.handoff
     upstream = router.engines.decode(
         prepared.decode.url,
@@ -653,6 +680,9 @@ async def _decode_attempt(
                             state.reported_tokens = reported
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n
+                    # A non-streamed reply keeps the engine's usage; a streamed one did not ask.
+                    if added_usage and body.get("stream") and _usage_frame(event):
+                        continue
                     frame = rewrite_sse(event, strip=strip) + "\n\n"
                     if state.first_at is None:
                         # Before output commits the attempt, metadata buffers and keepalives drop.

@@ -209,7 +209,16 @@ class WarmSweepBoundsTests(unittest.TestCase):
 
 
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
-    def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None, blind_after_cold=False):
+    def engine(
+        self,
+        *,
+        reuse=True,
+        hybrid=False,
+        leak=False,
+        sent=None,
+        blind_after_cold=False,
+        path="/metrics",
+    ):
         cache: dict[str, int] = {}
         hits = [0]
         # `blind_after_cold`: /metrics fails after the first cold control.
@@ -222,11 +231,12 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
             return tokens // 16 * 16
 
         def handle(request):
-            if request.url.path == "/metrics":
+            if request.url.path == path:
                 if blind[0]:
                     return httpx.Response(503)
+                count = hits[0]
                 return httpx.Response(
-                    200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {hits[0]}\n'
+                    200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {count}\n'
                 )
             body = json.loads(request.content)
             tokens = len(body["prompt"].split())
@@ -253,7 +263,9 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
         return httpx.MockTransport(handle)
 
-    async def run_probe(self, transport, prefix_lens=(100, 400), short=0, **kwargs):
+    async def run_probe(
+        self, transport, prefix_lens=(100, 400), short=0, metrics=VLLM_METRICS, **kwargs
+    ):
         sweep = replace(
             Sweep(),
             cached_prefix_lens=prefix_lens,
@@ -271,7 +283,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 redirect_stdout(io.StringIO()),
             ):
                 return await probe_cached_prefill(
-                    client, "http://e", "stub", sweep, VllmDialect(), metrics=VLLM_METRICS, **kwargs
+                    client, "http://e", "stub", sweep, VllmDialect(), metrics=metrics, **kwargs
                 )
 
     async def test_samples_record_observed_cache_state_and_cold_controls(self):
@@ -289,6 +301,18 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(s["prefix_tokens"] == 0 for s in cold))
         self.assertTrue(all(s["cache_evidence"] == "prefix_cache_hits" for s in samples))
+
+    async def test_the_probe_reads_the_backends_metrics_route(self):
+        class Elsewhere(type(VLLM_METRICS)):  # type: ignore[misc]
+            path = "/prometheus/metrics"
+
+        expected, _ = await self.run_probe(self.engine())
+        moved = self.engine(path="/prometheus/metrics")
+        samples, reason = await self.run_probe(moved, metrics=Elsewhere())
+        self.assertIsNone(reason)
+        self.assertEqual(
+            [s["prefix_tokens"] for s in samples], [s["prefix_tokens"] for s in expected]
+        )
 
     async def test_a_block_aligned_prefix_stays_reusable_on_a_hybrid_engine(self):
         samples, _ = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))

@@ -212,6 +212,49 @@ class EngineLauncherTests(unittest.TestCase):
                 )
                 self.assertEqual(transfer_config, plan["connector"])
 
+    def test_engine_configuration_files_reach_the_hook_and_the_plan(self):
+        files = {"engine.yaml": "kv_transfer_timeout_ms: 30000\n"}
+
+        def config_files(self, record, directory):
+            return files, ["--config", f"{directory}/engine.yaml"]
+
+        launcher = type(launch_plan.launcher())
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(launcher, "config_files", config_files),
+        ):
+            _, env = launcher_inputs(Path(folder))
+            run = Path(folder) / "plan"
+            prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][-2:], ["--config", "/narwhal-hooks/engine.yaml"])
+            self.assertEqual(plan["config_files"], files)
+            hooked = run / "hook/engine.yaml"
+            self.assertEqual(hooked.read_text(), files["engine.yaml"])
+            self.assertEqual(hooked.stat().st_mode & 0o777, 0o644)
+            self.assertIsNone(launch_plan.config_files_changed(run, plan))
+            hooked.chmod(0o600)
+            hooked.write_text("kv_transfer_timeout_ms: 1\n")
+            self.assertEqual(launch_plan.config_files_changed(run, plan), "engine.yaml")
+        for name in ("launch.json", "../engine.yaml", ".hidden", "a/b"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+
+                def named(self, record, directory, name=name):
+                    return {name: "x"}, []
+
+                record, env = launcher_inputs(Path(folder))
+                with (
+                    patch.object(launcher, "config_files", named),
+                    self.assertRaisesRegex(ValueError, "is not usable"),
+                ):
+                    build(record, env, Path(folder) / "launch")
+
+    def test_a_launch_without_configuration_files_records_none(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            plan, _ = build(record, env, Path(folder) / "launch")
+            self.assertNotIn("config_files", plan)
+
     def test_the_connector_sets_the_producer_kv_lease(self):
         for lease in (None, 6, 45):
             with self.subTest(lease=lease), tempfile.TemporaryDirectory() as folder:
@@ -455,6 +498,8 @@ class EngineLauncherTests(unittest.TestCase):
             record["runtime"]["extra_args"].extend(["--gpu-memory-utilization", "0.4"])
             plan, _ = build(record, env, Path(folder) / "launch")
             self.assertEqual(plan["shared_device"], record["shared_device"])
+            # Engines on one GPU need distinct host PIDs for UCX CUDA IPC.
+            self.assertEqual(plan["common"][plan["common"].index("--pid") + 1], "host")
             self.assertEqual(plan["ucx_tls"], "tcp,sm,self,cuda")
             self.assertEqual(plan["attestation_port"], 8010)
             self.assertEqual(plan["side_channel_port"], 5600)

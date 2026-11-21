@@ -97,6 +97,8 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(kv.contract_name, str)
                 self.assertTrue(kv.contract_name)
                 self.assertIsInstance(kv, KvConnector | RendezvousConnector)
+                self.assertIs(type(kv.min_output_tokens), int)
+                self.assertGreaterEqual(kv.min_output_tokens, 1)
                 for lease in (6, 30, 600):
                     self.assertTrue(0 < kv.handoff_bound(lease) <= lease)
 
@@ -142,6 +144,14 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(body=list(body)):
                 result = await client.tokenize(engine.url, body, 5, strict=True)
+                dialect = self.backend.dialect
+                if (
+                    "messages" in body
+                    and dialect.render_path is None
+                    and not dialect.tokenize_messages
+                ):
+                    self.assertIsNone(result)
+                    continue
                 self.assertEqual(result.count, len(PROMPT))
                 self.assertIn(result.token_ids, (None, tuple(ord(c) for c in PROMPT)))
 
@@ -558,6 +568,22 @@ class BackendFlows(Launched, unittest.TestCase):
             (Path(plan["model_dir"]) / "config.json").write_text("{}")
             with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
                 engine_document(run, log)
+
+    def test_the_attested_launch_carries_engine_configuration_files(self):
+        files = {"engine.yaml": "timeout: 30\n"}
+        launcher = type(self.backend.engine_launcher())
+        with patch.object(launcher, "config_files", lambda self, record, directory: (files, [])):
+            run, plan, _ = self.prepared()
+        self.check(run, plan)
+        self.start(run)
+        plan = load_plan(run)
+        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
+        log = run / "startup.log"
+        log.write_text(self.fixtures.startup_log)
+        image = json.loads((run / "checked.json").read_text())["image_id"]
+        with running_container(image):
+            document = engine_document(run, log)
+        self.assertEqual(document["launch"]["config_files"], files)
 
 
 class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):

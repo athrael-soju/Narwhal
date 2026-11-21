@@ -847,7 +847,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 calibration,
                 "engine_context_limit",
                 new=AsyncMock(
-                    side_effect=lambda client, url, *args: (
+                    side_effect=lambda client, url, *args, **kwargs: (
                         1028 if url == self.cfg.engines[0].url else 1024
                     )
                 ),
