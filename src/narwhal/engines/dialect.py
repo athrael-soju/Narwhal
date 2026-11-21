@@ -35,6 +35,9 @@ class EngineDialect(ABC):
     )
     # True when each streamed decode chunk carries its token IDs.
     token_ids: ClassVar[bool] = True
+    # True when, without token IDs, each streamed choice chunk carries one token and the usage
+    # frame that stream_options.include_usage adds counts them.
+    one_token_chunks: ClassVar[bool] = False
     # True when `stream_output_tokens` reads a reply's output token count from its stream.
     reports_output_tokens: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
