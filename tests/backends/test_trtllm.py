@@ -131,6 +131,9 @@ class TrtllmIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reader.kv_lease(attested(None)))
         self.assertIsNone(reader.kv_lease(attested({"kv_cache_config": {}})))
         self.assertIsNone(reader.kv_lease({"launch": {}}))
+        unnamed = attested({"cache_transceiver_config": timed})
+        unnamed["launch"]["args"] = ["--config"]
+        self.assertEqual(reader.kv_lease(unnamed), 45)
         self.assertIsNone(transfer_timeout_ms("not: [json"))
 
 

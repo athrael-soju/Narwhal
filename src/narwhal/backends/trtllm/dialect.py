@@ -15,6 +15,7 @@ class TrtllmDialect(EngineDialect):
     context_limit_flag = "--max_seq_len"
     # Stream chunks carry text, one token each, and no token IDs.
     token_ids = False
+    one_token_chunks = True
     reports_output_tokens = True
     # The connector sets both fields for the generation leg.
     reserved_fields = (PARAMS, PROMPT_IDS)

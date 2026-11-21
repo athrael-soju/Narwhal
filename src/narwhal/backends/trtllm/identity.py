@@ -67,10 +67,14 @@ class TrtllmIdentity(EngineIdentityReader):
 
     def kv_lease(self, attestation: Any) -> int | None:
         # The context worker frees a handoff's KV once its transfer timeout passes unclaimed.
-        name = attested_option(attestation, "--config")
         files = attested_launch(attestation).get("config_files")
-        if name is None or not isinstance(files, dict):
+        if not isinstance(files, dict) or not files:
             return None
-        config = files.get(name.rpartition("/")[2])
+        name = attested_option(attestation, "--config")
+        if name:
+            config = files.get(name.rpartition("/")[2])
+        else:
+            # A per-launch path leaves the flag without a value; the launch's one file is it.
+            config = next(iter(files.values())) if len(files) == 1 else None
         timeout = transfer_timeout_ms(config) if isinstance(config, str) else None
         return None if timeout is None or timeout < 2000 else timeout // 1000
