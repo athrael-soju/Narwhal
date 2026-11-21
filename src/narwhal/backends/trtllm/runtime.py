@@ -12,8 +12,15 @@ LAUNCHER = Path(__file__)
 API_KEY_ENV = "NARWHAL_TRTLLM_API_KEY"
 SETTINGS_TAG = "NARWHAL_IMAGE_RUNTIME="
 SERVER = "trtllm-serve"
-# The runtime script runs alone in the image, so it keeps its own copy of this path.
+# The runtime script runs alone in the image, so it keeps its own copies of these names.
 BLOCK_REUSE = "kv_cache_config.enable_block_reuse"
+KV_POOL_BYTES = "kv_cache_config.max_gpu_total_bytes"
+# The launcher passes this flag, with the MiB to hold for activations and CUDA graphs, to an
+# engine that shares its GPU. The wrapper removes it before starting the server.
+SHARED_GPU_FLAG = "--narwhal_shared_gpu_reserve_mib"
+MIB = 1024**2
+# Weight shard suffixes, in order of preference: a checkpoint may ship both forms.
+WEIGHT_SUFFIXES = (".safetensors", ".bin")
 
 
 def server_command(args: list[str]) -> list[str]:
@@ -23,8 +30,51 @@ def server_command(args: list[str]) -> list[str]:
     return [server, *args]
 
 
+def weight_bytes(model: str) -> int:
+    """Bytes of the checkpoint's weight shards on disk."""
+    path = Path(model)
+    if path.is_file():
+        return path.stat().st_size
+    for suffix in WEIGHT_SUFFIXES:
+        total = sum(shard.stat().st_size for shard in path.rglob(f"*{suffix}") if shard.is_file())
+        if total:
+            return total
+    raise ValueError(f"no weight shards under {model}")
+
+
+def gpu_total_bytes() -> int:
+    import torch  # type: ignore[import-not-found]  # The engine image provides it.
+
+    return int(torch.cuda.get_device_properties(0).total_memory)
+
+
+def shared_gpu_args(args: list[str], total: int | None = None) -> list[str]:
+    """Bound the KV cache of an engine that shares its GPU to its share of total memory.
+
+    The server sizes its KV cache from the memory free after the model loads. On a shared GPU
+    the share bounds the engine's weights, reserve and KV cache together.
+    """
+    if SHARED_GPU_FLAG not in args:
+        return args
+    reserve = option(args, SHARED_GPU_FLAG)
+    share = option(args, "--free_gpu_memory_fraction")
+    if reserve is None or share is None:
+        raise ValueError("a shared GPU launch needs its reserve and --free_gpu_memory_fraction")
+    index = args.index(SHARED_GPU_FLAG)
+    args = [*args[:index], *args[index + 2 :]]
+    ranks = int(option(args, "--tensor_parallel_size") or 1)
+    total = gpu_total_bytes() if total is None else total
+    pool = int(float(share) * total) - weight_bytes(args[1]) // ranks - int(reserve) * MIB
+    if pool <= 0:
+        raise ValueError(
+            f"a {share} share of {total // MIB} MiB leaves no KV cache after the weights and "
+            f"the {reserve} MiB reserve"
+        )
+    return [*args, "--set", f"{KV_POOL_BYTES}={pool}"]
+
+
 def serve(args: list[str]) -> None:
-    command = server_command(args)
+    command = server_command(shared_gpu_args(args))
     os.execv(command[0], command)
 
 

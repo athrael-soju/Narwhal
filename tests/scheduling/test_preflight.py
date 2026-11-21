@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.backends import EngineBackend
+from narwhal.backends import load as load_backend
 from narwhal.backends.vllm import NixlConnector, VllmDialect
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.diagnostics.check import engines as engine_gates
@@ -668,6 +669,70 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
                 "path": None,
             },
         )
+
+    async def test_a_decode_reply_can_report_its_own_kv_transfer(self):
+        connector = NixlConnector()
+        result = connector.prefill_result(
+            {"kv_transfer_params": {"remote_engine_id": "e", "remote_block_ids": [0]}},
+            url=self.cfg.engines[0].url,
+            endpoint="/v1/completions",
+            request_id="request",
+        )
+        calls = []
+
+        def output(seconds):
+            async def decode(*args, **kwargs):
+                calls.append((args[3], kwargs.get("trailer")))
+                yield [parse_event('data: {"choices":[{"text":"x","token_ids":[1]}]}')]
+                yield [parse_event("data: [DONE]"), parse_event(f'data: {{"kv_s": {seconds}}}')]
+
+            return decode
+
+        dialect = type(load_backend(self.cfg.backend).dialect)
+
+        def reported(self, payloads):
+            return next((p["kv_s"] for p in payloads if "kv_s" in p), None)
+
+        pair = [(self.cfg.engines[0].iid, self.cfg.engines[1].iid)]
+        src, dst = pair[0]
+        snapshot = {
+            "iid": src,
+            "engine_version": "0.29.0",
+            "process_start_time_seconds": 1.0,
+            "attestation_digest": "sha256:a",
+            "transfer_count": None,
+            "transfer_seconds_sum": None,
+        }
+        outcomes = []
+        for seconds in (0.25, "null"):
+            client = HandoffClient(prefill=AsyncMock(return_value=result), decode=output(seconds))
+            with (
+                patch.object(dialect, "transfer_report_headers", {"x-report": "1"}),
+                patch.object(dialect, "leg_transfer_seconds", reported),
+                patch.object(transfer, "validation_pairs", return_value=pair),
+                patch.object(transfer, "pair_snapshot", new=AsyncMock(return_value=snapshot)),
+            ):
+                report = Report()
+                await gate_consume(
+                    self.cfg,
+                    {src, dst},
+                    {src: result, dst: result},
+                    client,
+                    report,
+                    True,
+                    evidence=report.pairs,
+                )
+            outcomes.append(report)
+        self.assertEqual(outcomes[0].failed, [])
+        self.assertEqual(
+            (
+                outcomes[0].pairs[0]["transfer_count_delta"],
+                outcomes[0].pairs[0]["transfer_seconds"],
+            ),
+            (1.0, 0.25),
+        )
+        self.assertIn("produced no observed consumer KV transfer", outcomes[1].failed[0])
+        self.assertEqual(calls[0], ({"x-report": "1"}, True))
 
     async def test_produce_failure_and_consume_empty_output_are_failures(self):
         connector = NixlConnector()

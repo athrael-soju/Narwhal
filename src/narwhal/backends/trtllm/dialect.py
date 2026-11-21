@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, ClassVar
 
 from ...engines.dialect import EngineDialect
 from .connector import PARAMS, PROMPT_IDS
@@ -18,6 +20,11 @@ class TrtllmDialect(EngineDialect):
     one_token_chunks = True
     reports_output_tokens = True
     usage_frame_counts = True
+    # The reply then ends, after [DONE], with a trtllm.perf_metrics event whose Server-Timing
+    # field names the leg's KV transfer.
+    transfer_report_headers: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {"X-TRTLLM-return-metrics": "1"}
+    )
     # Each stream chunk's choice reports the tokens the iteration decoded.
     choice_fields = ("avg_decoded_tokens_per_iter",)
     # The connector sets both fields for the generation leg.
@@ -38,6 +45,22 @@ class TrtllmDialect(EngineDialect):
         usage = payload.get("usage")
         count = usage.get("completion_tokens") if isinstance(usage, dict) else None
         return count if type(count) is int and count >= 0 else None
+
+    def leg_transfer_seconds(self, payloads: list[dict[str, Any]]) -> float | None:
+        # Server-Timing lists "<phase>_kv_transfer;dur=<ms>" among the leg's timings.
+        for payload in payloads:
+            timing = payload.get("Server-Timing")
+            if not isinstance(timing, str):
+                continue
+            for entry in timing.split(","):
+                name, _, duration = entry.strip().partition(";dur=")
+                if name.endswith("kv_transfer"):
+                    try:
+                        seconds = float(duration) / 1000
+                    except ValueError:
+                        return None
+                    return seconds if seconds > 0 else None
+        return None
 
     def decode_probe_extras(self, tokens: int) -> dict[str, Any]:
         return {"ignore_eos": True}

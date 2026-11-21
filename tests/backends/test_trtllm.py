@@ -139,6 +139,42 @@ class TrtllmIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(transfer_timeout_ms("not: [json"))
 
 
+class SharedGpuTests(unittest.TestCase):
+    def test_a_shared_engine_bounds_its_kv_cache_to_its_share(self):
+        import tempfile
+        from pathlib import Path
+
+        from narwhal.backends.trtllm.runtime import MIB, SHARED_GPU_FLAG, shared_gpu_args
+
+        with tempfile.TemporaryDirectory() as model:
+            (Path(model) / "model-00001.safetensors").write_bytes(b"\0" * (10 * MIB))
+            (Path(model) / "pytorch_model.bin").write_bytes(b"\0" * (99 * MIB))
+            args = ["serve", model, "--free_gpu_memory_fraction", "0.5", SHARED_GPU_FLAG, "20"]
+            bounded = shared_gpu_args(args, total=100 * MIB)
+            self.assertNotIn(SHARED_GPU_FLAG, bounded)
+            # Half of 100 MiB, less 10 MiB of safetensors weights and the 20 MiB reserve.
+            self.assertEqual(
+                bounded[-2:], ["--set", f"kv_cache_config.max_gpu_total_bytes={20 * MIB}"]
+            )
+            self.assertEqual(shared_gpu_args(args[:4], total=100 * MIB), args[:4])
+            with self.assertRaisesRegex(ValueError, "leaves no KV cache"):
+                shared_gpu_args(args, total=50 * MIB)
+
+    def test_only_a_shared_launch_carries_the_reserve(self):
+        from narwhal.backends.trtllm.plan import serve_args
+        from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
+
+        runtime = {"kv_cache_dtype": "auto", "context_length": 4096, "memory_reserve_mib": 4096}
+        record = {"runtime": runtime, "tensor_parallel_size": 1}
+
+        def args(**fields):
+            return serve_args({**record, **fields}, model="/m", served_name="m", host="h", port=1)
+
+        self.assertNotIn(SHARED_GPU_FLAG, args())
+        shared = args(shared_device={"gpu_memory_utilization": 0.4})
+        self.assertEqual(shared[shared.index(SHARED_GPU_FLAG) + 1], "4096")
+
+
 class TrtllmMetricsTests(unittest.TestCase):
     def test_the_prometheus_route_holds_the_cache_size_and_hits(self):
         metrics = BACKEND.metrics
@@ -181,6 +217,19 @@ class TrtllmDialectTests(unittest.TestCase):
         )
         self.assertEqual(reply["choices"][0]["text"], " four five")
         self.assertEqual(reply["choices"][0]["finish_reason"], "length")
+
+    def test_a_generation_leg_reports_its_kv_transfer_after_done(self):
+        dialect = BACKEND.dialect
+        self.assertEqual(dict(dialect.transfer_report_headers), {"X-TRTLLM-return-metrics": "1"})
+        # The trailing event as a live generation leg sent it.
+        report = {
+            "Server-Timing": "server_queue;dur=75.444000, server_ttft;dur=153.694000, "
+            "server_e2e;dur=211.858000, server_kv_transfer;dur=71.117000",
+            "X-TRTLLM-Start-End-Time": "server-kv-start;ts=146441.575306000",
+        }
+        self.assertAlmostEqual(dialect.leg_transfer_seconds([{"choices": []}, report]), 0.071117)
+        self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "server_e2e;dur=2"}]))
+        self.assertIsNone(dialect.leg_transfer_seconds([{"Server-Timing": "x_kv_transfer;dur=0"}]))
 
     def test_the_usage_frame_reports_the_output_count(self):
         dialect = BACKEND.dialect

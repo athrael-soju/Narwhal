@@ -25,6 +25,8 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.header_delay = 0
         self.timeline = []
+        # A chunked reply ends with its terminating chunk, as an engine server sends it.
+        self.chunked = False
         self.handlers = set()
         self.client = EngineClient(**vllm_engine(), read_timeout_s=0.04)
 
@@ -40,14 +42,21 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
                 )
                 await reader.readexactly(size)
                 await asyncio.sleep(self.header_delay)
+                framing = b"Transfer-Encoding: chunked\r\n" if self.chunked else b""
                 writer.write(
                     b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
-                    b"Connection: close\r\n\r\n"
+                    + framing
+                    + b"Connection: close\r\n\r\n"
                 )
                 await writer.drain()
                 for delay, payload in self.timeline:
                     await asyncio.sleep(delay)
+                    if self.chunked:
+                        payload = b"%x\r\n%s\r\n" % (len(payload), payload)
                     writer.write(payload)
+                    await writer.drain()
+                if self.chunked:
+                    writer.write(b"0\r\n\r\n")
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
                 pass
@@ -82,6 +91,27 @@ class EngineTimeoutTests(unittest.IsolatedAsyncioTestCase):
             )
             for event in batch
         ]
+
+    async def test_a_trailer_read_keeps_the_events_after_done(self):
+        report = b'event: engine.metrics\ndata: {"timing":"kv;dur=3"}\n\n'
+        self.chunked = True
+        self.timeline = [(0, TOKEN + DONE + report[:20]), (0.01, report[20:])]
+        self.assertEqual((await self.consume())[-1], "data: [DONE]")
+        lines = [
+            event.line
+            async for batch in self.client.decode(
+                self.url,
+                "/v1/completions",
+                {"model": "stub", "prompt": "x"},
+                {},
+                None,
+                trailer=True,
+            )
+            for event in batch
+        ]
+        self.assertEqual(
+            lines[-3:], ["data: [DONE]", "event: engine.metrics", 'data: {"timing":"kv;dur=3"}']
+        )
 
     async def test_first_token_budget_covers_response_headers(self):
         self.header_delay = 0.12

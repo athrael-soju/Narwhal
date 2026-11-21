@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from .prefix import non_negative_ints
@@ -60,12 +61,21 @@ class EngineDialect(ABC):
     kv_reserved_blocks: ClassVar[int] = 0
     # Chat template fields the render route takes.
     render_passthrough: ClassVar[tuple[str, ...]] = ()
+    # Request headers that make an engine without a KV transfer counter report a decode leg's
+    # transfer in the leg's own reply, after its [DONE] terminator.
+    transfer_report_headers: ClassVar[Mapping[str, str]] = {}
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
 
     @abstractmethod
     def token_id_fields(self) -> dict[str, Any]: ...
+
+    def leg_transfer_seconds(self, payloads: list[dict[str, Any]]) -> float | None:
+        """Seconds a decode leg spent receiving its KV cache, from the data payloads of a
+        reply that `transfer_report_headers` requested, or None when the reply reports none.
+        """
+        return None
 
     def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
         """Client fields the engine refuses on a streamed request to `endpoint`."""
