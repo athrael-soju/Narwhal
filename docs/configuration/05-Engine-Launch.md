@@ -181,11 +181,11 @@ The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_ser
 - the overlap scheduler off
 - iteration statistics and `return_perf_metrics` on, so the engine serves Prometheus metrics at `/prometheus/metrics`
 - CUDA graphs for every batch size up to `max_sequences`
-- the first KV cache manager, which the C++ transceiver requires
+- the version 1 KV cache manager (`use_kv_cache_manager_v2` off), which the C++ transceiver requires
 
 `trtllm-serve` takes no API key, so the engine serves every caller on its port. Keep the engine port on a private network.
 
-Every engine serves context and generation requests, and the router assigns each engine's role without calling the engine.
+Every engine serves context and generation requests, so the router sets each engine's role without calling the engine.
 
 ### Runtime check
 

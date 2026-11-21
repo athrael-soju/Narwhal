@@ -12,7 +12,9 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) 
     dtype, context_length, args, environment, _ = discovered_settings(observed, setting, [])
     fields = discovered_launch_settings(setting)
     if fields.pop("kv_events", False):
-        raise ValueError("set KV_EVENTS to false: TensorRT-LLM publishes no cache-event stream")
+        raise ValueError(
+            "set NARWHAL_KV_EVENTS to false in .env: TensorRT-LLM publishes no cache-event stream"
+        )
     if observed.get("requires_trust_remote_code") and "--trust_remote_code" not in args:
         args.append("--trust_remote_code")
     record = {

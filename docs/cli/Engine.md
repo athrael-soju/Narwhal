@@ -36,7 +36,7 @@ A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to
 
 An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang to advertise to decode peers, `NARWHAL_SGLANG_BOOTSTRAP_PORT`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=30`, and the credential as `NARWHAL_SGLANG_API_KEY`. `NARWHAL_SGLANG_BOOTSTRAP_HOST` is the engine's HTTP bind address, or `NARWHAL_NODE_<n>_IP` when the engine binds every interface, as a container engine does. The launcher passes the port to SGLang as `--disaggregation-bootstrap-port` and the credential as `--api-key`.
 
-A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_<n>_IP`, `NARWHAL_TRTLLM_TRANSFER_PORT`, and the credential as `NARWHAL_TRTLLM_API_KEY`. `trtllm-serve` checks no credential, and its cache transceiver opens its own listener ports.
+A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_<n>_IP`, and `NARWHAL_TRTLLM_TRANSFER_PORT`, set to `NARWHAL_KV_SIDE_CHANNEL_PORT`. The cache transceiver opens its own listener ports. When a credential is set, the engine also gets it as `NARWHAL_TRTLLM_API_KEY`, which `trtllm-serve` does not check.
 
 ## Actions
 

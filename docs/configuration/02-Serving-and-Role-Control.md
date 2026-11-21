@@ -185,7 +185,7 @@ The router counts handoff age from the moment it receives the producer's prefill
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
 
-A TensorRT-LLM producer's lease is `kv_transfer_timeout_ms` in the `engine.json` of its attested launch, in whole seconds. The router derives the handoff bound from it the same way. At the launcher's default lease of 60 seconds, the bound is 50 seconds.
+A TensorRT-LLM producer's lease is `kv_transfer_timeout_ms` in the `engine.json` of its attested launch, rounded down to whole seconds. The router derives the handoff bound as `lease - lease // 6`. At the launcher's default lease of 60 seconds, the bound is 50 seconds.
 
 SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 

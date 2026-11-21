@@ -200,7 +200,7 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
 
     Replace `0` with the index of the GPU the engines use.
 
-3. Inside the container, install `ip`, which `init` reads the interface address with, and install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
+3. Inside the container, install `iproute2`, whose `ip` command `init` uses to read the interface address, and install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
 
     ```bash
     apt-get update && apt-get install -y iproute2

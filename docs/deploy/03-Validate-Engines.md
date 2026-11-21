@@ -354,7 +354,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang or TensorRT-LLM plan. For those engines, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+`narwhal-engine` rejects `capture-cache` for an SGLang or TensorRT-LLM plan. For those engines, skip the capture and size their fabric budgets from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 

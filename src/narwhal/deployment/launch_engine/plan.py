@@ -401,9 +401,14 @@ def build(
         evict_peers=evict_peers,
     )
     config_files, config_args = engine.config_files(record, hook_root)
+    reserved = sorted(HOOK_FILES)
     for file_name in config_files:
         if file_name in HOOK_FILES or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", file_name):
-            raise ValueError(f"engine configuration file name {file_name!r} is not usable")
+            raise ValueError(
+                f"engine configuration file name {file_name!r} must start with an ASCII letter or "
+                "digit, contain only ASCII letters, digits, '.', '_' or '-', and differ from "
+                f"{', '.join(reserved[:-1])} or {reserved[-1]}"
+            )
     args = [*args, *config_args]
     shared = record.get("shared_device")
     if shared is not None:

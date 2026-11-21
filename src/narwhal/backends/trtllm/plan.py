@@ -97,7 +97,7 @@ def validate_runtime(runtime: dict) -> None:
 def engine_config(runtime: dict) -> dict:
     """The server configuration the launch writes, for both leg types on every worker."""
     kv_cache = {
-        # The C++ transceiver requires the first KV cache manager.
+        # The C++ transceiver requires the version 1 KV cache manager.
         "use_kv_cache_manager_v2": False,
     }
     if "block_size" in runtime:
@@ -111,8 +111,7 @@ def engine_config(runtime: dict) -> dict:
         # The iteration statistics feed the Prometheus route that return_perf_metrics serves.
         "enable_iter_perf_stats": True,
         "return_perf_metrics": True,
-        # CUDA graphs cover every batch up to the sequence limit, so larger decode cohorts
-        # run as fast as small ones.
+        # CUDA graphs cover every batch up to the sequence limit, padded to a captured size.
         "cuda_graph_config": {
             "max_batch_size": count(runtime, SETTINGS, "max_sequences"),
             "enable_padding": True,
