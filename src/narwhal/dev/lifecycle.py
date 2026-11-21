@@ -509,6 +509,8 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             prepare(engine_run, env, backend="native")
         _run(run, "narwhal.deployment.launch_engine.cli", ["check", "--run", str(engine_run)], name)
         runs.append(engine_run)
+    # An engine that compiles kernels on its first start needs a longer window.
+    ready = spec["runtime"].get("ready_seconds", READY_SECONDS)
     _run(
         run,
         "narwhal.deployment.launch_engine.cli",
@@ -516,10 +518,12 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
             "start-shared",
             "--backend",
             "native",
+            "--ready-seconds",
+            str(ready),
             *[arg for path in runs for arg in ("--run", str(path))],
         ],
         "native-start-shared",
-        default_timeout=READY_SECONDS * len(runs),
+        default_timeout=ready * len(runs),
     )
     for index, engine_run in enumerate(runs):
         _run(

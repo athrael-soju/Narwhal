@@ -17,6 +17,11 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
         "environment": template["environment"],
         "context_length": template["max_model_len"],
         **({"max_sequences": template["max_num_seqs"]} if "max_num_seqs" in template else {}),
+        **(
+            {"memory_reserve_mib": template["memory_reserve_mib"]}
+            if "memory_reserve_mib" in template
+            else {}
+        ),
         "tokenizer": str(model_dir),
         "extra_args": [
             "--free_gpu_memory_fraction",

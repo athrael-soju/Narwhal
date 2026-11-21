@@ -268,6 +268,28 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs both --engine-memory-mib and"):
             self.initialize(engine_memory_mib=3000)
 
+    def test_a_template_sets_the_engine_ready_window(self):
+        spec = self.sglang_spec()
+        for value in (0, 1.5, "900"):
+            spec["runtime"]["ready_seconds"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "ready_seconds"):
+                self.initialize_sglang(spec)
+
+    def test_the_trtllm_template_plans_a_valid_shared_runtime(self):
+        from narwhal.deployment.launch_engine.backend import launcher
+
+        spec = template._read_template("small-cuda-trtllm-v1.json")
+        self.assertEqual(
+            spec["model"], template._read_template("small-cuda-sglang-v1.json")["model"]
+        )
+        # TensorRT-LLM compiles kernels on its first start.
+        self.assertEqual(spec["runtime"]["ready_seconds"], 900)
+        engine = launcher("trtllm")
+        runtime = engine.dev_runtime(spec["runtime"], self.model, 0.0625)
+        engine.validate_runtime(runtime)
+        self.assertEqual(runtime["memory_reserve_mib"], 3072)
+        self.assertEqual(runtime["extra_args"], ["--free_gpu_memory_fraction", "0.0625"])
+
     def sglang_spec(self):
         spec = template._read_template("small-cuda-sglang-v1.json")
         (self.model / "model.safetensors").write_bytes(b"weights")
@@ -557,6 +579,10 @@ class DevTests(unittest.TestCase):
         )
         budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
         self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
+        start = next(
+            c.args[2] for c in command.call_args_list if c.args[3] == "native-start-shared"
+        )
+        self.assertEqual(start[start.index("--ready-seconds") + 1], "180")
         self.assertEqual(budgets["engine-1"], {})
 
     def test_reference_sweep_fits_engine_context_and_concurrency(self):

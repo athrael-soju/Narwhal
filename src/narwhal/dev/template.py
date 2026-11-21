@@ -426,6 +426,9 @@ def materialize(
     required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
     if available < required:
         raise ValueError(f"GPU VRAM reserve failed: {available} MiB free, {required} MiB required")
+    ready = spec["runtime"].get("ready_seconds", 1)
+    if type(ready) is not int or ready < 1:
+        raise ValueError("runtime.ready_seconds must be a positive integer")
     engine = launcher(spec["runtime"].get("backend"))
     _check_packages(spec["runtime"]["expected_packages"])
     engine.check_dev_imports(spec["runtime"])

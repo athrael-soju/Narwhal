@@ -91,6 +91,7 @@ narwhal = ["py.typed", "fleet.example.json"]
 "narwhal.dev" = [
   "small-cuda-v1.json",
   "small-cuda-sglang-v1.json",
+  "small-cuda-trtllm-v1.json",
   "reference-v1.json",
   "direct-qwen35-08b-v1.json",
   "direct-ernie45-03b-v1.json",
