@@ -249,7 +249,7 @@ class EngineLauncherTests(unittest.TestCase):
                         ValueError,
                         "must start with an ASCII letter or digit, contain only ASCII "
                         "letters, digits, '.', '_' or '-', and differ from launch.json, "
-                        "launch_engine.py, sitecustomize.py",
+                        "launch_engine.py or sitecustomize.py",
                     ),
                 ):
                     build(record, env, Path(folder) / "launch")
