@@ -6,7 +6,7 @@ services:
     network_mode: host
     restart: always
     labels:
-      # Prometheus reads its config only at start; a new digest recreates the container.
+      # Prometheus reads its config and rules only at start; a new digest recreates it.
       narwhal.prometheus-config-digest: "${NARWHAL_PROMETHEUS_CONFIG_DIGEST:-}"
     volumes:
       # Startup stages readable configs and targets before Compose launches services.

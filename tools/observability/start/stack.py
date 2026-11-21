@@ -8,7 +8,7 @@ import os
 import secrets
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -27,7 +27,11 @@ BASE = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BASE / "compose.yml"
 RENDERER_PORT = 8081
 RENDERER_TOKEN = MOUNTS.parent / "renderer-token"
-PROMETHEUS_CONFIG = MOUNTS / "prometheus" / "prometheus.yml"
+# Prometheus reads these staged files only at start.
+PROMETHEUS_CONFIG = (
+    MOUNTS / "prometheus" / "prometheus.yml",
+    MOUNTS / "prometheus" / "prometheus-alerts.yml",
+)
 COMPOSE_UP_TIMEOUT_S = 300.0
 
 
@@ -52,7 +56,7 @@ class ComposeStack:
         runner: Runner = subprocess.run,
         env: Mapping[str, str] | None = None,
         token_path: Path = RENDERER_TOKEN,
-        prometheus_config: Path = PROMETHEUS_CONFIG,
+        prometheus_config: Sequence[Path] = PROMETHEUS_CONFIG,
     ) -> None:
         self._runner = runner
         self._prometheus_config = prometheus_config
@@ -89,7 +93,7 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
-        # Prometheus reads its config only at start, so a changed config recreates it.
+        # Prometheus reads its config and rules only at start, so a change recreates it.
         self._compose_env["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] = config_digest(
             self._prometheus_config
         )
@@ -130,11 +134,16 @@ class ComposeStack:
         )
 
 
-def config_digest(path: Path) -> str:
-    """Return the SHA-256 of a staged config, or an empty string before staging."""
-    if not path.exists():
+def config_digest(paths: Sequence[Path]) -> str:
+    """Return the SHA-256 of the staged files, or an empty string before staging."""
+    if not any(path.exists() for path in paths):
         return ""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    for path in paths:
+        data = path.read_bytes() if path.exists() else b""
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
 
 
 def renderer_token(path: Path) -> str:
