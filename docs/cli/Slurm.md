@@ -4,7 +4,7 @@ description: Start engines on every node of a Slurm allocation, then profile the
 
 # `narwhal-slurm`
 
-`narwhal-slurm` starts a Narwhal fleet inside one Slurm allocation. Run it as one task per node:
+`narwhal-slurm` starts a Narwhal fleet inside one Slurm allocation. [Running Narwhal in a Slurm allocation](../deploy/Slurm-Allocation.md) walks through a launch. Run it as one task per node:
 
 ```bash
 srun --ntasks-per-node=1 --kill-on-bad-exit=1 narwhal-slurm \
