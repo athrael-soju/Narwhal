@@ -3,17 +3,12 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import ClassVar, TypeVar
-
-N = TypeVar("N", int, float)
+from typing import ClassVar
 
 
 class EngineMetrics(ABC):
     # The engine route whose text the methods below read.
     path: ClassVar[str] = "/metrics"
-    # True when each read of `path` returns only what the engine counted since the previous
-    # read. A Prometheus scrape would then take those counts from Narwhal's own readers.
-    drains: ClassVar[bool] = False
     dashboard_series: ClassVar[Mapping[str, str]] = {}
     transfer_series: ClassVar[str | None] = None
     # Each match's first group is one series value: the KV cache size in tokens, and the
@@ -28,10 +23,6 @@ class EngineMetrics(ABC):
     def cache_block_tokens(self, metrics: str) -> int | None:
         values = {int(float(match)) for match in self.block_tokens_pattern.findall(metrics)}
         return values.pop() if len(values) == 1 and min(values) > 0 else None
-
-    def gained(self, before: N, after: N) -> N:
-        """What a counter gained between two consecutive reads."""
-        return after if self.drains else after - before
 
     @abstractmethod
     def prefix_cache_hits(self, metrics: str) -> int | None: ...
