@@ -15,6 +15,9 @@ class EngineDialect(ABC):
     # A route that renders chat messages to prompt text, for an engine whose tokenize route
     # takes text only. None sends the messages to the tokenize route.
     render_path: ClassVar[str | None] = None
+    # False when the tokenize route counts prompt text only. With no render route, callers then
+    # estimate chat requests instead of counting them.
+    tokenize_messages: ClassVar[bool] = True
     # None reads the context limit from the tokenize response.
     context_limit_path: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.

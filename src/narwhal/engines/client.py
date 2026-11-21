@@ -284,6 +284,8 @@ class EngineClient:
         dialect = self.dialect
         if dialect.tokenize_path is None:
             return None
+        if "messages" in body and dialect.render_path is None and not dialect.tokenize_messages:
+            return None
         model = body.get("model")
         try:
             # One deadline covers the render and the count.

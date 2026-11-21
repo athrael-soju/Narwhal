@@ -142,6 +142,14 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(body=list(body)):
                 result = await client.tokenize(engine.url, body, 5, strict=True)
+                dialect = self.backend.dialect
+                if (
+                    "messages" in body
+                    and dialect.render_path is None
+                    and not dialect.tokenize_messages
+                ):
+                    self.assertIsNone(result)
+                    continue
                 self.assertEqual(result.count, len(PROMPT))
                 self.assertIn(result.token_ids, (None, tuple(ord(c) for c in PROMPT)))
 
