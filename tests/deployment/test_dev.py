@@ -268,6 +268,28 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs both --engine-memory-mib and"):
             self.initialize(engine_memory_mib=3000)
 
+    def test_a_template_sets_the_engine_ready_window(self):
+        spec = self.sglang_spec()
+        for value in (0, 1.5, "900"):
+            spec["runtime"]["ready_seconds"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "ready_seconds"):
+                self.initialize_sglang(spec)
+
+    def test_the_trtllm_template_plans_a_valid_shared_runtime(self):
+        from narwhal.deployment.launch_engine.backend import launcher
+
+        spec = template._read_template("small-cuda-trtllm-v1.json")
+        self.assertEqual(
+            spec["model"], template._read_template("small-cuda-sglang-v1.json")["model"]
+        )
+        # TensorRT-LLM compiles kernels on its first start.
+        self.assertEqual(spec["runtime"]["ready_seconds"], 900)
+        engine = launcher("trtllm")
+        runtime = engine.dev_runtime(spec["runtime"], self.model, 0.0625)
+        engine.validate_runtime(runtime)
+        self.assertEqual(runtime["memory_reserve_mib"], 3072)
+        self.assertEqual(runtime["extra_args"], ["--free_gpu_memory_fraction", "0.0625"])
+
     def sglang_spec(self):
         spec = template._read_template("small-cuda-sglang-v1.json")
         (self.model / "model.safetensors").write_bytes(b"weights")
@@ -557,6 +579,10 @@ class DevTests(unittest.TestCase):
         )
         budgets = {call.args[3]: call.kwargs for call in command.call_args_list}
         self.assertEqual(budgets["native-start-shared"], {"default_timeout": 720})
+        start = next(
+            c.args[2] for c in command.call_args_list if c.args[3] == "native-start-shared"
+        )
+        self.assertEqual(start[start.index("--ready-seconds") + 1], "180")
         self.assertEqual(budgets["engine-1"], {})
 
     def test_reference_sweep_fits_engine_context_and_concurrency(self):
@@ -1097,6 +1123,39 @@ class DevTests(unittest.TestCase):
             self.assertNotIn("verification_failure", state)
             self.assertNotEqual(state["verification"], str(evidence))
             self.assertEqual(lifecycle.read(evidence / "failure.json"), failure)
+
+    def test_verification_reads_engine_metrics_from_the_backend_route(self):
+        run = self.launched_instance()
+        fleet = lifecycle.read(run / "fleet.json")
+        fleet["engine"]["backend"] = "trtllm"
+        (run / "fleet.json").write_text(json.dumps(fleet))
+        paths = []
+
+        def reply(request):
+            paths.append((request.url.port, request.url.path))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "5"}}]})
+
+        client = httpx.Client
+        with (
+            patch.object(lifecycle.native_engine, "_owns_process", return_value=True),
+            patch.object(lifecycle, "memory_samples", return_value=contextlib.nullcontext()),
+            patch.object(lifecycle, "_run"),
+            patch.object(
+                lifecycle.httpx,
+                "Client",
+                side_effect=lambda **kwargs: client(transport=httpx.MockTransport(reply)),
+            ),
+            patch.object(lifecycle, "verify_directed_kv_evidence", return_value=[]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main(["dev", "verify", "--instance", str(self.root)]), 0)
+        engines = {httpx.URL(e["url"]).port for e in fleet["engines"]}
+        self.assertEqual(
+            {path for port, path in paths if port in engines and "metrics" in path},
+            {"/prometheus/metrics"},
+        )
+        router = httpx.URL(lifecycle.read(self.root / "instance.json")["router_url"]).port
+        self.assertIn((router, "/metrics"), paths)
 
     def test_subprocess_failure_retains_diagnostic_after_progress(self):
         run = self.launched_instance()

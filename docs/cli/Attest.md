@@ -14,7 +14,7 @@ Run the sidecar while its engine runs, as root for a container engine and as the
 python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>
 ```
 
-The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. It passes `--engine-container` or `--engine-pid` for SGLang, and passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
+The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. It passes `--engine-container` or `--engine-pid` for SGLang and TensorRT-LLM, and passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
 At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. The identity is the engine's version, from `/version` on vLLM or `/server_info` on SGLang, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on SGLang. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
 
@@ -24,14 +24,14 @@ At startup, the sidecar reads the engine's identity. It exits with status 1 when
 | ----------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `--version`             |             | Print the installed distribution version.                                                                          |
 | `--document PATH`       | required    | Attestation document holding contract values and a source per field.                                               |
-| `--engine-base URL`     | required    | Engine base URL that serves `/version` and `/metrics` on vLLM, or `/server_info` on SGLang.                        |
+| `--engine-base URL`     | required    | Engine base URL that serves `/version` and `/metrics` on vLLM, `/server_info` on SGLang, or `/version` on TensorRT-LLM. |
 | `--backend NAME`        | `vllm`      | Engine backend, `vllm` or `sglang`.                                                                                |
 | `--host HOST`           | `127.0.0.1` | Address to bind.                                                                                                   |
 | `--port PORT`           | `8010`      | Port to listen on.                                                                                                 |
 | `--timeout-s SECONDS`   | `5.0`       | Timeout for reading the engine's identity.                                                                         |
 | `--kv-events DIR`       | optional    | Engine cache-event socket directory that turns on the residency routes.                                            |
 | `--model NAME`          | optional    | Served model name for block identities, required with `--kv-events`.                                               |
-| `--engine-container ID` |             | Engine container whose start time identifies the engine process. Required for SGLang unless `--engine-pid` is set. |
+| `--engine-container ID` |             | Engine container whose start time identifies the engine process. Required for SGLang and TensorRT-LLM unless `--engine-pid` is set. |
 | `--engine-pid PID`      |             | Native engine process whose start time identifies the engine process.                                              |
 
 ## Routes
@@ -44,7 +44,7 @@ At startup, the sidecar reads the engine's identity. It exits with status 1 when
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
 
-The router and `narwhal-check` read an SGLang engine's process start from `/v1/process`. With `--engine-pid`, the start is the process's start ticks added to the boot time the host reported when a Narwhal process of that user first read it in the boot, recorded under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`, so both read one record.
+The router and `narwhal-check` read an SGLang or TensorRT-LLM engine's process start from `/v1/process`. With `--engine-pid`, the start is the process's start ticks added to the boot time the host reported when a Narwhal process of that user first read it in the boot, recorded under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`, so both read one record.
 
 ## Residency
 

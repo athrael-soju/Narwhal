@@ -85,9 +85,9 @@ narwhal-check --fleet fleet.json --repeats 3 --evidence-out runs/kv-evidence.jso
 narwhal-check --fleet fleet.json --verify-evidence runs/kv-evidence.json
 ```
 
-With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when both the count and the sum of the decode engine's transfer histogram grow. On vLLM this histogram is `vllm:nixl_xfer_time_seconds`, and on SGLang it is the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds`. An engine without a transfer histogram reports each transfer in the decode leg's reply instead. Preflight then asks for that report on the probe's decode leg, and a transfer passes when the reply reports a transfer time above zero.
+With `--evidence-out`, preflight reads each engine's attestation and transfer metrics before and after every probe. A transfer passes when both the count and the sum of the decode engine's transfer histogram grow. On vLLM this histogram is `vllm:nixl_xfer_time_seconds`, and on SGLang it is the `decode_transferred` stage of `sglang:per_stage_req_latency_seconds`. TensorRT-LLM has no transfer histogram and reports each transfer in the decode leg's reply instead. Preflight then asks for that report on the probe's decode leg, and a transfer passes when the reply reports a transfer time above zero.
 
-Each pair record holds the histogram name in `transfer_metric` and its growth in `transfer_count_delta` and `transfer_seconds`. It also holds the fields that told the decode engine where to fetch the cache: `transfer_mode`, `remote_engine_id`, `remote_host` and `remote_port` on vLLM, or `bootstrap_host`, `bootstrap_port` and `bootstrap_room` on SGLang.
+Each pair record holds the histogram name in `transfer_metric` and its growth in `transfer_count_delta` and `transfer_seconds`. It also holds the fields that told the decode engine where to fetch the cache: `transfer_mode`, `remote_engine_id`, `remote_host` and `remote_port` on vLLM, or `bootstrap_host`, `bootstrap_port` and `bootstrap_room` on SGLang. On TensorRT-LLM, `transfer_metric` is `null`, `transfer_count_delta` is `1.0` for each confirmed transfer, `transfer_seconds` is the transfer time the reply reports, and `ctx_request_id` names the context leg.
 
 The run fails in any of these cases:
 

@@ -1,5 +1,5 @@
 ---
-description: Validate and start every vLLM or SGLang engine in a Narwhal fleet.
+description: Validate and start every vLLM, SGLang or TensorRT-LLM engine in a Narwhal fleet.
 ---
 
 # Validate and start engines
@@ -80,7 +80,7 @@ ss -ltnp
 
 A passing `test` command is silent and exits with status 0.
 
-- If `ss -ltnp` shows a planned HTTP, attestation, vLLM NIXL side-channel, SGLang bootstrap, or transfer port in use, free the port.
+- If `ss -ltnp` shows a planned HTTP, attestation, vLLM NIXL side-channel, SGLang bootstrap, TensorRT-LLM transfer, or UCX transfer port in use, free the port.
 - If `NARWHAL_ENGINE_IMAGE` holds a registry digest, compare the runtime's resolved digest with the configured digest.
 - If the provisioned checkpoint changed, rerun discovery.
 
@@ -147,11 +147,11 @@ The launcher builds one launch plan per engine with these properties:
 
 | Property                      | Value                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Serving command               | vLLM: `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`. SGLang: `python3 -m sglang.launch_server`, started by the Narwhal launch wrapper inside `NARWHAL_ENGINE_IMAGE`                                         |
+| Serving command               | vLLM: `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`. SGLang: `python3 -m sglang.launch_server`, and TensorRT-LLM: `trtllm-serve serve`, each started by the Narwhal launch wrapper inside `NARWHAL_ENGINE_IMAGE`                                         |
 | Model mount                   | `NARWHAL_MODEL_DIR`, read-only at `/model`                                                                                                                                                                                                  |
 | Devices                       | The configured devices with the selected TP allocation                                                                                                                                                                                      |
-| KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` transfer backend; every engine launches as prefill with `--enable-pd-role-switch` |
-| Side-channel address and port | The role environment, for the vLLM NIXL side channel or the SGLang bootstrap server                                                                                                                                                         |
+| KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` transfer backend; every engine launches as prefill with `--enable-pd-role-switch`. TensorRT-LLM: the C++ cache transceiver with the `UCX` or `NIXL` backend, set in `engine.json` |
+| Side-channel address and port | The role environment, for the vLLM NIXL side channel, the SGLang bootstrap server or the TensorRT-LLM transfer port                                                                                                                                                         |
 | Transport                     | `UCX_TLS` of `tcp,sm,self,<gpu>` for `ucx_tcp` or `rc,sm,self,<gpu>` for `ucx_rdma`                                                                                                                                                         |
 | Prefix caching                | On by default, turned off through `runtime.prefix_caching`                                                                                                                                                                                  |
 | Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
@@ -204,7 +204,7 @@ Validate the image and plan:
 narwhal-engine check --run "$ENGINE_RUN"
 ```
 
-A passing check confirms, for both backends:
+A passing check confirms, for every backend:
 
 - the immutable image identity and runtime identity
 - the pinned package versions
@@ -218,7 +218,7 @@ For vLLM, the check also confirms:
 - the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
 
-For SGLang, the check also parses the serving arguments.
+For SGLang, the check also parses the serving arguments. For TensorRT-LLM, it also checks for `trtllm-serve` and reads block reuse from the `--config` file.
 
 The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
@@ -289,6 +289,8 @@ Before you reuse a failed deployment:
     checked = json.loads((run / "checked.json").read_text())
     assert checked["plan_sha256"] == hashlib.sha256(plan_data).hexdigest(), "Repeat the image check for this plan"
     sglang = plan.get("engine") == "sglang"
+    # TensorRT-LLM's /metrics serves JSON iteration statistics, with no process start.
+    trtllm = plan.get("engine") == "trtllm"
     expected_version = checked["engine_version"]
     headers = {"Content-Type": "application/json"}
     if os.environ.get("NARWHAL_ENGINE_API_KEY"):
@@ -318,18 +320,22 @@ Before you reuse a failed deployment:
     if sglang:
         print("Engine health, version and model passed.")
     else:
-        metrics = probe("/metrics", "metrics.txt").decode()
-        assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
+        if not trtllm:
+            metrics = probe("/metrics", "metrics.txt").decode()
+            assert any(line.startswith("process_start_time_seconds ") for line in metrics.splitlines())
         completion = json.loads(probe("/v1/completions", "completion.json", {
             "model": os.environ["NARWHAL_ENGINE_MODEL_NAME"], "prompt": "The sea is",
             "max_tokens": 32, "temperature": 0,
         }))
         assert completion["choices"][0]["text"]
-        print("Engine health, version, model, process identity and completion passed.")
+        if trtllm:
+            print("Engine health, version, model and completion passed.")
+        else:
+            print("Engine health, version, model, process identity and completion passed.")
     PY_ENGINE
     ```
 
-For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list.
+For a vLLM engine, the probe checks `/version`, the process start in `/metrics`, and one completion. For a TensorRT-LLM engine, it checks `/version` and one completion. For an SGLang engine, it reads the version from `/server_info` and stops after the model list.
 
 If the probe reports another version, compare the container that serves the endpoint with the recorded image and container ID. To rerun the probe after a repair, use new capture filenames or a new launch directory.
 
@@ -348,7 +354,7 @@ narwhal-engine capture-cache --run "$ENGINE_RUN"
 
 Compare the resolved layouts and page geometry within each signature group. Matching engines share one fabric budget. An engine that differs gets a separate budget.
 
-`narwhal-engine` rejects `capture-cache` for an SGLang plan. For an SGLang engine, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
+`narwhal-engine` rejects `capture-cache` for an SGLang or TensorRT-LLM plan. For those engines, skip the capture and size its fabric budget from [measured handoffs](04-Qualify-Fabric.md#building-the-source-budget).
 
 In each engine-role shell, create the fabric run directory and check the budget tool:
 
