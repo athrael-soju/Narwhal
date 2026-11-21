@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
+from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.observability.targets import scrape_targets
 from tools.observability import make_targets
@@ -75,6 +78,15 @@ class EngineTargetTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_a_backend_whose_metrics_drain_on_read_has_no_engine_targets(self) -> None:
+        class Draining(type(load_backend("vllm").metrics)):  # type: ignore[misc]
+            path = "/stats"
+            drains = True
+
+        backend = replace(load_backend("vllm"), metrics=Draining())
+        with patch("narwhal.observability.targets.load_backend", return_value=backend):
+            self.assertEqual(scrape_targets(fleet(EngineSpec("e0", "http://127.0.0.2:8002"))), [])
 
     def test_targets_keep_the_engine_scheme_and_path_without_credentials(self) -> None:
         cfg = fleet(EngineSpec("e0", "https://user:secret@engine.internal:8443/n1"))

@@ -119,7 +119,7 @@ async def probe_cached_prefill(
                     observation_timeout_s,
                 )
                 cold_after = await prefix_cache_hits(client, url, metrics, timeout)
-                cached = after - before
+                cached = metrics.gained(before, after)
                 if cached <= 0:
                     return (
                         samples,
@@ -128,7 +128,7 @@ async def probe_cached_prefill(
                     )
                 if cold_after is None:
                     return samples, "the prefix-cache hit counter became unreadable"
-                if cold_after != cold_before:
+                if metrics.gained(cold_before, cold_after):
                     raise RuntimeError("a cold control reused a cached prefix; reserve the engine")
                 case = {"target_prefix": prefix_target, "target_suffix": suffix_target}
                 samples.append(

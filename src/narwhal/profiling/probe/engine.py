@@ -9,9 +9,11 @@ from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
 
 
-async def _engine_metrics(client: httpx.AsyncClient, url: str, timeout_s: float) -> str | None:
+async def _engine_metrics(
+    client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float
+) -> str | None:
     try:
-        response = await client.get(f"{url}/metrics", timeout=timeout_s)
+        response = await client.get(f"{url}{metrics.path}", timeout=timeout_s)
         response.raise_for_status()
     except httpx.HTTPError:
         return None
@@ -21,21 +23,21 @@ async def _engine_metrics(client: httpx.AsyncClient, url: str, timeout_s: float)
 async def kv_capacity(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.kv_capacity(text)
 
 
 async def cache_block_tokens(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.cache_block_tokens(text)
 
 
 async def prefix_cache_hits(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.prefix_cache_hits(text)
 
 

@@ -209,9 +209,20 @@ class WarmSweepBoundsTests(unittest.TestCase):
 
 
 class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
-    def engine(self, *, reuse=True, hybrid=False, leak=False, sent=None, blind_after_cold=False):
+    def engine(
+        self,
+        *,
+        reuse=True,
+        hybrid=False,
+        leak=False,
+        sent=None,
+        blind_after_cold=False,
+        drain=False,
+    ):
         cache: dict[str, int] = {}
         hits = [0]
+        # `drain`: each read of /stats returns the hits since the previous read.
+        drained = [0]
         # `blind_after_cold`: /metrics fails after the first cold control.
         blind, reused = [False], [False]
 
@@ -222,11 +233,13 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
             return tokens // 16 * 16
 
         def handle(request):
-            if request.url.path == "/metrics":
+            if request.url.path == ("/stats" if drain else "/metrics"):
                 if blind[0]:
                     return httpx.Response(503)
+                count = hits[0] - drained[0] if drain else hits[0]
+                drained[0] = hits[0]
                 return httpx.Response(
-                    200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {hits[0]}\n'
+                    200, text=f'vllm:prefix_cache_hits_total{{engine="0"}} {count}\n'
                 )
             body = json.loads(request.content)
             tokens = len(body["prompt"].split())
@@ -253,7 +266,9 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
 
         return httpx.MockTransport(handle)
 
-    async def run_probe(self, transport, prefix_lens=(100, 400), short=0, **kwargs):
+    async def run_probe(
+        self, transport, prefix_lens=(100, 400), short=0, metrics=VLLM_METRICS, **kwargs
+    ):
         sweep = replace(
             Sweep(),
             cached_prefix_lens=prefix_lens,
@@ -271,7 +286,7 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
                 redirect_stdout(io.StringIO()),
             ):
                 return await probe_cached_prefill(
-                    client, "http://e", "stub", sweep, VllmDialect(), metrics=VLLM_METRICS, **kwargs
+                    client, "http://e", "stub", sweep, VllmDialect(), metrics=metrics, **kwargs
                 )
 
     async def test_samples_record_observed_cache_state_and_cold_controls(self):
@@ -289,6 +304,20 @@ class CachedPrefillProbeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(s["prefix_tokens"] == 0 for s in cold))
         self.assertTrue(all(s["cache_evidence"] == "prefix_cache_hits" for s in samples))
+
+    async def test_a_draining_metrics_route_gives_the_same_samples(self):
+        class Draining(type(VLLM_METRICS)):  # type: ignore[misc]
+            path = "/stats"
+            drains = True
+
+        expected, _ = await self.run_probe(self.engine())
+        samples, reason = await self.run_probe(self.engine(drain=True), metrics=Draining())
+        self.assertIsNone(reason)
+        self.assertEqual(
+            [s["prefix_tokens"] for s in samples], [s["prefix_tokens"] for s in expected]
+        )
+        with self.assertRaisesRegex(RuntimeError, "cold control reused"):
+            await self.run_probe(self.engine(leak=True, drain=True), metrics=Draining())
 
     async def test_a_block_aligned_prefix_stays_reusable_on_a_hybrid_engine(self):
         samples, _ = await self.run_probe(self.engine(hybrid=True), prefix_lens=(96, 400))

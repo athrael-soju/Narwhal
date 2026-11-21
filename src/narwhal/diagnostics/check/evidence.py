@@ -33,9 +33,10 @@ async def pair_snapshot(cfg: FleetConfig, iid: str) -> dict[str, object]:
         failures = verify_attestation(payload, cfg.engine_contract, identity)
         if failures:
             raise ValueError(f"{iid} attestation: {'; '.join(failures)}")
-        metrics = await client.get(spec.url.rstrip("/") + "/metrics", headers=cfg.engine_headers())
+        reader = load_backend(cfg.backend).metrics
+        metrics = await client.get(spec.url.rstrip("/") + reader.path, headers=cfg.engine_headers())
         metrics.raise_for_status()
-    totals = load_backend(cfg.backend).metrics.transfer_totals(metrics.text)
+    totals = reader.transfer_totals(metrics.text)
     if totals is None:
         raise ValueError(f"{iid} exposes no KV transfer metrics")
     count, seconds = totals
