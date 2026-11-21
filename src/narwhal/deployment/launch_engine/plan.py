@@ -373,9 +373,10 @@ def build(
             common.extend(["--device", device])
         if record["gpu_visibility_env"] == "CUDA_VISIBLE_DEVICES":
             common.extend(["--gpus", "all"])
-            # UCX CUDA IPC tells peers apart by PID; colocated engines need distinct host PIDs.
+            # UCX CUDA IPC reaches a colocated engine only from the same PID namespace, and tells
+            # peers apart by host PID. In separate namespaces, UCX 1.23 sends KV over TCP.
             visible = record["environment"]["CUDA_VISIBLE_DEVICES"].split(",")
-            if len(visible) > len(record["gpu_ids"]):
+            if len(visible) > len(record["gpu_ids"]) or record.get("shared_device") is not None:
                 common.extend(["--pid", "host"])
         else:
             common.extend(["--security-opt", "seccomp=unconfined"])

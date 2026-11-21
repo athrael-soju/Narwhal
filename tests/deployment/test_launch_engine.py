@@ -438,6 +438,21 @@ class EngineLauncherTests(unittest.TestCase):
         for value, disabled in (("no", True), ("N", True), ("0", True), ("y", False), ("1", False)):
             self.assertIs(releases_peers("1.22.0", value), disabled)
 
+    def test_shared_device_engines_share_the_host_pid_namespace(self):
+        with tempfile.TemporaryDirectory() as folder:
+            record, env = launcher_inputs(Path(folder))
+            cuda_engine(record, visible="0")
+            record["shared_device"] = {
+                "group": "node-1:GPU-0",
+                "gpu_uuid": "GPU-0",
+                "device_allowance": 0.9,
+                "gpu_memory_utilization": 0.4,
+            }
+            record["runtime"]["extra_args"].extend(["--gpu-memory-utilization", "0.4"])
+            plan, _ = build(record, env, Path(folder) / "launch")
+            self.assertEqual(plan["common"][plan["common"].index("--pid") + 1], "host")
+            self.assertIs(plan["cuda_ipc_peers"], True)
+
     def test_the_shared_budget_and_transports_are_bound_to_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             record, env = launcher_inputs(Path(folder))
