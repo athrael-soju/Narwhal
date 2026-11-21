@@ -6,6 +6,8 @@ from pathlib import Path
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
 from ...deployment.launch_engine.backend import (
     CacheCapture,
+    CacheMeasurement,
+    CacheRegistration,
     EngineLauncher,
     LiveModelDimensions,
     ModelFormats,
@@ -17,7 +19,14 @@ from . import plan as policy
 from .runtime import LAUNCHER
 
 
-class VllmLauncher(EngineLauncher, CacheCapture, LiveModelDimensions, ModelFormats):
+class VllmLauncher(
+    EngineLauncher,
+    CacheCapture,
+    CacheMeasurement,
+    CacheRegistration,
+    LiveModelDimensions,
+    ModelFormats,
+):
     runtime_script = LAUNCHER
     cache_hook = Path(__file__).with_name("cache_capture_hook.py")
     side_channel = "NIXL"

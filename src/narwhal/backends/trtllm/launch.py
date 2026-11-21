@@ -4,9 +4,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ...deployment.attestation_contract.document import AttestationContext, AttestationEvidence
-from ...deployment.launch_engine.backend import EngineLauncher
+from ...deployment.launch_engine.backend import CacheCapture, EngineLauncher
 from ...deployment.launch_engine.check import CheckContext, ProbeResult
-from . import attestation, dev, discovery
+from . import attestation, captures, dev, discovery
 from . import check as runtime_check
 from . import plan as policy
 from .runtime import API_KEY_ENV, LAUNCHER
@@ -15,8 +15,10 @@ SIDE_CHANNEL_HOST_ENV = "NARWHAL_TRTLLM_TRANSFER_HOST"
 SIDE_CHANNEL_PORT_ENV = "NARWHAL_TRTLLM_TRANSFER_PORT"
 
 
-class TrtllmLauncher(EngineLauncher):
+class TrtllmLauncher(EngineLauncher, CacheCapture):
     runtime_script = LAUNCHER
+    cache_hook = Path(__file__).with_name("cache_capture_hook.py")
+    native_capture = True
     side_channel = "transfer"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES
@@ -78,6 +80,9 @@ class TrtllmLauncher(EngineLauncher):
 
     def probe_result(self, context: CheckContext, output: str) -> ProbeResult:
         return runtime_check.result(context, output)
+
+    def capture_cache(self, run: Path, plan: dict) -> None:
+        captures.capture_cache(run, plan)
 
     def capture_connector(self, run: Path) -> Path:
         return attestation.capture_server(run)

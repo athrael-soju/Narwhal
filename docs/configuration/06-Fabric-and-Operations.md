@@ -18,7 +18,7 @@ Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#derivi
 
 To compute the budget:
 
-1. On vLLM, capture each engine's `cache-layout.json` in its engine-role shell:
+1. On vLLM and TensorRT-LLM, capture each engine's `cache-layout.json` in its engine-role shell:
 
     ```bash
     narwhal-engine capture-cache --run "$ENGINE_RUN"

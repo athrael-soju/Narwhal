@@ -108,12 +108,22 @@ class CacheCapture(ABC):
 
     # Delivered as the launch hook's sitecustomize.py, pinned in the plan and enabled at start.
     cache_hook: ClassVar[Path]
+    # Whether capture-cache also reads a native launch's records from its launch directory.
+    native_capture: ClassVar[bool] = False
+
+    @abstractmethod
+    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+
+class CacheMeasurement(ABC):
+    """Optional capability: the KV cache layout from a temporary sizing container."""
 
     @abstractmethod
     def measure_cache(self, run: Path, plan: dict) -> None: ...
 
-    @abstractmethod
-    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+class CacheRegistration(ABC):
+    """Optional capability: the connector's cache block registration and handshake policy."""
 
     @abstractmethod
     def registration_layout(
