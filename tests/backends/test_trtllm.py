@@ -79,6 +79,27 @@ class TransceiverConnectorTests(unittest.TestCase):
         )
         self.assertEqual(leg, {"model": "m", "prompt": "x", "stream": True})
 
+    def test_a_context_leg_that_ends_the_reply_hands_off_a_recompute(self):
+        ended = json.loads(json.dumps(CONTEXT))
+        choice = ended["choices"][0]
+        choice.update(text="", finish_reason="stop")
+        choice["disaggregated_params"].update(
+            ctx_request_id=None, first_gen_tokens=None, encoded_opaque_state=None
+        )
+        ended["prompt_token_ids"] = None
+        found = self.kv.prefill_result(
+            ended, url="http://ctx", endpoint="/v1/completions", request_id=None
+        )
+        self.assertEqual(found.parameters(), {"recompute": True})
+        body = {"model": "m", "prompt": "x", "max_tokens": 6}
+        leg = self.kv.decode_body(body, result=found, url="http://gen", endpoint="/v1/completions")
+        # The generation engine serves the prompt as an ordinary request.
+        self.assertEqual(leg, {**body, "stream": True})
+        cut = json.loads(json.dumps(ended))
+        cut["choices"][0]["finish_reason"] = "length"
+        with self.assertRaises(ValueError):
+            self.kv.extract(cut)
+
     def test_a_context_response_without_complete_parameters_is_refused(self):
         for broken in (
             {"ctx_request_id": "1"},
