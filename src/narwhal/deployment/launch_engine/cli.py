@@ -44,8 +44,8 @@ CAPTURE_ACTIONS: dict[str, tuple[str, str, type]] = {
         CacheRegistration,
     ),
     "capture-cache": (
-        "Capture cache-layout.json from the running container recorded by a checked plan",
-        "container only",
+        "Capture cache-layout.json from the serving engine of a checked plan",
+        "container; native on TensorRT-LLM",
         CacheCapture,
     ),
     "cache-registration": (

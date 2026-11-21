@@ -48,7 +48,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
 | `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
 | `start` | container | Checked plan | One serving container and `container.id` |
-| `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running engine of a checked plan | `cache-layout.json` with the live cache pages |
+| `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
 | `cache-registration` | container, native, vLLM | Checked plan and one of `--startup-log` or `--runtime-layout` | `cache-registration.json` with the resolved block grouping |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |

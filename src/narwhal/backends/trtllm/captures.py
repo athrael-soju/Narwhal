@@ -81,4 +81,4 @@ def capture_cache(run: Path, plan: dict) -> None:
                 raise ValueError("ranks of one engine recorded different cache sizing")
             merged["ranks"].extend(ranks)
     write_private(destination, json.dumps(merged, indent=2) + "\n")
-    print("Live serving cache pages captured in cache-layout.json; container remains running.")
+    print("Live serving cache pages captured in cache-layout.json; the engine remains running.")
