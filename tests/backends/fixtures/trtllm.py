@@ -30,18 +30,17 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
     (run / "server-info.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
-def _iteration(used: int) -> dict:
-    return {
-        "iter": used,
-        "numActiveRequests": 1,
-        "kvCacheStats": {
-            "maxNumBlocks": 48574,
-            "freeNumBlocks": 48574 - used,
-            "usedNumBlocks": used,
-            "tokensPerBlock": 32,
-            "reusedBlocks": 0,
-        },
-    }
+_LABELS = 'engine_type="pytorch",model_name="m",pid="1"'
+# The Prometheus route as one worker serves it, with two ranks' cache sizes.
+METRICS = (
+    "# TYPE trtllm_kv_cache_max_blocks gauge\n"
+    f'trtllm_kv_cache_max_blocks{{dp_rank="0",{_LABELS}}} 48574.0\n'
+    f'trtllm_kv_cache_max_blocks{{dp_rank="1",{_LABELS}}} 48600.0\n'
+    f'trtllm_kv_cache_tokens_per_block{{dp_rank="0",{_LABELS}}} 32.0\n'
+    f'trtllm_kv_cache_tokens_per_block{{dp_rank="1",{_LABELS}}} 32.0\n'
+    f"trtllm_prompt_cached_tokens_total{{{_LABELS}}} 96.0\n"
+    f"trtllm_prompt_tokens_total{{{_LABELS}}} 6404.0\n"
+)
 
 
 CONFIG = {
@@ -54,11 +53,10 @@ CONFIG = {
 }
 
 FIXTURES = ContractFixtures(
-    metrics=json.dumps([_iteration(2), _iteration(3)]),
+    metrics=METRICS,
     kv_capacity=48574 * 32,
     cache_block_tokens=32,
-    # The iteration statistics carry no hit count that a reader can difference.
-    prefix_cache_hits=None,  # type: ignore[arg-type]
+    prefix_cache_hits=96,
     transfer_totals=None,
     kv_batches=[],
     malformed_kv_batch=b"[",

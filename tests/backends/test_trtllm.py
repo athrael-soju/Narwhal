@@ -140,12 +140,20 @@ class TrtllmIdentityTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TrtllmMetricsTests(unittest.TestCase):
-    def test_reads_drain_and_an_idle_read_reports_nothing(self):
+    def test_the_prometheus_route_holds_the_cache_size_and_hits(self):
         metrics = BACKEND.metrics
-        self.assertTrue(metrics.drains)
-        self.assertIsNone(metrics.kv_capacity("[]"))
-        self.assertIsNone(metrics.cache_block_tokens("[]"))
-        self.assertIsNone(metrics.kv_capacity('{"error": "busy"}'))
+        self.assertEqual(metrics.path, "/prometheus/metrics")
+        self.assertFalse(metrics.drains)
+        self.assertIsNone(metrics.kv_capacity(""))
+        self.assertIsNone(metrics.kv_capacity("trtllm_kv_cache_max_blocks 10\n"))
+        self.assertIsNone(metrics.prefix_cache_hits(""))
+        self.assertEqual(metrics.prefix_cache_hits("trtllm_prompt_cached_tokens_total 0.0\n"), 0)
+
+    def test_the_launch_turns_the_prometheus_route_on(self):
+        from narwhal.backends.trtllm.plan import engine_config
+
+        config = engine_config({"model_dtype": "bfloat16"})
+        self.assertTrue(config["return_perf_metrics"])
 
 
 class TrtllmDialectTests(unittest.TestCase):
