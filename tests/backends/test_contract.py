@@ -569,6 +569,22 @@ class BackendFlows(Launched, unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
                 engine_document(run, log)
 
+    def test_the_attested_launch_carries_engine_configuration_files(self):
+        files = {"engine.yaml": "timeout: 30\n"}
+        launcher = type(self.backend.engine_launcher())
+        with patch.object(launcher, "config_files", lambda self, record, directory: (files, [])):
+            run, plan, _ = self.prepared()
+        self.check(run, plan)
+        self.start(run)
+        plan = load_plan(run)
+        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
+        log = run / "startup.log"
+        log.write_text(self.fixtures.startup_log)
+        image = json.loads((run / "checked.json").read_text())["image_id"]
+        with running_container(image):
+            document = engine_document(run, log)
+        self.assertEqual(document["launch"]["config_files"], files)
+
 
 class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):
     """Golden records of each step a backend takes part in, recorded at the engine boundary."""
