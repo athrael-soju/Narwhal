@@ -98,6 +98,14 @@ RANDOM_HEX = re.compile(r"\b[0-9a-f]{32}\b")
 RANDOM_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 
 
+def _char_ids(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(type(item) is int and 32 <= item < 127 for item in value)
+    )
+
+
 def random_ids(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: random_ids(item) for key, item in value.items()}
@@ -232,12 +240,25 @@ class Engines:
         number = self.values.setdefault((name, value), len(self.values) + 1)
         return f"<{name} {number}>"
 
+    def masked(self, body: dict, prefix: str = "") -> dict:
+        # A dotted name masks a field inside an object field.
+        masked = {}
+        for key, value in body.items():
+            name = prefix + key
+            if name in self.random_fields:
+                masked[key] = self.placeholder(name, value)
+            elif key in ("prompt", "prompt_token_ids") and _char_ids(value):
+                # The simulated tokenizer gives one ID per character; record the text it read.
+                masked[key] = f"<token IDs of {''.join(map(chr, value))!r}>"
+            elif isinstance(value, dict):
+                masked[key] = self.masked(value, name + ".")
+            else:
+                masked[key] = value
+        return masked
+
     def recorded(self, request: httpx.Request, body: object) -> dict:
         if isinstance(body, dict):
-            body = {
-                key: self.placeholder(key, value) if key in self.random_fields else value
-                for key, value in body.items()
-            }
+            body = self.masked(body)
         headers = {
             name: request.headers[name]
             for name in ("authorization", "x-request-id")

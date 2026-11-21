@@ -95,7 +95,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code` when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`.
+Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code`, or `--trust_remote_code` on TensorRT-LLM, when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`.
 
 Discovery writes the generated configuration at mode 0600:
 
@@ -157,7 +157,7 @@ Override the policy in `.env` before discovery:
 
 | Field                                                                                    | Meaning                                                                                                                       |
 | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `NARWHAL_ENGINE_BACKEND`, `NARWHAL_ENGINE_CONNECTOR`                                     | Fleet `engine.backend` (`vllm`, the default, or `sglang`) and `engine.connector`                                              |
+| `NARWHAL_ENGINE_BACKEND`, `NARWHAL_ENGINE_CONNECTOR`                                     | Fleet `engine.backend` (`vllm`, the default, `sglang` or `trtllm`) and `engine.connector`                                     |
 | `NARWHAL_DECODE_CUDA_GRAPH_MEMORY_GB`                                                    | GB of decode CUDA graph memory for each SGLang engine, required with the `mooncake` connector                                 |
 | `NARWHAL_GPU_IDS`, `NARWHAL_TENSOR_PARALLEL_SIZE`                                        | Comma-separated GPU indices or NVIDIA UUIDs, and the replica TP size                                                          |
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
@@ -172,6 +172,8 @@ Override the policy in `.env` before discovery:
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
 With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and requires the `sglang`, `torch` and `mooncake-transfer-engine` versions installed in the image, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only. For SGLang, `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`, from 1 to 256. Without it, the launcher uses 256.
+
+With `NARWHAL_ENGINE_BACKEND=trtllm`, discovery writes the [TensorRT-LLM runtime fields](../configuration/05-Engine-Launch.md#tensorrt-llm-runtime-fields) and requires the `tensorrt_llm` and `torch` versions installed in the image. `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`. Without it, the launcher uses 64.
 
 Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`. It fails when `NARWHAL_ENGINE_ARGS` sets a flag that one of the [launch settings for every backend](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) controls.
 

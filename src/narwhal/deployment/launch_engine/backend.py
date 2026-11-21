@@ -64,6 +64,12 @@ class EngineLauncher(ABC):
         evict_peers: bool,
     ) -> tuple[list[str], dict]: ...
 
+    def config_files(self, record: dict, directory: str) -> tuple[dict[str, str], list[str]]:
+        """Engine configuration files for this launch, by file name, and the arguments that
+        pass them to the engine from `directory`.
+        """
+        return {}, []
+
     @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...
 
@@ -102,12 +108,22 @@ class CacheCapture(ABC):
 
     # Delivered as the launch hook's sitecustomize.py, pinned in the plan and enabled at start.
     cache_hook: ClassVar[Path]
+    # Whether capture-cache also reads a native launch's records from its launch directory.
+    native_capture: ClassVar[bool] = False
+
+    @abstractmethod
+    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+
+class CacheMeasurement(ABC):
+    """Optional capability: the KV cache layout from a temporary sizing container."""
 
     @abstractmethod
     def measure_cache(self, run: Path, plan: dict) -> None: ...
 
-    @abstractmethod
-    def capture_cache(self, run: Path, plan: dict) -> None: ...
+
+class CacheRegistration(ABC):
+    """Optional capability: the connector's cache block registration and handshake policy."""
 
     @abstractmethod
     def registration_layout(

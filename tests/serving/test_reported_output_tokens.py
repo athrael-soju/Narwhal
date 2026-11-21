@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -112,3 +113,57 @@ class ReportedOutputTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(
             load("vllm").dialect.stream_output_tokens({"timings": {"predicted_n": 4}})
         )
+
+
+class UsageFrameCountTests(unittest.IsolatedAsyncioTestCase):
+    """An engine that counts output only in the usage frame stream_options.include_usage adds."""
+
+    def setUp(self):
+        dialect = type(load("llamacpp").dialect)
+
+        def usage_count(self, payload):
+            usage = payload.get("usage")
+            return usage.get("completion_tokens") if isinstance(usage, dict) else None
+
+        for name, value in (("usage_frame_counts", True), ("stream_output_tokens", usage_count)):
+            patcher = patch.object(dialect, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.decode_bodies: list[dict] = []
+        self.router, self.client = serving_app(self, self.engine, backend="llamacpp")
+
+    def engine(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else {}
+        if request.url.path == "/props":
+            return httpx.Response(200, json={"total_slots": 2})
+        if request.url.path.startswith("/slots/"):
+            return httpx.Response(200, json={"n_saved": 3})
+        if not body.get("stream"):
+            return httpx.Response(200, json={"choices": [{"text": "x"}]})
+        self.decode_bodies.append(body)
+        frames = [{"choices": [{"index": 0, "text": "ab"}]}, {"choices": [FINISH]}]
+        if (body.get("stream_options") or {}).get("include_usage"):
+            usage = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+            frames.append({"choices": [], "usage": usage})
+        return stream(*frames)
+
+    async def complete(self, **fields) -> httpx.Response:
+        body = {"model": "stub", "prompt": "hello", "max_tokens": 8, **fields}
+        response = await self.client.post("/v1/completions", json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response
+
+    async def test_each_decode_leg_asks_for_the_usage_frame(self):
+        reply = (await self.complete()).json()
+        # A non-streamed reply carries the engine's own usage.
+        self.assertEqual(
+            reply["usage"], {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+        )
+        streamed = await self.complete(stream=True)
+        self.assertNotIn('"usage"', streamed.text)
+        self.assertIn("data: [DONE]", streamed.text)
+        asked = await self.complete(stream=True, stream_options={"include_usage": True})
+        self.assertIn('"completion_tokens":2', asked.text.replace(" ", ""))
+        for body in self.decode_bodies:
+            self.assertTrue(body["stream_options"]["include_usage"])
+        self.assertEqual(self.router.state()["serving"]["output_tokens"], 6)

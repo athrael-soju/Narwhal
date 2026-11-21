@@ -7,6 +7,8 @@ from typing import ClassVar
 
 
 class EngineMetrics(ABC):
+    # The engine route whose text the methods below read.
+    path: ClassVar[str] = "/metrics"
     dashboard_series: ClassVar[Mapping[str, str]] = {}
     transfer_series: ClassVar[str | None] = None
     # Each match's first group is one series value: the KV cache size in tokens, and the

@@ -55,7 +55,7 @@ Before you select deployment SLOs, [re-profile each engine whose process generat
 ### Prefill sweep
 
 - Select at least three prefill lengths that span the production range, including its longest inputs.
-- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`.
+- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`. On TensorRT-LLM, it reads `--max_seq_len` from the engine's attested launch.
 - Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 - The router prices a prompt longer than the longest swept length with the [fit extended past the sweep](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile).
 
@@ -66,7 +66,7 @@ The prefill fit is `a*n*n + b*n + c + ttft_split*s`:
 | `n` | Prompt token count |
 | `s` | 1 for a prompt that ends inside a cache block past the first, otherwise 0 |
 
-The cache block size comes from `vllm:cache_config_info` on vLLM and `sglang:page_size` on SGLang.
+The cache block size comes from `vllm:cache_config_info` on vLLM, `sglang:page_size` on SGLang, and `trtllm_kv_cache_tokens_per_block` on TensorRT-LLM.
 
 The profiler sets `ttft_split` when all of these hold:
 
@@ -128,7 +128,7 @@ The profiler reports four errors:
 
 The warm sweep runs on an engine when all of these hold:
 
-- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, or `sglang:cached_tokens_total` summed across its cache sources on SGLang. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit. Before then, the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs`.
+- The engine exports its prefix-cache hit counter: `vllm:prefix_cache_hits_total` on vLLM, `sglang:cached_tokens_total` summed across its cache sources on SGLang, or `trtllm_prompt_cached_tokens_total` on TensorRT-LLM. SGLang creates `sglang:cached_tokens_total` at the engine's first cache hit. Before then, the profiler counts zero hits on an SGLang engine that exports `sglang:num_running_reqs`.
 - At least two prefix lengths, two suffix lengths, and five cases fit within `max_model_len`.
 
 An engine keeps cold pricing when any of these hold:
@@ -183,7 +183,7 @@ If the TTFT fit fails, the sample sidecar keeps the raw prefill measurements and
 
 ### KV capacity source
 
-The KV capacity source is the physical KV constraint when the engine reports its KV capacity, and the TPOT-derived limit otherwise. vLLM reports it as `kv_cache_size_tokens` in `vllm:cache_config_info`, and SGLang as `sglang:max_total_num_tokens`. When the engine exports several values, the profiler takes the smallest.
+The KV capacity source is the physical KV constraint when the engine reports its KV capacity, and the TPOT-derived limit otherwise. vLLM reports it as `kv_cache_size_tokens` in `vllm:cache_config_info`, SGLang as `sglang:max_total_num_tokens`, and TensorRT-LLM as `trtllm_kv_cache_max_blocks` times `trtllm_kv_cache_tokens_per_block`. When the engine exports several values, the profiler takes the smallest.
 
 ## Validating the profile before using it
 

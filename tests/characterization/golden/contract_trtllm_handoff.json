@@ -1,0 +1,193 @@
+{
+  "inference_probe": {
+    "control": [],
+    "decode": {
+      "body": {
+        "disaggregated_params": {
+          "ctx_request_id": "<disaggregated_params.ctx_request_id 8>",
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 7>",
+          "encoded_opaque_state": "AQAAAAACAAAAAAAAAAEA",
+          "first_gen_tokens": [
+            1000
+          ],
+          "request_type": "generation_only"
+        },
+        "ignore_eos": true,
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<token IDs of '<hex> breaker verification'>",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "disaggregated_params": {
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 7>",
+          "request_type": "context_only"
+        },
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "<hex> breaker verification",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "paired_handoff": {
+    "control": [],
+    "decode": {
+      "body": {
+        "disaggregated_params": {
+          "ctx_request_id": "<disaggregated_params.ctx_request_id 6>",
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 5>",
+          "encoded_opaque_state": "AQAAAAACAAAAAAAAAAEA",
+          "first_gen_tokens": [
+            1000
+          ],
+          "request_type": "generation_only"
+        },
+        "max_tokens": 4,
+        "model": "m",
+        "prompt": "<token IDs of 'contract probe'>",
+        "stream": true
+      },
+      "engine": "stub-1",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "disaggregated_params": {
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 5>",
+          "request_type": "context_only"
+        },
+        "max_tokens": 1,
+        "model": "m",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {},
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  },
+  "placement": [],
+  "serving_chat_stream": {
+    "control": [],
+    "decode": {
+      "body": {
+        "disaggregated_params": {
+          "ctx_request_id": "<disaggregated_params.ctx_request_id 4>",
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 3>",
+          "encoded_opaque_state": "AQAAAAACAAAAAAAAAAEA",
+          "first_gen_tokens": [
+            1000
+          ],
+          "request_type": "generation_only"
+        },
+        "max_completion_tokens": 4,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "prompt_token_ids": "<token IDs of 'contract probe'>",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "disaggregated_params": {
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 3>",
+          "request_type": "context_only"
+        },
+        "max_tokens": 1,
+        "messages": [
+          {
+            "content": "contract probe",
+            "role": "user"
+          }
+        ],
+        "model": "stub",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    }
+  },
+  "serving_completions": {
+    "control": [],
+    "decode": {
+      "body": {
+        "disaggregated_params": {
+          "ctx_request_id": "<disaggregated_params.ctx_request_id 2>",
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 1>",
+          "encoded_opaque_state": "AQAAAAACAAAAAAAAAAEA",
+          "first_gen_tokens": [
+            1000
+          ],
+          "request_type": "generation_only"
+        },
+        "max_tokens": 4,
+        "model": "stub",
+        "prompt": "<token IDs of 'contract probe'>",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "engine": "stub-1",
+      "headers": {
+        "x-request-id": "<uuid>-a1-decode"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    },
+    "order": "prefill completes before decode",
+    "prefill": {
+      "body": {
+        "disaggregated_params": {
+          "disagg_request_id": "<disaggregated_params.disagg_request_id 1>",
+          "request_type": "context_only"
+        },
+        "max_tokens": 1,
+        "model": "stub",
+        "prompt": "contract probe",
+        "stream": false
+      },
+      "engine": "stub-0",
+      "headers": {
+        "x-request-id": "<uuid>-a1-prefill"
+      },
+      "method": "POST",
+      "path": "/v1/completions"
+    }
+  }
+}

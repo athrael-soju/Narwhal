@@ -1,18 +1,18 @@
 ---
-description: Deploy Narwhal on a multi-node vLLM or SGLang fleet with NIXL or Mooncake KV transfer, from host discovery to live serving.
+description: Deploy Narwhal on a multi-node vLLM, SGLang or TensorRT-LLM fleet, from host discovery to live serving.
 ---
 
 # Deploying a fleet
 
 ## Requirements
 
-Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector.
+Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer between every eligible producer and consumer, and one active role controller. vLLM transfers KV through NIXL `kv_both`. SGLang transfers KV through the `mooncake` connector. TensorRT-LLM transfers KV through its C++ cache transceiver, over UCX or NIXL.
 
 | Host | Responsibilities | Required software and inputs |
 | --- | --- | --- |
 | Management workstation | Generate private configuration, inspect hosts, package and install the approved revision, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH, your site's access tools, and `sshpass` for password authentication. The private `.env`, approved revision, engine image, model paths, fabric interface, run directory, ports, and credentials. |
 | Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv`, Git, Make, curl, Docker Engine, and Compose. The verified bundle and revision, engine and attestation URLs, API credential, model settings, and SLOs. |
-| Engine host | Run vLLM or SGLang and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
+| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
 
 ### Concurrency
 
@@ -22,7 +22,7 @@ Per-engine and per-host rules:
 
 - Compare each engine allocation with the GPU inventory collected on that engine host.
 - Install once per physical host.
-- Capture each vLLM engine's live cache layout.
+- Capture each vLLM and TensorRT-LLM engine's live cache layout.
 
 ### Deployment record
 
@@ -89,7 +89,7 @@ Record each gate's result before the next gate.
 | Router restart with unchanged fleet configuration | Restart the router. |
 | Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration). |
 | Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, [profile the new process generation](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles), [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), then run full preflight. |
-| Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM or from measured handoffs on SGLang. |
+| Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM and TensorRT-LLM or from measured handoffs on SGLang. |
 | Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), and exercise the live KV paths in preflight. |
 
 ## Evidence and recovery index

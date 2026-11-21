@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar
 from uuid import uuid4
 
@@ -284,6 +285,8 @@ class EngineClient:
         dialect = self.dialect
         if dialect.tokenize_path is None:
             return None
+        if "messages" in body and dialect.render_path is None and not dialect.tokenize_messages:
+            return None
         model = body.get("model")
         try:
             # One deadline covers the render and the count.
@@ -471,8 +474,11 @@ class EngineClient:
         body: dict[str, Any],
         headers: dict[str, str],
         first_token_timeout_s: float | None = None,
+        *,
+        trailer: bool = False,
     ) -> AsyncGenerator[list[SseEvent], None]:
-        decode = self.decode(
+        leg = partial(
+            self.decode,
             url,
             endpoint,
             body,
@@ -481,6 +487,8 @@ class EngineClient:
             first_token_timeout_s=handoff.first_token_bound(first_token_timeout_s),
             rendezvous=handoff.rendezvous,
         )
+        # Only a trailer read passes the flag, so a decode without one keeps its signature.
+        decode = leg(trailer=True) if trailer else leg()
         task = handoff.task
         if task is None:
             try:
@@ -553,7 +561,11 @@ class EngineClient:
         *,
         request_id: str | None = None,
         rendezvous: dict[str, Any] | None = None,
+        trailer: bool = False,
     ) -> AsyncGenerator[list[SseEvent], None]:
+        """Stream a decode leg. With `trailer`, the stream also yields the events the engine
+        sends after its [DONE] terminator, until the engine closes the response.
+        """
         try:
             leg = self.kv.decode_body(
                 body, result=kv_params, rendezvous=rendezvous, url=url, endpoint=endpoint
@@ -648,7 +660,12 @@ class EngineClient:
                                 yield relayed
                             raise EngineError("decode", url, 502, STREAM_EMPTY_DETAIL)
                         relayed.append(event)
+                        if trailer:
+                            relayed.extend(batch[batch.index(event) + 1 :])
                         yield relayed
+                        if trailer:
+                            async for rest in batches:
+                                yield rest
                         return
                     if first:
                         if sse_token_bearing(event, self.dialect, endpoint):
@@ -688,10 +705,9 @@ class EngineClient:
                 handoff.close()
                 return InferenceProbe(prefill=prefill, decode=ProbeLeg(inconclusive=True))
             try:
+                # The connector decides what a decode on the producer takes from its handoff.
                 decode = await _bounded(
-                    self._probe_decode(
-                        url, kv_params=handoff.result if prefill_url else None, prompt=prompt
-                    ),
+                    self._probe_decode(url, kv_params=handoff.result, prompt=prompt),
                     deadline_s,
                     LEG_STREAM,
                 )

@@ -15,7 +15,7 @@ from .. import stages
 from .backend import cache_capture, plan_launcher
 from .check import read_checked, require_checked
 from .docker import docker, run_runtime_script
-from .plan import container_options, env_file_name, load, read_env
+from .plan import config_files_changed, container_options, env_file_name, load, read_env
 from .runtime import digest, write_private
 
 # Readiness budget for each engine of a shared start.
@@ -40,6 +40,8 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError("cache capture launcher changed; prepare a fresh launch plan")
     if digest(run / "hook/launch.json") != digest(run / "launch.json"):
         raise ValueError("cache capture plan changed; prepare a fresh launch plan")
+    if changed := config_files_changed(run, plan):
+        raise ValueError(f"engine configuration {changed} changed; prepare a fresh launch plan")
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
     cid = docker(

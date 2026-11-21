@@ -142,3 +142,14 @@ class RenderedTokenizeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(EngineError, "exact count exceeded 0.1s"):
             await self.tokenize(CHAT, strict=True, timeout_s=0.1)
         self.assertEqual((await self.tokenize(CHAT, timeout_s=1)).count, 3)
+
+    async def test_a_prompt_only_dialect_counts_prompts_and_leaves_chat_uncounted(self):
+        class PromptOnly(Base):  # type: ignore[misc, valid-type]
+            tokenize_messages = False
+
+        self.client = self.engine(PromptOnly())
+        self.assertIsNone(await self.tokenize(CHAT, strict=True))
+        self.assertEqual(self.calls, [])
+        result = await self.tokenize({"model": "stub", "prompt": "hello"}, strict=True)
+        self.assertEqual(result.count, 3)
+        self.assertEqual(self.paths(), ["/tokenize"])

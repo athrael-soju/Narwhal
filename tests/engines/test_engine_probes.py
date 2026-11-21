@@ -192,6 +192,16 @@ class EngineProbeTests(unittest.IsolatedAsyncioTestCase):
         await self.client.probe_inference("http://decode", prefill_url="http://prefill")
         self.assertNotEqual(self.calls[0][1]["prompt"], self.calls[2][1]["prompt"])
 
+    async def test_a_same_engine_probe_gives_its_handoff_to_the_connector(self):
+        kv = self.client.kv
+        with patch.object(kv, "decode_body", wraps=kv.decode_body) as decode_body:
+            result = await self.client.probe_inference("http://engine")
+        self.assertEqual(result.decode, ProbeLeg())
+        handoff = decode_body.call_args.kwargs["result"]
+        self.assertEqual(handoff.producer_url, "http://engine")
+        # The base connector recomputes the prompt on its producer.
+        self.assertNotIn("kv_transfer_params", self.calls[-1][1])
+
     async def test_prefill_probe_failures_leave_cross_engine_consumers_inconclusive(self):
         for response, expected in (
             (httpx.PoolTimeout("pool"), ProbeLeg(inconclusive=True)),

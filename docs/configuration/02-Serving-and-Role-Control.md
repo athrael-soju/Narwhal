@@ -159,7 +159,7 @@ The router derives each engine's prefill and decode seats from engine evidence:
 | Decode  | The lower of the engine's attested sequence limit and its profiled `decode_max_requests`.                              |
 | Prefill | The number of back-to-back profiled prefills at the mean input length that complete within `slo.ttft_s`, at least `1`. |
 
-The attested sequence limit is the engine's `runtime.max_sequences`, read from the launch arguments in its verified [attestation](05-Engine-Launch.md): `--max-num-seqs` on vLLM or `--max-running-requests` on SGLang. The router reads it when it verifies the engine's identity at startup, takeover, and readmission. Without `runtime.max_sequences`, a vLLM engine takes its decode seats from the profile alone, and an SGLang engine has a limit of 256.
+The attested sequence limit is the engine's `runtime.max_sequences`, read from the launch arguments in its verified [attestation](05-Engine-Launch.md): `--max-num-seqs` on vLLM, `--max-running-requests` on SGLang, or `--max_batch_size` on TensorRT-LLM. The router reads it when it verifies the engine's identity at startup, takeover, and readmission. Without `runtime.max_sequences`, a vLLM engine takes its decode seats from the profile alone, an SGLang engine has a limit of 256, and a TensorRT-LLM engine has a limit of 64.
 
 The mean input length covers requests the router sized within the last `controller.reactive.window_s`. An engine has no prefill seat limit until a request is sized. An engine outside the profile store has no prefill seat limit, and its decode seats come from the attested sequence limit alone.
 
@@ -184,6 +184,8 @@ At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtim
 The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
+
+A TensorRT-LLM producer's lease is `kv_transfer_timeout_ms` in the `engine.json` of its attested launch, rounded down to whole seconds. The router derives the handoff bound as `lease - lease // 6`. At the launcher's default lease of 60 seconds, the bound is 50 seconds.
 
 SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 
