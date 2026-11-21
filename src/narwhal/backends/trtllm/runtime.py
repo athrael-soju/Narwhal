@@ -19,8 +19,11 @@ KV_POOL_BYTES = "kv_cache_config.max_gpu_total_bytes"
 # engine that shares its GPU. The wrapper removes it before starting the server.
 SHARED_GPU_FLAG = "--narwhal_shared_gpu_reserve_mib"
 MIB = 1024**2
-# Weight shard suffixes, in order of preference: a checkpoint may ship both forms.
-WEIGHT_SUFFIXES = (".safetensors", ".bin")
+# A sharded checkpoint names its shards in an index; the first index found wins.
+WEIGHT_INDEXES = ("model.safetensors.index.json", "pytorch_model.bin.index.json")
+# Without an index, the first pattern that matches names the shards. A checkpoint may also
+# ship its weights in a second form, such as consolidated.safetensors.
+WEIGHT_PATTERNS = ("model*.safetensors", "*.safetensors", "pytorch_model*.bin")
 
 
 def server_command(args: list[str]) -> list[str]:
@@ -31,12 +34,17 @@ def server_command(args: list[str]) -> list[str]:
 
 
 def weight_bytes(model: str) -> int:
-    """Bytes of the checkpoint's weight shards on disk."""
+    """Bytes of the checkpoint's weight shards on disk, each counted once."""
     path = Path(model)
     if path.is_file():
         return path.stat().st_size
-    for suffix in WEIGHT_SUFFIXES:
-        total = sum(shard.stat().st_size for shard in path.rglob(f"*{suffix}") if shard.is_file())
+    for name in WEIGHT_INDEXES:
+        index = path / name
+        if index.is_file():
+            shards = set(json.loads(index.read_text())["weight_map"].values())
+            return sum((path / shard).stat().st_size for shard in shards)
+    for pattern in WEIGHT_PATTERNS:
+        total = sum(shard.stat().st_size for shard in path.glob(pattern) if shard.is_file())
         if total:
             return total
     raise ValueError(f"no weight shards under {model}")
