@@ -97,6 +97,8 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(kv.contract_name, str)
                 self.assertTrue(kv.contract_name)
                 self.assertIsInstance(kv, KvConnector | RendezvousConnector)
+                self.assertIs(type(kv.min_output_tokens), int)
+                self.assertGreaterEqual(kv.min_output_tokens, 1)
                 for lease in (6, 30, 600):
                     self.assertTrue(0 < kv.handoff_bound(lease) <= lease)
 

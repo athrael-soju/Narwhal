@@ -417,3 +417,14 @@ class FailureReasonTests(unittest.TestCase):
         ):
             with self.subTest(at_deadline=exc.at_deadline, deadline_passed=deadline_passed):
                 self.assertEqual(failure_reason(exc, deadline_passed=deadline_passed), reason)
+
+
+class OutputFloorTests(HttpHarness):
+    async def test_an_output_limit_below_the_decode_floor_returns_400_before_prefill(self):
+        client = self.client()
+        with patch.object(type(self.router.engines.kv), "min_output_tokens", 2):
+            short = await self.post(client)
+        served = await self.post(client)
+        self.assertEqual((short.status_code, served.status_code), (400, 200))
+        self.assertIn("at least 2", short.json()["error"]["message"])
+        self.assertEqual([row["status"] for row in self.terminal_rows()], [400, 200])

@@ -25,7 +25,7 @@ from ..scheduling.prefill import prefill_seconds
 from ..scheduling.scheduler.occupancy import DecodeCheck, decode_check, decode_occupancy
 from ..types import Instance, Phase, Request, Role
 from .admission import PlacementRefused, QueueExpired
-from .completion import reassemble
+from .completion import output_cap, reassemble
 from .dispatch import placement_hold
 from .handoff import handoff_bound
 from .lifecycle import RequestLifecycle
@@ -82,6 +82,14 @@ def request_error(router: NarwhalRouter, body: dict[str, Any]) -> JSONResponse |
                 f"{field} > 1 cannot be served across a split: the prefill leg "
                 "runs with max_tokens=1 and the two legs would disagree on sampling width",
             )
+    least = router.engines.kv.min_output_tokens
+    if 0 < output_cap(body) < least:
+        return error_response(
+            400,
+            "invalid_request_error",
+            f"an output limit below {least} tokens cannot be served across a split: "
+            f"the decode leg returns at least {least}",
+        )
     return None
 
 
