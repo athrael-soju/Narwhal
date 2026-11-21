@@ -16,7 +16,7 @@ python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n
 
 The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. It passes `--engine-container` or `--engine-pid` for SGLang and TensorRT-LLM, and passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
-At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. The identity is the engine's version, from `/version` on vLLM or `/server_info` on SGLang, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on SGLang. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
+At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. The identity is the engine's version, from `/version` on vLLM and TensorRT-LLM or `/server_info` on SGLang, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on SGLang and TensorRT-LLM. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
 
 ## Options
 
@@ -25,7 +25,7 @@ At startup, the sidecar reads the engine's identity. It exits with status 1 when
 | `--version`             |             | Print the installed distribution version.                                                                          |
 | `--document PATH`       | required    | Attestation document holding contract values and a source per field.                                               |
 | `--engine-base URL`     | required    | Engine base URL that serves `/version` and `/metrics` on vLLM, `/server_info` on SGLang, or `/version` on TensorRT-LLM. |
-| `--backend NAME`        | `vllm`      | Engine backend, `vllm` or `sglang`.                                                                                |
+| `--backend NAME`        | `vllm`      | Engine backend: `llamacpp`, `sglang`, `trtllm` or `vllm`.                                                          |
 | `--host HOST`           | `127.0.0.1` | Address to bind.                                                                                                   |
 | `--port PORT`           | `8010`      | Port to listen on.                                                                                                 |
 | `--timeout-s SECONDS`   | `5.0`       | Timeout for reading the engine's identity.                                                                         |

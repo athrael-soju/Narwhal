@@ -245,7 +245,12 @@ class EngineLauncherTests(unittest.TestCase):
                 record, env = launcher_inputs(Path(folder))
                 with (
                     patch.object(launcher, "config_files", named),
-                    self.assertRaisesRegex(ValueError, "is not usable"),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        "must start with an ASCII letter or digit, contain only ASCII "
+                        "letters, digits, '.', '_' or '-', and differ from launch.json, "
+                        "launch_engine.py, sitecustomize.py",
+                    ),
                 ):
                     build(record, env, Path(folder) / "launch")
 
