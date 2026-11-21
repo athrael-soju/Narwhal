@@ -81,7 +81,7 @@ Each launch record holds these allocation and transport fields:
 
 `deploy_hosts.py prepare` adds the record's `environment`, which sets the visible GPUs and `UCX_NET_DEVICES`. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
 
-A CUDA engine with dedicated GPUs exports its own `gpu_ids` first, followed by the GPUs of the other such engines on its host. It runs on its own GPUs. A shared-device engine exports only its own GPU. Under the container backend, an engine that exports another engine's GPUs runs in the host PID namespace.
+A CUDA engine with dedicated GPUs exports its own `gpu_ids` first, followed by the GPUs of the other such engines on its host. It runs on its own GPUs. A shared-device engine exports only its own GPU. Under the container backend, a shared-device engine and an engine that exports another engine's GPUs run in the host PID namespace.
 
 On vLLM, an engine with CUDA IPC peers is one with `transfer.gpu_tls` set to `cuda` that shares a GPU or exports another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`. When that value is `n`, `no` or `0`, the launcher sets the NIXL `engine_ttl` to 60 seconds for that engine.
 

@@ -98,6 +98,21 @@ def validate_runtime(runtime: dict) -> None:
     )
 
 
+def kv_transfer_config(lease_s: int = KV_LEASE_S, evict_peers: bool = False) -> dict:
+    """The NIXL connector every engine runs: both roles, failing a request on a lost transfer."""
+    return {
+        "kv_connector": "NixlConnector",
+        "kv_role": "kv_both",
+        "kv_load_failure_policy": "fail",
+        "kv_connector_extra_config": {
+            "backends": ["UCX"],
+            "enforce_handshake_compat": True,
+            "kv_lease_duration": lease_s,
+            **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
+        },
+    }
+
+
 def serve_args(
     record: dict,
     *,
@@ -109,17 +124,7 @@ def serve_args(
     evict_peers: bool,
 ) -> tuple[list[str], dict]:
     runtime = record["runtime"]
-    connector = {
-        "kv_connector": "NixlConnector",
-        "kv_role": "kv_both",
-        "kv_load_failure_policy": "fail",
-        "kv_connector_extra_config": {
-            "backends": ["UCX"],
-            "enforce_handshake_compat": True,
-            "kv_lease_duration": runtime.get("kv_lease_s", KV_LEASE_S),
-            **({"engine_ttl": ENGINE_TTL_S} if evict_peers else {}),
-        },
-    }
+    connector = kv_transfer_config(runtime.get("kv_lease_s", KV_LEASE_S), evict_peers)
     args = render(
         record,
         SETTINGS,

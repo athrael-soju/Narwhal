@@ -7,6 +7,7 @@ from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ..deployment.allocation_start import AllocationStart
     from ..deployment.direct_start import DirectStart
     from ..deployment.launch_engine.backend import EngineLauncher
     from ..engines.attestation import EngineIdentityReader
@@ -40,6 +41,8 @@ class EngineBackend:
     icon: bytes = field(default=b"", repr=False)
     # Starts the backend's engines as plain processes for a local development fleet.
     direct: Callable[[], DirectStart] | None = field(default=None, repr=False)
+    # Starts the backend's engines as plain processes inside a scheduler allocation.
+    allocation: Callable[[], AllocationStart] | None = field(default=None, repr=False)
 
     def role_switcher(self, connector: str) -> RoleSwitcher:
         from ..runtime.role_switch import FixedRoles
@@ -58,6 +61,11 @@ class EngineBackend:
         if self.direct is None:
             raise ValueError(f"backend {self.name!r} has no direct engine start")
         return self.direct()
+
+    def allocation_start(self) -> AllocationStart:
+        if self.allocation is None:
+            raise ValueError(f"backend {self.name!r} has no allocation engine start")
+        return self.allocation()
 
     def connector(self, name: str) -> KvHandoff:
         try:
