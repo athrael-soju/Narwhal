@@ -80,7 +80,11 @@ def parser() -> argparse.ArgumentParser:
         "--engines-per-node", type=_positive(int), default=1, help="engines on each node"
     )
     p.add_argument("--tensor-parallel", type=_positive(int), default=1, help="devices per engine")
-    p.add_argument("--prefill", type=_positive(int), help="engines that open as prefill (half)")
+    p.add_argument(
+        "--prefill",
+        type=_positive(int),
+        help="engines that open as prefill (default: half the engines, rounded down)",
+    )
     p.add_argument("--engine-port", type=_positive(int), default=8100, help="first engine port")
     p.add_argument(
         "--transfer-port", type=_positive(int), default=5600, help="first KV side-channel port"
@@ -99,7 +103,7 @@ def parser() -> argparse.ArgumentParser:
         default=[],
         type=_pair,
         metavar="NAME=VALUE",
-        help="engine environment variable, repeatable, such as transport and device settings",
+        help="engine environment variable, repeatable, such as UCX_TLS or UCX_NET_DEVICES",
     )
     p.add_argument("--engine-python", default="python3", help="the engine image's Python")
     p.add_argument(
@@ -187,10 +191,14 @@ def settings_from(args: argparse.Namespace) -> Settings:
 
 
 def main(argv: list[str] | None = None, stop: threading.Event | None = None) -> int:
-    args = parser().parse_args(argv)
+    arguments = parser()
+    args = arguments.parse_args(argv)
     try:
         settings = settings_from(args)
         start = backends.load(settings.backend).allocation_start()
+    except ValueError as error:
+        arguments.error(str(error))
+    try:
         allocation = from_environment(os.environ, settings.device_env)
         addresses = [resolve(node) for node in allocation.nodes]
         stop = stop or threading.Event()

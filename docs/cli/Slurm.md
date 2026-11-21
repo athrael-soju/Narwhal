@@ -16,11 +16,13 @@ Each task reads its node's rank from `SLURM_NODEID` and the step's node names fr
 
 Every node starts its engines with the engine image's Python, outside Narwhal's own environment. The head node, rank 0, then runs these stages:
 
-1. `fleet`: writes the fleet file with each engine's literal URL.
+1. `fleet`: writes the fleet file with each engine's `http://<address>:<port>` URL.
 2. `health`: waits for `/health` 200 from every engine.
 3. `profile`: runs `narwhal-profile` on the fleet.
 4. `router`: starts `narwhal-serve`.
 5. `ready`: waits for the router's `/ready` 200, then prints the router URL.
+
+Before the head's stages, `prepare` creates `slurm-<job id>` and its `logs/` directory in the run directory, and `engines` starts each node's engines. While serving, a node fails with stage `serve` when one of its engines exits, or on the head node when the router exits.
 
 The other nodes keep their engines running until the launch stops. A failed stage ends that node's task with exit code `1` and prints `narwhal-slurm: <stage>: <detail>` to standard error. With `--kill-on-bad-exit=1`, `srun` then ends the task on every node.
 
@@ -30,7 +32,7 @@ SIGTERM, SIGINT or SIGHUP stops the launch. Each node stops its profiler and rou
 
 Engines are numbered `n1`, `n2`, ... in node order, then by their index on the node. The engine at index `i` on a node listens on `--engine-port` plus `i` and uses `--transfer-port` plus `i` for its KV side channel. The first `--prefill` engines open as prefill and the rest as decode.
 
-Each engine takes `--tensor-parallel` devices from the list in the `--device-env` variable, in order, and the launch sets that variable for the engine. Without the variable, the node's devices are numbered from `0`. A vLLM engine runs `python3 -m vllm.entrypoints.openai.api_server` with the NIXL connector in `kv_both` mode, and its NIXL side channel binds the node address.
+Each engine takes `--tensor-parallel` devices from the list in the `--device-env` variable, in order, and the launch sets that variable for the engine. Without the variable, the node's devices are numbered from `0`. A vLLM engine runs `vllm.entrypoints.openai.api_server` with the `--engine-python` interpreter and the NIXL connector in `kv_both` mode, and its NIXL side channel binds the node address.
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -39,7 +41,7 @@ Each engine takes `--tensor-parallel` devices from the list in the `--device-env
 | `--backend NAME` | `vllm` | Engine backend. |
 | `--engines-per-node N` | `1` | Engines on each node. |
 | `--tensor-parallel N` | `1` | Devices for each engine. |
-| `--prefill N` | half of the engines | Engines that open as prefill. |
+| `--prefill N` | half of the engines, rounded down | Engines that open as prefill. |
 | `--engine-port PORT` | `8100` | Port of the first engine on each node. |
 | `--transfer-port PORT` | `5600` | KV side-channel port of the first engine on each node. |
 | `--max-sequences N` | engine default | Each engine's sequence limit. The profiler keeps its decode cohorts within it. |
@@ -75,9 +77,9 @@ The head node writes these files to `<run-dir>/slurm-<job id>/`:
 | `router-state.json` | Router recovery state. |
 | `logs/` | One log for each engine, and `profile.log` and `router.log`. |
 
-`--fleet-setting` cannot set a field the launch writes, or an object that holds one: `schema`, `schema_version`, `model`, `engines`, `slo.ttft_s`, `slo.tpot_s`, `engine.backend`, `profiles.path` or `recovery.state_path`. It also refuses a path given twice, a path inside another given path, and `NaN` or `Infinity` values. Every node checks the fleet file before it starts its engines, and exits with code `2` naming the field when the file does not load.
+`--fleet-setting` cannot set a field the launch writes, a path inside one, or an object that holds one: `schema`, `schema_version`, `model`, `engines`, `slo.ttft_s`, `slo.tpot_s`, `engine.backend`, `profiles.path` or `recovery.state_path`. It also refuses a path given twice, a path inside another given path, and `NaN` or `Infinity` values. Every node checks the fleet file before it starts its engines, and exits with code `2` naming the field when the file does not load.
 
-The launch refuses a run directory that already holds `fleet.json`. Profiles bind to each engine's process start time, so every allocation profiles its engines again.
+The head node refuses a `slurm-<job id>` directory that already holds `fleet.json`. Profiles bind to each engine's process start time, so every allocation profiles its engines again.
 
 ## Exit codes
 

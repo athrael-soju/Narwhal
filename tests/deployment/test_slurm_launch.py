@@ -388,12 +388,30 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(caught.exception.stage, "health")
         self.assertIn("n1, n2", caught.exception.detail)
 
+    def test_ready_names_the_router_when_it_never_answers(self):
+        launch = self.launch(ready_timeout_s=1.5)
+        stub = launch._child
+
+        def child(name, module, args):
+            if name == "router":
+                return subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
+                )
+            return stub(name, module, args)
+
+        launch._child = child
+        with self.assertRaises(StageFailed) as caught:
+            launch.run()
+        self.assertEqual(caught.exception.stage, "ready")
+        self.assertEqual(caught.exception.detail, "no /ready 200 from the router after 1.5 seconds")
+
     def test_a_second_launch_into_the_same_run_directory_is_refused(self):
         Path(self.temp.name, "slurm-7").mkdir()
         Path(self.temp.name, "slurm-7", "fleet.json").write_text("{}")
         with self.assertRaises(StageFailed) as caught:
             self.launch().run()
         self.assertEqual(caught.exception.stage, "prepare")
+        self.assertIn("fleet.json already exists", caught.exception.detail)
 
 
 class CliTests(unittest.TestCase):
@@ -417,7 +435,10 @@ class CliTests(unittest.TestCase):
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
-            code = cli.main(args, stop=threading.Event())
+            try:
+                code = cli.main(args, stop=threading.Event())
+            except SystemExit as exit:
+                code = exit.code
         return code, stdout.getvalue(), stderr.getvalue()
 
     def test_outside_an_allocation_the_launch_exits_2(self):
@@ -456,6 +477,7 @@ class CliTests(unittest.TestCase):
     def test_a_fleet_setting_on_a_launch_field_exits_2(self):
         code, _, stderr = self.run_cli(ENV, ["--fleet-setting", "slo.ttft_s=3"])
         self.assertEqual(code, 2)
+        self.assertIn("narwhal-slurm: error: fleet setting 'slo.ttft_s'", stderr)
         self.assertIn("slo.ttft_s, which the launch writes", stderr)
 
     def test_a_fleet_setting_that_does_not_load_exits_2_before_any_engine_starts(self):
@@ -482,9 +504,8 @@ class CliTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(argparse.ArgumentTypeError, expected):
                     cli._setting(value)
-                with self.assertRaises(SystemExit) as exit:
-                    self.run_cli(ENV, ["--fleet-setting", value])
-                self.assertEqual(exit.exception.code, 2)
+                code, _, _ = self.run_cli(ENV, ["--fleet-setting", value])
+                self.assertEqual(code, 2)
 
     def test_a_fleet_setting_path_may_be_given_once_and_not_inside_another(self):
         for values, expected in (
@@ -505,7 +526,7 @@ class CliTests(unittest.TestCase):
                 argv = [arg for value in values for arg in ("--fleet-setting", value)]
                 code, _, stderr = self.run_cli(ENV, argv)
                 self.assertEqual(code, 2)
-                self.assertIn(expected, stderr)
+                self.assertIn(f"narwhal-slurm: error: fleet setting {expected}", stderr)
 
     def test_a_fleet_setting_value_may_hold_an_equals_sign(self):
         args = cli.parser().parse_args(
@@ -520,7 +541,14 @@ class CliTests(unittest.TestCase):
     def test_the_device_variable_cannot_be_set_through_engine_env(self):
         code, _, stderr = self.run_cli(ENV, ["--engine-env", "CUDA_VISIBLE_DEVICES=0"])
         self.assertEqual(code, 2)
-        self.assertIn("CUDA_VISIBLE_DEVICES", stderr)
+        self.assertIn(
+            "narwhal-slurm: error: --engine-env must not set CUDA_VISIBLE_DEVICES", stderr
+        )
+
+    def test_an_unknown_backend_is_an_argument_error(self):
+        code, _, stderr = self.run_cli(ENV, ["--backend", "missing"])
+        self.assertEqual(code, 2)
+        self.assertIn("narwhal-slurm: error: unknown engine backend 'missing'", stderr)
 
 
 if __name__ == "__main__":
