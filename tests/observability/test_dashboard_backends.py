@@ -14,14 +14,22 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "e560221046c4437c86bb66149246e0781277100a93f07b51badec865ca17ecbc"
+RENDERED_SHA256 = "15278c0fd2aad1bfbaefd97f96435ded60a44912c4ab846e1d2eb90ba207c386"
+
+
+def charted() -> set[str]:
+    """The backends whose engines the dashboard charts: each one that declares series."""
+    return {name for name in names() if load_backend(name).metrics.dashboard_series}
 
 
 def engine_prefixes(dashboard: dict) -> set[str]:
+    # Engine series names start with the backend name and a colon, or an underscore on
+    # TensorRT-LLM.
     return {
-        prefix
+        name
         for expression in _expressions(dashboard["spec"]["elements"])
-        for prefix in re.findall(r"\b([a-z]+):[a-z_]+", expression)
+        for name in names()
+        if re.search(rf"\b{name}[:_][a-z]", expression)
     }
 
 
@@ -34,7 +42,7 @@ class BackendDashboardTests(unittest.TestCase):
         rendered = artifacts.render_dashboard(SHIPPED)
         self.assertEqual(rendered["spec"]["elements"].keys(), SHIPPED["spec"]["elements"].keys())
         self.assertNotIn("<<", json.dumps(rendered))
-        self.assertEqual(engine_prefixes(rendered), set(names()))
+        self.assertEqual(engine_prefixes(rendered), charted())
         for name in names():
             for template in load_backend(name).metrics.dashboard_series.values():
                 self.assertIn("@sel", template)
@@ -49,7 +57,7 @@ class BackendDashboardTests(unittest.TestCase):
         selector = 'job="engines",iid=~"$iid"'
         union = " or ".join(
             f"({load_backend(name).metrics.dashboard_series['running'].replace('@sel', selector)})"
-            for name in names()
+            for name in sorted(charted())
         )
         exprs = [
             q["spec"]["query"]["spec"]["expr"] for q in rendered["spec"]["data"]["spec"]["queries"]
@@ -115,4 +123,4 @@ class BackendDashboardTests(unittest.TestCase):
             root = Path(folder) / "mounts"
             artifacts.stage_artifacts(make_targets.TargetContract("127.0.0.1:8000"), root=root)
             staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
-        self.assertEqual(engine_prefixes(staged), set(names()))
+        self.assertEqual(engine_prefixes(staged), charted())
