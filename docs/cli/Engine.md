@@ -4,7 +4,7 @@ description: Prepare and run vLLM and SGLang engines from engine launch records 
 
 # `narwhal-engine`
 
-`narwhal-engine` prepares and runs vLLM and SGLang engines from a `narwhal.engine-launch` record. The record's [`runtime.backend`](../configuration/05-Engine-Launch.md#sglang-runtime-fields) selects the engine, `vllm` by default or `sglang`. Each engine has a launch directory that `prepare` creates and the other actions read and write. The `container` launch backend runs engines in Docker. The `native` launch backend runs them on Linux or WSL2 under the Python interpreter that ran `prepare`.
+`narwhal-engine` prepares and runs vLLM, SGLang and TensorRT-LLM engines from a `narwhal.engine-launch` record. The record's [`runtime.backend`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) selects the engine: `vllm` by default, `sglang` or `trtllm`. Each engine has a launch directory that `prepare` creates and the other actions read and write. The `container` launch backend runs engines in Docker. The `native` launch backend runs them on Linux or WSL2 under the Python interpreter that ran `prepare`.
 
 To start a container engine, run three actions and then poll the engine's `/health` route:
 
@@ -36,6 +36,8 @@ A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to
 
 An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang to advertise to decode peers, `NARWHAL_SGLANG_BOOTSTRAP_PORT`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=30`, and the credential as `NARWHAL_SGLANG_API_KEY`. `NARWHAL_SGLANG_BOOTSTRAP_HOST` is the engine's HTTP bind address, or `NARWHAL_NODE_<n>_IP` when the engine binds every interface, as a container engine does. The launcher passes the port to SGLang as `--disaggregation-bootstrap-port` and the credential as `--api-key`.
 
+A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_<n>_IP`, `NARWHAL_TRTLLM_TRANSFER_PORT`, and the credential as `NARWHAL_TRTLLM_API_KEY`. `trtllm-serve` checks no credential, and its cache transceiver opens its own listener ports.
+
 ## Actions
 
 | Action | Backend | Input | Output |
@@ -51,14 +53,14 @@ An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang 
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
 
-SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`.
+SGLang and TensorRT-LLM plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`.
 
 These actions check their inputs:
 
 | Action | Checks |
 | --- | --- |
 | `prepare` | Model configuration hash and, on vLLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
-| `check` | For `container`, image identity. For `native`, the model path and model file hash. For both, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. |
+| `check` | For `container`, image identity. For `native`, the model path and model file hash. For both, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |
 

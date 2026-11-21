@@ -4,7 +4,7 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 # `narwhal-profile`
 
-`narwhal-profile --fleet PATH` measures the prefill and decode costs of vLLM and SGLang engines and writes them as router profiles. It runs in one of three modes:
+`narwhal-profile --fleet PATH` measures the prefill and decode costs of vLLM, SGLang and TensorRT-LLM engines and writes them as router profiles. It runs in one of three modes:
 
 | Mode | Operation | Output |
 | --- | --- | --- |
@@ -81,9 +81,9 @@ Every mode validates these options:
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input length and concurrency. | At least 1 |
 
-The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`.
+The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`. On TensorRT-LLM, it is `--max_seq_len` in the engine's attested launch.
 
-The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
+The [warm prefill sweep](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) runs when the engine exports a prefix-cache hit counter, `vllm:prefix_cache_hits_total` on vLLM or `sglang:cached_tokens_total` on SGLang. A TensorRT-LLM engine exports none, so its profile keeps cold prefill only. When a [warm sweep condition](../measure/01-Profile.md#warm-prefill-with-a-cached-prefix) fails, the profile keeps cold prefill only, and the sample sidecar records the reason in `cached_prefill.reason`.
 
 When the fleet file sets `serving.prefill_on_decode`, each engine's sweep ends with the [prefill-share step](../telemetry/02-Profiles.md#prefill-share-on-decode-engines). When the step fails, the engine's profile is written without the prefill-share fit.
 
