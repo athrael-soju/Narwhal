@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -26,6 +27,7 @@ BASE = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BASE / "compose.yml"
 RENDERER_PORT = 8081
 RENDERER_TOKEN = MOUNTS.parent / "renderer-token"
+PROMETHEUS_CONFIG = MOUNTS / "prometheus" / "prometheus.yml"
 COMPOSE_UP_TIMEOUT_S = 300.0
 
 
@@ -50,8 +52,10 @@ class ComposeStack:
         runner: Runner = subprocess.run,
         env: Mapping[str, str] | None = None,
         token_path: Path = RENDERER_TOKEN,
+        prometheus_config: Path = PROMETHEUS_CONFIG,
     ) -> None:
         self._runner = runner
+        self._prometheus_config = prometheus_config
         self._compose_env = dict(os.environ if env is None else env)
         prometheus, grafana = configured_services(self._compose_env)
         self._compose_env["NARWHAL_PROMETHEUS_URL"] = prometheus.listener.url
@@ -85,6 +89,10 @@ class ComposeStack:
 
     def up(self) -> None:
         """Create or update Prometheus, Grafana and the image renderer."""
+        # Prometheus reads its config only at start, so a changed config recreates it.
+        self._compose_env["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] = config_digest(
+            self._prometheus_config
+        )
         result = self._run("up", "-d", timeout_s=COMPOSE_UP_TIMEOUT_S)
         if result.stdout:
             print(result.stdout, end="")
@@ -120,6 +128,13 @@ class ComposeStack:
             restarting=bool(state.get("Restarting", False)),
             listener=configured_listener(config, service),
         )
+
+
+def config_digest(path: Path) -> str:
+    """Return the SHA-256 of a staged config, or an empty string before staging."""
+    if not path.exists():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def renderer_token(path: Path) -> str:

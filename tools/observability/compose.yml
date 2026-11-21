@@ -5,6 +5,9 @@ services:
     image: prom/prometheus:v3.14.0
     network_mode: host
     restart: always
+    labels:
+      # Prometheus reads its config only at start; a new digest recreates the container.
+      narwhal.prometheus-config-digest: "${NARWHAL_PROMETHEUS_CONFIG_DIGEST:-}"
     volumes:
       # Startup stages readable configs and targets before Compose launches services.
       - ../../runs/observability/mounts/prometheus:/etc/prometheus:ro

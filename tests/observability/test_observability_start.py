@@ -563,6 +563,34 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(len(calls[0]["NARWHAL_RENDERER_TOKEN"]), 64)
         self.assertEqual(calls[0]["NARWHAL_RENDERER_TOKEN"], calls[1]["NARWHAL_RENDERER_TOKEN"])
 
+    def test_a_changed_prometheus_config_changes_the_compose_digest(self) -> None:
+        config = self._token().parent / "prometheus.yml"
+        calls: list[dict[str, str]] = []
+
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            passed_env = kwargs.get("env")
+            assert isinstance(passed_env, dict)
+            calls.append(dict(passed_env))
+            return CompletedProcess(command, 0, "", "")
+
+        stack = observe_stack.ComposeStack(runner, {}, self._token(), config)
+        stack.up()
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("router: a\n")
+        stack.up()
+        stack.up()
+        config.write_text("router: b\n")
+        stack.up()
+        digests = [call["NARWHAL_PROMETHEUS_CONFIG_DIGEST"] for call in calls]
+        self.assertEqual(digests[0], "")
+        self.assertEqual(len(digests[1]), 64)
+        self.assertEqual(digests[1], digests[2])
+        self.assertNotEqual(digests[2], digests[3])
+        compose = observe_stack.COMPOSE_FILE.read_text()
+        self.assertIn(
+            'narwhal.prometheus-config-digest: "${NARWHAL_PROMETHEUS_CONFIG_DIGEST:-}"', compose
+        )
+
     def test_compose_queries_before_up_carry_the_renderer_token(self) -> None:
         path = self._token()
         calls: list[tuple[list[str], dict[str, str]]] = []
