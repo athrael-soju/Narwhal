@@ -386,7 +386,106 @@ class LlamacppWire:
         return {}
 
 
-PROTOCOLS = {"llamacpp": LlamacppWire(), "sglang": SglangWire(), "vllm": VllmWire()}
+class TrtllmWire:
+    """trtllm-serve's routes: prompt-only tokenize, JSON iteration statistics and two-leg
+    disaggregation through `disaggregated_params`.
+    """
+
+    # Body fields the server refuses, as it refuses every field outside its request schema.
+    REFUSED = ("return_token_ids", "stream_interval", "kv_transfer_params", "min_tokens")
+
+    def route(
+        self, engine: SimulatedEngine, method: str, path: str, body: bytes, query: str = ""
+    ) -> Reply | None:
+        if (method, path) == ("GET", "/version"):
+            return Reply(200, body=compact({"version": SIMULATED_VERSION}))
+        if (method, path) == ("GET", "/server_info"):
+            return Reply(
+                200, body=compact({"tokens_per_block": BLOCK_TOKENS, "max_batch_size": 64})
+            )
+        if (method, path) == ("GET", "/metrics"):
+            stats = {
+                "maxNumBlocks": MAX_MODEL_LEN // BLOCK_TOKENS,
+                "freeNumBlocks": MAX_MODEL_LEN // BLOCK_TOKENS,
+                "usedNumBlocks": 0,
+                "tokensPerBlock": BLOCK_TOKENS,
+                "reusedBlocks": 0,
+            }
+            return Reply(200, body=compact([{"iter": 0, "kvCacheStats": stats}]))
+        if (method, path) != ("POST", "/_internal/tokenize"):
+            return None
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict) or "messages" in payload or "prompt" not in payload:
+            return error(400, "the tokenize route takes a prompt", "BadRequestError")
+        tokens = tokenize({"prompt": payload["prompt"]})
+        return Reply(200, body=compact({"count": len(tokens), "tokens": tokens}))
+
+    def engine_metrics(self, engine: SimulatedEngine) -> str:
+        return ""
+
+    def request_id(self, headers: Mapping[str, str], payload: dict[str, Any]) -> str | None:
+        return headers.get("x-request-id")
+
+    async def admit(self, engine: SimulatedEngine, payload: dict[str, Any]) -> Reply | None:
+        refused = [name for name in self.REFUSED if name in payload]
+        if refused:
+            return error(400, f"Extra inputs are not permitted: {refused[0]}", "BadRequestError")
+        return None
+
+    def decode_error(self, payload: dict[str, Any]) -> Reply | None:
+        params = payload.get("disaggregated_params")
+        if params is None:
+            return None
+        if (
+            not isinstance(params, dict)
+            or params.get("request_type") != "generation_only"
+            or type(params.get("ctx_request_id")) is not int
+        ):
+            return error(400, "invalid disaggregated_params", "BadRequestError")
+        # A completion leg carries the IDs as its prompt, a chat leg beside its messages.
+        ids = payload.get("prompt_token_ids" if "messages" in payload else "prompt")
+        if not isinstance(ids, list):
+            return error(400, "a generation leg continues from prompt token IDs", "BadRequestError")
+        return None
+
+    def prefill_fields(
+        self, engine: SimulatedEngine, rid: str, payload: dict[str, Any], prompt: int
+    ) -> dict[str, Any]:
+        params = payload.get("disaggregated_params")
+        if not isinstance(params, dict) or params.get("request_type") != "context_only":
+            return {}
+        request = params.get("disagg_request_id")
+        return {
+            "prompt_token_ids": tokenize(payload),
+            "choices": [
+                {
+                    "index": 0,
+                    "text": " t0",
+                    "token_ids": None,
+                    "logprobs": None,
+                    "finish_reason": "length",
+                    "stop_reason": None,
+                    "disaggregated_params": {
+                        "request_type": "context_only",
+                        "first_gen_tokens": [1000],
+                        "ctx_request_id": request,
+                        "disagg_request_id": request,
+                        "encoded_opaque_state": "AQAAAAACAAAAAAAAAAEA",
+                    },
+                }
+            ],
+        }
+
+
+PROTOCOLS = {
+    "llamacpp": LlamacppWire(),
+    "sglang": SglangWire(),
+    "trtllm": TrtllmWire(),
+    "vllm": VllmWire(),
+}
 
 
 class SimulatedEngine:
