@@ -40,6 +40,10 @@ class EngineDialect(ABC):
     one_token_chunks: ClassVar[bool] = False
     # True when `stream_output_tokens` reads a reply's output token count from its stream.
     reports_output_tokens: ClassVar[bool] = False
+    # True when the stream reports that count only in the usage frame that
+    # stream_options.include_usage adds. The router asks for that frame on each decode leg and
+    # drops it from a reply whose client did not ask for it.
+    usage_frame_counts: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")
