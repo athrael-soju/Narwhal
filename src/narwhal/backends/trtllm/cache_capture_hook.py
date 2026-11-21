@@ -13,22 +13,33 @@ CREATOR_MODULE = "tensorrt_llm._torch.pyexecutor._util"
 SIZING = "runtime_padded_page_upper_bound"
 
 
+class Unsupported(Exception):
+    """A cache the hook cannot size. Serving continues, and capture-cache reports why."""
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def state_bytes(manager: Any) -> int:
     """Bytes of recurrent state one sequence holds on this rank, sent with its pages."""
+    try:
+        from tensorrt_llm._torch.pyexecutor.resource_manager import (  # type: ignore[import-not-found]
+            LinearCacheType,
+        )
+
+        marker = LinearCacheType.RECURRENT_STATES.value
+    except (ImportError, AttributeError):
+        marker = None
+    windows = list(getattr(manager, "max_attention_window_vec", None) or [])
+    layers = windows.count(marker) if marker is not None else 0
     metadata = getattr(manager, "linear_attention_metadata", None)
     if metadata is None:
-        if "mamba" in type(manager).__name__.lower():
-            raise ValueError(f"{type(manager).__name__} exposes no recurrent state size")
+        if layers or "mamba" in type(manager).__name__.lower():
+            raise Unsupported(f"{type(manager).__name__} exposes no recurrent state size")
         return 0
-    from tensorrt_llm._torch.pyexecutor.resource_manager import (  # type: ignore[import-not-found]
-        LinearCacheType,
-    )
-
-    layers = list(manager.max_attention_window_vec).count(LinearCacheType.RECURRENT_STATES.value)
+    if marker is None:
+        raise Unsupported("the engine names no recurrent state layers")
     return layers * int(metadata.all_recurrent_states_bytes)
 
 
@@ -69,11 +80,17 @@ def record(creator: Any, resources: dict) -> None:
         raise ValueError("model config differs from the checked serving plan")
     if digest(Path(__file__).with_name("launch_engine.py")) != plan["launcher_sha256"]:
         raise ValueError("cache hook launcher differs from the checked serving plan")
-    if int(creator._mapping.pp_size) != 1:
-        raise ValueError("cache capture supports pipeline parallel size 1")
-    if resources.get(ResourceManagerType.DRAFT_KV_CACHE_MANAGER) is not None:
-        raise ValueError("cache capture does not size a separate draft cache")
-    layout = rank_layout(creator, resources[ResourceManagerType.KV_CACHE_MANAGER])
+    rank = int(creator._mapping.tp_rank)
+    try:
+        if int(creator._mapping.pp_size) != 1:
+            raise Unsupported("cache capture supports pipeline parallel size 1")
+        if resources.get(ResourceManagerType.DRAFT_KV_CACHE_MANAGER) is not None:
+            raise Unsupported("cache capture does not size a separate draft cache")
+        layout = rank_layout(creator, resources[ResourceManagerType.KV_CACHE_MANAGER])
+        unsupported = {}
+    except Unsupported as error:
+        layout = {"rank": rank, "layers": []}
+        unsupported = {"unsupported": str(error)}
     value = {
         "schema_version": 1,
         "sizing": SIZING,
@@ -85,11 +102,12 @@ def record(creator: Any, resources: dict) -> None:
         "plan_sha256": hashlib.sha256(plan_data).hexdigest(),
         "launcher_sha256": plan["launcher_sha256"],
         "cache_capture_sha256": plan["cache_capture_sha256"],
+        **unsupported,
         "ranks": [layout],
     }
     # Each rank runs in its own process, so each writes its own record.
     output = Path(os.environ["NARWHAL_CACHE_OUTPUT"])
-    path = output.with_name(f"{output.stem}.rank{layout['rank']}{output.suffix}")
+    path = output.with_name(f"{output.stem}.rank{rank}{output.suffix}")
     text = json.dumps(value, indent=2) + "\n"
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -117,11 +135,18 @@ def patch(module: Any) -> None:
 class CreatorFinder(MetaPathFinder):
     """Patch the KV cache creator when a worker imports it, and only then."""
 
+    def __init__(self) -> None:
+        self.searching = False
+
     def find_spec(self, name: str, path: Any, target: Any = None) -> Any:
-        if name != CREATOR_MODULE:
+        if name != CREATOR_MODULE or self.searching:
             return None
-        sys.meta_path.remove(self)
-        spec = importlib.util.find_spec(name)
+        # The other finders locate the module; this one only wraps its loader.
+        self.searching = True
+        try:
+            spec = importlib.util.find_spec(name)
+        finally:
+            self.searching = False
         if spec is None or spec.loader is None:
             return spec
         loader = spec.loader
@@ -130,6 +155,8 @@ class CreatorFinder(MetaPathFinder):
         def exec_module(module: Any) -> None:
             execute(module)
             patch(module)
+            if self in sys.meta_path:
+                sys.meta_path.remove(self)
 
         loader.exec_module = exec_module  # type: ignore[method-assign]
         return spec

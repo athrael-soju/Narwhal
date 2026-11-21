@@ -46,8 +46,9 @@ ENGINE_PACKAGE = {
         from .resource_manager import ResourceManagerType
 
         class KvCacheCreator:
-            def __init__(self, manager, tp_rank=0, pp_size=1):
+            def __init__(self, manager, tp_rank=0, pp_size=1, draft=None):
                 self.manager = manager
+                self.draft = draft
                 self._mapping = type("Mapping", (), {"tp_rank": tp_rank, "pp_size": pp_size})()
                 self._max_seq_len = 32768
                 self.builds = 0
@@ -55,7 +56,7 @@ ENGINE_PACKAGE = {
             def build_managers(self, resources, estimating_kv_cache=False):
                 self.builds += 1
                 resources[ResourceManagerType.KV_CACHE_MANAGER] = self.manager
-                resources[ResourceManagerType.DRAFT_KV_CACHE_MANAGER] = None
+                resources[ResourceManagerType.DRAFT_KV_CACHE_MANAGER] = self.draft
     """,
 }
 
@@ -76,6 +77,13 @@ class Manager:
 
 
 class MambaCacheManager(Manager):
+    def __init__(self):
+        super().__init__(layers=0, linear=False)
+
+
+class HybridCacheManager(Manager):
+    """Recurrent layers in the window vector, but no state size to read."""
+
     def __init__(self):
         super().__init__(linear=False)
 
@@ -197,17 +205,47 @@ class HookTests(unittest.TestCase):
             record = json.loads(self.rank_record(rank).read_text())
             self.assertEqual(record["ranks"][0]["rank"], rank)
 
-    def test_unsupported_caches_stop_the_capture(self):
+    def test_an_unsizable_cache_records_why_and_the_engine_keeps_starting(self):
+        cases = (
+            ({"manager": MambaCacheManager()}, "MambaCacheManager exposes no recurrent state"),
+            ({"manager": HybridCacheManager()}, "HybridCacheManager exposes no recurrent state"),
+            ({"manager": Manager(), "pp_size": 2}, "pipeline parallel size 1"),
+            ({"manager": Manager(), "draft": Manager()}, "separate draft cache"),
+        )
         util = self.run_hook()
-        with self.environment():
-            with self.assertRaisesRegex(ValueError, "exposes no recurrent state size"):
-                util.KvCacheCreator(MambaCacheManager()).build_managers({})
-            with self.assertRaisesRegex(ValueError, "pipeline parallel size 1"):
-                util.KvCacheCreator(Manager(), pp_size=2).build_managers({})
-            self.plan_path.write_text(json.dumps({**self.plan, "model_config_sha256": "0" * 64}))
-            with self.assertRaisesRegex(ValueError, "model config differs"):
-                util.KvCacheCreator(Manager()).build_managers({})
+        for rank, (arguments, reason) in enumerate(cases):
+            with self.subTest(reason=reason), self.environment():
+                creator = util.KvCacheCreator(tp_rank=rank, **arguments)
+                creator.build_managers({})
+                self.assertEqual(creator.builds, 1)
+                record = json.loads(self.rank_record(rank).read_text())
+                self.assertIn(reason, record["unsupported"])
+                self.assertEqual(record["ranks"], [{"rank": rank, "layers": []}])
+
+    def test_a_launch_that_differs_from_its_plan_stops_the_engine(self):
+        util = self.run_hook()
+        self.plan_path.write_text(json.dumps({**self.plan, "model_config_sha256": "0" * 64}))
+        with self.environment(), self.assertRaisesRegex(ValueError, "model config differs"):
+            util.KvCacheCreator(Manager()).build_managers({})
         self.assertFalse(self.rank_record().exists())
+
+    def test_a_lookup_before_the_import_leaves_the_patch_in_place(self):
+        import importlib.util
+
+        environment = {
+            "NARWHAL_CAPTURE_CACHE": "1",
+            "NARWHAL_CACHE_PLAN": str(self.plan_path),
+            "NARWHAL_CACHE_OUTPUT": str(self.output),
+        }
+        with patch.dict(os.environ, environment):
+            runpy.run_path(str(self.hook), run_name="sitecustomize")
+            import tensorrt_llm._torch.pyexecutor  # noqa: F401  # type: ignore[import-not-found]
+
+            self.assertIsNotNone(importlib.util.find_spec("tensorrt_llm._torch.pyexecutor._util"))
+            import tensorrt_llm._torch.pyexecutor._util as util  # type: ignore[import-not-found]
+
+            util.KvCacheCreator(Manager()).build_managers({})
+        self.assertTrue(self.rank_record().exists())
 
     def test_attention_only_caches_record_no_state(self):
         util = self.run_hook()
@@ -302,6 +340,42 @@ class CaptureTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     self.capture(1, records)
                 self.assertFalse((self.run / "cache-layout.json").exists())
+
+    def test_capture_reports_a_rank_that_could_not_size_its_cache(self):
+        record = self.record(0, unsupported="cache capture does not size a separate draft cache")
+        with self.assertRaisesRegex(ValueError, "rank 0 could not size its cache: .*draft"):
+            self.capture(1, [record])
+        self.assertFalse((self.run / "cache-layout.json").exists())
+
+    def test_a_native_launch_merges_the_records_in_its_launch_directory(self):
+        self.plan.update(backend="native", python_executable="/engine/bin/python3")
+        (self.run / "checked.json").write_text(
+            json.dumps(
+                {
+                    "plan_sha256": digest(self.run / "launch.json"),
+                    "backend": "native",
+                    "python_executable": self.plan["python_executable"],
+                    "expected_packages": self.plan["expected_packages"],
+                }
+            )
+        )
+        for rank in (0, 1):
+            (self.run / f"cache-layout.rank{rank}.json").write_text(json.dumps(self.record(rank)))
+        with (
+            patch.object(captures, "tensor_parallel_size", return_value=2),
+            patch.object(captures, "docker") as docker,
+        ):
+            captures.capture_cache(self.run, self.plan)
+        docker.assert_not_called()
+        layout = json.loads((self.run / "cache-layout.json").read_text())
+        self.assertEqual([rank["rank"] for rank in layout["ranks"]], [0, 1])
+        (self.run / "cache-layout.json").unlink()
+        (self.run / "cache-layout.rank1.json").unlink()
+        with (
+            patch.object(captures, "tensor_parallel_size", return_value=2),
+            self.assertRaisesRegex(ValueError, "rank 1 has not recorded its cache layout"),
+        ):
+            captures.capture_cache(self.run, self.plan)
 
     def test_capture_refuses_ranks_that_disagree(self):
         records = [self.record(0), self.record(1, sizing="other")]

@@ -18,6 +18,7 @@ SIDE_CHANNEL_PORT_ENV = "NARWHAL_TRTLLM_TRANSFER_PORT"
 class TrtllmLauncher(EngineLauncher, CacheCapture):
     runtime_script = LAUNCHER
     cache_hook = Path(__file__).with_name("cache_capture_hook.py")
+    native_capture = True
     side_channel = "transfer"
     api_key_env = API_KEY_ENV
     image_packages = discovery.IMAGE_PACKAGES

@@ -215,11 +215,14 @@ def _main(argv: list[str]) -> int:
                 if results.json_mode():
                     raise
                 parser.exit(2, f"{context}: load run {run}: {error}\n")
-            if plan.get("backend") == "native" and args.command not in {
-                "check",
-                "cache-registration",
-                "handshake-policy",
-            }:
+            native_capture = args.command == "capture-cache" and getattr(
+                plan_launcher(plan), "native_capture", False
+            )
+            if (
+                plan.get("backend") == "native"
+                and not native_capture
+                and args.command not in {"check", "cache-registration", "handshake-policy"}
+            ):
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )

@@ -86,6 +86,34 @@ class LaunchCapabilityTests(unittest.TestCase):
         self.assertIn("SGLang does not support measure-cache; it applies to vLLM", error.getvalue())
         self.assertFalse((run / "cache-layout.json").exists())
 
+    def run_cli(self, *arguments):
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            cli.main(list(arguments))
+        return exited.exception.code, error.getvalue()
+
+    def test_tensorrt_llm_refuses_the_actions_only_vllm_supports(self):
+        run, _, _ = self.prepared("trtllm")
+        for action in ("measure-cache", "handshake-policy"):
+            with self.subTest(action=action):
+                code, error = self.run_cli(action, "--run", str(run))
+                self.assertEqual(code, 1)
+                self.assertIn(f"TensorRT-LLM does not support {action}; it applies to vLLM", error)
+
+    def test_only_tensorrt_llm_captures_a_native_launch(self):
+        run, _, _ = self.prepared("trtllm", native=True)
+        code, error = self.run_cli("capture-cache", "--run", str(run))
+        self.assertEqual(code, 1)
+        self.assertNotIn("container-only", error)
+        self.assertIn("checked", error)
+        run, _, _ = self.prepared("vllm", native=True)
+        code, error = self.run_cli("capture-cache", "--run", str(run))
+        self.assertEqual(code, 1)
+        self.assertIn("capture-cache is container-only", error)
+
     def test_a_backend_without_model_formats_takes_a_model_directory(self):
         with (
             tempfile.NamedTemporaryFile(suffix=".bin") as model,

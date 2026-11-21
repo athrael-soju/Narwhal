@@ -48,7 +48,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `model-dimensions` | container | Checked plan | `model-dimensions.json` |
 | `handshake-policy` | container, native, vLLM | Checked plan | `handshake-policy.json` from the installed NIXL worker |
 | `start` | container | Checked plan | One serving container and `container.id` |
-| `capture-cache` | container, vLLM, TensorRT-LLM | Running container of a checked plan | `cache-layout.json` with the live cache pages |
+| `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running engine of a checked plan | `cache-layout.json` with the live cache pages |
 | `cache-registration` | container, native, vLLM | Checked plan and one of `--startup-log` or `--runtime-layout` | `cache-registration.json` with the resolved block grouping |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
@@ -59,7 +59,7 @@ These actions check their inputs:
 
 | Action | Checks |
 | --- | --- |
-| `prepare` | Model configuration hash and, on vLLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
+| `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
 | `check` | For `container`, image identity. For `native`, the model path and model file hash. For both, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |

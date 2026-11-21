@@ -76,7 +76,7 @@ Each outgoing directed edge from the cache group's roles carries the full handof
     - `ENGINE_RUN`
     - The budget digest
     - `required_gbps`
-    - The resolved layout
+    - The resolved layout, on vLLM
     - The cache-group signature
 
 4. For each role that uses another host's representative budget, create a local comparison budget from the representative's `required_gbps` and budget digest:

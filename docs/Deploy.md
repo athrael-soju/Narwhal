@@ -22,7 +22,7 @@ Per-engine and per-host rules:
 
 - Compare each engine allocation with the GPU inventory collected on that engine host.
 - Install once per physical host.
-- Capture each vLLM engine's live cache layout.
+- Capture each vLLM and TensorRT-LLM engine's live cache layout.
 
 ### Deployment record
 

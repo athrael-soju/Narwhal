@@ -36,7 +36,7 @@ The prepared run holds these files at mode 0600:
 | `<host-id>/engine-launch.engine-<n>.json`                                 | The selected launch record for each engine role                          |
 | `<host-id>/fleet.local.json`                                              | The fleet configuration from discovery, on the router host               |
 | `<host-id>/profiling-limits.json`                                         | Profiling limits from each engine's sequence limit, on the router host   |
-| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper script copies for engine hosts, `cache_capture_hook.py` for vLLM  |
+| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper script copies for engine hosts, `cache_capture_hook.py` for vLLM and TensorRT-LLM  |
 | `manifest.json`                                                           | The private manifest                                                     |
 
 The manifest records:
