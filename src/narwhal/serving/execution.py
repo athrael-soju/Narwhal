@@ -680,7 +680,8 @@ async def _decode_attempt(
                             state.reported_tokens = reported
                     state.decode_tokens_observed += n
                     router.decode_tokens_observed += n
-                    if added_usage and _usage_frame(event):
+                    # A non-streamed reply keeps the engine's usage; a streamed one did not ask.
+                    if added_usage and body.get("stream") and _usage_frame(event):
                         continue
                     frame = rewrite_sse(event, strip=strip) + "\n\n"
                     if state.first_at is None:

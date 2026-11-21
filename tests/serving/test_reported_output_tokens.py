@@ -143,7 +143,7 @@ class UsageFrameCountTests(unittest.IsolatedAsyncioTestCase):
         self.decode_bodies.append(body)
         frames = [{"choices": [{"index": 0, "text": "ab"}]}, {"choices": [FINISH]}]
         if (body.get("stream_options") or {}).get("include_usage"):
-            usage = {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+            usage = {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
             frames.append({"choices": [], "usage": usage})
         return stream(*frames)
 
@@ -155,7 +155,10 @@ class UsageFrameCountTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_decode_leg_asks_for_the_usage_frame(self):
         reply = (await self.complete()).json()
-        self.assertEqual(reply["usage"]["completion_tokens"], 2)
+        # A non-streamed reply carries the engine's own usage.
+        self.assertEqual(
+            reply["usage"], {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
+        )
         streamed = await self.complete(stream=True)
         self.assertNotIn('"usage"', streamed.text)
         self.assertIn("data: [DONE]", streamed.text)
