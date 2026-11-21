@@ -497,6 +497,29 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(max(sent), 16300)
         self.assertEqual(max(bounded_sweep(Sweep(), 8192).prefill_lens), 4300)
 
+    async def test_a_dialect_with_a_context_flag_reads_the_attested_launch(self):
+        class Launched(type(DIALECT)):  # type: ignore[misc]
+            context_limit_flag = "--max_seq_len"
+
+        def refuse(request):
+            raise AssertionError(f"the engine was asked for {request.url.path}")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
+            for args in (["--max_seq_len", "32768"], ["--max_seq_len=32768"]):
+                with self.subTest(args=args):
+                    limit = await engine_context_limit(
+                        client, "http://e", "stub", Launched(), launch={"args": args}
+                    )
+                    self.assertEqual(limit, 32768)
+            for launch in (None, {"args": []}, {"args": ["--max_seq_len", "0"]}):
+                with (
+                    self.subTest(launch=launch),
+                    self.assertRaisesRegex(RuntimeError, "sets no valid --max_seq_len"),
+                ):
+                    await engine_context_limit(
+                        client, "http://e", "stub", Launched(), launch=launch
+                    )
+
     async def test_tokenizer_must_report_live_context_limit(self):
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"count": 1}))
@@ -541,13 +564,17 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "fewer than two"):
             bounded_sweep(Sweep(), 16384, 1)
 
-    async def measure(self, frames, *, cohort=1, tokens=3):
+    async def measure(self, frames, *, cohort=1, tokens=3, dialect=DIALECT, sent=None):
         stream = MeasuredStream(frames)
+
+        def answer(request):
+            if sent is not None:
+                sent.append(json.loads(request.content))
+            return httpx.Response(200, stream=stream)
+
         state = {"resident": 0, "requests": 0, "epoch": 0, "cohort": cohort}
         samples = []
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=stream))
-        ) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
             with patch.object(decode_probe, "time", SimpleNamespace(monotonic=lambda: stream.now)):
                 try:
                     await decode_probe._one_decode_stream(
@@ -558,7 +585,7 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                         10,
                         state,
                         samples,
-                        DIALECT,
+                        dialect,
                         tokens=tokens,
                     )
                 finally:
@@ -569,6 +596,32 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
         frames = [token(0), token(1), token(2, finish="length"), "[DONE]"]
         self.assertEqual(await self.measure(frames), [(1.0, 12.0, 0.25), (1.0, 13.0, 0.25)])
         self.assertEqual(await self.measure(frames, cohort=2), [])
+
+    async def test_one_token_chunks_count_when_the_usage_frame_confirms_them(self):
+        class Chunks(type(DIALECT)):  # type: ignore[misc]
+            token_ids = False
+            one_token_chunks = True
+
+        def text(finish=None):
+            return {"choices": [{"text": "x", "token_ids": None, "finish_reason": finish}]}
+
+        usage = {"choices": [], "usage": {"completion_tokens": 3}}
+        frames = [text(), text(), text("length"), usage, "[DONE]"]
+        sent = []
+        samples = await self.measure(frames, dialect=Chunks(), sent=sent)
+        self.assertEqual(samples, [(1.0, 12.0, 0.25), (1.0, 13.0, 0.25)])
+        self.assertEqual(sent[0]["stream_options"], {"include_usage": True})
+        self.assertNotIn("return_token_ids", sent[0])
+        short = {"choices": [], "usage": {"completion_tokens": 4}}
+        for tail in ([short, "[DONE]"], ["[DONE]"]):
+            with self.subTest(tail=tail), self.assertRaisesRegex(RuntimeError, "one-token chunks"):
+                await self.measure([text(), text(), text("length"), *tail], dialect=Chunks())
+
+        class Text(type(DIALECT)):  # type: ignore[misc]
+            token_ids = False
+
+        with self.assertRaisesRegex(RuntimeError, "requires exact output token IDs"):
+            await self.measure(frames, dialect=Text())
 
     async def test_bundled_terminal_tokens_keep_counts_without_false_intervals(self):
         frames = [

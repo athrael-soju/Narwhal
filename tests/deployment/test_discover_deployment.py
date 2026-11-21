@@ -254,6 +254,18 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "set KV_EVENTS to true or false"):
                 build_records(hosts, env, observations, root)
 
+    def test_trtllm_discovery_refuses_cache_events(self):
+        env = environment(Path("/synthetic"))
+        env.update(NARWHAL_ENGINE_BACKEND="trtllm", NARWHAL_KV_EVENTS="true")
+        hosts = derive_hosts(env)
+        observations = {}
+        for i in (1, 2):
+            observed = sglang_observation(f"10.0.0.{i}")
+            observed.update(packages={"tensorrt_llm": "1.4.0rc3", "torch": "2.12.0"})
+            observations[f"engine-{i}"] = observed
+        with self.assertRaisesRegex(ValueError, "set NARWHAL_KV_EVENTS to false in .env"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+
     def test_sglang_engines_need_the_mooncake_connector_and_graph_memory(self):
         env = sglang_environment(Path("/synthetic"))
         hosts = derive_hosts(env)

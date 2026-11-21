@@ -128,30 +128,30 @@ The optional `hardware` block needs all three fields when present.
 
 ### Contract fields
 
-The attestation generator derives each field from the deployed engine. Fields that name only vLLM sources stay unset on SGLang.
+The attestation generator derives each field from the deployed engine. Fields that name only vLLM sources stay unset on SGLang. On TensorRT-LLM, `attention_backend`, `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat` stay unset, and the other fields come from the sources below.
 
 | Field                      | Default           | Requirement                                                                                                                                    |
 | -------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine_version`           | required          | The exact version each engine reports: `/version` on vLLM, `/server_info` on SGLang.                                                           |
+| `engine_version`           | required          | The exact version each engine reports: `/version` on vLLM and TensorRT-LLM, `/server_info` on SGLang.                                                           |
 | `image_digest`             | `""`              | The engine's local container image ID, `sha256:<64 hex>`. Empty for a native engine.                                                           |
-| `transfer_version`         | `""`              | The pinned transfer package version: `nixl` or `nixl-rocm` on vLLM, the Mooncake package on SGLang.                                            |
+| `transfer_version`         | `""`              | The pinned transfer package version: `nixl` or `nixl-rocm` on vLLM, the Mooncake package on SGLang, `tensorrt_llm` on TensorRT-LLM.                                            |
 | `connector_version`        | `0`               | vLLM only. A positive `NIXL_CONNECTOR_VERSION`, read from the deployed connector's module.                                                     |
-| `model_architecture`       | `""`              | The model implementation name: vLLM's resolved architecture, or the first `architectures` entry in the model's `config.json` on SGLang.        |
-| `model_dtype`              | `""`              | The dtype the model runs in: the `--dtype` launch argument on vLLM, `dtype` from `/server_info` on SGLang.                                     |
-| `kv_heads`                 | `0`               | Positive KV head count for the whole model: `ModelConfig.get_total_num_kv_heads()` on vLLM, `num_key_value_heads` in `config.json` on SGLang.  |
-| `head_size`                | `0`               | Positive head size: `ModelConfig.get_head_size()` on vLLM, `head_dim` in `config.json` on SGLang.                                              |
-| `hidden_layers`            | `0`               | Positive layer count for the whole model: `ModelConfig.get_total_num_hidden_layers()` on vLLM, `num_hidden_layers` in `config.json` on SGLang. |
+| `model_architecture`       | `""`              | The model implementation name: vLLM's resolved architecture, or the first `architectures` entry in the model's `config.json` on SGLang and TensorRT-LLM.        |
+| `model_dtype`              | `""`              | The dtype the model runs in: the `--dtype` launch argument on vLLM, `dtype` from `/server_info` on SGLang, `dtype` in the launch's `engine.json` on TensorRT-LLM.                                     |
+| `kv_heads`                 | `0`               | Positive KV head count for the whole model: `ModelConfig.get_total_num_kv_heads()` on vLLM, `num_key_value_heads` in `config.json` on SGLang and TensorRT-LLM.  |
+| `head_size`                | `0`               | Positive head size: `ModelConfig.get_head_size()` on vLLM, `head_dim` in `config.json` on SGLang and TensorRT-LLM.                                              |
+| `hidden_layers`            | `0`               | Positive layer count for the whole model: `ModelConfig.get_total_num_hidden_layers()` on vLLM, `num_hidden_layers` in `config.json` on SGLang and TensorRT-LLM. |
 | `attention_backend`        | `""`              | The attention backend: from the startup log on vLLM, from `/server_info` on SGLang.                                                            |
-| `kv_cache_dtype`           | `""`              | The KV-cache dtype: the `--kv-cache-dtype` launch argument on vLLM, from `/server_info` on SGLang.                                             |
+| `kv_cache_dtype`           | `""`              | The KV-cache dtype: the `--kv-cache-dtype` launch argument on vLLM, from `/server_info` on SGLang, the `--kv_cache_dtype` launch argument on TensorRT-LLM.                                             |
 | `cross_layers_blocks`      | `null`            | vLLM only. Cache-block grouping, the `KVCacheLayout.is_block_outermost` value from the pinned layout API.                                      |
 | `hybrid_kv_cache_manager`  | `null`            | vLLM only. Whether vLLM's hybrid KV-cache manager is part of the layout.                                                                       |
-| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. On SGLang, the default and the attested value are `engine.connector`.                                     |
+| `connector`                | `"NixlConnector"` | Nonempty engine-side connector name. On SGLang, the default and the attested value are `engine.connector`. On TensorRT-LLM, they are the transceiver backend, `UCX` or `NIXL`.                                     |
 | `kv_role`                  | `""`              | vLLM only. The engine-side KV role, such as `kv_both`.                                                                                         |
 | `transfer_mode`            | `""`              | vLLM only. `pull` for `NixlConnector` and `NixlPullConnector`, `push` for `NixlPushConnector`.                                                 |
-| `speculative_config`       | `""`              | The `--speculative-config` launch value on vLLM, or SGLang's `speculative_algorithm`, or `disabled`.                                           |
+| `speculative_config`       | `""`              | The `--speculative-config` launch value on vLLM, or SGLang's `speculative_algorithm`, or `speculative_config` in TensorRT-LLM's `engine.json`, or `disabled`.                                           |
 | `enforce_handshake_compat` | `true`            | vLLM only. `true`, as the effective value from the pinned NIXL worker extra-config lookup. `null` on SGLang.                                   |
 
-On SGLang, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
+On SGLang and TensorRT-LLM, `head_size` falls back to `hidden_size` divided by `num_attention_heads`, and `kv_heads` falls back to `num_attention_heads`. Both read the model's `text_config` when it has one.
 
 Capture every contract value from the deployed engine in [Capturing the attestation inputs](../deploy/05-Attest.md#capturing-the-attestation-inputs).
 
@@ -195,10 +195,10 @@ For each contracted engine:
 
 At startup, the sidecar reads two identity values:
 
-- the engine version, from `/version` on vLLM or `/server_info` on SGLang
-- the engine process start time, from the `process_start_time_seconds` metric on vLLM, or on SGLang from the host start time of the process that `--engine-container` or `--engine-pid` names
+- the engine version, from `/version` on vLLM and TensorRT-LLM or `/server_info` on SGLang
+- the engine process start time, from the `process_start_time_seconds` metric on vLLM, or on SGLang and TensorRT-LLM from the host start time of the process that `--engine-container` or `--engine-pid` names
 
-An SGLang sidecar also serves the process start time at `/v1/process`.
+An SGLang or TensorRT-LLM sidecar also serves the process start time at `/v1/process`.
 
 When the engine version at startup differs from `engine_version` in the attestation document, the sidecar exits with an error. When either identity value is unreadable or differs from its startup value, every sidecar route except `/v1/process` returns HTTP 503.
 
@@ -214,7 +214,7 @@ An attestation document with launch evidence adds two fields to each sidecar res
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence
 
-An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`.
+An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`.
 
 Saved profiles and first-token calibrations bind to the engine's `launch_digest` when the response carries launch evidence, otherwise to its `attestation_digest`.
 

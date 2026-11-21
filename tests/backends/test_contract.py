@@ -97,6 +97,8 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(kv.contract_name, str)
                 self.assertTrue(kv.contract_name)
                 self.assertIsInstance(kv, KvConnector | RendezvousConnector)
+                self.assertIs(type(kv.min_output_tokens), int)
+                self.assertGreaterEqual(kv.min_output_tokens, 1)
                 for lease in (6, 30, 600):
                     self.assertTrue(0 < kv.handoff_bound(lease) <= lease)
 
@@ -142,6 +144,14 @@ class BackendContract(Launched, unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(body=list(body)):
                 result = await client.tokenize(engine.url, body, 5, strict=True)
+                dialect = self.backend.dialect
+                if (
+                    "messages" in body
+                    and dialect.render_path is None
+                    and not dialect.tokenize_messages
+                ):
+                    self.assertIsNone(result)
+                    continue
                 self.assertEqual(result.count, len(PROMPT))
                 self.assertIn(result.token_ids, (None, tuple(ord(c) for c in PROMPT)))
 
@@ -493,7 +503,8 @@ class BackendFlows(Launched, unittest.TestCase):
                     self.check(run, plan, stages)
                     self.assertTrue((run / "checked.json").exists())
                     continue
-                with self.assertRaisesRegex(ValueError, "^Model metadata requires --trust-remote"):
+                flag = re.escape(self.launcher.launch_settings.remote_code_flag)
+                with self.assertRaisesRegex(ValueError, f"^Model metadata requires {flag}"):
                     self.check(run, plan, stages)
                 self.assertEqual(stages.calls, [])
 
@@ -527,6 +538,9 @@ class BackendFlows(Launched, unittest.TestCase):
             self.assertRaisesRegex(ValueError, "^native runtime check exited 1: boom; inspect"),
         ):
             check(run, plan)
+        if plan["kv_events"] is None:
+            # A launch that publishes no cache events has no endpoints to move.
+            return
         moved = copy.deepcopy(plan)
         moved["kv_events"]["endpoint"] = "tcp://*:5557"
         stages = Stages(plan, self.fixtures.check_output(moved))
@@ -558,6 +572,30 @@ class BackendFlows(Launched, unittest.TestCase):
             (Path(plan["model_dir"]) / "config.json").write_text("{}")
             with self.assertRaisesRegex(ValueError, "^Model configuration changed after launch"):
                 engine_document(run, log)
+
+    def test_the_attested_launch_carries_engine_configuration_files(self):
+        launcher = type(self.backend.engine_launcher())
+        own = launcher.config_files
+        added: dict[str, str] = {}
+
+        def config_files(self, record, directory):
+            # The backend's own files stay beside the added one.
+            found, args = own(self, record, directory)
+            added.update(found, **{"extra.yaml": "timeout: 30\n"})
+            return dict(added), args
+
+        with patch.object(launcher, "config_files", config_files):
+            run, plan, _ = self.prepared()
+        self.check(run, plan)
+        self.start(run)
+        plan = load_plan(run)
+        self.fixtures.attestation_evidence(run, plan, CONTAINER_ID)
+        log = run / "startup.log"
+        log.write_text(self.fixtures.startup_log)
+        image = json.loads((run / "checked.json").read_text())["image_id"]
+        with running_container(image):
+            document = engine_document(run, log)
+        self.assertEqual(document["launch"]["config_files"], added)
 
 
 class BackendCharacterization(Launched, unittest.IsolatedAsyncioTestCase):

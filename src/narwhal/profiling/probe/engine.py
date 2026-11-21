@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
 
+from ...engines.attestation import attested_option
 from ...engines.dialect import EngineDialect
 from ...engines.metrics import EngineMetrics
 
 
-async def _engine_metrics(client: httpx.AsyncClient, url: str, timeout_s: float) -> str | None:
+async def _engine_metrics(
+    client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float
+) -> str | None:
     try:
-        response = await client.get(f"{url}/metrics", timeout=timeout_s)
+        response = await client.get(f"{url}{metrics.path}", timeout=timeout_s)
         response.raise_for_status()
     except httpx.HTTPError:
         return None
@@ -21,21 +24,21 @@ async def _engine_metrics(client: httpx.AsyncClient, url: str, timeout_s: float)
 async def kv_capacity(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.kv_capacity(text)
 
 
 async def cache_block_tokens(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.cache_block_tokens(text)
 
 
 async def prefix_cache_hits(
     client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
 ) -> int | None:
-    text = await _engine_metrics(client, url, timeout_s)
+    text = await _engine_metrics(client, url, metrics, timeout_s)
     return None if text is None else metrics.prefix_cache_hits(text)
 
 
@@ -103,7 +106,15 @@ async def engine_context_limit(
     model: str,
     dialect: EngineDialect,
     timeout_s: float = 30.0,
+    *,
+    launch: Mapping[str, Any] | None = None,
 ) -> int:
+    flag = dialect.context_limit_flag
+    if flag is not None:
+        value = attested_option({"launch": launch}, flag)
+        if value is None or not value.isdigit() or int(value) < 1:
+            raise RuntimeError(f"the attested launch of {url} sets no valid {flag}")
+        return int(value)
     path = dialect.context_limit_path
     if path is None:
         body = await _tokenize_response(client, url, model, "benchmark ", dialect, timeout_s)

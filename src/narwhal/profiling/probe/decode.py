@@ -39,7 +39,8 @@ async def _one_decode_stream(
     dialect: EngineDialect,
     tokens: int = DECODE_TOKENS,
 ) -> None:
-    if not dialect.token_ids:
+    exact = dialect.token_ids
+    if not exact and not dialect.one_token_chunks:
         raise RuntimeError("decode profiling requires exact output token IDs")
     body = {
         "model": model,
@@ -49,9 +50,14 @@ async def _one_decode_stream(
         "stream": True,
         **dialect.decode_probe_extras(tokens),
         **dialect.cold_probe_extras(),
-        "return_token_ids": True,
-        "stream_interval": 1,
+        **(
+            {"return_token_ids": True, "stream_interval": 1}
+            if exact
+            # The usage frame confirms that the chunks counted one token each.
+            else {"stream_options": {"include_usage": True}}
+        ),
     }
+    reported: int | None = None
     mine = 0
     last: float | None = None
     last_epoch = -1.0
@@ -85,7 +91,12 @@ async def _one_decode_stream(
                         raise RuntimeError("decode probe returned invalid choices") from exc
                     if len(choices) > 1:
                         raise RuntimeError("decode probe returned invalid choices")
-                    ids = token_ids(choices)
+                    if not exact:
+                        usage = obj.get("usage")
+                        if isinstance(usage, dict) and not choices:
+                            count = usage.get("completion_tokens")
+                            reported = count if type(count) is int else -1
+                    ids = token_ids(choices) if exact else [0] * len(choices)
                     if ids is None:
                         raise RuntimeError("decode probe SSE event lacks exact token IDs")
                     if any(choice.get("finish_reason") is not None for choice in choices):
@@ -133,6 +144,10 @@ async def _one_decode_stream(
         if not done or not finished or mine != tokens:
             raise RuntimeError(
                 f"decode probe incomplete: tokens={mine}/{tokens}, done={done}, finished={finished}"
+            )
+        if not exact and reported != tokens:
+            raise RuntimeError(
+                f"decode probe counted {mine} one-token chunks, and the engine reported {reported}"
             )
     finally:
         if mine:

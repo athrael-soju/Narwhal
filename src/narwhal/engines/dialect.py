@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from .prefix import non_negative_ints
@@ -15,8 +16,14 @@ class EngineDialect(ABC):
     # A route that renders chat messages to prompt text, for an engine whose tokenize route
     # takes text only. None sends the messages to the tokenize route.
     render_path: ClassVar[str | None] = None
+    # False when the tokenize route counts prompt text only. With no render route, callers then
+    # estimate chat requests instead of counting them.
+    tokenize_messages: ClassVar[bool] = True
     # None reads the context limit from the tokenize response.
     context_limit_path: ClassVar[str | None] = None
+    # The launch flag that sets the context limit, for an engine that reports none. Callers
+    # then read the limit from the engine's attested launch.
+    context_limit_flag: ClassVar[str | None] = None
     # None means the engine exposes no HTTP cache-reset capability.
     cache_reset_path: ClassVar[str | None] = None
     # These client fields conflict with the forced one-token prefill request.
@@ -29,8 +36,15 @@ class EngineDialect(ABC):
     )
     # True when each streamed decode chunk carries its token IDs.
     token_ids: ClassVar[bool] = True
+    # True when, without token IDs, each streamed choice chunk carries one token and the usage
+    # frame that stream_options.include_usage adds counts them.
+    one_token_chunks: ClassVar[bool] = False
     # True when `stream_output_tokens` reads a reply's output token count from its stream.
     reports_output_tokens: ClassVar[bool] = False
+    # True when the stream reports that count only in the usage frame that
+    # stream_options.include_usage adds. The router asks for that frame on each decode leg and
+    # drops it from a streamed reply whose client did not ask for it.
+    usage_frame_counts: ClassVar[bool] = False
     # Below the engine server's own idle close, so a reused connection is never closing.
     keepalive_expiry_s: ClassVar[float] = 4.0
     engine_output_fields: ClassVar[tuple[str, ...]] = ("token_ids", "prompt_token_ids")
@@ -47,12 +61,21 @@ class EngineDialect(ABC):
     kv_reserved_blocks: ClassVar[int] = 0
     # Chat template fields the render route takes.
     render_passthrough: ClassVar[tuple[str, ...]] = ()
+    # Request headers that make an engine without a KV transfer counter report a decode leg's
+    # transfer in the leg's own reply, after its [DONE] terminator.
+    transfer_report_headers: ClassVar[Mapping[str, str]] = {}
 
     @abstractmethod
     def request_id(self, rid: str) -> tuple[dict[str, str], dict[str, Any]]: ...
 
     @abstractmethod
     def token_id_fields(self) -> dict[str, Any]: ...
+
+    def leg_transfer_seconds(self, payloads: list[dict[str, Any]]) -> float | None:
+        """Seconds a decode leg spent receiving its KV cache, from the data payloads of a
+        reply that `transfer_report_headers` requested, or None when the reply reports none.
+        """
+        return None
 
     def stream_refused_fields(self, endpoint: str) -> tuple[str, ...]:
         """Client fields the engine refuses on a streamed request to `endpoint`."""

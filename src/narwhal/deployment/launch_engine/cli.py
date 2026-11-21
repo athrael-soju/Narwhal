@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from ... import command_results as results
 from ...backends import load as load_backend
@@ -11,7 +12,13 @@ from ...backends import names
 from ...cli_support import add_version_argument
 from .. import native_engine
 from ..attestation_contract.evidence import model_dimensions
-from .backend import cache_capture, engine_backend, plan_launcher
+from .backend import (
+    CacheCapture,
+    CacheMeasurement,
+    CacheRegistration,
+    engine_backend,
+    plan_launcher,
+)
 from .check import check
 from .plan import load, prepare
 from .start import READY_SECONDS, start, start_shared
@@ -21,26 +28,31 @@ def main(argv: list[str] | None = None) -> int:
     return results.invoke("narwhal-engine", argv, _main, operation="engine")
 
 
-# Actions of a backend with cache capture, with the launch backends each one runs on.
-CAPTURE_ACTIONS = {
+# Optional actions: each one's description, the launch backends it runs on, and the
+# launcher capability it requires.
+CAPTURE_ACTIONS: dict[str, tuple[str, str, type]] = {
     "measure-cache": (
         "Run a temporary sizing container from a checked, unused plan; write "
         "cache-layout.json and remove the completed sizing container",
         "container only",
+        CacheMeasurement,
     ),
     "handshake-policy": (
         "Inspect the installed connector compatibility policy using a checked plan; write "
         "handshake-policy.json",
         "container and native",
+        CacheRegistration,
     ),
     "capture-cache": (
-        "Capture cache-layout.json from the running container recorded by a checked plan",
-        "container only",
+        "Capture cache-layout.json from the serving engine of a checked plan",
+        "container; native on TensorRT-LLM",
+        CacheCapture,
     ),
     "cache-registration": (
         "Resolve cache block grouping from a checked plan and a startup log or runtime "
         "layout; write cache-registration.json",
         "container and native",
+        CacheRegistration,
     ),
 }
 
@@ -59,12 +71,13 @@ ACTIONS = (
 )
 
 
-def capture_backends() -> list[str]:
+def capture_backends(capability: type) -> list[str]:
+    """Labels of the backends whose launcher has the capability."""
     backends = [load_backend(name) for name in names()]
     return [
         backend.label
         for backend in backends
-        if backend.launcher is not None and cache_capture(backend.launcher()) is not None
+        if backend.launcher is not None and isinstance(backend.launcher(), capability)
     ]
 
 
@@ -89,11 +102,12 @@ def _main(argv: list[str]) -> int:
         "stop-native": "Stop owned process groups after validating the recorded native "
         "process identities in the run directory (native only).",
     }
-    capturing = capture_backends()
-    if capturing:
-        engines = ", ".join(capturing)
-        for name, (text, modes) in CAPTURE_ACTIONS.items():
-            descriptions[name] = f"{text} ({modes}; {engines})."
+    capturing = {
+        name: capture_backends(capability) for name, (_, _, capability) in CAPTURE_ACTIONS.items()
+    }
+    for name, (text, modes, _) in CAPTURE_ACTIONS.items():
+        if capturing[name]:
+            descriptions[name] = f"{text} ({modes}; {', '.join(capturing[name])})."
     descriptions = {name: descriptions[name] for name in ACTIONS if name in descriptions}
     sub = parser.add_subparsers(dest="command", required=True)
     public = {
@@ -201,35 +215,38 @@ def _main(argv: list[str]) -> int:
                 if results.json_mode():
                     raise
                 parser.exit(2, f"{context}: load run {run}: {error}\n")
-            if plan.get("backend") == "native" and args.command not in {
-                "check",
-                "cache-registration",
-                "handshake-policy",
-            }:
+            native_capture = args.command == "capture-cache" and getattr(
+                plan_launcher(plan), "native_capture", False
+            )
+            if (
+                plan.get("backend") == "native"
+                and not native_capture
+                and args.command not in {"check", "cache-registration", "handshake-policy"}
+            ):
                 raise ValueError(
                     f"{args.command} is container-only; use native shared start or stop"
                 )
             if args.command in CAPTURE_ACTIONS:
-                capture = cache_capture(plan_launcher(plan))
-                if capture is None:
+                engine = plan_launcher(plan)
+                if not isinstance(engine, CAPTURE_ACTIONS[args.command][2]):
                     label = engine_backend(plan.get("engine")).label
                     raise ValueError(
-                        f"{label} has no cache capture; {args.command} applies to "
-                        f"{', '.join(capturing)}"
+                        f"{label} does not support {args.command}; it applies to "
+                        f"{', '.join(capturing[args.command])}"
                     )
                 if args.command == "cache-registration":
-                    capture.registration_layout(
+                    cast(CacheRegistration, engine).registration_layout(
                         run,
                         plan,
                         args.runtime_layout or args.startup_log,
                         args.runtime_layout is not None,
                     )
-                    return 0
-                {
-                    "measure-cache": capture.measure_cache,
-                    "capture-cache": capture.capture_cache,
-                    "handshake-policy": capture.handshake_policy,
-                }[args.command](run, plan)
+                elif args.command == "handshake-policy":
+                    cast(CacheRegistration, engine).handshake_policy(run, plan)
+                elif args.command == "measure-cache":
+                    cast(CacheMeasurement, engine).measure_cache(run, plan)
+                else:
+                    cast(CacheCapture, engine).capture_cache(run, plan)
                 return 0
             {
                 "check": check,

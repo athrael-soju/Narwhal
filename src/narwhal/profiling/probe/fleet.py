@@ -457,7 +457,12 @@ async def run(
                     "that reports max_model_len before profiling"
                 )
             max_model_len = await engine_context_limit(
-                client, spec.url, cfg.model, dialect, observation_timeout_s or 30.0
+                client,
+                spec.url,
+                cfg.model,
+                dialect,
+                observation_timeout_s or 30.0,
+                launch=launches.get(spec.iid),
             )
             max_num_seqs = limits.get(spec.iid)
             engine_sweep = bounded_sweep(sweep or Sweep(), max_model_len, max_num_seqs)
@@ -492,6 +497,7 @@ async def run(
                     colocated_workload,
                     observation_timeout_s,
                     peerless=paired_load,
+                    launches=launches,
                 )
             try:
                 if paired_load:

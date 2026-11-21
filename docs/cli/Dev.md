@@ -4,12 +4,13 @@ description: Options, exit codes and run directories for narwhal dev on one work
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM or SGLang engines on one NVIDIA CUDA GPU, their attestation sidecars and a router. To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of three installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
+`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, their attestation sidecars and a router. To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of four installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM | 1 prefill, 1 decode | GGUF file |
 | [`small-cuda-sglang-v1.json`](../Dev-Runtime.md#running-sglang-engines) | SGLang with Mooncake | 1 prefill, 1 decode | Checkpoint directory |
+| [`small-cuda-trtllm-v1.json`](../Dev-Runtime.md#running-tensorrt-llm-engines) | TensorRT-LLM with UCX | 1 prefill, 1 decode | Checkpoint directory |
 | [`reference-v1.json`](../dev/RTX-5090-Reference.md), for an RTX 5090 | vLLM | 2 prefill, 2 decode | GGUF file |
 | [`direct-ernie45-03b-v1.json`](../dev/Llama-Cpp-Engines.md#templates), the default of `setup` | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |
 | [`direct-qwen35-08b-v1.json`](../dev/Llama-Cpp-Engines.md#templates) | llama.cpp | 2 prefill, 2 decode | GGUF file that `setup` downloads |

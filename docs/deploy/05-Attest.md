@@ -1,5 +1,5 @@
 ---
-description: Generate and serve attestation documents for the live vLLM or SGLang engines of a Narwhal fleet.
+description: Generate and serve attestation documents for the live vLLM, SGLang or TensorRT-LLM engines of a Narwhal fleet.
 ---
 
 # Attest live engines
@@ -21,7 +21,7 @@ Each engine's `ENGINE_RUN` directory supplies:
 
 ## Capturing the attestation inputs
 
-Run these steps in each engine's role shell. For an SGLang engine, run only [Saving the startup log](#saving-the-startup-log), [Capturing the connector version](#capturing-the-connector-version) and [Capturing the model dimensions](#capturing-the-model-dimensions), then [generate the document](#generating-the-document).
+Run these steps in each engine's role shell. For an SGLang or TensorRT-LLM engine, run only [Saving the startup log](#saving-the-startup-log), [Capturing the connector version](#capturing-the-connector-version) and [Capturing the model dimensions](#capturing-the-model-dimensions), then [generate the document](#generating-the-document).
 
 ### Saving the startup log
 
@@ -43,6 +43,8 @@ For a vLLM engine, `contract.connector_version` comes from the installed connect
 
 For an SGLang engine, the capture writes fields from `/server_info` and the process start time to `server-info.json`. `/server_info` supplies `engine_version`, `model_dtype`, `attention_backend`, `kv_cache_dtype` and `speculative_config`. `transfer_version` records the version of `mooncake-transfer-engine` in `runtime.expected_packages`, or of the one CUDA build listed there, such as `mooncake-transfer-engine-cuda13`.
 
+For a TensorRT-LLM engine, the capture writes `version` from `/version`, `tokens_per_block`, `max_batch_size` and `kv_cache_hash_algo` from `/server_info`, and the process start time to `server-info.json`. Generation fails when the launch's `engine.json` sets a block size other than the live `tokens_per_block`, when the live `max_batch_size` differs from `--max_batch_size`, or when `engine.json` names a transceiver backend other than the planned connector's. `model_dtype`, `kv_cache_dtype`, `connector` and `speculative_config` come from the launch. `transfer_version` records the `tensorrt_llm` version in `runtime.expected_packages`.
+
 Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `runtime.max_sequences` to the logged value, or raise the limit the log names, such as `--max-mamba-cache-size`, and then relaunch the engine.
 
 ### Capturing the model dimensions
@@ -62,7 +64,7 @@ For a vLLM engine, the capture reads the dimensions from the live engine into `m
 | `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
 | `model_architecture` | Resolved architecture                                                                                          |
 
-For an SGLang engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`, the file to read in place of `model-dimensions.live.json`. `config.json` must match `model_config_sha256` in `launch.json`.
+For an SGLang or TensorRT-LLM engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`, the file to read in place of `model-dimensions.live.json`. `config.json` must match `model_config_sha256` in `launch.json`.
 
 ### Capturing the cache grouping
 
@@ -195,7 +197,7 @@ export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 
 ### Confirming the attested process
 
-1. Recheck the engine's `/health` and version: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, or `version` in `/server_info` on SGLang.
+1. Recheck the engine's `/health` and version: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, `version` in `/server_info` on SGLang, or `/version` on TensorRT-LLM.
 2. Confirm the document describes the running process.
 
 ### Starting the sidecar
@@ -253,9 +255,10 @@ plan = json.loads((Path(os.environ["ENGINE_RUN"]) / "launch.json").read_text())
 key = os.environ.get("NARWHAL_ENGINE_API_KEY")
 headers = {"authorization": "Bearer " + key} if key else {}
 options = {}
-if plan.get("engine") == "sglang":
-    # SGLang publishes no process start; the sidecar reads it on the host.
-    options = {"reader": load_backend("sglang").identity, "attestation_url": base + "/v1/attestation"}
+backend = load_backend(plan.get("engine") or "vllm")
+if not backend.identity.reports_process_start:
+    # SGLang and TensorRT-LLM publish no process start; the sidecar reads it on the host.
+    options = {"reader": backend.identity, "attestation_url": base + "/v1/attestation"}
 identity = asyncio.run(fetch_engine_identity(plan["endpoint"], headers=headers, **options))
 (out / "identity.json").write_text(json.dumps(asdict(identity), indent=2) + "\n")
 document = AttestationDocument.load(os.environ["ATTEST_DOCUMENT"])

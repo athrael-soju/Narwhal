@@ -21,6 +21,7 @@ from . import stages
 from .launch_engine.backend import cache_capture, engine_backend, plan_launcher
 from .launch_engine.check import read_checked
 from .launch_engine.plan import (
+    config_files_changed,
     kv_events_directory,
     launch_headers,
     read_env,
@@ -128,6 +129,8 @@ def _checked_plan(run: Path, plan: dict) -> dict:
         raise ValueError("cache capture launcher changed after launch preparation")
     if digest(run / "hook/launch.json") != digest(run / "launch.json"):
         raise ValueError("cache capture plan changed after launch preparation")
+    if changed := config_files_changed(run, plan):
+        raise ValueError(f"engine configuration {changed} changed after launch preparation")
     return checked
 
 

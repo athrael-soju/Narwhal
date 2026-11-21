@@ -18,6 +18,7 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | On SGLang, a `/v1/chat/completions` body sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | Unsupported non-streaming audio, modality, or tool request; `param` names the option | `400` | `invalid_request_error` | `null` | |
 | `n > 1` or `best_of > 1` | `400` | `invalid_request_error` | | |
+| On TensorRT-LLM, `max_completion_tokens`, or else `max_tokens`, is `1`; the decode leg returns at least 2 tokens | `400` | `invalid_request_error` | | |
 | Requested model differs from the configured model | `404` | `invalid_request_error` | `model_not_found` | |
 | Request exceeds `serving.max_request_bytes` | `413` | `request_too_large` | | |
 | Requests counted against the [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) reach it plus `serving.queue_capacity`; message `router in-flight limit reached` | `429` | `server_overloaded_error` | | `1` |
@@ -122,8 +123,10 @@ On vLLM, every decode request includes:
 
 On SGLang, a `/v1/completions` decode request includes `"return_token_ids": true`, and the launcher sets `--stream-interval 1`. A `/v1/chat/completions` decode request on SGLang carries no token-ID field, and the router counts one token for each streamed chunk that carries text, reasoning content, or tool calls.
 
+On TensorRT-LLM, a decode request carries no token-ID field and sets `stream_options.include_usage`. The router counts one token for each streamed chunk until the final usage frame reports the output count. It removes that frame from a streamed reply whose client did not set `include_usage`. A non-streamed reply carries the engine's `usage`.
+
 When the decode request asks for token IDs, every event with text, reasoning, tool calls, or refusals carries a token-ID list of nonnegative integers. A missing or malformed list, including one with a Boolean ID, fails the decode attempt or profiling measurement.
 
-The router reports `token_accounting: token_ids` on vLLM and SGLang, and `token_accounting: reported` on llama.cpp.
+The router reports `token_accounting: token_ids` on vLLM and SGLang, and `token_accounting: reported` on llama.cpp and TensorRT-LLM.
 
 Clients that set `return_token_ids` receive the IDs in streaming and assembled responses. On SGLang, the router refuses a `/v1/chat/completions` request that sets `return_token_ids` with HTTP `400`.

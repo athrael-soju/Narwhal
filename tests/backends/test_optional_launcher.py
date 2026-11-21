@@ -44,7 +44,8 @@ class OptionalLauncherTests(unittest.TestCase):
 
     def test_capture_actions_and_launch_tests_leave_the_backend_out(self):
         with patch.object(cli, "load_backend", return_value=BARE):
-            self.assertEqual(cli.capture_backends(), [])
+            for _, _, capability in cli.CAPTURE_ACTIONS.values():
+                self.assertEqual(cli.capture_backends(capability), [])
         with patch.object(contract, "load_backend", return_value=BARE):
             self.assertEqual(contract.with_launcher(), [])
 

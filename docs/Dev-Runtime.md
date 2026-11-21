@@ -1,20 +1,21 @@
 ---
-description: Narwhal dev runs several vLLM, SGLang or llama.cpp engines with prefill and decode role swaps on one workstation under Ubuntu or WSL2.
+description: Narwhal dev runs several vLLM, SGLang, TensorRT-LLM or llama.cpp engines with prefill and decode role swaps on one workstation under Ubuntu or WSL2.
 ---
 
 # Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page covers vLLM and SGLang engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page covers vLLM, SGLang and TensorRT-LLM engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
-A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs three for vLLM and SGLang, and two for [llama.cpp engines](dev/Llama-Cpp-Engines.md#templates):
+A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs four for vLLM, SGLang and TensorRT-LLM, and two for [llama.cpp engines](dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Backend and KV transfer | Model | Engines |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 2 |
 | `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
+| `small-cuda-trtllm-v1.json` | TensorRT-LLM 1.4.0rc3 with UCX over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The two small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,680 MiB of free VRAM and the SGLang template about 10,240 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The three small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,680 MiB of free VRAM, the SGLang template about 10,240 MiB and the TensorRT-LLM template about 13,824 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -43,19 +44,19 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 A template states the GPU memory of its engines in MiB or as fractions of the GPU.
 
-The two small templates state it in MiB: `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `7168` in the vLLM template, whose engines each take about 450 MiB in addition to `engine_memory_mib`, and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to it. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.088` and `0.2199` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
+The three small templates state it in MiB. In the vLLM and SGLang templates, `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `7168` in the vLLM template, whose engines each take about 450 MiB in addition to `engine_memory_mib`, and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to it. The TensorRT-LLM template sets `engine_memory_mib` to `6144` and `device_memory_mib` to `13312`. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.088` and `0.2199` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
-A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first.
+A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first. A TensorRT-LLM engine receives it as `--free_gpu_memory_fraction`, and the launcher bounds its KV cache to that fraction of total VRAM, less the model weights and `runtime.memory_reserve_mib`, which is `3072` in the template.
 
 Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
 
-`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,680 MiB for the small vLLM template and about 10,240 MiB for the small SGLang template. During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
+`init` requires free VRAM of the fleet's allowance plus the template's `gpu.reserve_mib`: about 7,680 MiB for the small vLLM template, about 10,240 MiB for the small SGLang template and about 13,824 MiB for the small TensorRT-LLM template. During `up`, each engine starts only when free VRAM covers its fraction of total VRAM, and startup fails when whole-device memory use grows by more than the device allowance times total VRAM.
 
 The small templates set development SLO targets of 5 seconds for time to first token (TTFT) in `slo.ttft_s` and 500 ms for time per output token (TPOT) in `slo.tpot_s`. Replace these placeholder targets with values measured on your card.
 
-A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode.
+A custom `--template` sets the model, runtime, context length, profiling sweep, and reserve. Its `gpu.product` field pins the GPU product name, and `gpu.minimum_total_mib` pins the minimum total VRAM. An SGLang template with the `mooncake` connector also sets `runtime.decode_cuda_graph_memory_gb`, the memory a prefill-launched engine reserves when it switches to decode. `runtime.ready_seconds` sets how long `up` waits for each engine to answer `/health`, `180` seconds by default.
 
 `runtime.max_num_seqs` caps each engine's running requests. An SGLang template accepts 1 to 256 and defaults to 256. If `up` stops at attestation with `The engine serves at most <n> running requests`, set `runtime.max_num_seqs` to `<n>` and initialize a new `--instance` from the template.
 
@@ -178,6 +179,52 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     ```
 
     Under WSL2, when an engine fails to start, lower `--engine-memory-mib` as [Template and GPU allocation](#template-and-gpu-allocation) describes.
+
+## Running TensorRT-LLM engines
+
+The installed `small-cuda-trtllm-v1.json` template runs one prefill and one decode TensorRT-LLM engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through UCX over TCP. Narwhal and the engines run inside the TensorRT-LLM release container, which provides TensorRT-LLM 1.4.0rc3 and its CUDA libraries.
+
+1. Download the checkpoint into the Hugging Face cache on the host:
+
+    ```bash
+    hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17
+    ```
+
+2. From the checkout, start the container with the host network, IPC and PID namespaces, the Hugging Face cache and the checkout:
+
+    ```bash
+    docker run -it --rm --gpus '"device=0"' --network host --ipc host --pid host \
+      --ulimit memlock=-1:-1 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+      -v "$PWD:/work" -w /work nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc3 bash
+    ```
+
+    Replace `0` with the index of the GPU the engines use.
+
+3. Inside the container, install `iproute2`, whose `ip` command `init` uses to read the interface address, and install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
+
+    ```bash
+    apt-get update && apt-get install -y iproute2
+    python3 -m venv --system-site-packages .venv-trtllm
+    source .venv-trtllm/bin/activate
+    python -m pip install .
+    ```
+
+4. Export the template and start an instance from it:
+
+    ```bash
+    mkdir -p runs
+    python - <<'PYTHON' > runs/small-cuda-trtllm-template.json
+    from importlib.resources import files
+    print(files('narwhal.dev').joinpath('small-cuda-trtllm-v1.json').read_text())
+    PYTHON
+    interface=eth0  # replace with the interface reported by ip
+    narwhal dev init --template runs/small-cuda-trtllm-template.json \
+      --instance runs/dev-trtllm --interface "$interface"
+    narwhal dev up --instance runs/dev-trtllm
+    narwhal dev verify --instance runs/dev-trtllm
+    ```
+
+    On its first start, each engine compiles its kernels before it answers `/health`. The template's `runtime.ready_seconds` gives each engine 900 seconds to become healthy, in place of the default 180.
 
 ## Inspecting and stopping the instance
 
