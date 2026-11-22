@@ -40,7 +40,7 @@ class FailoverControlTests(unittest.TestCase):
                     with (
                         patch.object(cli, "_port_in_use", return_value=None),
                         patch.object(cli, "create_app", wraps=create_app) as construct,
-                        patch.object(cli.uvicorn, "run") as run,
+                        patch.object(cli, "YieldingServer") as server,
                         redirect_stderr(stderr),
                         redirect_stdout(stdout),
                         self.assertRaises(SystemExit) as raised,
@@ -58,7 +58,7 @@ class FailoverControlTests(unittest.TestCase):
                     self.assertIn(f"{flag} must be finite", stderr.getvalue())
                     self.assertEqual(stdout.getvalue(), "")
                     construct.assert_not_called()
-                    run.assert_not_called()
+                    server.assert_not_called()
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_direct_application_rejects_nonfinite_timings(self):
@@ -97,7 +97,7 @@ class FailoverControlTests(unittest.TestCase):
         """Finite fractional intervals and a zero safety margin reach the server."""
         with (
             patch.object(cli, "_port_in_use", return_value=None),
-            patch.object(cli.uvicorn, "run") as run,
+            patch.object(cli, "YieldingServer") as server,
         ):
             result = cli.serve(
                 [
@@ -113,7 +113,7 @@ class FailoverControlTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(result, 0)
-        run.assert_called_once()
-        lease = run.call_args.args[0].state.router.lease
+        server.return_value.run.assert_called_once_with()
+        lease = server.call_args.args[0].app.state.router.lease
         self.assertEqual(lease.ttl_s, 0.75)
         self.assertEqual(lease.safety_margin_s, 0)

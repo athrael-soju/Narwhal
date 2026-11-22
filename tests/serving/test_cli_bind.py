@@ -18,13 +18,15 @@ class RouterBindTests(unittest.TestCase):
                 "narwhal.cli.FleetConfig.load", return_value=SimpleNamespace(graceful_timeout_s=1)
             ),
             patch("narwhal.cli.create_app") as app,
-            patch("narwhal.cli.uvicorn.run") as run,
+            patch("narwhal.cli.YieldingServer") as server,
         ):
             result = serve(["--fleet", "unused", "--host", "127.0.0.2", "--port", str(port)])
         self.assertEqual(result, 0)
-        self.assertEqual(run.call_args.args, (app.return_value,))
-        self.assertEqual(run.call_args.kwargs["host"], "127.0.0.2")
-        self.assertEqual(run.call_args.kwargs["port"], port)
+        (config,) = server.call_args.args
+        self.assertIs(config.app, app.return_value)
+        self.assertEqual(config.host, "127.0.0.2")
+        self.assertEqual(config.port, port)
+        server.return_value.run.assert_called_once_with()
 
     def test_occupied_configured_address_fails_before_fleet_loading(self):
         with (
