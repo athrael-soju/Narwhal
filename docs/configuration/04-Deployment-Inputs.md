@@ -37,11 +37,19 @@ Prepare deployment inputs for [host installation](../deploy/02-Install.md):
 python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 ```
 
-| Command                                | Output                                                                                                |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `deploy_hosts.py prepare`              | `<directory>/source.bundle` with the selected revision, and role files under `<directory>/<host-id>/` |
-| `tools/deployment/prepare_host_env.py` | Role files at mode 0600, with shell literals copied through unchanged                                 |
-| `deploy_hosts.py install`              | The bundle and a checkout cloned from it on each selected host                                        |
+| Command                   | Output                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `deploy_hosts.py prepare` | `<directory>/source.bundle` with the selected revision, and role files under `<directory>/<host-id>/` |
+| `deploy_hosts.py install` | The bundle and a checkout cloned from it on each selected host                                        |
+
+To write one role file from the variables loaded in your shell, run:
+
+```bash
+python3 tools/deployment/prepare_host_env.py --role router --fleet <fleet.json> --out <file>
+python3 tools/deployment/prepare_host_env.py --role engine --node <n> --fleet <fleet.json> --out <file>
+```
+
+`--out` must name a new file. The script writes it at mode 0600.
 
 ### Generated host-side files
 
@@ -53,7 +61,7 @@ python3 tools/deployment/deploy_hosts.py prepare --out <directory>
 | `runs/deployment-tools/fabric_budget.py`      | Standalone fabric calculator snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                         | Management-checkout `tools/deployment/fabric_budget.py`.                                                                                                                                                 |
 | `runs/deployment-tools/cache_capture_hook.py` | Copy of the cache-capture hook for a vLLM or TensorRT-LLM fleet, with its path and SHA-256 in `.env.engine-<n>`.                                                               | Management-checkout `src/narwhal/backends/<backend>/cache_capture_hook.py`, for `vllm` or `trtllm`.                                                                                                      |
 | `runs/deployment/fleet.json`                  | Effective generated fleet copied before deployment edits.                                                                                                                      | Workstation file selected by `NARWHAL_FLEET`.                                                                                                                                                            |
-| `runs/deployment/profiling-limits.json`       | Each engine's `runtime.max_sequences` by engine ID, or `256` for an SGLang engine without it, on the router host.                                                               | Each engine's generated launch record.                                                                                                                                                                   |
+| `runs/deployment/profiling-limits.json`       | Each engine's `runtime.max_sequences` by engine ID, or the backend default when unset (`256` on SGLang, `64` on TensorRT-LLM), on the router host.                                                               | Each engine's generated launch record.                                                                                                                                                                   |
 
 Engine export requires:
 
@@ -95,7 +103,7 @@ Profile with the generated limits from the router shell:
 
 ### Role shells
 
-Load a generated role environment:
+Open a shell for a role on its host. With `--run`, the shell starts in the deployed checkout with the role environment loaded and the checkout's virtual environment active, as [Opening installed role shells](../deploy/02-Install.md#opening-installed-role-shells) shows:
 
 ```bash
 python3 tools/deployment/deploy_hosts.py shell --run <directory> --role <role>
@@ -106,7 +114,7 @@ A host with both roles holds both role files in one checkout.
 
 ## Host inventory and SSH trust
 
-`NARWHAL_HOSTS` selects the physical-host inventory (default `config/hosts.local.json`).
+`deploy_hosts.py` reads the physical-host inventory from `--hosts PATH`, then from `NARWHAL_HOSTS`, then from `config/hosts.local.json`. Put `--hosts` before the subcommand, as in `deploy_hosts.py --hosts <path> plan`.
 
 Roles with identical `NARWHAL_NODE_<n>_SSH` or `NARWHAL_ROUTER_SSH` destinations share one physical-host record.
 
@@ -173,13 +181,7 @@ To replace the key of a changed server:
 
 ### Prepared and remote runs
 
-`prepare --out <directory>` writes:
-
-- one verified source bundle
-- role files grouped by host ID
-- a private manifest containing revision, host assignments, destination fingerprints, remote run directory, and file hashes
-
-`--out` takes a new directory for each deployment.
+`prepare --out <directory>` writes the source bundle, role files grouped by host ID and a private manifest, as [Building an immutable deployment package](../deploy/02-Install.md#building-an-immutable-deployment-package) lists. Use a new directory for each deployment.
 
 `install --run <directory>` installs the prepared run once on each selected host.
 
@@ -202,9 +204,3 @@ Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 A repeated `install` on a host reuses each file with the manifest SHA-256 and a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
 
 The run's private `logs/` directory holds one log per host with executed scripts, exit status, and host output.
-
-A role shell opened with `--run` has:
-
-- the deployed checkout as its working directory
-- the matching role environment loaded
-- the checkout's virtual environment active

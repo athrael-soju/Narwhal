@@ -4,41 +4,9 @@ description: Recovery procedures and reference GPU qualification checks for Narw
 
 # Narwhal dev recovery and qualification
 
-These procedures recover a Narwhal dev instance after a failed stage, an interrupted Docker command or an interrupted `narwhal dev` process. Two optional checks qualify timeout and interruption recovery on the reference GPU.
+Recover a Narwhal dev instance after a failed stage by following [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery). After an interrupted Docker command, follow [Docker command reconciliation](#docker-command-reconciliation). After an interrupted `narwhal dev` process, follow [Interrupted `narwhal dev` process](#interrupted-narwhal-dev-process).
 
-<div class="grid cards" markdown>
-
--   [Stage deadlines and recovery](../Dev-Runtime.md#stage-deadlines-and-recovery)
-
-    ---
-
-    Recover from a failed stage.
-
--   [Docker command reconciliation](#docker-command-reconciliation)
-
-    ---
-
-    Recover from an interrupted Docker command.
-
--   [Interrupted `narwhal dev` process](#interrupted-narwhal-dev-process)
-
-    ---
-
-    Recover from an interrupted `narwhal dev` process.
-
--   [Reference GPU timeout check](#reference-gpu-timeout-check)
-
-    ---
-
-    Optionally qualify a startup budget expiry on the reference GPU.
-
--   [Reference GPU interruption check](#reference-gpu-interruption-check)
-
-    ---
-
-    Optionally qualify SIGINT and SIGKILL interruptions on the reference GPU.
-
-</div>
+Two optional checks qualify recovery on the reference GPU. The [timeout check](#reference-gpu-timeout-check) covers a startup budget that expires, and the [interruption check](#reference-gpu-interruption-check) covers SIGINT and SIGKILL.
 
 ## Docker command reconciliation
 
@@ -69,30 +37,29 @@ For an `inspection_required` report result from a stalled daemon:
 
 ## Interrupted `narwhal dev` process
 
-The Linux recovery suite checks twelve barrier and signal combinations for:
+After an interruption, run `narwhal dev down` from a fresh shell. What it does depends on where the interruption landed:
 
-- complete committed JSON documents
-- released locks
-- retained output
-- idempotent teardown
-- survival of an unrelated process
+| Interruption point | Signal | Result |
+| --- | --- | --- |
+| Child created, before identity capture | SIGINT | `down` reports `stopped` |
+| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set |
+| Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current |
+| Process record committed | SIGINT | Startup rolls back |
+| Process record committed | SIGTERM | `down` terminates the recorded group |
+| Service readiness wait | SIGKILL | `down` terminates the recorded group |
+| Profiling helper active | SIGINT or SIGTERM | Startup rolls back |
+| Profiling helper active | SIGKILL | `down` recovers the helper and service records |
+| Verification helper active | SIGTERM | `down` terminates the retained services |
+| Verification helper active | SIGKILL | `down` terminates the helpers and services |
+| Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection |
 
-The twelve combinations:
+A few cases need more from you:
 
-| Interruption barrier | Signal | Cleanup and fresh `down` | Fresh `status` | Operator action |
-| --- | --- | --- | --- | --- |
-| Child created, before identity capture | SIGINT | A fresh `down` reports `stopped` | | |
-| Child created, before identity capture | SIGKILL | Recovery uses the last committed process set | | Identify the newly created service from its command and log |
-| Process record awaiting atomic replacement | SIGKILL | The previous complete document stays current | | Inspect the service described by the pending write |
-| Process record committed | SIGINT | Startup rolls back | | |
-| Process record committed | SIGTERM | A fresh `down` terminates the recorded group | | |
-| Service readiness wait | SIGKILL | A fresh `down` terminates the recorded group | Reports `degraded` | |
-| Profiling helper active | SIGINT | Startup rolls back | | |
-| Profiling helper active | SIGTERM | Startup rolls back | | |
-| Profiling helper active | SIGKILL | A fresh `down` recovers the helper and service records | | |
-| Verification helper active | SIGTERM | A fresh `down` terminates the retained services | Reports degraded verification | |
-| Verification helper active | SIGKILL | A fresh `down` terminates the helpers and services | | |
-| Recorded service leader exited, delayed worker surviving | SIGKILL | Teardown requests operator inspection | Lists the surviving group | Inspect the worker's identity |
+- Child created before identity capture, SIGKILL: identify the newly created service from its command and log.
+- Process record awaiting replacement, SIGKILL: inspect the service that the pending write describes.
+- Service leader exited with a worker surviving: `status` lists the surviving group. Inspect the worker's identity.
+
+`status` reports `degraded` after a SIGKILL during the service readiness wait, and reports degraded verification after a SIGTERM during the verification helper.
 
 Stage documents record each observed descendant's boot ID and process start ticks.
 

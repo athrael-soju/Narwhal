@@ -26,7 +26,7 @@ The dashboard expects these label contracts:
   and `sglang:generation_tokens_total` on each engine metrics endpoint.
 - Prometheus exposes evaluated rules through the `ALERTS` series.
 
-Run the deployment's selected AMD or NVIDIA exporter to discover GPUs, collect sensor telemetry and present those metrics through its hardware dashboard.
+To chart GPU sensor metrics, add a scrape job for your GPU exporter to `prometheus.yml`.
 
 ### Metric boundaries
 

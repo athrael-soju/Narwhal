@@ -46,15 +46,13 @@ Run every later command from this directory with the virtual environment active.
 narwhal dev up
 ```
 
-On its first run, `up` sets up the instance in `runs/dev` and then starts the fleet. It takes the options of `setup`, so `narwhal dev up --engine-count 8` changes a stopped fleet to eight engines and starts it.
+On its first run, `up` sets up the instance in `runs/dev` and then starts the fleet. It accepts the options of `setup`.
 
 ```bash
 narwhal dev down --remove
 ```
 
 `down --remove` stops the fleet and deletes `runs/dev` with its downloads and logs. `python -m pip uninstall narwhal-inference` then removes Narwhal itself.
-
-The sections below take the same steps one at a time.
 
 ## Setting up the instance
 
@@ -161,7 +159,13 @@ In the first shell, send 2,000 built-in prompts with eight in flight:
 narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
-The live view shows each engine's role and requests, the latency and the throughput. Long replies load the decode engines. In most runs on the measured hosts, the router moved one prefill engine to the decode role within 30 seconds. [Reading the live view](Live-View.md) explains each figure.
+The live view shows:
+
+- each engine's role and requests
+- the latency
+- the throughput
+
+Long replies load the decode engines, and the router decides role changes from the last 30 seconds of load. [Reading the live view](Live-View.md) explains each figure.
 
 When the prompts finish, `ask` prints their latency spread and throughput:
 
@@ -207,4 +211,6 @@ narwhal dev down
 
 ## Differences from a deployed fleet
 
-The quick-start fleet gives each engine a profile from a few short requests. Its admission is `open`, so the router queues a request that the predictive admission of a deployed fleet would refuse with HTTP 429 when its predicted latency exceeds the targets. It has no engine attestation, profiling sweep or KV transfer evidence, which the [deployment stages](../Deploy.md) produce. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.
+The quick-start fleet gives each engine a profile from a few short requests. Its admission is `open`: the router queues a request that a deployed fleet's predictive admission would refuse with HTTP 429 because its predicted latency exceeds the targets.
+
+The [deployment stages](../Deploy.md) add engine attestation, a profiling sweep and KV transfer evidence. [llama.cpp engines](Llama-Cpp-Engines.md) describes the engine settings, the KV handoff and the metrics.

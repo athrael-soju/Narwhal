@@ -4,14 +4,7 @@ description: Validate a Narwhal fleet file and inspect its effective values with
 
 # `narwhal config`
 
-`narwhal config validate` runs these checks on a fleet file:
-
-- Serving schema
-- Fields
-- Endpoint references
-- Cross-field rules
-
-Validation requires the fleet file and its endpoint environment variables. The credential variable named by `engine.engine_api_key_env`, profiles and reachable engines are optional.
+`narwhal config validate` checks a fleet file against the serving schema, its fields, its endpoint references and its cross-field rules. It needs the fleet file and the environment variables its endpoints reference.
 
 Both subcommands take the fleet file through the required `--fleet PATH` option. `--format` selects `text`, the default, or `json` output:
 
@@ -53,12 +46,7 @@ The `derived` fields hold values Narwhal computes from the settings:
 | `http_retained_limit` | `serving.max_connections + serving.queue_capacity` |
 | `uvicorn_graceful_timeout_s` | `serving.graceful_timeout_s` as an integer |
 
-`narwhal-serve` flags applied outside the `narwhal config` output:
-
-- `--max-concurrent`
-- `--journal`
-- `--graceful-timeout`
-- `--resume`
+`narwhal-serve` options override some of these values when the router starts. `--max-concurrent` replaces `max_concurrent`, `--graceful-timeout` replaces `uvicorn_graceful_timeout_s`, `--journal` replaces the journal path, and `--resume` restores roles, breaker holds and counters from the last state handoff.
 
 ## Artifact paths
 
@@ -74,16 +62,10 @@ The `derived` fields hold values Narwhal computes from the settings:
 
 ## Live checks
 
-Check running engines and the profile store:
+To check running engines and the profile store, run [`narwhal-check`](cli/Check.md):
 
 ```bash
 narwhal-check --fleet config/fleet.json
 ```
 
-[`narwhal-check`](cli/Check.md) covers:
-
-- Live reachability
-- Engine contracts
-- Profile bindings
-- Transfer paths
-- Service-level objective (SLO) gates
+It checks that engines are reachable, that their contracts match the fleet file, that profiles bind to the running engines, that KV transfer paths work, and that the service-level objective (SLO) gates pass.

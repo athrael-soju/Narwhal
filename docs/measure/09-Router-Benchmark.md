@@ -22,30 +22,48 @@ Router CPU seconds are the router process's user and system time from `/proc/<pi
 
 ## Simulated engines
 
-`tools/measurement/simulated_engine.py` serves one simulated engine per process. It speaks the vLLM protocol, or the SGLang protocol with `--backend sglang`. The benchmark driver starts every engine with the default `vllm` backend.
+`tools/measurement/simulated_engine.py` serves one simulated engine per process. `--backend` selects the protocol: `vllm` (the default), `sglang`, `trtllm` or `llamacpp`. The benchmark driver starts every engine with the `vllm` backend.
 
-With the default `vllm` backend, each engine answers these routes:
+Every backend answers `GET /health` with HTTP 200 and an empty body, and `POST /v1/completions`. Other paths return HTTP 404. A `trtllm` engine serves its metrics on `GET /prometheus/metrics`. The other backends serve them on `GET /metrics`.
+
+With the default `vllm` backend, each engine also answers these routes:
 
 | Route | Response |
 | --- | --- |
-| `GET /health` | HTTP 200 with an empty body |
 | `GET /version` | `{"version":"simulated"}` |
 | `GET /metrics` | The metrics in [Engine metrics](#engine-metrics) |
 | `POST /tokenize` | `count`, `max_model_len`, `tokens` and `token_strs` |
 | `POST /v1/completions` with `stream: false` | One completion after `--prefill-seconds`, with `kv_transfer_params` for a remote-decode request |
 | `POST /v1/completions` with `stream: true` | Paced server-sent events for `max_tokens` tokens |
-| Other paths | HTTP 404 |
 
-With `--backend sglang`, each engine answers `GET /health`, `GET /metrics`, `POST /tokenize` and `POST /v1/completions` as above, except that a completion carries no `kv_transfer_params`. It also answers these routes:
+With `--backend sglang`, each engine answers `POST /tokenize` and `POST /v1/completions` as above, except that a completion carries no `kv_transfer_params`. It also answers these routes:
 
 | Route | Response |
 | --- | --- |
 | `GET /server_info` | `version` `simulated`, and the engine's role in `internal_states[0].disaggregation_mode` |
 | `POST /pd_role_switch` | Sets the engine's role to the body's `new_role`, `prefill` or `decode` |
 | `GET /flush_cache`, `POST /flush_cache` | HTTP 200 with the body `Cache flushed.` |
-| Other paths | HTTP 404 |
 
 The engine starts in the `prefill` role. A streaming completion without an integer `bootstrap_room` returns HTTP 400.
+
+With `--backend trtllm`, each engine answers `POST /v1/completions` as above, except that it returns HTTP 400 for a body with `return_token_ids`, `stream_interval`, `kv_transfer_params` or `min_tokens`, and a `context_only` request carries `disaggregated_params` in its choice. It also answers `POST /tokenize` and these routes:
+
+| Route | Response |
+| --- | --- |
+| `GET /version` | `{"version":"simulated"}` |
+| `GET /server_info` | `tokens_per_block` `16` and `max_batch_size` `64` |
+| `GET /metrics` | A JSON list holding one `kvCacheStats` object |
+| `GET /prometheus/metrics` | The metrics in [Engine metrics](#engine-metrics) |
+| `POST /_internal/tokenize` | `count` and `tokens` for a body with `prompt`, HTTP 400 for a body with `messages` |
+
+With `--backend llamacpp`, each engine answers `POST /v1/completions` as above, and these routes:
+
+| Route | Response |
+| --- | --- |
+| `GET /props` | `build_info` `simulated`, `total_slots` `4` and `default_generation_settings.n_ctx` `131072` |
+| `POST /tokenize` | `tokens` for the body's `content` |
+| `POST /apply-template` | `prompt` rendered from the body's messages |
+| `POST /slots/<n>?action=save`, `POST /slots/<n>?action=restore` | The slot's `id_slot`, `filename` and `n_saved`; a restore of an unsaved `filename` returns HTTP 400 |
 
 The simulated tokenizer maps each prompt character to one token ID, the character's Unicode code point.
 
@@ -74,15 +92,23 @@ These settings pace each stream:
 
 ### Engine metrics
 
+`GET /metrics` serves the first rows for every backend. A `trtllm` engine serves them on `GET /prometheus/metrics`.
+
 | Metric | Type | Value |
 | --- | --- | --- |
-| `process_start_time_seconds` | Gauge | Engine start time in Unix seconds, with the `vllm` backend |
 | `simulated_engine_late_ticks_total` | Counter | Late ticks |
 | `simulated_engine_active_streams{phase="prefill"}` | Gauge | Prefill requests in progress |
 | `simulated_engine_active_streams{phase="decode"}` | Gauge | Decode streams in progress |
 | `simulated_engine_peak_streams{phase="prefill"}`, `simulated_engine_peak_streams{phase="decode"}` | Gauge | Most requests of the phase in progress at once since the engine started |
 
-With the `sglang` backend, `/metrics` also serves `sglang:max_total_num_tokens` at `131072`, `sglang:page_size` at `1`, and `sglang:cached_tokens_total{cache_source="device"}`, `sglang:per_stage_req_latency_seconds_count{stage="decode_transferred"}` and `sglang:per_stage_req_latency_seconds_sum{stage="decode_transferred"}` at `0`.
+Each backend adds its own metrics:
+
+| Backend | Metrics |
+| --- | --- |
+| `vllm` | `process_start_time_seconds`, the engine start time in Unix seconds |
+| `sglang` | `sglang:max_total_num_tokens` at `131072`, `sglang:page_size` at `1`, and `sglang:cached_tokens_total{cache_source="device"}`, `sglang:per_stage_req_latency_seconds_count{stage="decode_transferred"}` and `sglang:per_stage_req_latency_seconds_sum{stage="decode_transferred"}` at `0` |
+| `trtllm` | `trtllm_kv_cache_max_blocks` at `8192`, `trtllm_kv_cache_tokens_per_block` at `16` and `trtllm_prompt_cached_tokens_total` at `0` |
+| `llamacpp` | `llamacpp:prompt_tokens_cached_total` at `0` |
 
 ### Running one engine
 
@@ -103,7 +129,7 @@ Example ready line:
 | Flag | Default | Meaning |
 | --- | :---: | --- |
 | `--iid` | required | Engine ID |
-| `--backend` | `vllm` | Engine protocol, `vllm`, `sglang` or `llamacpp` |
+| `--backend` | `vllm` | Engine protocol, `vllm`, `sglang`, `trtllm` or `llamacpp` |
 | `--state-dir` | None | Directory that `llamacpp` engines in separate processes share for saved slot files |
 | `--host` | `127.0.0.1` | Listen address |
 | `--port` | `0`, a free port | Listen port |
@@ -263,7 +289,7 @@ Each rate row holds these fields:
 | `saturation_rejections` | Sum over routers of the change in `admission.rejected` from the read before the first offer to the read after the drain |
 | `refused` | Sum over routers of the change in `admission.refused` over the same reads |
 | `routers` | Each router's `index`, steady-window `cpu_s`, `busy_share`, `saturation_rejections` and `refused` |
-| `residents` | Over the samples, the mean of the routers' summed `resident.<iid>.decode` (`mean_router_decode`), the mean of the engines' decode streams (`mean_engine_decode`), and the mean over engines of the absolute difference between the two (`mean_abs_gap`) |
+| `residents` | Means over the samples: the routers' summed `resident.<iid>.decode` (`mean_router_decode`), the engines' summed decode streams (`mean_engine_decode`), and the sum over engines of the absolute difference between the two (`mean_abs_gap`) |
 | `mean_engine_decode_streams` | Mean over samples of the engines' summed decode streams |
 | `max_engine_decode_streams` | Largest decode-stream count of one engine in any sample |
 | `role_disagreement_s` | Samples in which the routers' `pools` differ |
@@ -271,7 +297,7 @@ Each rate row holds these fields:
 
 `busy_share` is the router's steady-window rate of `narwhal_event_loop_busy_seconds_total` when the router exports it, otherwise `null`.
 
-`scale` writes `fleet-<i>.json`, `journal-<i>.jsonl`, `state-<i>.json` and `router-<i>.log` for each router. Other files follow [Output files](#output-files).
+`scale` writes `fleet-<i>.json`, `journal-<i>.jsonl`, `state-<i>.json` and `router-<i>.log` for each router, and `fleet.json`, `profiles.json`, `pids.json`, `engine-<iid>.log`, `manifest.json`, `report.json` and `report.txt`. `manifest.json` holds the label, `routers`, settings, CPU allocation, router source path and start time. Each `rates/<rate>/` holds the client rows and logs, and `samples.json` with the samples and the router edge reads.
 
 ## Options
 
@@ -481,7 +507,7 @@ Example settings with `--output-tokens 256`:
 
 | File | Contents |
 | --- | --- |
-| `manifest.json` | Settings, CPU allocation, router source path and import path, and tool digests |
+| `manifest.json` | Label, settings, CPU allocation, router source path and import path, tool digests, `router_url`, `router_source`, Python interpreter and version, command line and start time |
 | `pids.json` | Process IDs the driver started |
 | `fleet.json`, `profiles.json` | Generated fleet and profiles |
 | `journal.jsonl` | Router journal, with `meta.source` in the first row |
@@ -490,6 +516,7 @@ Example settings with `--output-tokens 256`:
 | `engine-<iid>.log` | Simulated-engine output |
 | `rates/warmup/` | Warmup client rows |
 | `rates/<rate>/client-<i>.jsonl` | One row per offer with the `load_trial.py` request fields |
+| `rates/<rate>/client-<i>.log` | Client output |
 | `rates/<rate>/samples.json` | Raw samples |
 | `report.json` | Report document |
 | `report.txt` | Report text |

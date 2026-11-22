@@ -4,20 +4,18 @@ description: Run engine actions, configuration overlays, and AIPerf load jobs fr
 
 # Controlling the fleet
 
-The fleet control service runs operator test actions against a running Narwhal fleet:
+The fleet control service runs operator test actions against a running Narwhal fleet from a browser console:
 
 - engine pause, resume, stop, start, drain and readmit
 - configuration overlays
 - cold restarts and baseline restores
 - AIPerf load jobs
 
-The service records each action, with its time and effect, in a private run record. The console runs on its own page. The **Narwhal Orchestrator** dashboard links to it and marks each action on its charts.
+The service runs on the router host, listens on loopback and authenticates API requests with a bearer token. From a workstation, open its console at `/console` through the operator tunnel. The **Narwhal Orchestrator** dashboard links to the console and marks each action and load job on its charts.
 
-The service runs on the router host, listens on loopback, and authenticates API requests with a bearer token. Operators reach the console and Grafana from a workstation through the operator tunnel.
+All work happens in a session. Starting a session validates the baseline fleet configuration and copies it. Ending a session stops a running load job and closes the session's record, and the fleet keeps the session's changes. Select **Restore baseline** before you end the session to undo them. The service writes each action, with its time and effect, to the session's private run record.
 
-Hooks are the commands, defined in the private configuration, that perform each change, such as stopping an engine or restarting the router. Drains and readmits use the router's lifecycle API instead.
-
-Work happens in sessions. Starting a session copies the baseline fleet configuration. Ending it closes the session's record and leaves the fleet as it is. **Restore baseline** undoes the session's changes.
+Engine pause, resume, stop and start, overlays and cold restarts run hooks: commands you define in the private configuration, such as one that stops an engine or restarts the router. Drains and readmits call the router's lifecycle API.
 
 ## Walkthrough
 

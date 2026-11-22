@@ -95,7 +95,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery also sets launch settings from the checkpoint. It adds `--trust-remote-code`, or `--trust_remote_code` on TensorRT-LLM, when `config.json` or `tokenizer_config.json` has an `auto_map` entry. For a model with convolutional SSM transfer state, it sets `VLLM_SSM_CONV_STATE_LAYOUT=DS` on vLLM, or on an SGLang `mooncake` engine adds `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule` unless `NARWHAL_ENGINE_ARGS` already sets `--mamba-radix-cache-strategy` or `NARWHAL_PREFIX_CACHING` is `false`.
+Discovery reads the checkpoint's `config.json` and `tokenizer_config.json` and sets the custom-code and convolutional-state launch settings. You can find more details in [Engine endpoints and launch records](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 Discovery writes the generated configuration at mode 0600:
 

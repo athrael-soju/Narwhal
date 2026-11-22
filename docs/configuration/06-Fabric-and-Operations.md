@@ -14,29 +14,7 @@ If the helper changes, start a new preparation directory.
 
 ### Calculating the workload budget
 
-Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine.
-
-To compute the budget:
-
-1. On vLLM and TensorRT-LLM, capture each engine's `cache-layout.json` in its engine-role shell:
-
-    ```bash
-    narwhal-engine capture-cache --run "$ENGINE_RUN"
-    ```
-
-2. Run `calculate` in the shell of each representative engine role. On SGLang, give it `--transfer-metrics` from [measured handoffs](../deploy/04-Qualify-Fabric.md#building-the-source-budget) in place of `--runtime-layout`:
-
-    ```bash
-    python3 "$NARWHAL_FABRIC_BUDGET_TOOL" calculate \
-      --model-config "$NARWHAL_MODEL_DIR/config.json" \
-      --launch-config "$NARWHAL_ENGINE_LAUNCH_CONFIG" \
-      --runtime-layout "$ENGINE_RUN/cache-layout.json" \
-      --prompt-tokens 1024 --handoffs-per-s 1 --burst 1 \
-      --transfer-budget-s 1 --headroom 1.25 \
-      --out "$FABRIC_RUN/budget.json"
-    ```
-
-3. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
+Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#deriving-cache-equivalence-groups) with matching captured cache layouts share one budget from a representative engine. [Building the source budget](../deploy/04-Qualify-Fabric.md#building-the-source-budget) gives the commands. Compare each directed host edge with its group budget using the [link evidence](#link-evidence).
 
 `calculate` accepts these options:
 
@@ -91,7 +69,7 @@ The captured layout holds per-layer page bytes for each TP rank, the token block
 
 ### Uniform-cache options
 
-Deployments use `--runtime-layout` on vLLM and `--transfer-metrics` on SGLang, for every model.
+Deployments use `--runtime-layout` on vLLM and TensorRT-LLM, and `--transfer-metrics` on SGLang, for every model.
 
 Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
 
@@ -120,20 +98,7 @@ These `fabric_budget.py` commands compare a link sample with a budget:
 
 ## CLI precedence
 
-`narwhal-serve` options take precedence over fleet fields.
-
-`--host`, `--port`, `--log-level`, and the warm-standby options have [command-line defaults](../CLI-Reference.md).
-
-Options that default to a fleet field:
-
-| Option                       | Default                      | Description                                                     |
-| ---------------------------- | ---------------------------- | --------------------------------------------------------------- |
-| `--max-concurrent N`         | `serving.max_connections`    | Router [in-flight limit](02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections`. |
-| `--graceful-timeout SECONDS` | `serving.graceful_timeout_s` | Uvicorn shutdown drain time in zero or more whole seconds.      |
-| `--resume`                   | `recovery.resume`            | Turns resume on.                                                |
-
-To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
-
+`narwhal-serve` options take precedence over fleet fields. [Serving options](../cli/Serve.md#serving-options) lists each option, its default and the fleet field it falls back to.
 
 ## Request journal
 
@@ -142,34 +107,13 @@ To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 
 ## Configuration provenance and publication
 
-- Keep the exact fleet configuration beside every scored run.
-- Replace the engine URLs in that configuration before publishing an artifact.
-- Keep live fleet files in a Git-ignored path, such as `runs/` or `config/fleet.json`.
-- Keep real host allocations, credentials, runtime evidence and launch records in Git-ignored private paths.
+Keep the exact fleet file beside every scored run. The [benchmark evidence collector](../measure/06-Benchmark-Evidence.md) records SHA-256 digests of the fleet file and profiles before each point and reports `input_changed` when either one changes during the point.
+
+Live fleet files name real hosts and engine URLs. Git ignores `runs/`, `config/fleet.json` and `config/fleet.*.json`, so keep live configurations there, together with real host allocations, credentials, runtime evidence and launch records.
+
+Before publishing a result, replace the engine URLs in its fleet file and remove engine IDs and URLs from [journal](../telemetry/01-Journal.md) failure text. Each benchmark point also writes `summary.shareable.json`, a redacted copy without URLs, credentials, private file paths or request failure text, with engine IDs replaced by `engine-1`, `engine-2` and onward.
 
 
 ## Operational sequence
 
-For a new or changed deployment:
-
-1. Define model, SLOs, engines, controller, serving, recovery, and profile settings.
-2. Load the private workstation `.env`.
-3. Run deployment discovery.
-4. Prepare a new deployment output directory from the exact management revision.
-5. Install the source bundle on each physical host.
-6. Install the role configuration on each physical host.
-7. Inspect every engine host against its generated launch record.
-8. Verify image, package, and connector identity.
-9. Start every engine.
-10. Capture each engine's live cache layout.
-11. Qualify the directed transfer fabric against the cache-layout budgets.
-12. Start one attestation sidecar per engine.
-13. Finalize the fleet contract from the live processes.
-14. Profile the deployed engine shape with generated `profiling-limits.json`.
-15. Run `narwhal-check` against the exact fleet and engine build.
-16. Start the router and monitoring stack with the qualified fleet.
-17. Measure capacity with final authentication, queueing, retry, byte-limit, and timeout settings.
-18. Run advisory mode on representative traffic before production role movement.
-19. Archive the fleet, private inputs, and launch evidence.
-
-Remeasure capacity after changing the engine build or a serving setting: queueing, concurrency, retry, KV handoff timeout, or byte limits.
+Follow the [deployment sequence](../Deploy.md#deployment-sequence). Measure capacity again after you change the engine build, or the queueing, concurrency, retry, KV handoff timeout or byte-limit settings.

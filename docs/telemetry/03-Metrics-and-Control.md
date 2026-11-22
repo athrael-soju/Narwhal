@@ -67,11 +67,16 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
 | `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
-| `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
-| `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |
-| `narwhal_admission_margin` | gauge | | `serving.admission_margin`. |
 
 The four outcome counters export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the total that `/narwhal/state` reports.
+
+## Reading admission mode and retries
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |
+| `narwhal_admission_margin` | gauge | | `serving.admission_margin`. |
+| `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
 
 ## Reading engine lifecycle gauges
 
@@ -85,14 +90,44 @@ The lifecycle gauges report fields of each engine's record in [`GET /narwhal/lif
 
 ## Inspecting scheduling and role control
 
-These metrics track role changes and pool load:
+Pools and resident work:
 
-| Metric | Meaning |
-| --- | --- |
-| `narwhal_engine_seats` | Each engine's [seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), labelled by `iid` and `phase` (`prefill` or `decode`), `0` for no limit. |
-| `narwhal_flip_reversals_total` | Moves whose target role differs from the same engine's previous recorded move, counted from that engine's second move. |
-| `narwhal_flips_refused_total` | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
-| `narwhal_pool_load` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#role-control), with `1.0` at the phase target. |
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_instance_role` | gauge | `iid`, `role` | `1` on the series for each engine's current role. |
+| `narwhal_pool_instances` | gauge | `role` | Engines in the pool. |
+| `narwhal_pool_load` | gauge | `role` | Pool load normalized per phase in [Role control](../configuration/02-Serving-and-Role-Control.md#role-control), with `1.0` at the phase target. |
+| `narwhal_resident_requests` | gauge | `iid`, `phase` | Requests resident on the engine. |
+| `narwhal_engine_seats` | gauge | `iid`, `phase` | The engine's [seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit. |
+
+Role changes:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_flips_total` | counter | `to`, `by` | Role changes by target pool and caller. The `decode_floor` to `decode`, `floor_recovery` to `prefill`, `reactive` to `decode` and `reactive` to `prefill` series start at `0`. |
+| `narwhal_flip_reversals_total` | counter | | Moves whose target role differs from the same engine's previous recorded move, counted from that engine's second move. |
+| `narwhal_flips_refused_total` | counter | | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
+| `narwhal_flip_inflight_total` | counter | `phase` | Requests resident on an engine at the moment it changed role. |
+
+Controller decisions:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_controller_advisory` | gauge | | `1` while the controller records decisions without changing roles. |
+| `narwhal_controller_decisions_total` | counter | `by`, `result` | Controller decisions by caller and result. |
+
+These series appear after the controller records its first decision:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_controller_last_decision` | gauge | `by`, `reason`, `result` | `1` on the most recent decision. |
+| `narwhal_controller_proposed_engines` | gauge | `role` | Engines per pool in the most recent decision. |
+| `narwhal_controller_projected_slo_ratio` | gauge | `phase` | Projected SLO ratio after the most recent proposal. |
+| `narwhal_controller_phase_work_engines` | gauge | `phase` | Measured phase work in engine equivalents. |
+| `narwhal_controller_objective` | gauge | `value`: `candidate`, `improvement` | Candidate pressure, and its improvement over the current split. |
+| `narwhal_controller_decode_tokens_per_engine` | gauge | `value`: `projected`, `slo_capacity`, `kv_capacity` | Projected decode tokens per engine, beside the profiled SLO and KV capacity. |
+| `narwhal_controller_decode_requests_per_engine` | gauge | | Projected active decode requests per engine. |
+| `narwhal_controller_decode_model` | gauge | `value`: `correction`, `profile_covered` | Live decode correction, and `1` when the measured profile domain covers the decision. |
 
 ## Reading latency histograms
 
@@ -120,17 +155,27 @@ Histogram aggregation:
 
 `narwhal_attainment_evidence_pruned_total` appears with a `kind` label of `buckets` or `outcomes` after the first buckets age out of the [attainment retention window](../http-api/06-SLO-and-Demand.md#slo-attainment).
 
-## Inspecting demand history and decode floor
+## Inspecting demand history and floors
 
 Demand histories clear on router restart.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `narwhal_decode_floor` | gauge | | Configured `min_decode`. |
 | `narwhal_demand_history_cells` | gauge | `window`: `unsized`, `arrivals`, `expected_decode`, `observed_decode`, `residency` | Retained demand cohorts. |
 | `narwhal_demand_history_cell_limit` | gauge | same `window` values | Maximum retained cohorts. |
 | `narwhal_demand_history_observations` | gauge | same `window` values | Original observations represented by the window. |
 | `narwhal_demand_history_overflow_observations` | gauge | same `window` values | Observations merged past the cohort limit. |
+
+The floor series report the live pools against `min_prefill` and `min_decode`:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `narwhal_decode_floor` | gauge | | Configured `min_decode`. |
+| `narwhal_decode_below_floor` | gauge | | `1` while live decode capacity is below `min_decode`. |
+| `narwhal_decode_floor_restorations_total` | counter | | Moves made to restore the decode floor. |
+| `narwhal_prefill_below_floor` | gauge | | `1` while the live prefill pool is below `min_prefill`. |
+| `narwhal_prefill_below_floor_events_total` | counter | | Prefill floor breaches. |
+| `narwhal_prefill_below_floor_seconds_total` | counter | | Seconds spent below the prefill floor. |
 
 ## Inspecting consolidation gates
 

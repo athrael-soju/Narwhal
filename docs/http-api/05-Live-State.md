@@ -70,33 +70,22 @@ The state document carries these top-level fields:
 
 After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero.
 
-<div class="grid cards" markdown>
+- [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle): the drain state, resident work and lifecycle events in `lifecycle`.
+- [SLO attainment and demand accounting](06-SLO-and-Demand.md): the `attainment`, `demand_history` and `demand_evidence` objects.
+- [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release): the release rounds in `peer_release`.
+- [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal): the evidence for one client request.
 
--   [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle)
+### `ha`
 
-    ---
+The `ha` object reports the router's lease and readiness:
 
-    The drain state, resident work, and lifecycle events in `lifecycle`.
-
--   [SLO attainment and demand accounting](06-SLO-and-Demand.md)
-
-    ---
-
-    The `attainment`, `demand_history`, and `demand_evidence` objects.
-
--   [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release)
-
-    ---
-
-    The release rounds that `peer_release` reports.
-
--   [Request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal)
-
-    ---
-
-    Per-request evidence for one client request.
-
-</div>
+| Field     | Meaning                                                                                  |
+| --------- | ---------------------------------------------------------------------------------------- |
+| `ready`   | `true` when the router controls the fleet and admits new work, as `/ready` reports       |
+| `standby` | `true` for a standby router                                                              |
+| `epoch`   | Lease epoch                                                                              |
+| `holder`  | Lease-holder token                                                                       |
+| `blocked` | Failover block reason, such as `lease renewal failed`, or an empty string                 |
 
 ### `monitoring`
 
@@ -263,14 +252,14 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `mean_input_len`               | Mean sized input length that sets prefill seats, `null` before a request is sized in the window                                           |
 | `engines.<iid>.prefill`        | [Prefill seats](../configuration/02-Serving-and-Role-Control.md#engine-seats), `0` for no limit                                           |
 | `engines.<iid>.decode`         | Decode seats, `0` for no limit                                                                                                            |
-| `engines.<iid>.sequence_limit` | vLLM `--max-num-seqs` or SGLang `--max-running-requests` from the engine's verified attestation, `null` when the launch arguments omit it |
+| `engines.<iid>.sequence_limit` | The engine's sequence limit from its verified attestation: vLLM `--max-num-seqs`, SGLang `--max-running-requests` or TensorRT-LLM `--max_batch_size`. `null` when the launch arguments omit it, and always on llama.cpp |
 
 `handoff` fields, one entry per engine:
 
 | Field              | Meaning                                                                                                                |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `<iid>.kv_lease_s` | `kv_lease_duration` from the engine's verified attestation, `null` when the attestation records none                   |
-| `<iid>.renewal_s`  | The connector's lease-renewal interval, `kv_lease_s // 6`                                                              |
+| `<iid>.renewal_s`  | `kv_lease_s` minus `bound_s`, which is `kv_lease_s // 6` on vLLM and TensorRT-LLM. `null` when the engine attests no lease, as llama.cpp and SGLang engines do |
 | `<iid>.bound_s`    | [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) for requests this engine prefills |
 
 `serving` fields:

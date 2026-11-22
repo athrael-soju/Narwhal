@@ -45,13 +45,15 @@ Before assigning a serving throughput ceiling, compare:
 
 Each trial writes to a new directory with mode `0700` and creates its files with mode `0600`.
 
-The trial `manifest.json` records the management checkout Git revision and helper SHA-256. The router journal `meta` row records the installed router package version, Git description, and source digest.
+The trial `manifest.json` records the management checkout Git revision and the helper SHA-256. The router journal `meta` row records the installed router package version, Git description, and source digest.
 
-### Confirming KV transfer after load
+## Confirming KV transfer after load
 
-1. Query the dashboard series.
-2. Run the [post-load KV ring](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial).
-3. Compare exact output across role changes with resident requests.
+Run the post-load KV ring on the router, as in the [initial capacity trial](../deploy/07-Serve-and-Measure.md#running-the-initial-capacity-trial):
+
+```bash
+.venv/bin/narwhal-check --fleet runs/deployment/fleet.json --ring
+```
 
 ## Recording deployment acceptance
 

@@ -8,15 +8,26 @@ description: narwhal-attest serves the attestation document of one engine over H
 
 ## Running the sidecar
 
-Run the sidecar while its engine runs, as root for a container engine and as the engine's user otherwise. In a deployment, the contract tool starts it from the engine's launch directory:
+Run the sidecar while its engine runs. For a container engine, run it as a user that can run `docker inspect` on the container. For a native engine, run it as the user that launched the engine. In a deployment, the contract tool starts it from the engine's launch directory:
 
 ```bash
 python -m narwhal.deployment.attestation_contract.cli serve --run runs/engine-<n>
 ```
 
-The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. It passes `--engine-container`, or `--engine-pid` for a native launch, and passes `--kv-events` and `--model` when the checked launch has prefix caching on and publishes cache events. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
+The contract tool binds the sidecar to the host and port of `NARWHAL_NODE_<n>_ATTESTATION_URL`, which must be an HTTP URL ending in `/v1/attestation`. When the engine publishes no process start (llama.cpp, SGLang and TensorRT-LLM), it passes `--engine-container`, or `--engine-pid` for a native launch. When the checked launch has prefix caching on and publishes cache events, it passes `--kv-events` and `--model`. It refuses to start the sidecar when the attestation document differs from the launch directory's current evidence.
 
-At startup, the sidecar reads the engine's identity. It exits with status 1 when it cannot read the identity or the engine's version differs from the document, and with status 2 when the document fails to load. The identity is the engine's version, from `/version` on vLLM and TensorRT-LLM, `/server_info` on SGLang or `build_info` in `/props` on llama.cpp, and its process start time, from `/metrics` on vLLM or from the host process named by `--engine-container` or `--engine-pid` on llama.cpp, SGLang and TensorRT-LLM. While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
+At startup the sidecar reads the engine's identity, which is its version and its process start time:
+
+| Backend | Version from | Process start from |
+| --- | --- | --- |
+| vLLM | `/version` | `/metrics` |
+| SGLang | `/server_info` | The host process named by `--engine-container` or `--engine-pid` |
+| TensorRT-LLM | `/version` | The host process named by `--engine-container` or `--engine-pid` |
+| llama.cpp | `build_info` in `/props` | The host process named by `--engine-container` or `--engine-pid` |
+
+The sidecar exits with status 1 when it cannot read the identity or the engine's version differs from the document's `engine_version`. It exits with status 2 when the document fails to load or an argument is invalid: `--kv-events` without `--model`, a backend that publishes no process start without `--engine-container` or `--engine-pid`, or both of those two options together.
+
+While the engine's version or process start time differs from startup, or cannot be read, every route except `/v1/process` returns HTTP 503. After an engine restart, restart the sidecar.
 
 ## Options
 
@@ -44,12 +55,11 @@ At startup, the sidecar reads the engine's identity. It exits with status 1 when
 | `GET /v1/residency`                | A residency snapshot, with `--kv-events`                                                                                  |
 | `GET /v1/residency/events?after=N` | The residency changes after sequence `N`, with `--kv-events`                                                              |
 
-The router and `narwhal-check` read an SGLang or TensorRT-LLM engine's process start from `/v1/process`. With `--engine-pid`, the start is the process's start ticks added to the boot time the host reported when a Narwhal process of that user first read it in the boot, recorded under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`, so both read one record.
+The router and `narwhal-check` read the process start of a llama.cpp, SGLang or TensorRT-LLM engine from `/v1/process`. With `--engine-pid`, the sidecar takes the process start from the engine's start ticks and a boot-time record under `/tmp/narwhal-<uid>/`. Run the sidecar as the user that launched the engine, with the same `/tmp`.
 
 ## Residency
 
-The residency routes tell the router which prefix blocks are on the engine's GPU. The sidecar reads this from the cache events that the engine publishes while prefix caching is on. To turn the events off and keep prefix caching on, set [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`.
-
+The residency routes tell the router which prefix blocks are on the engine's GPU. The sidecar reads this from the cache events that the engine publishes while prefix caching is on. vLLM and SGLang publish these events; llama.cpp and TensorRT-LLM publish none. To turn the events off and keep prefix caching on, set [`runtime.kv_events`](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events) to `false`.
 An SGLang engine stores the cache in one-token pages, so the sidecar groups the pages into blocks of 64 tokens.
 
 ### Snapshots and changes

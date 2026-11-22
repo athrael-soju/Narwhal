@@ -111,7 +111,7 @@ narwhal dev down --remove
 
 `up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
 
-Narwhal dev also runs vLLM and SGLang engines on one NVIDIA GPU with `narwhal dev init`, with the attestation, profiling and KV transfer checks a deployed fleet uses.
+To run vLLM, SGLang or TensorRT-LLM engines on one NVIDIA GPU instead, use `narwhal dev init`. That fleet goes through the same attestation, profiling and KV transfer checks as a deployed fleet.
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Quick%20start-0f766e" alt="Quick start documentation"></a>
@@ -121,11 +121,7 @@ Narwhal dev also runs vLLM and SGLang engines on one NVIDIA GPU with `narwhal de
 
 ## Bringing up a fleet
 
-Run the deployment gates in [Deploying a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation.
-
-## Documentation
-
-The [documentation site](https://athrael-soju.github.io/Narwhal/) covers installation, deployment, operation, measurement, and reference tasks.
+Run the deployment gates in [Deploying a fleet](https://athrael-soju.github.io/Narwhal/Deploy/) from a management workstation. The [documentation site](https://athrael-soju.github.io/Narwhal/) has the rest.
 
 ## Contributing
 

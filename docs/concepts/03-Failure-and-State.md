@@ -8,24 +8,26 @@ The router learns that an engine is failing from the requests it sends and from 
 
 ## Monitoring and readiness
 
-A monitoring pass runs the stages below. When a stage fails, the router records the failure and carries on with the rest of the pass.
+A monitoring pass runs the stages below in order, except `residency`, which runs in its own loop. A stage that raises an exception counts as a failure. The router records it and carries on with the rest of the pass.
 
-| Stage              | Work                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------- |
-| `controller`       | Role-controller evaluation                                                            |
-| `health`           | Decode performance-drift checks against each engine's profile                         |
-| `drains`           | Closing the drain of each role change whose remaining work has finished               |
-| `rollover`         | Closing the interval's telemetry windows and opening the next                         |
-| `readmission`      | Readmission and [peer release](#peer-memory-release) rounds                           |
-| `transfer_refresh` | [Transfer state refresh](#transfer-state-refresh) of SGLang decode engines            |
-| `liveness`         | [Liveness](#liveness) probes every `recovery.liveness_every` intervals                |
-| `residency`        | Prefix residency refresh from attestation sidecars, on its own loop once per interval |
-| `handoff`          | Writing the [state handoff](#durable-control-plane-state)                             |
-| `telemetry`        | Floor-state refresh and loop logging                                                  |
+| Stage              | Work                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controller`       | Role-controller evaluation, on each pass and on urgent control wakes                                                                                           |
+| `health`           | Decode performance-drift checks against each engine's profile, and drift ejections                                                                             |
+| `drains`           | Closing the drain of each role change whose remaining work has finished                                                                                        |
+| `rollover`         | Closing the interval's telemetry windows and opening the next                                                                                                  |
+| `readmission`      | Repeat inference probes, readmission of due ejected engines, and on vLLM [peer release](#peer-memory-release) rounds                                           |
+| `transfer_refresh` | On SGLang with engine-side role switching, [transfer state refresh](#transfer-state-refresh) of decode engines                                                 |
+| `liveness`         | [Liveness](#liveness) probes every `recovery.liveness_every` intervals                                                                                         |
+| `residency`        | Prefix residency refresh from attestation sidecars, once per interval                                                                                          |
+| `handoff`          | Writing the [state handoff](#durable-control-plane-state)                                                                                                      |
+| `telemetry`        | Prefill floor-state refresh and the loop log line                                                                                                              |
 
 Consecutive passes with a failed stage form the monitor-failure streak. When the streak reaches `controller.monitor_failure_limit`, the router degrades. It stops admitting requests and placing prefill legs, so new requests and requests waiting for prefill receive HTTP 503, while requests past prefill keep decoding. `/ready` returns HTTP 503 with the reason `monitoring degraded: <stage> <class>`, naming the stage and error class of the streak's first failure. Monitoring continues, and a warm standby counts each degraded readiness answer as a missed probe toward its takeover threshold.
 
 The first pass in which every stage succeeds ends the streak and reopens admission. A router restart resets the monitor-failure counters.
+
+[Engine monitoring and failure diagnosis](../telemetry/04-Failures.md#engine-monitoring-degradation) lists the metrics that count failed passes.
 
 ## Engine failure handling
 
@@ -64,13 +66,9 @@ A recovery probe clears evidence and lifts holds once the loaded profiles match 
 
 ### Inference probes
 
-An inference probe sends one request through a prefill leg and a decode leg to retest the path that failed. Each `stream` failure on a decode leg records the leg's producer against the decode engine, and the probe retests every recorded path. A failed producer leg leaves the held engine untested, so the next producer runs the probe.
+An inference probe sends one request through a prefill leg and a decode leg to retest the path that failed. A passing probe that meets the profile-match rule clears the recorded inference failures and lifts the hold. A failed leg on the held engine ejects it when it is covered, and returns it to placement when it is uncovered. An inconclusive probe keeps the hold, and engine monitoring probes again every `recovery.readmit_every` monitor intervals.
 
-On vLLM, the [prefill leg of each path](../telemetry/04-Failures.md#inference-probe-producers) runs on the recorded producer while it is live, then on one other live producer, and last in a standalone probe that runs both legs on the held engine. An engine held without a recorded producer, such as one held for `inference_status` or `kv_handoff` evidence, takes the standalone probe.
-
-On SGLang, each engine serves only its live role, so the probe pairs the held engine with a live peer in the other role, and the two legs run together. A held prefill engine produces for each live decode engine in turn, moving to the next when a decode leg fails. A held decode engine takes the prefill leg from its recorded producer while it is live, and then from one other live prefill engine. A held decode engine without a recorded producer, such as one held for `inference_status` evidence, takes it from that other engine alone. When no peer in the other role is live, the probe is `inconclusive` with the reason `no_producer` or `no_consumer`.
-
-A passing probe that meets the profile-match rule clears the recorded inference failures and lifts the hold. A failed leg on the held engine ejects it when it is covered, and returns it to placement when it is uncovered. An inconclusive probe keeps the hold, and engine monitoring probes again every `recovery.readmit_every` monitor intervals.
+[Inference probe producers](../telemetry/04-Failures.md#inference-probe-producers) gives the producer order on vLLM and the peer pairing on SGLang.
 
 ### Liveness
 
@@ -88,7 +86,7 @@ At zero serving capacity, `/ready` and new completion requests return HTTP 503.
 
 ### Failure quarantine
 
-With `recovery.failure_quarantine_s` above `0`, a [covered](#failure-evidence) engine whose request leg fails leaves placement until the quarantine deadline passes, and then candidate selection releases it. Every failed leg starts a quarantine except a 4xx response other than 408 or 429 and a wait for a connection in the router's pool. A successful health or inference probe that meets the profile-match rule ends the quarantine early, and so does another engine's ejection or drain that leaves the engine uncovered.
+With `recovery.failure_quarantine_s` above `0`, a [covered](#failure-evidence) engine whose request leg fails leaves placement for a timed quarantine. [Hold kinds](../telemetry/04-Failures.md#hold-kinds) lists what starts and ends a timed quarantine and an inference hold.
 
 ### Clearing failure evidence
 
@@ -113,7 +111,7 @@ With the CUDA IPC cache off and UCX 1.22 or later in the engine image, a consume
 `UCX_CUDA_IPC_CACHE` in `runtime.environment` chooses how CUDA IPC engines behave:
 
 - At `y`, the UCX default, a stopped peer's GPU memory stays mapped until a wave restart, and transfers from a restarted or idle-evicted producer go through the cached mapping.
-- At `n`, with UCX 1.22 or later, release rounds free that memory, and each transfer from a restarted or idle-evicted producer maps and unmaps the producer's KV memory. Transfers and decoding grow slower as the engines serve, until the engines restart. On an eight-engine fleet, decode engines lost up to 64% of their decode rate, and mean NIXL transfer time per decode engine reached 105 to 124 ms after about 4,300 transfers, against 15 to 22 ms after about 3,350 transfers with the cache on.
+- At `n`, `no` or `0`, with UCX 1.22 or later, release rounds free that memory. Each transfer from a restarted or idle-evicted producer then maps and unmaps the producer's KV memory, so transfers and decoding slow as the engines serve, until the engines restart.
 
 `launch.peer_release` in a vLLM engine's attestation, and the same value in the image check's [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification), report whether the engine releases a stopped peer's memory. It is `true` for an engine with zero CUDA IPC peers and for an engine with UCX 1.22 or later and the CUDA IPC cache off, and `false` for every other CUDA IPC engine.
 
@@ -150,7 +148,7 @@ With `engine_contract` set and `recovery.engine_restart_policy` `individual`, au
 
 With `engine_contract` unset, automatic recovery checks health, or reruns the inference probe for an inference suspect, and matches profiles to the live process identity.
 
-Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's `launch_digest` when the sidecar reports one, and its `attestation_digest` otherwise. A profile mismatch excludes the engine from recovery, readmission and takeover. The running router keeps its loaded profiles until it restarts.
+Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's [process generation](../configuration/01-Fleet-Schema.md#attestation). A profile mismatch excludes the engine from recovery, readmission and takeover. The running router keeps its loaded profiles until it restarts.
 
 An operator drain holds through healthy responses, resume and takeover until readmission clears it.
 
@@ -166,4 +164,4 @@ Each monitoring pass writes a state handoff that records engine roles, ejections
 
 [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
 
-A warm standby router serves traffic while it holds the shared lease, and load balancers find the serving router through `/ready`.
+A warm standby router, started with `--standby-of`, shadows the primary's handoff and reports not ready until it claims the expired shared lease. A load balancer that checks `/ready` therefore reaches only the serving router. [Standby takeover and lease fencing](../cli/Serve.md#standby-takeover-and-lease-fencing) gives the takeover conditions.

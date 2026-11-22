@@ -6,15 +6,16 @@ description: Run the narwhal-check preflight gates against profiled, idle Narwha
 
 ## Profiling idle engines
 
-Run these steps from the router shell.
+Run these steps from the router shell, with the engines reserved for profiling and otherwise idle.
 
-1. Reserve the real engines.
-2. Keep the engines otherwise idle.
-3. Load the private engine URLs and credentials from the router environment.
-4. Warm the model.
-5. Pick input lengths and concurrency points that match production traffic.
-6. Choose `--prefill-lens` values that meet the [`ttft_split` length rules](../measure/01-Profile.md#prefill-sweep).
-7. Run the profiler:
+1. Warm the model.
+2. Choose the sweep from your production traffic:
+
+    - `--prefill-lens` values that meet the [`ttft_split` length rules](../measure/01-Profile.md#prefill-sweep).
+    - `--decode-input-lens` values near the input lengths you serve.
+    - `--decode-concurrency` values near the concurrency you serve, when it differs from the default `1,4,16,48`.
+
+3. Run the profiler:
 
     ```bash
     .venv/bin/narwhal-profile \
@@ -24,29 +25,24 @@ Run these steps from the router shell.
       --decode-input-lens 512,4096,8192
     ```
 
-8. Compare each printed effective sweep with every checked serving plan.
+4. Compare the line printed for each engine, `<iid>: max_model_len <n>; prefill up to <x>, decode input up to <y>, decode concurrency up to <z>`, with the `max_model_len` and sequence limit in that engine's checked serving plan.
 
-`deploy_hosts.py prepare` writes each engine's `runtime.max_sequences` to `profiling-limits.json`, or 256 for an SGLang engine without it.
+`deploy_hosts.py prepare` writes each engine's `runtime.max_sequences` to `profiling-limits.json`. An SGLang engine without the setting gets 256 and a TensorRT-LLM engine without it gets 64.
 
-The effective sweep has these bounds:
+The profiler fits each sweep to the engine's live `max_model_len`, as [Prefill sweep](../measure/01-Profile.md#prefill-sweep) and [Decode sweep](../measure/01-Profile.md#decode-sweep) define. It ends decode concurrency at the engine's sequence limit.
 
-| Sweep input          | Bound                                                                                                                                                |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Decode concurrency   | Requested counts up to the engine's sequence limit, then the limit itself. At each input length, the counts whose streams exceed the KV capacity the engine reports give way to the largest cohort that fills at most 80% of it, when that cohort is larger than every count that fits |
-| Prefill lengths      | Input plus one output token fits the live `max_model_len`                                                                                            |
-| Decode input lengths | Input plus 64 output tokens fits the live `max_model_len`                                                                                            |
+Prefix caching can stay on during profiling. On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines.
 
-Prefix caching can stay on during profiling.
+When an engine refuses a decode measurement request, reports an error in its stream, or times out or drops the stream (for example after a lost KV transfer), the profiler discards that cohort's measurement and runs it again, up to twice. The log shows each rerun as `rerun after engine error`. A third consecutive error stops the profile.
 
-On an SGLang fleet, `narwhal-profile` requires the `mooncake` connector and at least two engines.
-
-When an engine refuses a decode measurement request or reports an error in its stream, or the stream times out or drops, such as after a lost KV transfer, the profiler discards that cohort's measurement and runs it again, up to twice. A third consecutive error stops the profile. The log shows each rerun as `rerun after engine error`.
-
-If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit allows fewer than two decode concurrency points, change the engine launch policy.
+If the live context leaves fewer than three prefill lengths or two decode input lengths, pass shorter `--prefill-lens` and `--decode-input-lens`. If the sequence limit leaves fewer than two decode concurrency points, change the engine launch policy.
 
 Keep the profiler's `.samples.json` sidecar beside the `profiles.path` store.
 
-Preflight warns when an engine's profile measures decode below its sequence limit, as recorded in the profile's sidecar from `--limits`. On a fleet with an engine contract, preflight also compares the profile with the limit in the engine's attestation when the sidecar records no limit or a lower one. The engine's [decode seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) stop at the profiled maximum. To clear the warning, re-profile the engine with `--limits`. First regenerate the limits file if the sidecar records a lower limit than the attestation. If the sweep skipped cohorts that exceed the engine's KV capacity, also pass shorter `--decode-input-lens`, or lower the engine's sequence limit and regenerate the limits file.
+Preflight warns when an engine's profile measures decode below its sequence limit. It reads that limit from the profile's sidecar (recorded by `--limits`) and, on a fleet with an engine contract, from the engine's attestation when the sidecar records a lower limit or none. Decode seats stop at the profiled maximum, as [Engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) describes. To clear the warning, re-profile the engine with `--limits`, after you:
+
+- regenerate the limits file, when the sidecar records a lower limit than the attestation.
+- pass shorter `--decode-input-lens`, or lower the engine's sequence limit and regenerate the limits file, when the sweep skipped cohorts that exceed the engine's KV capacity.
 
 Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 
@@ -112,7 +108,7 @@ For four engines in separate device slots, the command prints:
 
 ```text
 calibration groups: 36; concurrent rounds per input length: 3; sweep 1 runs each group alone
-e0 -> e1, target 256 tokens: 100/100 completed, 0 failed
+n1 -> n2, target 256 tokens: 100/100 completed, 0 failed
 ...
 first-token calibration: runs/deployment/first-token-calibration.json
 candidate deadline: above 1.840s
@@ -123,7 +119,7 @@ The candidate deadline is the largest `max(observed maximum, 1.2 × nearest-rank
 
 Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
 
-The deadline, the measured prefill, and the router overhead must fit the client time to first token (TTFT) requirement.
+The deadline, the measured prefill and the router overhead must fit the client time to first token (TTFT) requirement.
 
 ### Reusing or repeating the calibration
 
@@ -193,11 +189,11 @@ calibration
   ok    first-token calibration measured on the running engines: candidate 1.840s, deadline 2.5s
 ```
 
-For a fleet with relaunched engines `e1` and `e3`, preflight prints:
+For a fleet with relaunched engines `n2` and `n4`, preflight prints:
 
 ```text
 calibration
-  ok    first-token calibration reused for e1, e3: launch unchanged since capture; candidate 1.840s, deadline 2.5s
+  ok    first-token calibration reused for n2, n4: launch unchanged since capture; candidate 1.840s, deadline 2.5s
 ```
 
 Under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).

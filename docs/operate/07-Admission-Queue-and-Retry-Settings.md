@@ -4,55 +4,55 @@ description: Choose Narwhal's admission, queue, retry, quarantine, in-flight, an
 
 # Choosing admission, queue and retry settings
 
-[Serving and role control](../configuration/02-Serving-and-Role-Control.md) defines field defaults, bounds, and router behaviour. [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [engine failure handling](../http-api/03-Backend-and-Failures.md#engine-failure-handling) define client responses.
-
-Restart the router after changing a fleet setting.
+Restart the router after changing a fleet setting. Defaults and bounds are in [Serving and role control](../configuration/02-Serving-and-Role-Control.md). Client responses are in [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) and [engine failure handling](../http-api/03-Backend-and-Failures.md#engine-failure-handling).
 
 ## Admission mode
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) selects predictive or open admission. The [request journal](../telemetry/01-Journal.md#admission-price) records the price used for each prefill placement.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) is `predictive` (the default) or `open`. In `predictive` mode the router answers HTTP 429 when a request fails the TTFT check or the decode admission check. In `open` mode it makes no predictive refusals, and the [request journal](../telemetry/01-Journal.md#admission-price) still records the price of each prefill placement.
 
-- Keep predictive admission when clients should receive a refusal instead of a first token after the TTFT target.
-- Use open admission for an in-flight sweep or another measurement without predictive refusals.
-- Compare `price_s` with `ttft_s` on completed journal rows before relying on predictive admission. Remeasure the [engine profiles](../measure/01-Profile.md) when the median ratio is materially above or below 1.
-- Raise `serving.admission_margin` only when you accept first tokens beyond `slo.ttft_s`.
+- Keep `predictive` when clients should receive a refusal instead of a first token after the TTFT target.
+- Use `open` for an in-flight sweep or any measurement that predictive refusals would distort.
+- Before you rely on `predictive`, compare `price_s` plus `slot_wait_s` with `first_byte_s` on completed journal rows. When the median ratio is materially above or below 1, remeasure the [engine profiles](../measure/01-Profile.md).
+- Raise `serving.admission_margin` (default `0.0`, a fraction of the TTFT target added to the admission budget) only when you accept first tokens beyond `slo.ttft_s`.
 
 ## Queue
 
-[`serving.queue_capacity` and `serving.queue_timeout_s`](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) control waits for admission and engine seats. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) defines their bounds and outcomes.
+With `serving.queue_capacity` at `0`, the default, the router answers HTTP 429 as soon as requests reach the in-flight limit. A positive value lets that many more requests wait, in arrival order, for an admission seat and then for a prefill seat.
 
-Turn the queue on for short bursts when clients should wait for a seat. Set `serving.queue_timeout_s` to the longest acceptable wait before prefill. Review journal refusals for long, mostly cached prompts before enabling it under predictive admission.
+Turn the queue on for short bursts when clients should wait for a seat. Set `serving.queue_timeout_s` (default `0.0`, and positive whenever the capacity is positive) to the longest acceptable wait before prefill. The admission-seat and prefill-seat waits share that budget. When it runs out, the router answers HTTP 504 with error type `queue_expired` during the admission-seat wait and `expired` during a prefill-seat wait. A wait for a decode seat ends at the KV handoff bound instead, as described below.
+
+Under `predictive` admission, the router prices a request that waits for an admission seat with a cold prefill curve, before it sizes the prompt and without prefix-cache evidence. A long, mostly cached prompt can leave the queue with a `queue` or `prompt` refusal that its sized price would have passed. Review journal refusals for such prompts before you enable the queue. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) lists every wait, bound and response.
 
 ## Engine seats and KV handoff
 
-The router sets [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) from attestation and profiles. To change decode seats, relaunch with a different `runtime.max_sequences` and attest again, or remeasure the profile. Prefill seats follow the profile and `slo.ttft_s`.
+To change decode seats, relaunch the engine with a different `runtime.max_sequences` and attest again, or remeasure the profile. To change prefill seats, remeasure the profile or change `slo.ttft_s`. [Engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) defines how the router derives both, and `/narwhal/state` reports the result under `seats`.
 
-The [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) comes from the lease in engine attestation. [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease at engine launch. A longer lease permits a longer decode-seat wait and retains abandoned handoff blocks longer. Relaunch and attest engines after changing it. [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry) defines the client outcome.
+For vLLM and TensorRT-LLM engines, the router's [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) is the lease minus `lease // 6` seconds. [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease, at least 6 seconds. The default is 30 seconds on vLLM, a 25-second bound, and 60 seconds on TensorRT-LLM, a 50-second bound. A longer lease lets a decode-seat wait run longer and keeps abandoned handoff blocks longer. After you change it, relaunch and attest the engines.
 
 ## Retries and quarantine
 
-[`serving.max_attempts` and retry credits](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) bound retries before visible output. [Retries](../http-api/03-Backend-and-Failures.md#retries) defines eligible failures, placement, responses, and stream behaviour.
+`serving.max_attempts` (default `2`, from 1 to 3) caps the complete prefill and decode attempts per request. The router retries only an attempt that fails before visible output, and each retry spends one credit from the pool that `serving.retry_budget` (default `10`) sizes. Each successful original request adds `serving.retry_replenish` credits (default `0.1`). [Retries](../http-api/03-Backend-and-Failures.md#retries) lists the retryable failures and the placement rules.
 
 - Set `serving.max_attempts` to `1` when clients retry failed requests themselves.
 - Set it to `3` only when each role keeps at least three live engines, including unpinned engines that [aggregate fallback](../concepts/02-Role-Control.md#aggregate-fallback) can use.
 - Raise `serving.retry_budget` when `narwhal_retry_denied_total` rises during an engine failure and the remaining engines have spare capacity.
 - Lower `serving.retry_replenish` to limit prefill load from retries during a sustained failure.
 
-[`recovery.failure_quarantine_s`](../configuration/03-Recovery-and-Validation.md) controls the timed hold after a failed request leg. [Failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine) defines coverage and release. Set a positive value when one engine fails successive requests faster than the breaker removes it and the remaining engines can carry the load.
+[`recovery.failure_quarantine_s`](../configuration/03-Recovery-and-Validation.md) defaults to `0.0`, which disables quarantine. A positive value keeps an engine that failed a request leg out of placement for that time while other live engines place its roles. Set one when an engine fails successive requests faster than the breaker removes it and the remaining engines can carry the load. [Failure quarantine](../concepts/03-Failure-and-State.md#failure-quarantine) gives the coverage and the release conditions.
 
 ## In-flight limit and decode gaps
 
-[`serving.max_connections`](../configuration/02-Serving-and-Role-Control.md#global-admission) protects router resources; [`narwhal-serve --max-concurrent`](../cli/Serve.md) can lower its in-flight limit. Use an open-admission sweep to find the first saturation rejection, then set the limit at or below that count. [In-flight limit rejections](../Troubleshoot.md#in-flight-limit-rejections) gives the production diagnosis.
+To choose the in-flight limit, run an open-admission sweep, read `narwhal_admission_inflight` when the first `saturated` rejection appears, and set the limit at or below that count with `narwhal-serve --max-concurrent` or `serving.max_connections`. [In-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit) and [Router saturation](../configuration/02-Serving-and-Role-Control.md#router-saturation) define the limit and the `inflight_limit` and `saturated` rejections. [In-flight limit rejections](../Troubleshoot.md#in-flight-limit-rejections) covers production diagnosis.
 
-[`engine.decode_read_timeout_s`](../configuration/02-Serving-and-Role-Control.md#streaming-failure-semantics) bounds decode silence. [Decode timeouts](../http-api/03-Backend-and-Failures.md#decode-timeouts) defines the client and journal outcomes. Raise the limit when healthy streams show longer inter-chunk gaps; lower it to end a hung stream sooner while keeping it above the largest healthy gap.
+`engine.decode_read_timeout_s` (default `10.0`, `0` disables it) is the longest silent interval the router accepts between decode chunks after the first token. Raise it when healthy streams show longer gaps. Lower it to end a hung stream sooner, keeping it above the largest healthy gap. [Decode timeouts](../http-api/03-Backend-and-Failures.md#decode-timeouts) gives the client and journal outcomes.
 
 ## Check a changed setting
 
-Run the candidate against the current value with the same request mix and offered load:
+Compare the candidate value with the current one under the same request mix and offered load:
 
 1. On a test fleet, apply the value with a [configuration overlay](fleet-control/07-Configuration-Changes.md#configuration-overlays), or edit the fleet file and restart the router.
 2. Run load at and above fleet capacity with a [load job](fleet-control/06-Load-Jobs.md).
-3. Classify outcomes with [Fleet overload with healthy engines](../Troubleshoot.md#classify-outcomes-by-reason).
-4. Compare completed requests and requests meeting the SLO from `narwhal_served_total` and `narwhal_slo_met_total` with the current-value run.
+3. Classify the outcomes as in [Fleet overload with healthy engines](../Troubleshoot.md#classify-outcomes-by-reason).
+4. Compare completed requests and requests meeting the SLO (`narwhal_served_total` and `narwhal_slo_met_total`) with the run at the current value.
 
-The [dashboard](../observability/05-Dashboard.md#pool-pressure-admission-and-queue-depth) shows admission in-flight, queue depth, waits, and retry credits.
+The [dashboard](../observability/05-Dashboard.md#pool-pressure-admission-and-queue-depth) shows admission in-flight, queue depth, waits and retry credits.

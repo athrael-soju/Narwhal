@@ -16,14 +16,14 @@ General options:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--fleet PATH` | optional | Fleet configuration file for preflight, calibration, and evidence verification. |
+| `--fleet PATH` | required, except with a print option | Fleet configuration file for preflight, calibration, and evidence verification. |
 | `--format` | `text` | `text` or `json` for [versioned command results](../Command-Results.md). |
 | `--version` | | Print the installed version. |
 | `--print-example-config` | off | Print the packaged, annotated config and exit. |
 | `--print-contract-versions` | off | Print the versioned JSON interface registry and exit. |
-| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | Serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics` during preflight and calibration, where `URL` is `http://host:port`. |
+| `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | Serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics` during preflight and calibration, where `URL` is `http://host:port`. `--verify-evidence` rejects it with exit code 2. |
 
-Every mode needs `--fleet`. When both print options are set, `--print-example-config` wins.
+When both print options are set, `--print-example-config` wins.
 
 KV transfer probe and evidence options:
 
@@ -32,19 +32,19 @@ KV transfer probe and evidence options:
 | `--repeats N` | 1 | Probes per pair. |
 | `--ring` | off | Test `consume` in a ring. |
 | `--no-kv` | off | Skip `produce` and `consume`. |
-| `--evidence-out PATH` | optional | Save full-mesh KV evidence to a new JSON file. |
-| `--verify-evidence PATH` | optional | Check saved evidence against the current fleet, profiles, and engine processes. |
+| `--evidence-out PATH` | none | Save full-mesh KV evidence to a new JSON file. |
+| `--verify-evidence PATH` | none | Check saved evidence against the current fleet, profiles, and engine processes. |
 
-Options for first-token calibration:
+Options for first-token calibration. `--calibrate-first-token` requires `--input-tokens`, `--observation-timeout-s` and `--calibration-out`, and the other calibration options require `--calibrate-first-token`.
 
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--calibrate-first-token` | off | Measure fresh KV handoffs at each input length and report a first-token deadline. | |
-| `--input-tokens LIST` | optional | Comma-separated input lengths. | Distinct positive lengths, each leaving room for one output token within both engines' live context limits. |
+| `--input-tokens LIST` | none, required | Comma-separated input lengths. | Distinct positive lengths, each leaving room for one output token within both engines' live context limits. |
+| `--observation-timeout-s SECONDS` | none, required | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
+| `--calibration-out PATH` | none, required | Raw samples and group summaries file. | A new JSON file |
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
-| `--observation-timeout-s SECONDS` | optional | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
-| `--calibration-out PATH` | optional | Raw samples and group summaries file. | A new JSON file |
-| `--calibration-base PATH` | optional | Previous calibration artifact. Calibration reuses its complete groups and measures the rest. | An artifact with the same model, contract, `--input-tokens` and `--samples` |
+| `--calibration-base PATH` | none | Previous calibration artifact. Calibration reuses its complete groups and measures the rest. | An artifact with the same model, contract, `--input-tokens` and `--samples` |
 
 ## Preflight
 
@@ -169,13 +169,7 @@ The `calibration` gate reads the artifact at `engine.first_token_calibration_pat
 - It lacks a capture time, a run duration, a process start for every engine or a round for every attempt.
 - `engine.first_token_timeout_s` is at or below its candidate deadline.
 
-It then compares each running engine's [process generation](../Core-Concepts.md#terms) with `generations`:
-
-| Fleet and sidecar | Process generation |
-| --- | --- |
-| `engine_contract` set, sidecar reports launch evidence | `launch_digest` |
-| `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
-| `engine_contract` unset | Engine version and process start time |
+It then compares each running engine's [process generation](../configuration/01-Fleet-Schema.md#attestation) with `generations`.
 
 An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. A restarted engine keeps its calibration only when its sidecar reports launch evidence.
 

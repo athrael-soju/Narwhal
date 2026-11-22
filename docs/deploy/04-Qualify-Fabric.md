@@ -8,7 +8,7 @@ Measure each directed host edge against its source cache group's budget while th
 
 ## Building the source budget
 
-The `calculate` command sizes the budget from these initial trial parameters:
+The `calculate` command sizes the budget from one cache source and these initial trial parameters:
 
 | Parameter                     | Value | `calculate` flag        |
 | ----------------------------- | :---: | ----------------------- |
@@ -17,6 +17,8 @@ The `calculate` command sizes the budget from these initial trial parameters:
 | Burst size                    | 1     | `--burst 1`             |
 | Transfer budget               | 1 s   | `--transfer-budget-s 1` |
 | Bandwidth headroom            | 25%   | `--headroom 1.25`       |
+
+On vLLM and TensorRT-LLM, the cache source is `--runtime-layout` with the engine's captured `cache-layout.json`. On SGLang, it is `--transfer-metrics` with the before and after metrics that `measure-transfer` saves. [Calculating the workload budget](../configuration/06-Fabric-and-Operations.md#calculating-the-workload-budget) lists every `calculate` and `measure-transfer` option.
 
 Each outgoing directed edge from the cache group's roles carries the full handoff rate.
 
@@ -283,9 +285,7 @@ The test measures one-way RDMA writes between host-memory buffers. On RDMA over 
 
 This matrix qualifies KV handoffs between engine hosts. [Preflight](06-Profile-and-Preflight.md#running-preflight) qualifies handoffs within one host.
 
-For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs.
-
-For every edge, retain:
+For `n` distinct engine hosts, qualify the `n * (n - 1)` directed host pairs. For every edge, retain:
 
 - The source and destination roles.
 - The source revision.
@@ -295,23 +295,12 @@ For every edge, retain:
 - The budget digest.
 - The sample path and exit status.
 
-When the runtime layout changes, recalculate the budget from the new `cache-layout.json` on vLLM and TensorRT-LLM, or from new measured handoffs on SGLang.
-
-Link inputs:
-
-- The host assignment
-- Both routes
-- The interfaces
-- The transport
-- The utility version
-- The measurement parameters
-
-When any link input changes, collect a new directed sample. When all link inputs are identical, reuse the retained sample:
+A retained sample stays valid while the link record is unchanged: the source and destination roles, addresses and interfaces, both routes, the transport, the utility version and the measurement parameters. When any of these changes, collect a new directed sample. When all are identical, compare the retained sample with the current budget:
 
 1. Set `CURRENT_EDGE_PREFIX` to the current link record prefix.
 2. Set `RETAINED_EDGE_PREFIX` to the retained evidence prefix.
 3. Recreate the current link fingerprint with `link`.
-4. Compare the retained sample with the recalculated budget:
+4. Compare the retained sample with the budget:
 
     ```bash
     python3 "$NARWHAL_FABRIC_BUDGET_TOOL" reuse-edge \
@@ -326,9 +315,11 @@ For `ucx_tcp`, `--sample` takes the retained `iperf3` JSON. For `ucx_rdma`, it t
 
 | `reuse-edge` exit code | Meaning                                                                                 |
 | :--------------------: | --------------------------------------------------------------------------------------- |
-| 0                      | The retained sample meets the recalculated budget.                                      |
-| 1                      | The retained sample is below the recalculated budget.                                   |
+| 0                      | The retained sample meets the budget.                                                   |
+| 1                      | The retained sample is below the budget.                                                |
 | 2                      | The current link fingerprint or the retained sample differs from the recorded evidence. |
+
+When the runtime layout changes, recalculate the budget before the comparison: from the new `cache-layout.json` on vLLM and TensorRT-LLM, or from new measured handoffs on SGLang.
 
 ## Troubleshooting an edge below its budget
 
@@ -336,6 +327,6 @@ When `record-edge` or `reuse-edge` exits 1:
 
 1. Check link speed, MTU, retransmissions or RDMA counters, CPU load, and other traffic.
 2. Fix the cause.
-3. Resample the directed edge until `record-edge` exits 0.
+3. Resample the directed edge under a new `EDGE_PREFIX` until `record-edge` exits 0.
 
 [Attest live engines](05-Attest.md)

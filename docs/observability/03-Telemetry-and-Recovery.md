@@ -1,30 +1,26 @@
 ---
-description: Feed AMD or NVIDIA GPU telemetry to the exporter's hardware dashboard, inspect Narwhal alerts, troubleshoot monitoring, and retain captures.
+description: Inspect Narwhal alerts, troubleshoot the monitoring stack, add a GPU exporter, and retain captures.
 ---
 
-# GPU telemetry, alerts, and recovery
-
-## GPU telemetry
-
-Run the deployment's AMD or NVIDIA exporter to feed GPU sensor metrics to its hardware dashboard.
+# Alerts, troubleshooting and captures
 
 ## Alert evaluation
 
-Prometheus publishes the state of the `tools/observability/prometheus-alerts.yml` rules in the `ALERTS` series.
+Prometheus evaluates the rules in `tools/observability/prometheus-alerts.yml` and publishes their state in the `ALERTS` series. Each rule carries `severity="page"` or `severity="warn"`. Route those labels through your own Alertmanager.
 
-Inspect rules on the router host:
+List the loaded rules on the router host:
 
 ```bash
 curl -fsS http://127.0.0.1:9090/api/v1/rules | python3 -m json.tool
 ```
 
-Alert rules select the router by `job="narwhal-router"` and each engine by `job="engines"` and `iid=<engine identity>`.
+Rules select the router by `job="narwhal-router"` and each engine by `job="engines"` and `iid=<engine identity>`.
 
-The deployment's alert manager routes `severity="page"` and `severity="warn"` alerts in production.
+## GPU metrics
+
+The monitoring stack scrapes the router, the engines, the fleet control service and the Narwhal tools. To chart GPU sensor metrics, run a GPU exporter that Prometheus can reach, add a scrape job for it to `tools/observability/prometheus.yml`, rerun `make observe`, and build the GPU dashboard in Grafana.
 
 ## Troubleshooting
-
-Find the symptom and apply the check or action beside it:
 
 | Symptom | Check or action |
 | --- | --- |
@@ -32,15 +28,14 @@ Find the symptom and apply the check or action beside it:
 | `make observe` reports an occupied listener | Stop the reported process or socket unit, or [move to isolated listeners](02-Access.md#isolating-a-second-monitoring-stack) |
 | Startup reports a command deadline | Check Docker daemon health, registry reachability, and the [Compose service status](#inspecting-compose-services) |
 | Startup reports a container exit or readiness deadline | Inspect the Prometheus and Grafana [Compose logs](#inspecting-compose-services) |
-| Prometheus reports `config permission denied` | Follow the [mount permission failure](#mount-permission-failures) steps |
-| Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps |
+| Prometheus reports `config permission denied`, or Grafana returns dashboard 404 | Follow the [mount permission failure](#mount-permission-failures) steps |
 | Router target fails | Check `NARWHAL_ROUTER_URL`, its route from the router host, and Prometheus `/targets` |
 | An engine replica disappears from charts | Check its entry in the router's `/narwhal/targets` and its `iid` label |
 | Grafana shows an older dashboard | Rerun `make observe` |
 | `make observe` fails the [dashboard readiness check](01-Start-and-Verify.md#readiness-contract) | Read the Grafana provisioning log |
 | An alert evaluates against the wrong scope | Inspect target relabelling for `job`, `instance`, and `iid` |
 
-Verify each fix with a `make observe` rerun that passes the [readiness contract](01-Start-and-Verify.md#readiness-contract).
+After a fix, rerun `make observe`. It returns once the [readiness contract](01-Start-and-Verify.md#readiness-contract) passes.
 
 ### Inspecting Compose services
 

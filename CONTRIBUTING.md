@@ -14,7 +14,7 @@ git switch -c describe-your-change upstream/main
 
 Run all `make` commands from the repository root. `make help` lists the contributor commands and their overrides.
 
-`make setup` creates the development environment when it is missing:
+`make setup` creates `.venv` when it is missing and installs the package with its development dependencies, pinned by `constraints-dev.txt`:
 
 ```bash
 make setup
@@ -32,20 +32,13 @@ Run the local checks:
 make check
 ```
 
-`constraints-dev.txt` pins the development toolchain. Install it by hand with:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]' -c constraints-dev.txt
-```
-
-After any change to `pyproject.toml` or `constraints-dev.txt`, refresh the environment with:
+After any change to `pyproject.toml` or `constraints-dev.txt`, reinstall against the pins with:
 
 ```bash
 make sync
 ```
 
-`make sync` installs the editable package and its development dependencies against `constraints-dev.txt`, creating `.venv` when needed. You can point it at an existing virtual environment by setting `VENV_PYTHON`, which applies to `make sync`, tests, linting, formatting, and documentation:
+To use an existing virtual environment, set `VENV_PYTHON`. It applies to `make sync`, tests, linting, formatting, and documentation:
 
 ```bash
 make sync VENV_PYTHON=/path/to/venv/bin/python
@@ -57,7 +50,9 @@ These targets run the checks:
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `make check`               | Runs publication, version metadata and backend boundary checks, Ruff lint and formatting, mypy, unit tests, and the documentation link checker |
 | `make lint`, `make format` | Runs Ruff in check mode and reports lint and formatting errors                                                                                 |
+| `make types`               | Runs mypy on the `narwhal` package in `src/` with the settings in `pyproject.toml`, and fails on untyped function definitions                  |
 | `make publication`         | Scans the Git index for private files and private key material                                                                                 |
+| `make versions`            | Checks that the `pyproject.toml` version has the form `MAJOR.MINOR.PATCH` and equals the `CITATION.cff` version                                |
 | `make boundary`            | Fails when a module in `src/narwhal/` outside `backends/` imports a backend package or names an engine-specific term                           |
 | `make links`               | Checks links and HTML targets in unfenced Markdown, heading anchors, and canonical Narwhal URLs                                                |
 | `make docs-build`          | Builds the public site in strict mode and reports navigation, asset, and rendering errors                                                      |
@@ -100,6 +95,8 @@ CodeQL scans the Python source and GitHub Actions workflows weekly and on pushes
 Place tests under `tests/` by component, assert a named failure or invariant, and reuse the synthetic profiles and fleets in `tests/fixtures.py`.
 
 `tests/observability/test_engine_state_promql.py` runs promtool from the Prometheus image pinned in `tools/observability/compose.yml`, or from a `promtool` on `PATH` with the same major version, and skips when neither is available. To run it locally, pull the image with `docker pull`.
+
+To measure the router's per-request bookkeeping cost before and after a change, run `python tools/measurement/bookkeeping_bench.py`. It prints one JSON line per measurement with the median microseconds per call. `--calls` sets the calls per round, default 20000, and `--rounds` sets the rounds, default 7.
 
 Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 
@@ -144,6 +141,10 @@ Put operator settings in `FleetConfig` and document them in `config/fleet.exampl
 Keep the engine contract portable, leaving hardware, model, image, and launch details to the deployment automation. The fleet configuration records the compatibility fields that Narwhal verifies.
 
 Update the docs whenever a config field, route, journal field, metric, CLI flag, or operator procedure changes.
+
+## Contributing a GPU recipe
+
+To contribute a Narwhal dev template for a new small CUDA GPU, follow the checks and pull request workflow above and submit the working template with qualification evidence. The evidence records the GPU, driver, model and runtime versions; the free-memory reserve and peak startup memory; both directed KV transfers; and the routed completion. A contribution for a GPU from another vendor includes a measured template and, optionally, discovery, memory accounting, engine launch and a compatible transfer runtime.
 
 ## Repository layout
 
@@ -253,6 +254,7 @@ Import each name from the subpackage module that defines it.
 
 | Module                                      | Contents                                         |
 | ------------------------------------------- | ------------------------------------------------ |
+| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router target |
 | `tools/observability/start/services.py`     | Listener and service contracts                   |
 | `tools/observability/start/stack.py`        | Docker Compose control                           |
 | `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |
@@ -308,6 +310,9 @@ Keep evaluation builders, generators, deployment-specific datasets, experiment c
 | Live engine addresses and site paths      | Those ignored files, or node URLs from the ignored `.env` through the documented endpoint syntax |
 | Fleet control configurations and hooks    | The ignored `config/fleet-control.*.json` pattern                                                |
 | Fleet control action log and run records  | `runs/fleet-control/`                                                                            |
+| Benchmark plans and evidence output       | `runs/`                                                            |
+
+The plan's `evidence.identity` holds the engine image reference and the host and GPU map (`gpu_allocation`), and the collector copies it into the point's `evidence.json`. A benchmark point's `summary.shareable.json` is the one evidence file meant for publication. The collector builds it from a fixed list of fields, so it holds no URLs, credentials, private file paths or request failure text. It names engines `engine-1`, `engine-2` and onward in order of first appearance, replaces the engine image reference and GPU allocation with SHA-256 digests, and keeps `narwhal_revision`, `model_id`, `benchmark_client_version`, `engine_version`, `checkpoint_revision` and `gpu_shape` exactly as supplied in the plan. Review those labels for sensitive data before you publish the file.
 
 Site automation provides host credentials, the source distribution, network configuration, and engine process launch. The transfer fabric it configures must pass [Qualify the transfer fabric](docs/deploy/04-Qualify-Fabric.md).
 
@@ -388,9 +393,17 @@ Configure a GitHub trusted publisher on PyPI:
 | Workflow     | `release.yml`          |
 | Environment  | `pypi`                 |
 
-Prepare a release by checking the latest PyPI version and comparing the target version with the conventional commit bump. If they differ, put one `Release-As` footer in the preceding squash commit. Confirm that the release PR's package, citation, manifest, and changelog versions all agree.
+Prepare a release by checking the latest PyPI version and comparing the target version with the conventional commit bump. If they differ, put one `Release-As` footer in the preceding squash commit.
 
-After the release PR merges, the release workflow publishes the reviewed wheel and source archive to GitHub and PyPI.
+Check the release PR's versions:
+
+```bash
+python3 tools/maintenance/release.py check --release
+```
+
+The check fails unless the package, citation, manifest and changelog versions agree and the changelog's first section holds the release notes.
+
+After the release PR merges, the release workflow publishes the reviewed wheel and source archive to GitHub and PyPI. It publishes only from a public repository whose `NARWHAL_RELEASES_ENABLED` variable is `true`.
 
 The PyPI project description is `README.md` followed by `CHANGELOG.md`, so each version's page on PyPI shows its own release notes at the top of the changelog.
 

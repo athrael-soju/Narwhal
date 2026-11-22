@@ -51,7 +51,7 @@ Each original completion request and its retries share one terminal row.
 | `wanted_len`                   | Requested output tokens.                                                                                           |
 | `output_len`                   | Output tokens the router measured up to completion or cancellation.                                                |
 | `ttft_s`                       | Seconds from arrival to prefill completion.                                                                        |
-| `tpot_s`                       | Mean seconds per output token after prefill completion.                                                            |
+| `tpot_s`                       | Seconds from prefill completion to the last output token, divided by `output_len - 1`.                             |
 | `first_byte_s`                 | Seconds from arrival to the first visible output.                                                                  |
 | `decode_tpot_s`                | Time from first to last observed output token divided by `output_len - 1`.                                         |
 | `prefill_iid`, `decode_iid`    | Engines of the final attempt's prefill and decode legs.                                                            |
@@ -60,10 +60,10 @@ Each original completion request and its retries share one terminal row.
 | `cached_tokens`                | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
 | `cache_placement`              | The prefill placement priced with [cache evidence](#cache-placement).                                              |
 | `token_accounting`             | `token_ids` for exact per-token identity, `reported` when the engine's stream reports each reply's output token count, `unavailable` when it supplies neither. |
-| `refused`, `refused_cause`     | `true` on a predictive refusal, with its [refusal cause](#refusal-causes).                                         |
-| `rejected`                     | `true` on a capacity or router-readiness rejection.                                                                |
-| `expired`                      | `true` on an admission or total deadline expiry.                                                                   |
-| `cancelled`, `cancelled_phase` | `true` on a client disconnect, with its phase: `admission`, `queue`, `backoff`, `prefill`, or `decode`.            |
+| `refused`, `refused_cause`     | `true` on a predictive refusal, with its [refusal cause](#refusal-causes). Written only on `refused` rows.         |
+| `rejected`                     | `true` on a capacity or router-readiness rejection. Written only on `rejected` rows.                               |
+| `expired`                      | `true` on an admission or total deadline expiry. Written only on `expired` rows.                                   |
+| `cancelled`, `cancelled_phase` | `true` on a client disconnect, with its phase: `admission`, `queue`, `backoff`, `prefill`, or `decode`. Written only on `cancelled` rows. |
 | `terminal`                     | Final request state: `completed`, `failed`, `refused`, `rejected`, `expired`, `invalid`, or `cancelled`.           |
 | `reason`                       | [Outcome reason](#outcome-reasons) on `failed`, `refused`, `rejected`, and `expired` rows.                         |
 | `status`                       | HTTP status of the router's response.                                                                              |
@@ -88,7 +88,7 @@ These conditions set a field to `0` or null:
 | `token_accounting` is `reported`                                 | `decode_tokens_observed` is null. A request that ends before the engine's last chunk has null `output_len`, `tpot_s` and `decode_tpot_s`. |
 | Fewer than two measured output tokens                            | `tpot_s` and `decode_tpot_s` are null.                                          |
 | Prefill incomplete                                               | `ttft_s` and `tpot_s` are null.                                                 |
-| Zero visible output                                              | `first_byte_s` is null.                                                         |
+| Zero visible output                                              | `first_byte_s` and `decode_tpot_s` are null.                                    |
 | `terminal` is `completed` or `cancelled`                         | `error`, `error_type`, and `error_code` are null.                               |
 | `terminal` is `completed`, `invalid`, or `cancelled`             | `reason` is null.                                                               |
 | A stream has sent output                                         | `status` is `200`; a later error ends the stream with a terminal event.         |
@@ -249,7 +249,7 @@ Each router event row carries an `at` timestamp, in Unix wall-clock seconds for 
 | `engine_ejected`           | The breaker or a recovery check ejects an engine.                                    | `iid`, [`cause`](04-Failures.md#ejections-holds-and-readmissions)                                                               |
 | `engine_hold_ended`        | A timed quarantine or inference hold ends.                                           | `iid`, `kind`, [`cause`](04-Failures.md#ejections-holds-and-readmissions), `held_s`                                             |
 | `engine_hold_started`      | A timed quarantine or inference hold starts.                                         | `iid`, [`kind`](04-Failures.md#hold-kinds), `duration_s` (`null` for an inference hold)                                         |
-| `engine_lifecycle`         | An engine lifecycle operation runs.                                                  | `action` and its operation fields                                                                                               |
+| `engine_lifecycle`         | An engine lifecycle operation runs.                                                  | `action` and its [operation fields](#engine-lifecycle-events)                                                                   |
 | `engine_probe`             | A health or inference verification probe returns.                                    | `iid`, `kind`, [`outcome`](04-Failures.md#verification-probe-outcomes); [inference probe fields](#inference-probe-events)       |
 | `engine_readmitted`        | An ejected engine returns to placement.                                              | `iid`, [`evidence`](04-Failures.md#ejections-holds-and-readmissions)                                                            |
 | `monitoring_stage_failure` | A monitoring stage fails.                                                            | `stage`, `class`, stage-local `consecutive` count                                                                               |
@@ -270,19 +270,28 @@ An `engine_probe` event with `kind: verify_inference` adds these fields:
 | `reason`                        | On SGLang, `no_producer` for a held decode engine or `no_consumer` for a held prefill engine, on an `inconclusive` outcome when the probe had no [peer to run with](04-Failures.md#inference-probe-producers). |
 | `prefill_class`, `decode_class` | Failure class of each failed leg, on a `failed` outcome.                                                                                                                                                       |
 
-### Profile recovery events
+### Engine lifecycle events
 
-A failed profile-generation check during a health or inference recovery probe:
+An `engine_lifecycle` event carries `action`, `at` (Unix wall-clock seconds) and the fields below. `wave_id` is an empty string outside a whole-wave operation.
 
-- ejects the engine and writes an `engine_ejected` event with `cause: profile_generation`
-- writes an `engine_lifecycle` event with `action: profile_recovery_blocked`
+| `action` | Written when | Fields |
+| --- | --- | --- |
+| `drain_started` | A drain begins for an engine. | `iid`, `wave_id` |
+| `wave_started` | A whole-wave drain begins. | `engines`, `wave_id` |
+| `process_recorded` | A drain records the engine's process start. | `iid`, `process_start`, `wave_id` |
+| `drain_blocked` | A drain cannot record the engine's process start. | `iid`, `error`, `wave_id` |
+| `drain_complete` | The engine has no resident work and a recorded process start. | `iid`, `wave_id` |
+| `drain_deadline_exceeded` | Resident requests remain after the drain deadline. | `iid`, `resident`, `wave_id` |
+| `wave_ready_to_stop` | Every wave member is drained. | `engines`, `wave_id` |
+| `process_excluded` | An identity check finds a changed or unreadable process and ejects the engine. | `iid`, `reason`, `previous_process_start`, `observed_process_start` |
+| `restart_required` | The router holds the whole fleet until an operator restarts the wave. | `wave_id`, `reason` |
+| `recovery_validation_started` | Automatic recovery starts validating an ejected engine. | `iid`, `wave_id` |
+| `validation_started` | Readmission validation starts for a drained engine. | `iid`, `wave_id` |
+| `validation_failed` | Readmission validation fails. | `iid`, `error`, `wave_id` |
+| `readmitted` | An engine returns to placement. | `iid`, `process_start`, `wave_id` |
+| `wave_readmitted` | Every member of a wave is back in placement. | `engines`, `wave_id` |
+| `profile_recovery_blocked` | A health or inference recovery probe finds a failed profile-generation check. | `iid`, `error` |
 
-That event carries these fields:
-
-| Field   | Meaning                  |
-| ------- | ------------------------ |
-| `iid`   | Engine.                  |
-| `error` | Failed checks.           |
-| `at`    | Unix wall-clock seconds. |
+A failed profile-generation check ejects the engine and also writes an `engine_ejected` event with `cause: profile_generation`. Under `whole_wave`, it also writes `restart_required`.
 
 Inspect the engine's [profile generation evidence](02-Profiles.md#validating-the-engine-cost-model) before retrying recovery.

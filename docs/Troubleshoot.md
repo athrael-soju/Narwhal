@@ -6,13 +6,7 @@ description: Capture diagnostic bundles and recover a Narwhal fleet from router,
 
 ## Capturing router and engine state
 
-Collect one bundle per incident router, with:
-
-- a fresh output path
-- that router's fleet configuration
-- that router's run directory
-
-Collect a bundle:
+Collect one bundle per incident router, with a fresh output path, that router's fleet configuration and that router's run directory:
 
 ```bash
 mkdir -p runs/diagnostics
@@ -23,9 +17,7 @@ narwhal diagnostics collect \
   --out runs/diagnostics/router-incident-001
 ```
 
-On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md).
-
-Add `--artifact PATH` to include ingress and supervisor status, engine boot logs, profiles, or deployment load results from outside the selected run. Add `--include-request-content` to include journal and completion content.
+On exit status `3`, inspect the source rows in the partial bundle's [manifest](Diagnostic-Bundles.md#manifest-and-exit-status). [`narwhal diagnostics`](Diagnostic-Bundles.md) lists the options for files kept outside the run directory and for request content.
 
 Before stopping an engine, capture evidence per the [planned restart or unplanned-failure procedure](troubleshoot/01-Engine-Recovery.md).
 
@@ -37,6 +29,7 @@ Start from the router's health and readiness:
 - If `/health` reports `standby`, send traffic and lifecycle actions to the active lease holder.
 - If `/health` reports `fenced`, identify the current lease holder and remove the fenced router from the load balancer.
 - If `/health` reports `maintenance`, follow `/narwhal/lifecycle` through the engine wave until readiness returns.
+- If `/health` reports `degraded`, read `reason` in `/ready`. It names degraded monitoring, a lease that expired, pending engine identity validation, or no available engines.
 - If both routers return HTTP 503 from `/ready`, compare their refusal reasons. Inspect backend health, lifecycle holds, engine monitoring, the lease holder, and state handoff freshness.
 
 For rising client errors:
@@ -119,13 +112,13 @@ To match a response's status, error type, and code to its cause, use [Admission 
 
 Check: `narwhal_http_retained` reaches `narwhal_http_retained_limit`, which is the [in-flight limit](configuration/02-Serving-and-Role-Control.md#in-flight-limit) plus `serving.queue_capacity`. `narwhal_admission_inflight` stays at `narwhal_admission_inflight_limit`.
 
-Cause: requests arrive faster than admitted requests release their seats. The router rejects each arrival before it reads the body, so the predictive checks never run for these requests.
+Cause: requests arrive faster than admitted requests release their seats. The router rejects each arrival before it reads the body.
 
-Action: reduce ingress traffic, or add engines that passed deployment validation. Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy.
+Action: reduce ingress traffic, or add engines that passed deployment validation. Before raising the limit, run the open-admission sweep in [In-flight limit and decode gaps](operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps): read `narwhal_admission_inflight` when the first `saturated` rejection appears, and set the limit at or below that count. `narwhal-serve --max-concurrent` accepts values up to `serving.max_connections`.
 
 #### Router saturation rejections
 
-Check: compare `narwhal_router_loop_lag_seconds` and `narwhal_request_sizing_delay_seconds` with `narwhal_saturation_threshold_seconds`. The signal at or above the threshold caused the rejection.
+Check: compare `narwhal_router_loop_lag_seconds` and `narwhal_request_sizing_delay_seconds` with `narwhal_saturation_threshold_seconds`, which is a quarter of `slo.ttft_s`. The signal at or above the threshold caused the rejection.
 
 Cause: a late router event loop, or slow token counting and prefix hashing. With `engine.tokenize` on, sizing includes the exact count from an engine.
 
@@ -165,7 +158,7 @@ Raising `serving.queue_timeout_s` lengthens waits without adding seats.
 
 Check: `narwhal_waiting_decode` stays above `0`, and the expired rows' `queue_waits.decode` approaches the producer's `narwhal_handoff_bound_seconds`.
 
-Cause: on vLLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the router ends the attempt instead of dispatching its decode leg. On SGLang, the router places the decode leg before it starts the prefill leg, so this expiry occurs only on vLLM.
+Cause: on vLLM and TensorRT-LLM, every decode engine's seats stayed full until prefilled requests reached their [KV handoff bound](configuration/02-Serving-and-Role-Control.md#kv-handoff-bound). Past the bound, the router ends the attempt instead of dispatching its decode leg.
 
 Action: reduce the offered rate, or add decode capacity. With `serving.max_attempts` above `1`, as in the default of `2`, an expiry with attempts left retries with a fresh prefill, which adds prefill load.
 
@@ -190,11 +183,9 @@ Action: reduce the offered rate, or add capacity. In `open` mode, compare a run 
 3. Compare completed throughput and the share of requests meeting the service-level objective, from `narwhal_served_total` and `narwhal_slo_met_total`.
 4. Reduce ingress traffic, or add a fleet that passed deployment validation, before raising a limit.
 
+The fix has worked when the counter you matched in the table above stops rising at the same offered rate.
+
 Before you change an admission, queue, retry or in-flight setting, read [Choosing admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value.
-
-The class is resolved when the counter series that identified it stops increasing at the offered rate, and the journal shows no new terminal rows with that reason.
-
-The load-test router outcome ratio divides router completions by admitted requests. [Deployment attainment](measure/04-Reconcile-and-Accept.md#joining-client-offers-to-the-router-journal) divides the client completions that meet the service-level objective by all scheduled offers, including cancellations, predictive refusals, and unsent scheduling misses.
 
 ## Validating recovery
 

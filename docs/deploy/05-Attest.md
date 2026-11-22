@@ -85,7 +85,7 @@ narwhal-engine cache-registration \
   --run "$ENGINE_RUN" --runtime-layout "$ENGINE_RUN/cache-layout.json"
 ```
 
-In vLLM v0.30.0, `is_block_outermost` is `true` for the `BLHNC`, `BLNHC`, and `BHLNC` layouts and `false` for the `LBHNC`, `LBNHC`, and `LHBNC` layouts. `cache-registration.json` records the value as `cross_layers_blocks`.
+`cache-registration.json` records the engine's `kv_cache_layout`, and that layout's `is_block_outermost` value as `cross_layers_blocks`.
 
 ### Comparing the layout with the representative's
 
@@ -271,7 +271,19 @@ PY_ATTEST_CHECK
 
 ### Repeating for every engine
 
-Run the capture, generate, and serve steps for each engine.
+In each engine's role shell, with that engine's `ENGINE_RUN`, run these sections in order:
+
+1. [Saving the startup log](#saving-the-startup-log)
+2. [Capturing the connector version](#capturing-the-connector-version)
+3. [Capturing the model dimensions](#capturing-the-model-dimensions)
+4. On vLLM only: [Capturing the cache grouping](#capturing-the-cache-grouping), [Comparing the layout with the representative's](#comparing-the-layout-with-the-representatives), [Capturing the transfer direction](#capturing-the-transfer-direction), [Confirming the connector in the startup log](#confirming-the-connector-in-the-startup-log) and [Capturing handshake enforcement](#capturing-handshake-enforcement)
+5. [Generating the document](#generating-the-document)
+6. [Confirming the attested process](#confirming-the-attested-process)
+7. [Starting the sidecar](#starting-the-sidecar)
+8. [Checking the sidecar from the router](#checking-the-sidecar-from-the-router)
+9. [Verifying the sidecar against the engine](#verifying-the-sidecar-against-the-engine)
+
+When every engine has passed step 9, run [finalizing the fleet contract](#finalizing-the-fleet-contract) once.
 
 ### Finalizing the fleet contract
 

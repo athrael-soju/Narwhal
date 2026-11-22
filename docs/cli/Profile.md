@@ -14,7 +14,7 @@ description: Measure the prefill and decode cost model of each engine with narwh
 
 Every mode writes a profile store, and a sample sidecar at the store's path with the suffix `.samples.json`. Neither file may be a symlink.
 
-A live sweep binds each fit to the engine process it measured. With `engine_contract` set in the fleet configuration, the binding is the `launch_digest` of the [verified engine attestation](../configuration/01-Fleet-Schema.md#attestation), or its `attestation_digest` when the attestation carries no launch evidence. Without `engine_contract`, the binding is the engine version and process start time.
+A live sweep binds each fit to the [process generation](../configuration/01-Fleet-Schema.md#attestation) of the engine it measured.
 
 A live sweep measures engines on separate devices at the same time. Engines in one `shared_device.group`, and all engines under `--colocated`, take turns.
 
@@ -72,9 +72,9 @@ Every mode validates these options:
 
 | Option | Default | Description | Valid values |
 | --- | :---: | --- | --- |
-| `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths. Each engine keeps the lengths that fit its live context limit with one output token. | At least three distinct positive values, and three that fit each engine |
-| `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. Each engine keeps the lengths that fit its live context limit with `--decode-tokens`. | At least two distinct positive values, and two that fit each engine |
-| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. With `--limits`, each engine drops the counts above its limit and adds the limit. At each input length, counts whose streams exceed the engine's reported KV capacity give way to the largest cohort that fills at most 80% of it, when that cohort is larger than every count that fits. See [Decode sweep](../measure/01-Profile.md#decode-sweep). | At least two distinct values of at least 1, and two that remain for each engine |
+| `--prefill-lens LIST` | `256,700,1024,1300,2300,4096,4300,8300,12300,16300` | Comma-separated candidate prefill lengths. Each engine keeps the lengths whose input plus one output token stays below its [context limit](../measure/01-Profile.md#prefill-sweep). | At least three distinct positive values, and three that remain for each engine |
+| `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. Each engine keeps the lengths whose input plus `--decode-tokens` stays below its [context limit](../measure/01-Profile.md#decode-sweep). | At least two distinct positive values, and two that remain for each engine |
+| `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. [Decode sweep](../measure/01-Profile.md#decode-sweep) describes how each engine's sequence limit and KV capacity change them. | At least two distinct values of at least 1, and two that remain for each engine |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
 | `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | Positive, with at least two distinct values and five prefix and suffix cases |
 | `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | Positive, with at least two distinct values |

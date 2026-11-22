@@ -6,7 +6,7 @@ description: Compare SLO-qualified throughput between cold and cache-aware prefi
 
 The trial compares the throughput of requests that meet the service-level objectives (SLOs) between two arms on the same fleet. The baseline arm prices every engine cold. The cache-aware arm prices each engine that holds the request's prefix at its warm fit.
 
-Both arms run with prefix caching on, and the baseline arm turns off cache events with `runtime.kv_events: false`.
+Both arms run with prefix caching on, and the baseline arm turns off cache events with `runtime.kv_events: false`. Run the trial on vLLM or SGLang engines. The cache-aware arm needs the cache events they publish.
 
 ## Freezing the comparison
 

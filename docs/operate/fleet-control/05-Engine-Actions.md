@@ -16,7 +16,9 @@ To narrow the list:
 - Type part of an engine ID in **Find engine**.
 - Choose a role in **All roles**.
 
-**Clear filters** removes all three. When the fleet has more than 10 engines, the list splits into pages; choose 10, 20, 50 or 100 engines per page.
+**Clear filters** removes all three.
+
+The list shows 20 engines per page. When the fleet has more than 10 engines, a selector offers 10, 20, 50 or 100 engines per page, and **‹** and **›** appear once the list needs more than one page.
 
 Click an engine ID to open its details beside the list: its state, role, resident requests, router lifecycle state and flags, the router's reason when the engine is ejected, and the engine's actions in this session.
 
@@ -47,13 +49,14 @@ Click an engine ID to open its details beside the list: its state, role, residen
 
 Each row has a main button for the engine's current state and a **…** menu with the other actions:
 
-| Engine state                 | Main button                                                         |
-| ---------------------------- | ------------------------------------------------------------------- |
-| Paused in this session       | **Resume**                                                          |
-| Stopped in this session      | **Start**                                                           |
-| Draining, drained or blocked | **Readmit**                                                         |
-| Ejected by the router        | **Readmit**, disabled. The tooltip gives the router's reason        |
-| In service                   | **Drain**                                                           |
+| Engine state                | Main button                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| Paused in this session      | **Resume**                                                                          |
+| Stopped in this session     | **Start**                                                                           |
+| Drained or blocked          | **Readmit**                                                                         |
+| Draining                    | **Readmit**, disabled until the drain finishes. The tooltip names the state         |
+| Ejected by the router       | **Readmit**, disabled. The tooltip gives the router's reason                        |
+| In service                  | **Drain**                                                                           |
 
 **Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. While they wait, the engine's state reads `starting` or `resuming` with the seconds waited. The action fails if the engine stays ejected or quarantined for the whole wait, the router blocks its readmission, or the engine needs fresh profiles. To fix a failed action, follow [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected).
 
