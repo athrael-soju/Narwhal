@@ -163,6 +163,7 @@ def _pair_roles(
     launches: dict[str, dict],
     phases: Any = None,
     neighbour_load: NeighbourLoad | None = None,
+    switched: set[str] | None = None,
 ) -> Callable[[Role], Awaitable[None]]:
     async def serve_as(role: Role) -> None:
         if phases is not None:
@@ -176,6 +177,8 @@ def _pair_roles(
             if neighbour_load is not None:
                 # The engine refuses a switch or a cache reset while it holds requests.
                 await neighbour_load.pause()
+            if switched is not None:
+                switched.update((spec.url, peer.url))
             await switcher.place(control, producer, consumer)
             await _reset_caches(control, dialect, (spec.url, peer.url), cfg.health_timeout_s)
             pairing.pair(spec.url, role, peer.url, producer[1])
@@ -509,6 +512,7 @@ async def run(
                         timeout=cfg.health_timeout_s, headers=cfg.engine_headers()
                     ) as control:
                         # Every engine in the group serves its split role under neighbour load.
+                        kept.switched.update(peer.url for peer in members)
                         await restore_roles(
                             switcher,
                             control,
@@ -534,6 +538,7 @@ async def run(
                         launches,
                         phases,
                         neighbour_load,
+                        switched=kept.switched,
                     )
                 profile = await profile_instance(
                     client,
@@ -652,7 +657,7 @@ async def run(
 
 
 class _KeptRoles:
-    """Return each engine that the sweep may switch to the role it served before the sweep."""
+    """Return each engine that the sweep switched to the role it served before the sweep."""
 
     def __init__(
         self,
@@ -665,6 +670,7 @@ class _KeptRoles:
         self.switcher = switcher
         self.launches = {spec.url: launches.get(spec.iid) for spec in specs}
         self.roles: dict[str, tuple[Role, Any]] = {}
+        self.switched: set[str] = set()
         self.error: str | None = None
 
     def control(self) -> httpx.AsyncClient:
@@ -676,14 +682,17 @@ class _KeptRoles:
         if self.switcher.engine_held and self.launches:
             async with self.control() as control:
                 self.roles = await current_roles(self.switcher, control, self.launches)
+            if unread := sorted(set(self.launches) - set(self.roles)):
+                print(f"role unreadable, not restored: {', '.join(unread)}", file=sys.stderr)
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
-        if not self.roles:
+        roles = {base: role for base, role in self.roles.items() if base in self.switched}
+        if not roles:
             return
         try:
             async with self.control() as control:
-                await restore_roles(self.switcher, control, self.roles)
+                await restore_roles(self.switcher, control, roles)
         except (httpx.HTTPError, ValueError) as exc:
             self.error = f"{type(exc).__name__}: {exc}"
             print(f"role restore failed: {self.error}", file=sys.stderr)

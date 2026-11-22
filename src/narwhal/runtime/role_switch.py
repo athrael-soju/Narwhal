@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from typing import Any, ClassVar
 
 import httpx
@@ -176,11 +176,29 @@ async def restore_roles(
     client: httpx.AsyncClient,
     roles: Mapping[str, tuple[Role, Mapping[str, Any] | None]],
 ) -> None:
-    """Serve each engine in `roles` as its role again, with no transfer state from before."""
+    """Serve each engine in `roles` as its role again, with no transfer state from before.
+
+    An engine that fails does not stop the others; the failures raise together at the end.
+    """
+    failures: list[str] = []
+
+    async def attempt(base: str, change: Awaitable[None]) -> bool:
+        try:
+            await change
+        except (httpx.HTTPError, ValueError) as exc:
+            failures.append(f"{base}: {type(exc).__name__}: {exc}")
+            return False
+        return True
+
     ordered = sorted(roles.items(), key=lambda item: item[1][0] is not Role.PREFILL)
-    for base, (role, launch) in ordered:
-        await switcher.switch(client, base, role, launch)
-    producers = [base for base, (role, _) in ordered if role is Role.PREFILL]
-    for base, (role, launch) in ordered:
+    restored = [
+        (base, role, launch)
+        for base, (role, launch) in ordered
+        if await attempt(base, switcher.switch(client, base, role, launch))
+    ]
+    producers = [base for base, role, _ in restored if role is Role.PREFILL]
+    for base, role, launch in restored:
         if role is Role.DECODE and any(switcher.stale_handoff(p, base) for p in producers):
-            await switcher.refresh(client, base, role, launch)
+            await attempt(base, switcher.refresh(client, base, role, launch))
+    if failures:
+        raise ValueError("; ".join(failures))

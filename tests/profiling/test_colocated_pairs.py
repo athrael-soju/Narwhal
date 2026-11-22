@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -472,3 +473,88 @@ class VllmColocatedTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SweepRoleRestoreTests(unittest.IsolatedAsyncioTestCase):
+    """A live SGLang sweep returns each engine it switched to the role it served before."""
+
+    def setUp(self):
+        # The backend's one switcher keeps handoff state for the process; start each test clean.
+        switcher = load_backend("sglang").role_switcher("mooncake")
+        for state in (switcher._received, switcher._generations):
+            saved = dict(state)
+            state.clear()
+            self.addCleanup(lambda state=state, saved=saved: (state.clear(), state.update(saved)))
+
+    def fleet(self, root):
+        cfg = fleet(root, engines=("e0", "e1", "e2", "e3"))
+        cfg.backend, cfg.connector = "sglang", "mooncake"
+        cfg.profiles_path = root / "swept.json"
+        return cfg
+
+    async def sweep(self, measured, *, unhealthy=None):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = self.fleet(Path(folder))
+            group = SglangGroup(cfg)
+            hosts = list(group.roles)
+            group.roles.update({hosts[1]: Role.DECODE, hosts[3]: Role.DECODE})
+            before = dict(group.roles)
+            switches = []
+
+            async def handle(request):
+                if request.url.path == "/pd_role_switch":
+                    switches.append(request.url.host)
+                if request.url.path == "/health" and request.url.host == unhealthy:
+                    return httpx.Response(503)
+                return await group.handle(request)
+
+            with (
+                sglang_engines(cfg, SimpleNamespace(handle=handle), measured),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                try:
+                    code = await fleet_probe.run(cfg, {"e0"}, split_lanes=False)
+                except RuntimeError as exc:
+                    code = exc
+        self.errors = errors.getvalue()
+        return code, before, group.roles, switches, hosts
+
+    async def test_the_target_and_its_peer_return_to_their_roles(self):
+        async def measured(client, iid, *args, roles, **kwargs):
+            await roles(Role.PREFILL)
+            await roles(Role.DECODE)
+            return profile(iid)
+
+        code, before, after, switches, _ = await self.sweep(measured)
+        self.assertEqual(code, 0)
+        self.assertTrue(switches)
+        self.assertEqual(after, before)
+
+    async def test_a_failed_sweep_still_restores_the_roles(self):
+        async def measured(client, iid, *args, roles, **kwargs):
+            await roles(Role.DECODE)
+            raise RuntimeError("probe failed")
+
+        code, before, after, _, _ = await self.sweep(measured)
+        self.assertIsInstance(code, RuntimeError)
+        self.assertEqual(after, before)
+
+    async def test_a_failed_role_restore_fails_the_sweep(self):
+        async def measured(client, iid, *args, roles, **kwargs):
+            await roles(Role.DECODE)
+            return profile(iid)
+
+        refused = AsyncMock(side_effect=ValueError("http://engine-1.invalid: ConnectError: down"))
+        with patch.object(fleet_probe, "restore_roles", refused):
+            code, *_ = await self.sweep(measured)
+        self.assertEqual(code, 1)
+        self.assertIn("role restore failed: ValueError: http://engine-1.invalid", self.errors)
+
+    async def test_an_unhealthy_target_switches_no_engine(self):
+        measured = AsyncMock()
+        with tempfile.TemporaryDirectory() as folder:
+            target = httpx.URL(self.fleet(Path(folder)).engines[0].url).host
+        code, before, after, switches, _ = await self.sweep(measured, unhealthy=target)
+        self.assertEqual(code, 1)
+        measured.assert_not_called()
+        self.assertEqual((switches, after), ([], before))
