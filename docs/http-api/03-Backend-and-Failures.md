@@ -26,14 +26,14 @@ Same-engine decode:
 
 ### Descriptor validation
 
-Run [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) to validate the pinned engine contract and role-permitted KV transfers.
-
 Decode rejects a KV handoff descriptor with:
 
 - missing engine identity
 - malformed block IDs
 - a connector mismatch
 - an endpoint mismatch
+
+[Preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) validates the pinned engine contract and role-permitted KV transfers before you serve traffic.
 
 ### Request scope and timing
 
@@ -46,7 +46,7 @@ Scoped to the original client request:
 
 ### KV handoff expiry
 
-The [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) limits the time from prefill completion to decode dispatch. A handoff that reaches the bound ends its attempt:
+On vLLM and TensorRT-LLM, the [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) limits the time from prefill completion to decode dispatch. A handoff that reaches the bound ends its attempt:
 
 | Point of expiry | Journal `error` contains |
 | --- | --- |
@@ -146,8 +146,11 @@ A valid engine stream ends with `data: [DONE]` after generated output.
 
 A fresh attempt starts for a transient fault before visible output when:
 
-- the original request deadline permits it
+- attempts remain
 - retry budget remains
+- the original request deadline falls after the retry delay
+
+The retry delay is a random value up to `serving.retry_base_s`, doubled for each earlier attempt and capped at `serving.retry_cap_s`.
 
 A retry reserves one retry credit when it is scheduled and spends that credit when its prefill dispatches. A retry that ends before dispatch returns its credit.
 

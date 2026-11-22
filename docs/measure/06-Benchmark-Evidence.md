@@ -4,9 +4,7 @@ description: Evidence collection for each point of a Narwhal benchmark plan.
 
 # Benchmark evidence bundle
 
-The `evidence` object in the plan starts one evidence collector for each point of the [ordered benchmark runner](05-Benchmark-Runner.md).
-
-Put `evidence` at the top level of the plan, next to `schema` and `points`:
+The `evidence` object in a plan starts one evidence collector for each point of the [ordered benchmark runner](05-Benchmark-Runner.md). Put it at the top level of the plan, next to `schema` and `points`:
 
 ```json
 {
@@ -32,8 +30,6 @@ Put `evidence` at the top level of the plan, next to `schema` and `points`:
 }
 ```
 
-The `evidence` object takes these fields:
-
 | Field | Value |
 | --- | --- |
 | `journal_path` | The `narwhal-serve --journal` file |
@@ -41,16 +37,15 @@ The `evidence` object takes these fields:
 | `profiles_path` | Profile store under test |
 | `sample_interval_s` | Positive sampling interval in seconds |
 | `engine_metrics_urls` | Engine name mapped to its HTTP metrics URL |
-| `identity` | All nine labels shown in the example |
+| `identity` | All nine labels shown in the example. Each is required and non-empty, and every label except `gpu_allocation` must be a string |
 | `client_records` | Optional [client records](#client-records) path, default `{point_dir}/client/requests.jsonl` |
 
-The collector reads `warmup.json` and `summary.json` from the directory that holds the client records.
+To adapt the example:
 
 1. Replace the example metrics URLs with addresses the runner host can reach.
-2. Check the self-declared `identity` fields against the deployment and preflight records before accepting a GPU result.
-3. Keep the plan and everything under `runs/` private.
+2. Fill `identity` from the deployment and preflight records. The collector copies the `identity` object into `evidence.json` as given, so verify the labels before you accept a GPU result.
 
-The collector records SHA-256 digests of the fleet file and profiles before each point, and of the retained client records, warmup, and summary files. It groups metrics samples by router process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
+For each point the collector records SHA-256 digests of the fleet file and the profiles before the point starts, and of the client records, `warmup.json` and `summary.json` it retains. It reads `warmup.json` and `summary.json` from the directory that holds the client records. It groups metrics samples by router process, keyed on the `journal_run` in the router state, across restarts and standby takeovers.
 
 ## Client records
 
@@ -73,11 +68,9 @@ The collector adds these files under `runs/<run>/<point>/`:
 | `journal-rows.json` | JSONL rows between the byte offset before client start and the byte offset after final drain: terminal rows, process metadata, events |
 | `client/requests.jsonl`, `client/warmup.json`, `client/summary.json` | Client files when the client writes inside the point directory |
 | `client-*.snapshot.*` | Private copies when the configured client files live outside the point directory |
-| `summary.shareable.json` | Redacted publication copy: selected counts, anonymized role history, configuration digests, evidence gaps, and latency and throughput when the client wrote `summary.json` |
+| `summary.shareable.json` | Shareable copy: selected counts, anonymized role history, configuration digests, evidence gaps, and latency and throughput when the client wrote `summary.json` |
 
-`summary.shareable.json` removes URLs, credentials, private file paths, and request failure text. It replaces engine IDs with `engine-1`, `engine-2`, and onward, and replaces the engine image reference and GPU allocation with their SHA-256 digests.
-
-Before publishing `summary.shareable.json`, check the model and revision labels you supplied for sensitive data.
+The collector builds `summary.shareable.json` from a fixed list of fields, so it holds no URLs, credentials, private file paths or request failure text. It names engines `engine-1`, `engine-2` and onward in order of first appearance, and replaces the engine image reference and GPU allocation with their SHA-256 digests.
 
 ## Reconciliation
 

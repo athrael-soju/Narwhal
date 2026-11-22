@@ -35,7 +35,7 @@ description: Read each figure of narwhal dev watch and send concurrent requests 
 ╰───────────────────────────────────────── Ctrl+C to exit ─────────────────────────────────────────╯
 ```
 
-In a terminal the view takes the whole window, colours prefill engines cyan and decode engines magenta, and highlights an engine in the frame where it switches role. Ctrl+C gives the terminal back as it was. Piped to a file, `watch` writes each frame as plain lines, and `--format json` prints one frame as a document.
+In a terminal the view takes the whole window, colours prefill engines cyan and decode engines magenta, and highlights an engine in the frame where it switches role. Ctrl+C gives the terminal back as it was. Piped to a file, `watch` writes each frame as plain lines with no terminal control codes.
 
 ## Fields
 
@@ -68,10 +68,9 @@ To load the decode engines, ask for long replies:
 narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
 ```
 
-On the measured hosts, a four-engine fleet filled its decode engines, and in most runs the router moved one prefill engine to the decode role within 30 seconds. After a switch, the view shows `1 prefill, 3 decode` and the switch in its last line. With `--concurrency 16`, the router kept two prefill and two decode engines in three runs on one measured GPU host, where the decode work of the proposed split fell outside the range the engines' profiles cover.
+With the installed templates, the router decides a role switch from the last 30 seconds of load and needs ten arrivals in that window. A short burst leaves the roles as they are.
 
-With the installed templates, the router decides a switch from the load of the last 30 seconds and needs ten arrivals in that window, so a short burst leaves the roles unchanged.
-
+After a switch, the engine counts at the top of the view change, the frame highlights the engine that switched, and `role switches` goes up by one.
 ## Single-frame JSON output
 
 `narwhal dev watch --once` takes two readings one `--interval` apart and prints that frame as JSON:
@@ -80,6 +79,4 @@ With the installed templates, the router decides a switch from the load of the l
 narwhal dev watch --once --interval 5
 ```
 
-With `--format json` the frame arrives inside the [versioned command result](../Command-Results.md).
-
-Output sent to a file or a pipe carries one frame after another with no terminal control codes.
+`--format json` implies `--once` and wraps the frame in the [versioned command result](../Command-Results.md).

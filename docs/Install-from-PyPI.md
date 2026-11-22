@@ -35,9 +35,10 @@ For each deployment:
 
 ## Before serving requests
 
-Qualify these production inputs by following [Deploying a fleet](Deploy.md):
+The package installs the router and its commands. Provision the engines separately: vLLM with NIXL, SGLang with Mooncake, or TensorRT-LLM with UCX or NIXL.
 
-- separately provisioned vLLM engines with NIXL, or SGLang engines with Mooncake
+Then follow [Deploying a fleet](Deploy.md) to qualify the rest of the production inputs:
+
 - engine attestation
 - a fleet configuration
 - measured profiles

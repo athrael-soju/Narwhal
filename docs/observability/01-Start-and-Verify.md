@@ -17,7 +17,7 @@ Run these commands in the [installed router-role shell](../deploy/02-Install.md#
 
 ## Configuring the monitored deployment
 
-`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves. When the router moves to another origin, set the new value and rerun `make observe`, which recreates Prometheus with the new targets.
+`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Write it as `http://host:port` with an explicit port and no path, query or credentials. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves. When the router moves to another origin, set the new value and rerun `make observe`, which recreates Prometheus with the new targets.
 
 Set it in the router-role shell:
 
@@ -53,6 +53,17 @@ Run:
 ```bash
 make observe
 ```
+
+To pass options, run the start command directly:
+
+```bash
+.venv/bin/python -m tools.observability.start.cli --router-url http://127.0.0.1:8000 --ready-timeout 120
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--router-url URL` | `NARWHAL_ROUTER_URL` | Router origin Prometheus scrapes, required when the variable is unset |
+| `--ready-timeout SECONDS` | `60` | Seconds each readiness wait allows |
 
 ### Readiness contract
 

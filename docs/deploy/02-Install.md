@@ -4,7 +4,7 @@ description: Package an approved Narwhal revision and install it on the router a
 
 # Install the approved revision
 
-`prepare` bundles the approved commit, role files, and helper snapshots. `install` installs the approved commit on each host.
+Run these commands from the management checkout after discovery. `prepare` writes the package that `install` copies to each host.
 
 ## Building an immutable deployment package
 

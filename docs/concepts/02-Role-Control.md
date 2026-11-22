@@ -48,42 +48,11 @@ In `/narwhal/state`, the [demand accounting](../http-api/06-SLO-and-Demand.md#de
 
 ### Departures from a settled split
 
-A departure is a move away from a settled split when demand shifts. A split is settled while no split one engine away improves the worst projected SLO ratio by `controller.reactive.movement_margin` or more, both on window demand, measured over the full measurement window, and on confirmation-span demand, measured over a short recent span.
-
-The confirmation span is `controller.reactive.step_s` times the sustained confirmation count, the larger of `controller.reactive.confirmations` and `controller.thresholds.sustained_intervals`. By default it is 15 s.
-
-A departure reverses the role controller's recent moves when all of these are true as it starts:
-
-- The role controller moved at least one engine in the preceding `controller.reactive.window_s` plus `controller.reactive.evidence_span_s`.
-- Each of those moves went opposite the departure's direction.
-- The latest of those moves is at least `controller.reactive.evidence_span_s` old.
-
-The role controller starts a departure when all of these are true:
-
-- The split has been settled for at least `controller.reactive.evidence_span_s`, or for one confirmation span less when the departure reverses the role controller's recent moves.
-- For prefill or decode, confirmation-span demand differs from window demand by more than `controller.reactive.demand_rise_tolerance` times the larger of the two.
-- On confirmation-span demand, a split one engine away improves the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
-
-The first move toward that split needs one confirmation and, on confirmation-span demand, a source load at or below `controller.thresholds.shrink`.
-
-While the shift lasts, a departure keeps moving engines in its direction on confirmation-span demand, starting from the time in this table. Every other move uses window demand.
-
-| Departure | Starting at                                           |
-| --------- | ----------------------------------------------------- |
-| Reversing | Its first move                                        |
-| Other     | `controller.reactive.evidence_span_s` after it starts |
-
-After moving an engine, the controller blocks reverse moves until the departure ends (at most `controller.reactive.window_s` later). Prefill surges bypass this restriction.
+A split is settled when no split one engine away improves the worst projected SLO ratio by `controller.reactive.movement_margin`. When demand shifts, the role controller opens a departure and moves engines toward the better split one at a time until the shift ends. [Adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) give the conditions and defaults.
 
 ### Steady demand
 
-Demand is steady when the arrival-evidence window is closed and confirmation-span demand has stayed within `controller.reactive.demand_rise_tolerance` of window demand for the last `controller.reactive.evidence_span_s`.
-
-Under steady demand, the role controller may take an engine from a role whose source load is above `controller.thresholds.shrink` when all of these hold:
-
-- The source load is at or below `controller.thresholds.expand`.
-- The move lowers the worst projected SLO ratio by at least `controller.reactive.movement_margin`.
-- The move has been confirmed for the sustained confirmation count.
+Under steady demand, the role controller can move an engine from a role whose load is above `controller.thresholds.shrink`, up to `controller.thresholds.expand`, when the move lowers the worst projected SLO ratio by at least `controller.reactive.movement_margin`. [Adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) define steady demand.
 
 ### Incomplete demand
 

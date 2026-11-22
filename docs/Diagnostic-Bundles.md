@@ -89,7 +89,17 @@ Filter free-text logs with site tooling when they hold credentials or request co
 
 ## Manual collection
 
-When the installed collector is unavailable, use the [incident capture commands](Troubleshoot.md#capturing-router-and-engine-state):
+When the installed collector is unavailable, save each GET response from the router yourself. Use a separate private directory per router and keep each HTTP status with its response:
 
-- Keep each HTTP status with its response.
-- Use a separate private directory per router.
+```bash
+ROUTER_URL=http://127.0.0.1:8000
+OUT=runs/diagnostics/manual-incident-001
+umask 077
+mkdir -p "$OUT"
+for route in health ready narwhal/state narwhal/lifecycle metrics; do
+  curl -sS -w '\nHTTP %{http_code}\n' "$ROUTER_URL/$route" \
+    > "$OUT/$(echo "$route" | tr / -).txt"
+done
+```
+
+Copy the fleet file and run directory, and apply the [content policy](#content-policy) to anything you share.

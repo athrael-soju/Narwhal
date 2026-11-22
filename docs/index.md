@@ -26,7 +26,7 @@ Narwhal is a Python framework for disaggregated LLM inference. It assigns prefil
 
     Set up four llama.cpp engines on a GPU or the CPU, send prompts and watch the roles change.
 
--   [Run vLLM or SGLang on one GPU](Dev-Runtime.md)
+-   [Run vLLM, SGLang or TensorRT-LLM on one GPU](Dev-Runtime.md)
 
     ---
 

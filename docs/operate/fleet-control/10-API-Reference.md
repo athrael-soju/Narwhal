@@ -23,8 +23,8 @@ A malformed request body returns HTTP 422 with a `detail` alone, and the service
 |                         | 409    | No session is active, or an exclusive action is in progress                                                   |
 | `GET /api/session`      | 200    | The active session's run record, with `changes`                                                               |
 |                         | 404    | No session is active                                                                                          |
-| `GET /api/health`       | 200    | `status`, the active `session`, the current or last load `job`, `in_progress` and `in_progress_since`         |
-| `GET /api/console`      | 200    | `grafana` with the dashboard UID, dashboard URL and panel URLs, or `null`; `load`; and the configured `hooks` |
+| `GET /api/health`       | 200    | `status` (`ok`), `session` (the active session ID or `null`), `job` (the current or last job document, or `null`), `in_progress` (the running exclusive action or `null`) and `in_progress_since` |
+| `GET /api/console`      | 200    | `grafana` with the dashboard UID, dashboard URL and panel URLs, or `null` without a `console` section; `load`, `true` with a `load` section; and `hooks`, the sorted names of the configured hooks |
 
 ## Engines
 
@@ -89,7 +89,7 @@ Each workload kind requires, accepts or rejects these fields as in [Start a job]
 |                               | 409    | No job is running, no session is active, or an exclusive action is in progress                                                                                                                                                                                                                    |
 | `GET /api/jobs/current`       | 200    | The running job, or the last one to finish                                                                                                                                                                                                                                                        |
 |                               | 404    | No job has run                                                                                                                                                                                                                                                                                    |
-| `GET /api/jobs/current/live`  | 200    | The current job's results so far, read from AIPerf's per-request records: `requests`, `elapsed_s`, `throughput`, `latency` percentiles, `slo` targets, `goodput` and a `series` over the job                                                                                                      |
+| `GET /api/jobs/current/live`  | 200    | The current job's results so far, read from AIPerf's per-request records: `job`, `state`, `requests`, `elapsed_s`, `throughput`, `latency` percentiles, `slo` targets, `goodput` once requests carry goodput grades, and a `series` over the job. The route exists only with a `load` section |
 |                               | 404    | No job has run                                                                                                                                                                                                                                                                                    |
 | `GET /api/workloads`          | 200    | The workload library. `workloads` lists each entry with `name`, `kind`, `label`, `description`, `ignore_eos` and the workload's other keys, except `file`. `limits` maps each numeric job field to its `min`, `max`, `integer` and console `default`. The route exists only with a `load` section |
 

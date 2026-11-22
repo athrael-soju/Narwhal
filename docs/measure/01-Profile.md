@@ -55,7 +55,7 @@ Before you select deployment SLOs, [re-profile each engine whose process generat
 ### Prefill sweep
 
 - Select at least three prefill lengths that span the production range, including its longest inputs.
-- The effective sweep is the set of prefill lengths whose input plus one output token fits the live `max_model_len`. On vLLM, the profiler reads it from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`. On TensorRT-LLM, it reads `--max_seq_len` from the engine's attested launch.
+- The effective sweep keeps the prefill lengths whose input plus one output token stays below the engine's context limit. On vLLM, the profiler reads the limit as `max_model_len` from `/tokenize`. On SGLang, it reads `/server_info` and takes the lower of `context_length` and `max_req_input_len`. On TensorRT-LLM, it reads `--max_seq_len` from the engine's attested launch.
 - Compare each engine's effective sweep in `profiles.samples.json` with the serving plan.
 - The router prices a prompt longer than the longest swept length with the [fit extended past the sweep](../telemetry/02-Profiles.md#prefill-price-derived-from-the-profile).
 
@@ -83,14 +83,13 @@ A decode cell is one combination of decode input length and concurrency.
 
 - Use at least two decode input lengths and two concurrency values.
 - For production calibration, use at least three concurrency values, including one stream and the intended operating range.
-- With `--limits`, each engine's top concurrency value is its sequence limit.
+- The effective sweep keeps the decode input lengths whose input plus `--decode-tokens` output tokens, 64 by default, stays below the engine's context limit. When fewer than two decode input lengths remain, choose shorter inputs.
+- With `--limits`, each engine drops the concurrency values above its sequence limit and adds the limit as its top value.
 - When the engine reports its [KV capacity](#kv-capacity-source), the profiler skips, at each decode input length, the concurrency values whose streams exceed it, and measures instead the largest cohort whose streams fill at most 80% of it when that cohort is larger than every value that fits. A stream counts its input plus its requested output, or plus the 512 KV tokens an SGLang decode engine holds free for each running request when that is larger. When the engine reports its cache block size, each stream rounds up to whole blocks, and a vLLM engine's capacity leaves out the block vLLM keeps as its null block. The profiler skips an input length where fewer than two cohorts fit, and fails the engine's profile when fewer than two measured input lengths remain.
 - A lagged cohort's retry keeps its longer streams within the same KV capacity.
 - When the largest cohort that fills at most 80% of the KV capacity still completes too few intervals after its retries, the profiler drops that cell and records it in `decode_skipped` with its `reason`. It keeps the other cells at that input length when at least two remain. Otherwise it drops the input length and records its measured cells in `decode_skipped` with their `reason`.
 - `decode_max_requests` is the cohort of the measured cell that held the most KV tokens, so the profile's request and KV bounds meet at a measured cell.
 - Use a broader sweep for long-context deployments.
-- Each decode input plus its requested output must fit the live `max_model_len`.
-- When fewer than two decode input lengths fit, choose shorter inputs.
 - When a cold sweep fails on a rise in the prefix-cache hit counter, rerun the sweep with the engine reserved for profiling.
 
 ### Warm prefill with a cached prefix

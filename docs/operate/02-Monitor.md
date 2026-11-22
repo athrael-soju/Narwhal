@@ -12,31 +12,25 @@ description: Interpret Narwhal router health, readiness and placement state duri
 
 | Field | Value |
 | --- | --- |
-| `status` | Router state: `ok`, `degraded`, `maintenance`, `standby`, or `fenced` |
+| `status` | Router state: `ok` when the router admits traffic, `fenced` after a failover block or with an invalid lease, `maintenance` during a whole-wave hold, `standby` on a standby, otherwise `degraded` |
 | `instances` | Configured fleet size |
-| `available_instances` | Engines eligible for placement: the configured fleet minus ejected, draining, and quarantined engines |
+| `available_instances` | Engines eligible for placement: the configured fleet minus ejected, draining, quarantined, and role-switching engines |
 
 ### Backend exhaustion
 
-When every engine is excluded from placement, the active router's `/health` reports `status: degraded` and `/ready` returns HTTP 503 with `reason: no available engines`. New completion requests receive HTTP 503 with the retryable error code `backend_unavailable`.
+When every engine is excluded from placement, the active router's `/health` reports `status: degraded` and `/ready` returns HTTP 503 with `reason: no available engines`. New completion requests receive HTTP 503 with the retryable error code `backend_unavailable` and the message `No engines are available`.
 
 ### Whole-wave lifecycle hold
 
-Until whole-wave readmission succeeds, the active router's `/health` reports `status: maintenance` and `/ready` returns HTTP 503 with the lifecycle reason as `reason`. New completion requests receive HTTP 503 with error code `standby` and the lifecycle reason as the error message.
+Until whole-wave readmission succeeds, the active router's `/health` reports `status: maintenance` and `/ready` returns HTTP 503 with the lifecycle reason, such as `whole-wave drain <id>`, as `reason`. New completion requests receive HTTP 503 with error code `standby` and the message `Router is not ready`. The journal's terminal row for each such request carries the lifecycle reason as `readiness_reason`.
 
 ### Temporary holds
 
-Under [last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection), the router starts no timed quarantine or inference hold on an engine that alone serves one of its roles. When another engine's ejection or drain leaves a held engine alone in its role, the router ends that hold.
+[Last-engine protection](../concepts/03-Failure-and-State.md#last-engine-protection) keeps the last engine of a role in placement.
 
 ### Router control and replacement
 
-The HTTP status of `/ready` shows traffic eligibility, and load balancers route client traffic by it. `control_ready: true` in `/ready` means the router holds a valid lease and its engine monitoring is healthy. A standby copies the state handoff from a primary that reports it, even while that primary's `/ready` returns HTTP 503.
-
-A replacement router:
-
-- runs the same release
-- applies the same lifecycle rules
-- keeps saved ejections until recovery succeeds
+Load balancers route traffic by the HTTP status of `/ready`. `control_ready: true` means the router holds a valid lease and its engine monitoring is healthy. A standby copies the primary's state handoff even while the primary's `/ready` returns HTTP 503.
 
 ## Monitoring placement and control
 
@@ -70,6 +64,8 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
-`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. `NarwhalRejectedRising`, `NarwhalExpiredRising` and `NarwhalRetryDeniedRising` divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
+`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome.
 
-Request journals record per-request placement and timing. Metrics hold process-level summaries since the last counter reset.
+`NarwhalRejectedRising`, `NarwhalExpiredRising` and `NarwhalRetryDeniedRising` divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
+
+To see the placement and timing of one request, read the [request journal](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal).

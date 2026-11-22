@@ -26,22 +26,13 @@ These fields set breaker thresholds, liveness probing, failure quarantine and dr
 | `recovery.health.recovery_windows`    |   `3`   | Consecutive healthy windows required to clear probation                                             | At least 1                                                                  |
 | `recovery.health.probation_penalty_s` |  `1.5`  | Placement penalty in seconds for an engine on probation                                             | At least 0                                                                  |
 
-The probation penalty adds to a prefill placement cost in seconds. For a decode placement cost, Narwhal converts it to tokens at the time per output token (TPOT) target.
+The probation penalty adds to an engine's placement cost, so it moves a placement only when it is larger than the cost gap between that engine and its healthy peers. For a prefill placement the cost is seconds: the engine's resident prefill work plus the request's prefill time plus the penalty. For a decode placement Narwhal divides the penalty by the TPOT target and adds the result in tokens, so the default 1.5 s penalty at a 0.125 s TPOT target adds 12 tokens. Narwhal compares the first cost component (decode tokens for prefill, prefill tokens for decode) before the second, so the penalty breaks ties only among engines equal on the first component. Set the penalty from the cost gaps you see between healthy engines on your own traffic.
 
-Compare the penalty with the time to first token (TTFT) target and the measured healthy placement cost.
+At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class. To choose `recovery.failure_quarantine_s`, follow [Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine).
 
-At `recovery.eject_after` consecutive failures of one class, the breaker runs the action that [failure evidence](../concepts/03-Failure-and-State.md#failure-evidence) lists for that class.
+An inconclusive inference probe keeps the breaker's placement hold on a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence) and repeats every `recovery.readmit_every` monitor intervals.
 
-To choose a value for `recovery.failure_quarantine_s`, follow [Failure quarantine settings](../operate/07-Admission-Queue-and-Retry-Settings.md#retries-and-quarantine).
-
-An inconclusive inference probe:
-
-- keeps the breaker's placement hold on a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence)
-- repeats every `recovery.readmit_every` monitor intervals
-
-The state handoff carries the producer IDs of failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields).
-
-A new router process restores each `inference_sources` suspect by the rules in [restored and process-local state](../http-api/07-Handoff-and-Lifecycle.md#restored-and-process-local-state).
+The state handoff carries the producer IDs of failed KV-transfer paths in [`inference_sources`](../http-api/07-Handoff-and-Lifecycle.md#handoff-fields). A new router process restores each suspect by the rules in [restored and process-local state](../http-api/07-Handoff-and-Lifecycle.md#restored-and-process-local-state).
 
 ### Decode drift evidence
 
@@ -103,12 +94,7 @@ Configure warm-standby takeover with the `narwhal-serve` options in [Starting a 
 
 ## Engine authentication and protocol adapters
 
-Ingress terminates public client credentials.
-
-Each engine request carries:
-
-- the configured engine Bearer credential
-- a router-generated `x-request-id`, unique to every attempt and phase
+Ingress authenticates clients and removes their credentials before a request reaches the router. The router then authenticates to engines with one Bearer credential.
 
 `engine.engine_api_key_env`, empty by default, names the environment variable that must hold the engine Bearer credential. Set it under `engine`:
 
@@ -120,23 +106,30 @@ Each engine request carries:
 }
 ```
 
-Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL with the engine Bearer credential. Attestation requests go to the attestation sidecar URL on the trusted control network.
+Every engine request carries that credential and a router-generated `x-request-id`, unique to every attempt and phase. Serving, profiling, preflight, cache-reset and lifecycle requests go to the engine URL. Attestation requests go to the attestation sidecar URL on the trusted control network.
+
+`/narwhal/state` reports the authentication mode in `admission.engine_auth`: `engine-credential` when `engine.engine_api_key_env` is set, and `boundary` when it is empty. Use the same mode for workload measurement and production serving.
 
 When `engine.engine_api_key_env` names a variable at deployment export, the credential reaches the engine as:
 
-| Location                                                              | vLLM                     | SGLang                   |
-| --------------------------------------------------------------------- | ------------------------ | ------------------------ |
-| Engine role environment                                               | `NARWHAL_ENGINE_API_KEY` | `NARWHAL_ENGINE_API_KEY` |
-| Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` |
-| Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` |
+| Location                                                              | vLLM                     | SGLang                   | TensorRT-LLM             |
+| --------------------------------------------------------------------- | ------------------------ | ------------------------ | ------------------------ |
+| Engine role environment                                               | `NARWHAL_ENGINE_API_KEY` | `NARWHAL_ENGINE_API_KEY` | `NARWHAL_ENGINE_API_KEY` |
+| Mode-0600 `container.env` that the engine launcher supplies to Docker | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
+| Mode-0600 `engine.env` for a native engine                            | `VLLM_API_KEY`           | `NARWHAL_SGLANG_API_KEY` | `NARWHAL_TRTLLM_API_KEY` |
 
-The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`.
+The SGLang launcher passes `NARWHAL_SGLANG_API_KEY` to the engine as `--api-key`. `trtllm-serve` does not check `NARWHAL_TRTLLM_API_KEY` and serves every caller that reaches its port, so keep a TensorRT-LLM engine port on a private network.
 
-`/narwhal/state` reports the authentication mode in `admission.engine_auth`. The mode is `engine-credential` when `engine.engine_api_key_env` is set, and `boundary` when it is empty.
+`engine.backend` is `"vllm"`, the default, `"sglang"`, `"trtllm"` for TensorRT-LLM, or `"llamacpp"` for a [development fleet of llama.cpp engines](../dev/Llama-Cpp-Engines.md). `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults:
 
-Use the same authentication mode for workload measurement and production serving.
+| Backend      | `engine.backend` | `engine.connector` | `engine.dialect` |
+| ------------ | ---------------- | ------------------ | ---------------- |
+| vLLM         | `"vllm"`         | `"nixl"`           | `"vllm"`         |
+| SGLang       | `"sglang"`       | `"mooncake"`       | `"sglang"`       |
+| TensorRT-LLM | `"trtllm"`       | `"ucx"`            | `"trtllm"`       |
+| llama.cpp    | `"llamacpp"`     | `"slot-file"`      | `"llamacpp"`     |
 
-`engine.backend` is `"vllm"`, the default, `"sglang"`, or `"llamacpp"` for a [development fleet of llama.cpp engines](../dev/Llama-Cpp-Engines.md). `engine.connector` and `engine.dialect` take the backend's values, which are also their defaults: `"nixl"` and `"vllm"` on vLLM, `"mooncake"` and `"sglang"` on SGLang, `"slot-file"` and `"llamacpp"` on llama.cpp.
+A TensorRT-LLM engine also accepts the connector `"nixl"`.
 
 
 ## Profile validation

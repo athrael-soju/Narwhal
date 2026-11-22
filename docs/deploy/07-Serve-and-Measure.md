@@ -31,24 +31,24 @@ Replace `<served-model>` with the fleet model.
 
 3. Retain these responses before load:
 
-    | Response          | Shows                                                                  |
-    | ----------------- | ---------------------------------------------------------------------- |
-    | `/health`         | Liveness status and instance counts                                    |
-    | `/ready`          | Admission state                                                        |
-    | `/narwhal/state`  | Engine inventory and role split                                        |
-    | `/metrics`        | Router metrics                                                         |
-    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state` |
+    | Response          | Shows                                                                                                           |
+    | ----------------- | --------------------------------------------------------------------------------------------------------------- |
+    | `/health`         | `status` (`ok` when the router is ready), `instances` and `available_instances`                                 |
+    | `/ready`          | `status` `ready` or `not_ready` with a `reason`, and HTTP 503 when not ready                                |
+    | `/narwhal/state`  | Engine inventory and role split                                                                                 |
+    | `/metrics`        | Router metrics                                                                                                  |
+    | `/v1/completions` | One successful completion that increments `served` in `/narwhal/state`                                          |
 
 ## Starting the monitoring stack on the router
 
-In the router shell, run:
+With the router running, start the stack in the router shell:
 
 ```bash
 export NARWHAL_ROUTER_URL=http://127.0.0.1:8000
 make observe
 ```
 
-Retain the target-discovery and dashboard-verification output.
+The command waits until Prometheus scrapes the router, then prints one line for each service: `<service> ready at <URL> (<container ID>, <image>)`. Retain those lines.
 
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 

@@ -4,38 +4,41 @@ description: Serving options, standby takeover and lease fencing for the narwhal
 
 # `narwhal-serve`
 
-Start a router: `narwhal-serve --fleet PATH`.
+Start a router with `narwhal-serve --fleet PATH`.
 
-`narwhal-serve` exits with these statuses:
+`narwhal-serve` checks `--host` and `--port` before it loads the fleet file. It exits with these statuses:
 
 | Condition | Exit status |
 | --- | :--: |
 | `--host` and `--port` fail the bind check | `1` |
-| Invalid arguments | `2` |
+| An argument is invalid, including a `--port` outside 0 to 65535 and a `--max-concurrent` above `serving.max_connections` | `2` |
 | The fleet configuration fails to load | `2` |
 | The router configuration fails validation | `2` |
 
 ## Serving options
 
-Command-line options take [precedence](../configuration/06-Fabric-and-Operations.md#cli-precedence) over the matching fleet configuration fields.
+A command-line option takes precedence over the matching fleet configuration field.
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--version` | | Print the installed distribution version. |
 | `--fleet PATH` | required | Fleet configuration JSON file. |
 | `--host HOST` | `127.0.0.1` | Uvicorn bind address. |
-| `--port PORT` | `8000` | Uvicorn bind port. |
+| `--port PORT` | `8000` | Uvicorn bind port, from 0 to 65535. |
 | `--log-level LEVEL` | `info` | Logging threshold: `critical`, `error`, `warning`, `info`, `debug`, or `trace`. |
 | `--journal PATH` | `journal.jsonl` beside `profiles.path` | Request journal, append mode. |
 | `--max-concurrent N` | Config `serving.max_connections` | Router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections` inclusive. |
 | `--graceful-timeout SECONDS` | Config `serving.graceful_timeout_s` | Uvicorn shutdown drain time, in whole seconds, zero or greater. |
 | `--resume` | Config `recovery.resume` | Restore roles, breaker holds, and counters from the last state handoff. |
 
+`--resume` only turns resume on. To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
+
 ## Standby takeover and lease fencing
 
-Takeover with `--standby-of URL` requires both:
+A standby router started with `--standby-of URL` polls the primary every `--standby-probe-interval` seconds. It takes over when all of these hold:
 
 - `--standby-takeover-after` consecutive polls have failed.
+- The last handoff the standby received is at most `--standby-max-handoff-age` seconds old.
 - The shared lease has expired.
 
 Set `--lease-path` on both routers to the same file in the pair's [lease domain](../operate/01-Start-Routers.md#starting-a-router-pair).

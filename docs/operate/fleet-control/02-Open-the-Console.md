@@ -25,7 +25,7 @@ If you forward Grafana to a workstation port other than `13000`, set `console.gr
 
 If the control service or Grafana listens on a router-host address other than `127.0.0.1`, open a separate tunnel for that address with `--remote-address`, as in [Accessing dashboards and isolating listeners](../../observability/02-Access.md#isolating-a-second-monitoring-stack).
 
-## Console authentication
+## Signing in and display options
 
 **Connect** keeps the token in the tab's session storage. Closing the tab or selecting **Forget token** clears it. If the service rejects the token, the page asks for it again.
 

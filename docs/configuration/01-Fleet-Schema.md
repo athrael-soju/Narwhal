@@ -8,7 +8,7 @@ description: Top-level keys, a minimal fleet definition and the engine compatibi
 
 ### Top-level keys
 
-A fleet file accepts the top-level keys `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery` and `profiles`, and annotation keys that start with `_`. Any other top-level key is an error.
+A fleet file accepts the top-level keys `schema`, `schema_version`, `model`, `hardware`, `engines`, `engine_contract`, `slo`, `controller`, `serving`, `engine`, `recovery` and `profiles`. Keys that start with `_` are annotations at any level. Any other key is an error, at the top level and inside each section.
 
 Use JSON-native types:
 
@@ -19,11 +19,13 @@ Use JSON-native types:
 | Duration or ratio   | Finite number     |
 | Name, path, or mode | String            |
 
-A type mistake produces an error like this:
+Loading reports the unknown keys and type errors of every section in one message:
 
 ```text
-fleet.json: controller.monitor_interval_s must be a number; serving.max_connections must be an integer; engine.tokenize must be a boolean
+fleet.json: unknown controller.reactive key 'windows_s' (a typo falls back to the default silently); controller.monitor_interval_s must be a number; serving.max_connections must be an integer; engine.tokenize must be a boolean
 ```
+
+Loading also rejects `NaN` and `Infinity`, an empty `engines` list, and two engines with the same `iid`.
 
 ### Paths
 
@@ -206,9 +208,6 @@ Each sidecar response carries:
 
 - the contract
 - its sources
-- the two identity values, under `engine`
-- an `attestation_digest` over the rest of the response
-
 An attestation document with launch evidence adds two fields to each sidecar response:
 
 - `launch`, the launch evidence
@@ -216,7 +215,15 @@ An attestation document with launch evidence adds two fields to each sidecar res
 
 An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`.
 
-Saved profiles and first-token calibrations bind to the engine's `launch_digest` when the response carries launch evidence, otherwise to its `attestation_digest`.
+The process generation is the identity that saved profiles and first-token calibrations bind to:
+
+| Fleet and sidecar | Process generation |
+| --- | --- |
+| `engine_contract` set, sidecar reports launch evidence | `launch_digest` |
+| `engine_contract` set, sidecar reports an attestation digest only | `attestation_digest` |
+| `engine_contract` unset | Engine version and process start time |
+
+A restarted engine keeps its first-token calibration only when its sidecar reports launch evidence and its launch is unchanged.
 
 Treat an HTTP 503 as a changed engine process:
 

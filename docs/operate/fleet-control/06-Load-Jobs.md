@@ -19,21 +19,23 @@ The hint under the inputs describes the selected workload and the inputs it acce
 
 ## Start a job
 
-In the **Benchmark** panel, select a workload and set its inputs:
+In the **Benchmark** panel, select a workload and set its inputs. The console fills an empty input with its default when you select a workload:
 
-| Input            | Field             | Meaning                                                                                                  | Range        | Default  |
-| ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------- |
-| Rate (req/s)     | `rate`            | Requests per second                                                                                      | 0.1 to 1000  | 2        |
-| Arrival          | `arrival`         | Spacing of requests at the rate: `random` (Poisson), `steady` (even) or `bursty` (gamma, smoothness 0.5) |              | `random` |
-| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               | 1 to 4096    | 32       |
-| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    | 10       |
-| Duration (s)     | `duration_s`      | Seconds of load                                                                                          | 1 to 86400   | 300      |
-| Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 | 1000     |
-| Warm-up          | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   | 10       |
+| Input            | Field             | Meaning                                                                                                  | Range        | Console default            |
+| ---------------- | ----------------- | -------------------------------------------------------------------------------------------------------- | ------------ | -------------------------- |
+| Rate (req/s)     | `rate`            | Requests per second                                                                                      | 0.1 to 1000  | 2                          |
+| Arrival          | `arrival`         | Spacing of requests at the rate: `random` (Poisson), `steady` (even) or `bursty` (gamma, smoothness 0.5) |              | empty, shown as **Random** |
+| Concurrency      | `concurrency`     | Maximum requests in flight                                                                               | 1 to 4096    | 32                         |
+| Ramp-up (s)      | `ramp_s`          | Seconds to rise from a low start to the rate and the concurrency                                         | 1 to 3600    | 10                         |
+| Duration (s)     | `duration_s`      | Seconds of load                                                                                          | 1 to 86400   | 300                        |
+| Requests         | `requests`        | Number of requests to send                                                                               | 1 to 1000000 | 1000                       |
+| Warm-up          | `warmup_requests` | Requests sent before measurement. The results leave them out                                             | 1 to 10000   | 10                         |
 
 Concurrency, Requests and Warm-up take whole numbers. The console and the service refuse values outside the range.
 
-Selecting a workload fills each empty input with its default. A `timestamped_trace` workload clears every input, so the trace replays in full at its recorded times.
+A `timestamped_trace` workload clears every input, so the trace replays in full at its recorded times.
+
+The service passes AIPerf only the fields that a `POST /api/jobs` request sends.
 
 Each workload kind accepts these inputs:
 

@@ -4,9 +4,7 @@ description: Read the Narwhal Orchestrator dashboard from the service-level head
 
 # Reading the dashboard
 
-The **Narwhal Orchestrator** dashboard reads from top to bottom. The headline row shows whether requests meet their SLOs. The engine, outcome and pool panels below it show how the fleet carries the load and why requests drop. The latency, admission, queue, retry and router event-loop panels at the bottom show where delays and failures start.
-
-Below the headline row, the dashboard groups its panels under titles that match the sections of this page. Select a title to hide or show its panels.
+Use the **Narwhal Orchestrator** dashboard to find where a problem starts. Start at the headline row, which shows whether requests meet their SLOs. The engine, outcome and pool panels below it show how the fleet carries the load and why requests drop. The latency, admission, queue, retry and router event-loop panels at the bottom show where delays and failures start. Selecting a row title hides or shows its panels. The **Headline** row matches [Headline row](#headline-row), the **Engines** row matches [Engines and engine role history](#engines-and-engine-role-history), and every other row title is the title of the section that describes it.
 
 Open the dashboard through the tunnel in [Accessing the dashboard from a workstation](02-Access.md#accessing-the-dashboard-from-a-workstation).
 
@@ -132,9 +130,7 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 ## Request outcomes and fleet events
 
-**Request outcomes** shows what happened to client requests, and **Fleet events** shows which alerts fired at the same time.
-
-In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went:
+**Request outcomes** plots client requests per second by outcome. In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went.
 
 | Series               | Requests per second                                                           |
 | -------------------- | ----------------------------------------------------------------------------- |
@@ -145,11 +141,9 @@ In a healthy fleet, **completed** follows **offered** and the other series stay 
 | rejected (capacity)  | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness  |
 | expired              | Requests terminated by their admission or total deadline                      |
 | cancelled            | Requests their client abandoned before completion                             |
-| invalid              | Malformed or unsupported client requests rejected before dispatch             |
+| invalid              | Requests rejected with HTTP 400 as invalid                                    |
 
-When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine.
-
-**Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`. A red or yellow bar marks the time the alert fires.
+Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose.
 
 ## Pool assignments
 
@@ -159,17 +153,11 @@ The teal line counts prefill engines, the blue line counts decode engines and th
 
 ## Latency and token throughput
 
-These panels show how long requests take and how much work the engines complete.
+**Time to first token** plots the p50, p95 and p99 time from router arrival to the end of prefill. **Time per output token** plots the same percentiles of each ended request's average time between output tokens after prefill. Each panel draws the selected router's SLO as a dashed red line. When p95 is above that line, more than 5% of requests in the window missed the SLO.
 
-**Time to first token** plots the p50, p95 and p99 time from router arrival to the end of prefill. **Time per output token** plots the same percentiles of each ended request's average time between output tokens after prefill.
-
-Both panels draw the selected router's SLO as a dashed red line. When p95 crosses it, more than 5% of requests in that window missed the SLO.
-
-**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). On vLLM, Prefill/s counts the `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total. On SGLang and TensorRT-LLM, it counts `sglang:prompt_tokens_total` or `trtllm_prompt_tokens_total` on engines outside the decode and colocated roles.
+**Token throughput** plots two rates: prompt tokens the engines prefill (**Prefill/s**) and output tokens the router observes (**Decode/s**). On vLLM, Prefill/s counts the `local_compute` and `local_cache_hit` prompt tokens, or `vllm:prompt_tokens_total` on engines that report only the total. On SGLang and TensorRT-LLM, it counts `sglang:prompt_tokens_total` or `trtllm_prompt_tokens_total` on engines outside the decode role.
 
 ## Pool pressure, admission and queue depth
-
-These panels show pool load, admission seats and the requests waiting at each queue stage.
 
 **Pool pressure** plots each pool's load as a fraction of its SLO target, and the dashed yellow line at 1 marks the target. When a pool's load stays at or above `controller.thresholds.expand` (default 1.0), [reactive role control](../concepts/02-Role-Control.md#expansion-and-consolidation) can move an engine into that pool.
 
@@ -183,13 +171,9 @@ These panels show pool load, admission seats and the requests waiting at each qu
 | prefill   | `narwhal_waiting_prefill` | For a prefill [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) |
 | decode    | `narwhal_waiting_decode`  | For a decode engine seat                                                                  |
 
-When the prefill or decode line rises, no engine of that phase has a free seat. When the admission line rises while **Admission in-flight** sits at its limit, every admission seat is taken.
-
 ## Request waiting time and retries
 
-These panels show how long requests wait and how the router retries failed attempts.
-
-**Request waiting time** plots the p95 wait at each queue stage from `narwhal_queue_wait_seconds`, split by its `stage` label: **admission wait p95** for an admission seat, and **prefill seat wait p95** and **decode seat wait p95** for an engine seat. **seat time p95** shows how long a request holds an admission seat. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) defines the bounds and outcomes.
+**Request waiting time** plots the p95 wait from `narwhal_queue_wait_seconds`, split by its `stage` label. **admission wait p95** is the wait for an admission seat. **prefill seat wait p95** and **decode seat wait p95** are the waits for an engine seat. **seat time p95** is how long a request holds an admission seat. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) defines the bounds and outcomes.
 
 **Retries and early exits** plots these rates:
 
@@ -200,11 +184,11 @@ These panels show how long requests wait and how the router retries failed attem
 | completed after retry | Requests completed by an attempt after the first                                               |
 | ended before sizing   | Requests that ended before [input sizing](../http-api/03-Backend-and-Failures.md#input-sizing) |
 
-**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The [retry settings](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) define the pool's size, spending, and replenishment.
+**Retry credits** plots `narwhal_retry_credits`, the credits available for new retries. The [retry settings](../configuration/02-Serving-and-Role-Control.md#waiting-engine-seats-and-retries) define the pool's size, spending and replenishment.
 
 ## Router event loop
 
-**Router event loop** shows the selected router's event-loop busy share and monitoring-deadline lag.
+**Router event loop** plots two series for the selected router:
 
 | Series | Shows                                                                                                                        |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -238,4 +222,4 @@ Probing marks work from another client, such as a direct request or a Narwhal to
 
 Probing stays off during an engine's first 23 seconds of scrapes, for 32 to 37 seconds after a router's last request to the engine, and for 37 seconds after a router last held work on it or a scraped tool last reported it. On every engine, it stays off from a router's first scrape after the router starts or stops, 0 to 5 seconds after the change, until 32 to 37 seconds after it. An engine that a scraped tool reports reads Calibrating, Profiling or Preflight, and returns to Serving 0 to 5 seconds after the tool exits.
 
-[GPU telemetry, alerts, and recovery](03-Telemetry-and-Recovery.md)
+[Alerts, troubleshooting and captures](03-Telemetry-and-Recovery.md)

@@ -16,7 +16,7 @@ Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer
 
 ### Concurrency
 
-Inspect engine hosts, start engines with disjoint GPU allocations, and attest running engines after the fabric check in parallel. Start engines that share GPUs one at a time. Measure one directed fabric edge at a time with idle engines.
+`narwhal-engine start-shared` starts engines that share a GPU one at a time and waits for each to answer before it starts the next. Measure each directed fabric edge while the fleet is idle.
 
 Per-engine and per-host rules:
 
@@ -80,6 +80,8 @@ Record each gate's result before the next gate.
 
 </div>
 
+After the capacity trial passes, run [advisory mode](configuration/02-Serving-and-Role-Control.md#advisory-rollout) on representative traffic before you allow production role movement. Then archive the fleet configuration, the private inputs and the launch evidence in the private deployment record.
+
 ### Rerunning after a change
 
 | Change | Repeat |
@@ -87,8 +89,8 @@ Record each gate's result before the next gate.
 | Offered rate or request count within the profiled range | Drain the router and run the next trial point with the existing profiles, fabric samples, and preflight. |
 | SLO or first-token deadline | Run `narwhal-check` with the revised limits against saved profiles and live handoffs, then load the edited fleet. |
 | Router restart with unchanged fleet configuration | Restart the router. |
-| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration). |
-| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM and the attestation, [profile the new process generation](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles), [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), then run full preflight. |
+| Engine restart with unchanged attested [`launch_digest`](configuration/01-Fleet-Schema.md#attestation) | Capture the live cache layout on vLLM or TensorRT-LLM and the attestation, then run full preflight against saved profiles and the [first-token calibration](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration). |
+| Engine restart with changed attestation or only an attestation digest | Capture the live cache layout on vLLM or TensorRT-LLM and the attestation, [profile the new process generation](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles), [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), then run full preflight. |
 | Changed cache geometry | Recalculate the fabric budget, from `cache-layout.json` on vLLM and TensorRT-LLM or from measured handoffs on SGLang. |
 | Changed fabric route, host assignment, or transport | Measure affected directed links against the source budget, [recalibrate the first-token deadline](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-the-calibration), and exercise the live KV paths in preflight. |
 
@@ -96,42 +98,27 @@ Record each gate's result before the next gate.
 
 Record these inputs and artifacts in the private deployment record:
 
-| Stage                      | Inputs                                                                                                                                          | Evidence to retain                                                                                                               |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery and access       | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key                                                   | `.env`, generated JSON, host-key database, `runs/discovery/<run>/`, `runs/access-<id>/`                                          |
-| Package and install        | Approved commit, role mapping, per-engine allocation, host prerequisites                                                                        | `runs/deployment-env/<run>/`, remote `~/Narwhal-deploy/<id>/`, role files, fleet config, install marker                          |
-| Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports                        | Engine role env, launch record, discovery checkpoint manifests, `model_tree_sha256`, `ENGINE_RUN`, image-check and HTTP captures |
-| Fabric                     | Peer addresses, transport, representative process, live cache layout, workload budget                                                           | Cache layout, budget, link fingerprints, route files, directed samples, comparisons, edge matrix                                 |
-| Attestation                | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json`, all `ENGINE_RUN` captures, router fleet before and after attestation                                  |
-| Profiling                  | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency                                                         | Fleet config, profiling limits, profile and sample files                                                                         |
-| Preflight                  | Current processes, profiles, first-token calibration, fleet contract, and SLOs                                                                  | Router environment, fleet config, calibration artifact, private check output                                                     |
-| Router                     | Bind address, model, engine count, and role split                                                                                               | Router env, fleet config, endpoint captures                                                                                      |
-| Capacity trial             | Workstation load client, router observability stack, SSH path, fixed runtime and cache policy, workload, and thresholds                         | Tunnel logs, Compose discovery, `runs/load-trial-<id>/`, manifests, request records, summaries, state and network snapshots      |
+| Stage | Inputs | Evidence to retain |
+| --- | --- | --- |
+| Discovery and access | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
+| Package and install | Approved commit, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
+| Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
+| Fabric | Peer addresses, transport, representative process, live cache layout, workload budget | `budget.json`, `cache-layout.json`, and the `<edge>.*` files of every directed edge |
+| Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json` and `startup.log` in each `ENGINE_RUN` directory, `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |
+| Profiling | Idle engines, fixed runtime, generated sequence limits, prompt lengths, and concurrency | `runs/deployment/fleet.json`, `runs/deployment/profiling-limits.json`, the profile store and its `.samples.json` file |
+| Preflight | Current processes, profiles, first-token calibration, fleet contract, and SLOs | Router environment, `runs/deployment/fleet.json`, `runs/deployment/first-token-calibration.json`, the `narwhal-check` output |
+| Router | Bind address, model, engine count, and role split | Router env, fleet config, endpoint captures |
+| Capacity trial | Workstation load client, router observability stack, SSH path, fixed runtime and cache policy, workload, and thresholds | Tunnel logs in `runs/access-<id>/`, `runs/load-trial-<id>/` |
 
-Correct a failed stage from its evidence:
+Recover a failed stage with the steps on its page:
 
-- Discovery and access: fix the named environment field, missing host utility, image inspection issue, credential, route, or independently verified changed host key.
-- Package and install:
-    1. Create a new prepared run from corrected input.
-    2. Resume dependency installation after fixing the host cause.
-- Host and engine validation:
-    1. Restore device exposure or artifacts, free the planned ports, or repair the differing checkpoint file.
-    2. Repeat discovery.
-- Fabric:
-    1. Identify the root cause in route, binding, listener, firewall, HCA/GID, MTU, retransmissions or RDMA counters, CPU saturation, or concurrent traffic.
-    2. Re-sample.
-- Attestation:
-    1. Inspect the bound capture and source.
-    2. Restart only the affected process or sidecar.
-    3. Rerun finalization.
-- Profiling:
-    1. Correct the failing engine or sweep.
-    2. Write new samples to a fresh profile path.
-- Preflight: follow the reported engine, transfer leg, or budget into the matching troubleshooting path.
-- Router: inspect the listener's process, the address family, the router error, and the upstream engine error.
-- Capacity trial:
-    1. Resolve local port conflicts, remote listeners, scrape failures, client saturation, scheduler lag, and reconciliation gaps.
-    2. Attribute any remaining SLO miss to serving capacity.
+- Discovery and access: [Access failure handling](deploy/01-Discover.md#access-failure-handling).
+- Package and install: [Recovering a failed installation](deploy/02-Install.md#recovering-a-failed-installation).
+- Fabric: [Troubleshooting an edge below its budget](deploy/04-Qualify-Fabric.md#troubleshooting-an-edge-below-its-budget).
+- Attestation: fix the failing engine, restart its sidecar against the checked process, and run `finalize-fleet` again.
+- Profiling: [Reusing or repeating profiles](deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles).
+- Preflight: follow the reported engine, transfer leg or budget into [Troubleshooting a fleet](Troubleshoot.md).
+- Router and capacity trial: [Troubleshooting the tunnel](deploy/07-Serve-and-Measure.md#troubleshooting-the-tunnel).
 
 ## Runtime and tooling references
 

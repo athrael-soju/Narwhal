@@ -483,10 +483,12 @@ Complete the activation:
 
 ## Detect process replacement
 
-When `recovery.liveness_every` is above `0`, a liveness sweep probes each engine's `/health` every `recovery.liveness_every * controller.monitor_interval_s` seconds. `recovery.liveness_every` defaults to `10` and must be above `0` under `whole_wave`.
+When `recovery.liveness_every` is above `0`, a liveness sweep runs every `recovery.liveness_every * controller.monitor_interval_s` seconds. `recovery.liveness_every` defaults to `10` and must be above `0` under `whole_wave`.
 
-An engine that answers the sweep leaves placement for recovery when one of these checks fails:
+The sweep probes `/health` on each engine that is not ejected or draining. An engine whose `/health` stays silent is ejected after `recovery.liveness_misses` consecutive sweeps (default `2`).
 
-- the engine identity: `/version` and `process_start_time_seconds` on vLLM, or `/server_info` and the sidecar's process start on SGLang
+In a fleet with an [`engine_contract`](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract), the sweep also checks each engine that answered. The router ejects the engine with cause `process_identity` when one of these checks fails:
+
+- the engine identity: `/version` and `process_start_time_seconds` on vLLM, `/server_info` and the sidecar's process start on SGLang, or `/version` and the sidecar's process start on TensorRT-LLM
 - the process-bound attestation and loaded profile bindings
 - the process start against the accepted identity

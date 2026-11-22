@@ -15,6 +15,8 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | The body is not valid JSON or not a JSON object, with `param` null, or a field the router reads has the wrong type, with `param` naming the field | `400` | `invalid_request_error` | `null` | |
 | On vLLM, `vllm_xargs` sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`; `param` is `vllm_xargs` | `400` | `invalid_request_error` | `null` | |
 | On SGLang, the body sets `rid`, `bootstrap_host`, `bootstrap_port`, or `bootstrap_room`; `param` names the field | `400` | `invalid_request_error` | `null` | |
+| On TensorRT-LLM, the body sets `disaggregated_params` or `prompt_token_ids`; `param` names the field | `400` | `invalid_request_error` | `null` | |
+| On llama.cpp, the body sets `id_slot`, `cache_prompt`, or `n_predict`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | On SGLang, a `/v1/chat/completions` body sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`; `param` names the field | `400` | `invalid_request_error` | `null` | |
 | Unsupported non-streaming audio, modality, or tool request; `param` names the option | `400` | `invalid_request_error` | `null` | |
 | `n > 1` or `best_of > 1` | `400` | `invalid_request_error` | | |
@@ -38,7 +40,7 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | After the first prefill dispatch, no engine outside the request's failed engines can take its decode leg or a retry's leg | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
 | The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s` before the original request deadline | `504` | `queue_expired` | | |
 | A prefill-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches the remaining `serving.queue_timeout_s` before the original request deadline | `504` | `expired` | `expired` | |
-| On vLLM, the KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
+| On vLLM or TensorRT-LLM, the KV handoff reaches its [bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) before decode dispatch, including during a decode-seat wait, with no attempts left | `504` | `handoff_expired` | `handoff_expired` | |
 | The original request deadline expires before response headers, at any stage, including a seat wait | `504` | `request_expired` | | |
 
 An engine fault before output starts returns HTTP `502` or `504` with the [request phase](03-Backend-and-Failures.md#engine-failure-handling) as its error type. A streaming decode failure after output starts ends the HTTP `200` stream with a terminal error event of type `decode`.
@@ -57,8 +59,8 @@ The router keeps these admission counters:
 | ------------------ | ------------------------------------------------------------------ |
 | `offered`          | Each request to a completion route                                 |
 | `unsized_offered`  | Termination before workload sizing                                 |
-| `rejected`         | HTTP `429` capacity refusal or HTTP `503` router-readiness refusal |
-| `refused`          | Global predictive refusal                                          |
+| `rejected`         | HTTP `429` for the in-flight limit or router saturation, and HTTP `503` for router readiness |
+| `refused`          | HTTP `429` from the predictive admission checks                                              |
 | `invalid_requests` | HTTP `400`, `404`, or `413` refusal before admission               |
 
 Journal rows and `/metrics` split `rejected` and `refused` by [outcome reason](../telemetry/01-Journal.md#outcome-reasons).
@@ -66,8 +68,6 @@ Journal rows and `/metrics` split `rejected` and `refused` by [outcome reason](.
 ## Streaming and response assembly
 
 ### Streaming responses
-
-Streaming deltas use the engine's response shape under the [token-ID rules](#token-identity-and-output-accounting).
 
 The router relays the engine stream with these rules:
 

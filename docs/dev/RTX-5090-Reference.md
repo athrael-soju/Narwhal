@@ -124,14 +124,18 @@ Exit codes:
 | `1` | Setup or execution failed |
 | `2` | A completed replay failed the role cycle or a phase |
 
-## Reference operating limits
+## Inspecting the fleet
 
-State and metrics endpoints:
+Read the router's live state and metrics:
 
 ```bash
 curl http://127.0.0.1:18000/narwhal/state
 curl http://127.0.0.1:18000/metrics
 ```
+
+[Live router and scheduler state](../http-api/05-Live-State.md) describes the state document.
+
+## Reference operating limits
 
 The reference template sets these profiling, SLO and role-control values:
 

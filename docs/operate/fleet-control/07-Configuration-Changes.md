@@ -40,12 +40,13 @@ The service validates the merged configuration as `narwhal config validate` does
 
 ## Restore the baseline
 
-**Restore baseline** undoes the session's changes and leaves everything else running:
+Select **Restore baseline** to return the fleet to the state the session started from. Ending a session keeps its changes, so restore before you end it.
 
-- If the configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook.
-- It resumes each paused engine, starts each stopped engine and readmits each drained engine.
+Restore baseline is an [exclusive action](04-Sessions.md#exclusive-actions) and undoes the session's changes in this order:
 
-A session that changed nothing restores nothing. The session stays open.
+1. If the current configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook and waits for readiness, as in [Router readiness](#router-readiness).
+2. For each engine the session paused, the service runs the `engine_resume` hook. For each engine it stopped, the service runs the `engine_start` hook.
+3. For each engine the session drained, the service calls the router's readmit.
 
 ## Router readiness
 

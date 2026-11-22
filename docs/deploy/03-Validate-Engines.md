@@ -157,23 +157,16 @@ The launcher builds one launch plan per engine with these properties:
 | Cache events                  | Published by the engine over private IPC sockets under `/tmp/narwhal-<uid>/` while prefix caching and `runtime.kv_events` are on                                                                                                            |
 | Cache event opt-out           | [Prefix caching and cache events documentation](../configuration/05-Engine-Launch.md#prefix-caching-and-cache-events)                                                                                                                       |
 
-For the [capacity trial](../measure/03-Load-Trial.md), set `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or set `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans.
-
-To turn prefix caching off after launch:
+For the [capacity trial](../measure/03-Load-Trial.md), turn prefix caching off by setting `NARWHAL_PREFIX_CACHING=false` in `.env` before discovery, or `runtime.prefix_caching` to `false` in the launch records before preparing the launch plans. To turn it off after launch:
 
 1. Derive the cache-equivalence groups again.
 2. Prepare a fresh launch directory.
 3. Restart each engine.
-4. Repeat the work for an engine restart with a changed attested `launch_digest` from the [deployment sequence](../Deploy.md#deployment-sequence).
+4. Repeat the steps that [Rerunning after a change](../Deploy.md#rerunning-after-a-change) lists for an engine restart with a changed attested `launch_digest`.
 
 For a separate tokenizer at `PATH`, set `NARWHAL_TOKENIZER=PATH` in `.env` before discovery, or set `runtime.tokenizer` to `PATH` before preparing the launch plan.
 
-When the image, model, dtype, cache policy, TP allocation, or model arguments change:
-
-1. Derive the groups.
-2. For vLLM, capture the live cache layout.
-
-When the workload assumptions change, recalculate the fabric budget.
+When the image, model, dtype, cache policy, TP allocation or model arguments change, derive the groups again. On vLLM and TensorRT-LLM, also capture the live cache layout. When the workload assumptions change, recalculate the fabric budget.
 
 In every engine-role shell, prepare the launch plan:
 

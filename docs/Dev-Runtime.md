@@ -4,7 +4,9 @@ description: Narwhal dev runs several vLLM, SGLang, TensorRT-LLM or llama.cpp en
 
 # Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page covers vLLM, SGLang and TensorRT-LLM engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence.
+
+An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
 A template selects the backend, model, runtime pins, engine count, and memory budget. Narwhal installs four for vLLM, SGLang and TensorRT-LLM, and two for [llama.cpp engines](dev/Llama-Cpp-Engines.md#templates):
 
@@ -15,7 +17,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-trtllm-v1.json` | TensorRT-LLM 1.4.0rc3 with UCX over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The three small templates start one prefill and one decode engine on an NVIDIA GPU. The vLLM template needs about 7,680 MiB of free VRAM, the SGLang template about 10,240 MiB and the TensorRT-LLM template about 13,824 MiB. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The three small templates start one prefill and one decode engine on an NVIDIA GPU and need free VRAM of about 7,680 MiB (vLLM), 10,240 MiB (SGLang) and 13,824 MiB (TensorRT-LLM). The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -44,7 +46,11 @@ For the default vLLM template, install the pinned vLLM, Torch, NIXL, Transformer
 
 A template states the GPU memory of its engines in MiB or as fractions of the GPU.
 
-The three small templates state it in MiB. In the vLLM and SGLang templates, `allocation.engine_memory_mib` is `2867` for each engine, and `allocation.device_memory_mib` bounds all engines together and whole-device memory growth during startup. It is `7168` in the vLLM template, whose engines each take about 450 MiB in addition to `engine_memory_mib`, and `9728` in the SGLang template, whose engines each take about 1,700 MiB for CUDA graphs and runtime in addition to it. The TensorRT-LLM template sets `engine_memory_mib` to `6144` and `device_memory_mib` to `13312`. `init` converts both to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json`. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.088` and `0.2199` on a GPU of 32 GiB. `--engine-memory-mib` and `--device-memory-mib` override the two values, and the device memory must cover the engines' memory.
+The three small templates state the memory in MiB. In the vLLM and SGLang templates, `allocation.engine_memory_mib` is `2867` for each engine. `allocation.device_memory_mib` bounds all engines together and the whole-device memory growth during startup. It is `7168` in the vLLM template and `9728` in the SGLang template. The TensorRT-LLM template sets `engine_memory_mib` to `6144` and `device_memory_mib` to `13312`.
+
+`init` converts both values to fractions of the GPU it finds, rounded up to four places, and writes them beside the MiB values in the instance's `template.json` as `gpu_memory_utilization` for each engine and `device_allowance` for all of them. The allowance is at least the engine fraction times the engine count. For the vLLM template the fractions are `0.35` and `0.875` on a GPU of 8 GiB, and `0.0875` and `0.2188` on a GPU of 32 GiB.
+
+`--engine-memory-mib` and `--device-memory-mib` override the two values. The device memory must cover the memory of every engine together.
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
@@ -268,7 +274,7 @@ Stages and default budgets:
 | Stage | Work | Default budget |
 | --- | --- | --- |
 | `engine-<n>` | Runtime check for engine `n` | 300 seconds |
-| `native-start-shared` | Native shared startup | 180 seconds per engine |
+| `native-start-shared` | Native shared startup | `runtime.ready_seconds` for each engine, 180 seconds by default |
 | `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
 | `profile-merge` | Merging the role-split profiles, when `up` profiles more than one split | 300 seconds |
@@ -283,7 +289,7 @@ NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 
 A stage budget covers the stage's work, helper imports, and subprocess startup. Each profiled role split gets a fresh stage budget.
 
-Native shared startup allows 180 seconds for each engine health check. Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
+Native shared startup waits up to `runtime.ready_seconds` for each engine to answer `/health`: 180 seconds by default and 900 in the TensorRT-LLM template. Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
 
 `narwhal dev` stops the stage's supervised processes when:
 
@@ -319,21 +325,4 @@ Recover from a failed stage, with `PATH` as the instance directory:
 
 If `status` or `down` lists surviving PIDs, [inspect each one by hand](dev/Recovery-and-Qualification.md) against its recorded boot ID, start tick, and process group.
 
-## Contributing another GPU recipe
 
-Contribute a template for a new small CUDA GPU:
-
-1. Follow the [checks and pull request workflow](https://github.com/athrael-soju/Narwhal/blob/main/CONTRIBUTING.md).
-2. Submit the working template with qualification evidence.
-
-The qualification evidence records:
-
-- the GPU, driver, model, and runtime versions
-- the free-memory reserve and peak startup memory
-- both directed KV transfers
-- the routed completion
-
-A contribution for a GPU from another vendor includes:
-
-- a measured template
-- optionally, discovery, memory accounting, engine launch, and a compatible transfer runtime

@@ -29,7 +29,7 @@ narwhal dev status
 narwhal dev down
 ```
 
-For vLLM or SGLang engines, `narwhal dev init` takes the place of `setup`.
+For vLLM, SGLang or TensorRT-LLM engines, run `narwhal dev init` in place of `narwhal dev setup`.
 
 | Subcommand | Operation | Reports |
 | --- | --- | --- |

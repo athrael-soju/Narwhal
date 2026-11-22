@@ -81,9 +81,9 @@ Each launch record holds these allocation and transport fields:
 
 `deploy_hosts.py prepare` adds the record's `environment`, which sets the visible GPUs and `UCX_NET_DEVICES`. `install` copies each engine's record into the engine checkout as `config/engine-launch.engine-<n>.json`.
 
-A CUDA engine with dedicated GPUs exports its own `gpu_ids` first, followed by the GPUs of the other such engines on its host. It runs on its own GPUs. A shared-device engine exports only its own GPU. Under the container backend, an engine that exports another engine's GPUs, and a shared-device engine, run in the host PID namespace.
+On a host with several CUDA engines, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other dedicated-GPU engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. Under the container backend, an engine that can see another engine's GPUs and every `shared_device` engine run in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
 
-On vLLM, an engine with CUDA IPC peers is one with `transfer.gpu_tls` set to `cuda` that shares a GPU or exports another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`. When that value is `n`, `no` or `0`, the launcher sets the NIXL `engine_ttl` to 60 seconds for that engine.
+On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`. When that value is `n`, `no` or `0`, the launcher sets the NIXL `engine_ttl` to 60 seconds for that engine.
 
 When preparation reports an error in an `.env` input or a remote prerequisite:
 
@@ -168,11 +168,12 @@ For a model with SSM state, discovery adds `--mamba-radix-cache-strategy no_buff
 
 With `NARWHAL_ENGINE_BACKEND=trtllm`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) sets `runtime.backend` to `trtllm` and `runtime.connector` to `NARWHAL_ENGINE_CONNECTOR`: `ucx`, the default, or `nixl`. Discovery fails when `NARWHAL_KV_EVENTS` is `true`.
 
-A TensorRT-LLM record adds two optional fields. `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine on a shared GPU for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance. `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
+A TensorRT-LLM record adds two optional fields:
 
-`expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`.
+- `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine on a shared GPU for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
+- `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
-`extra_args` accepts these options, each with a value: `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`. It accepts the flag `--trust_remote_code`.
+`expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`. `extra_args` accepts the options `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`, each with a value, and the flag `--trust_remote_code`.
 
 The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_serve_frontends 1`, and with `--max_num_tokens 8192` unless `extra_args` sets it. It writes `engine.json` into the launch's hook directory and passes it with `--config`. That file sets:
 
@@ -183,9 +184,9 @@ The launcher starts `trtllm-serve serve` with `--backend pytorch` and `--num_ser
 - CUDA graphs for every batch size up to `max_sequences`
 - the version 1 KV cache manager (`use_kv_cache_manager_v2` off), which the C++ transceiver requires
 
-`trtllm-serve` takes no API key, so the engine serves every caller on its port. Keep the engine port on a private network.
+Every engine serves both context and generation requests, so the router holds each engine's role itself.
 
-Every engine serves context and generation requests, so the router sets each engine's role without calling the engine.
+`trtllm-serve` takes no API key and serves every caller that reaches its port. Keep the engine port on a private network.
 
 ### Runtime check
 

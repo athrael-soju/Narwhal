@@ -27,12 +27,12 @@ The bearer token in `token_env` must be at least 32 characters long, without lea
 
 ## Hooks
 
-Each entry under `hooks` names one command:
+Each entry under `hooks` names one command. An action whose hook is missing, for example after a misspelled hook name, reports `no '<name>' hook is configured`. Each entry has these keys:
 
-| Key         | Default | Meaning                                            |
-| ----------- | ------- | -------------------------------------------------- |
-| `argv`      | none    | Command and arguments, a non-empty list of strings |
-| `timeout_s` | `900`   | Seconds before the service stops the command       |
+| Key         | Default | Meaning                                                                                |
+| ----------- | ------- | -------------------------------------------------------------------------------------- |
+| `argv`      | none    | Command and arguments, a non-empty list of non-empty strings                           |
+| `timeout_s` | `900`   | Seconds before the service stops the command, a finite number above `0`                |
 
 The service runs these hooks:
 
@@ -97,7 +97,7 @@ The hook exits `2` before it runs Docker when it refuses the request, for exampl
 | Key                        | Default                 | Meaning                                                                                                                                   |
 | -------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `router.url`               | `http://127.0.0.1:8000` | Router base URL, `http` or `https`. AIPerf load jobs also send their requests here                                                        |
-| `router.timeout_s`         | `600`                   | Limit for lifecycle calls, for the readiness wait after a restart or restore, and for an engine's return to service after start or resume |
+| `router.timeout_s`         | `600`                   | Seconds, finite and above `0`. Limit for lifecycle calls, for the readiness wait after a restart or restore, and for an engine's return to service after start or resume |
 | `router.journal`           | absent                  | Absolute path of the router's request journal on this host. The file need not exist at startup                                            |
 | `router.journal_max_bytes` | `268435456` (256 MiB)   | Largest journal extract copied for one session or load job, a positive number of bytes                                                    |
 
@@ -107,17 +107,27 @@ Set `router.journal` to the path the router writes: the value of `narwhal-serve 
 
 ## Load
 
-| Key                   | Default | Meaning                                                             |
-| --------------------- | ------- | ------------------------------------------------------------------- |
-| `load.aiperf`         | none    | AIPerf executable                                                   |
-| `load.model`          | none    | Served model name that AIPerf requests                              |
-| `load.tokenizer`      | none    | Tokenizer name or path for AIPerf                                   |
-| `load.endpoint_type`  | `chat`  | `chat` or `completions`                                             |
-| `load.streaming`      | `true`  | Whether AIPerf streams responses                                    |
-| `load.goodput`        | `{}`    | AIPerf metric tag mapped to its positive goodput threshold          |
-| `load.grace_period_s` | none    | Seconds AIPerf waits for in-flight responses after a timed job ends |
-| `load.extra_args`     | `[]`    | Further arguments appended to the AIPerf command                    |
-| `load.workloads`      | none    | The workload library: at least one named workload                   |
+Add a `load` section to run AIPerf load jobs from the service and the console. Without it, the service serves neither `GET /api/workloads` nor `GET /api/jobs/current/live`, and `POST /api/jobs` answers HTTP 501 with `no load-job runner is configured`.
+
+Three keys are required, each a non-empty string:
+
+| Key              | Meaning                                |
+| ---------------- | -------------------------------------- |
+| `load.aiperf`    | AIPerf executable                      |
+| `load.model`     | Served model name that AIPerf requests |
+| `load.tokenizer` | Tokenizer name or path for AIPerf      |
+
+`load.workloads` is also required. It is the workload library, an object with at least one named workload. [Workloads](#workloads) describes each entry.
+
+These keys are optional:
+
+| Key                   | Default | Meaning                                                                                    |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `load.endpoint_type`  | `chat`  | `chat` or `completions`. `completions` rejects the workloads that [Workloads](#workloads) lists |
+| `load.streaming`      | `true`  | Whether AIPerf streams responses                                                           |
+| `load.goodput`        | `{}`    | AIPerf metric tag mapped to its goodput threshold, a number above 0                        |
+| `load.grace_period_s` | none    | Seconds AIPerf waits for in-flight responses after a timed job ends, zero or greater       |
+| `load.extra_args`     | `[]`    | Further arguments appended to the AIPerf command, each a non-empty string. `--extra-inputs` conflicts with a workload that sets `ignore_eos` |
 
 ### Workloads
 

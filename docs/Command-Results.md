@@ -4,7 +4,7 @@ description: Machine-readable JSON results and exit codes for automating Narwhal
 
 # Command results for automation
 
-`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, and `narwhal dev` accept `--format json` before or after operation arguments. `narwhal-serve` and `narwhal-attest` report through logs, exit status, HTTP endpoints, and persisted artifacts.
+`narwhal-check`, `narwhal-profile`, `narwhal-engine`, `narwhal config`, `narwhal diagnostics`, and `narwhal dev` accept `--format json` before or after operation arguments. `narwhal-serve` and `narwhal-attest` do not.
 
 With `--format json`, stdout carries one `narwhal.command-result` version 1 object for every outcome. stderr carries live progress and diagnostics, subprocess stdout and stderr replayed at completion, and the help text for `--format json --help`.
 

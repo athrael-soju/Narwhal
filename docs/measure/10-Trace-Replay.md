@@ -45,7 +45,7 @@ Output for the 2023 code trace:
 
 The first request of the clip replays at time 0. `--out` names a new file. The converter keeps `hash_ids` from a Mooncake trace.
 
-The converter prints the requests written and skipped, the source and replay spans in seconds, and `offered_rps`. `offered_rps` is the replay's mean arrival rate: one less than the request count, divided by the seconds from the first arrival to the last.
+`offered_rps` in the output is the replay's mean arrival rate: one less than the request count, divided by the seconds from the first arrival to the last.
 
 ## Finding the highest rate within the SLOs
 

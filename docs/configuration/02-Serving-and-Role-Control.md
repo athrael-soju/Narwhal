@@ -134,11 +134,11 @@ A request with no queue budget left still takes a free prefill seat, but it does
 
 Waiting requests keep their arrival order. When a seat frees, the release gives it to the waiting requests in that order. The release stops at the first waiting request that cannot take a free seat.
 
-In `predictive` mode, the router prices an original request's first attempt throughout an admission-seat or prefill-seat wait. The price is the projected TTFT on the cheapest live prefill engine, which is that engine's placement price plus the time since arrival. When the price exceeds the budget, the request leaves the queue with the HTTP 429 of the TTFT check. Each price also runs the [decode admission check](#decode-admission-check) on that engine, so a request whose projected TTFT plus its slot wait and the slot-wait headroom exceeds the budget leaves the queue with a `slot_wait` refusal before it takes a prefill seat. The router does not price a retry's prefill-seat wait, and `open` mode never refuses a waiting request.
+In `predictive` mode, the router prices an original request's first attempt while it waits for an admission seat or a prefill seat. The price is the projected TTFT on the cheapest live prefill engine: that engine's placement price plus the time since arrival. A request whose price exceeds the budget leaves the queue with the HTTP 429 of the TTFT check. Each price also runs the [decode admission check](#decode-admission-check) on that engine, and a request that fails it leaves the queue with a `slot_wait` refusal.
 
-The router does not price a prefilled request again while it waits for a decode seat. The wait adds to its TTFT, and the request is served late when a seat frees before the producer's KV handoff bound.
+The admission-seat price uses the local length estimate, from `engine.chars_per_token` or the array length of a token-ID prompt, and ignores [prefix-cache pricing](#prefix-cache-pricing). It can refuse a mostly cached prompt.
 
-The router prices an admission-seat wait before it sizes the request. That price uses the local length estimate from `engine.chars_per_token`, or the array length of a token-ID prompt, and the cold prefill curve without [prefix-cache pricing](#prefix-cache-pricing). A waiting request whose prompt is mostly cached can therefore leave the queue with a `queue` or `prompt` refusal that its sized, cache-aware price would pass. The router sizes the request when it takes an admission seat, so later prefill-seat waits use the sized price.
+Retries, decode-seat waits and `open` mode wait unpriced until a bound in the table above ends the wait. A decode-seat wait adds to the request's TTFT.
 
 A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
 
@@ -187,7 +187,7 @@ When an engine's attestation records no `kv_lease_duration`, the router applies 
 
 A TensorRT-LLM producer's lease is `kv_transfer_timeout_ms` in the `engine.json` of its attested launch, rounded down to whole seconds. The router derives the handoff bound as `lease - lease // 6`. At the launcher's default lease of 60 seconds, the bound is 50 seconds.
 
-SGLang engines have no lease and no handoff bound. The router caps a decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
+The router caps an SGLang decode leg's wait for its first token at 30 seconds, the prefill engine's bootstrap timeout.
 
 When `serving.max_attempts` is greater than 1, the router retries an attempt that fails before visible output with any of these:
 
@@ -206,20 +206,13 @@ A retry avoids each engine whose leg failed earlier in the same request. When no
 
 The original request deadline covers tokenization, queue wait, retry backoff, engine work, and client writes.
 
-Tune queueing and retries:
-
-1. Read [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) for the client outcomes of each value and when to change it.
-2. Set queue capacity and deadlines from the workload's measured latency and capacity.
-3. Verify that the backend releases abandoned KV handoffs when the lease expires.
-4. After any change to queueing, engine launch limits, profiles, KV handoff expiry, retries, or byte limits, measure again.
+[Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md) gives the client outcome of each value and when to change it. Measure again after any change to queueing, engine launch limits, profiles, KV handoff expiry, retries or byte limits.
 
 ### Streaming failure semantics
 
-A streaming response holds its HTTP status and headers until the first output frame.
+A streaming response holds its HTTP status and headers until the first output frame, so a failure before that frame returns an HTTP error status. [Engine failure handling](../http-api/03-Backend-and-Failures.md#engine-failure-handling) gives the client response for each prefill and decode failure.
 
-[Engine failure handling](../http-api/03-Backend-and-Failures.md#engine-failure-handling) gives the client response for each prefill and decode failure.
-
-Request deadline expiry ends a streaming response this way:
+When the request deadline expires:
 
 | Deadline expires                | Result                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------- |
@@ -227,9 +220,7 @@ Request deadline expiry ends a streaming response this way:
 | After the first output frame    | The client receives a terminal stream error event with `code: expired` |
 | While client writes are blocked | The router drops the connection immediately                            |
 
-Treat an error event, or a stream that ends before the success terminator, as a failed response.
-
-Fit client-side retries inside the caller's remaining deadline.
+A client must treat an error event, or a stream that ends before the success terminator, as a failed response.
 
 
 ## Placement
@@ -284,11 +275,25 @@ The request journal records each placement priced with cache evidence in [`cache
 
 ### Prefill legs on decode engines
 
-| Field                       | Default | Meaning                                                                                       | Values                                                              |
-| --------------------------- | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `serving.prefill_on_decode` | `false` | Lets placement send a prefill leg to a decode-role engine inside its measured TPOT envelope. | `true` requires `engine.backend` `"vllm"` or `"llamacpp"` |
+`serving.prefill_on_decode` defaults to `false`. When it is `true`, placement can send a prefill leg to a decode-role engine that stays inside its measured time-per-output-token (TPOT) envelope.
 
-With `serving.prefill_on_decode` set, placement borrows a decode-role engine for a prefill leg when the engine is live, unpinned and not held for a role switch, another live decode engine can take the request's decode leg, its profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines), and the leg keeps the engine inside its envelope. Profile the fleet with the setting on to measure the fit. Prefill legs then go to prefill-role engines and borrowed engines. When placement has neither, it places the leg as with the setting off.
+Set it to `true` only when `engine.backend` is `"vllm"`, `"trtllm"` or `"llamacpp"`. Loading refuses `true` on SGLang. Then profile the fleet with the setting on, so that each engine's profile carries the [prefill-share fit](../telemetry/02-Profiles.md#prefill-share-on-decode-engines).
+
+#### When placement borrows an engine
+
+Prefill legs go to prefill-role engines and to borrowed decode-role engines. When placement has neither, it places the leg as it does with the setting off.
+
+Placement borrows a decode-role engine for a leg only when all of these hold:
+
+- The engine is live, unpinned and not held for a role switch.
+- Another live decode engine can take the request's decode leg.
+- The engine's profile carries the prefill-share fit (`decode_prefill_slowdown` and `decode_prefill_max_share`) and `decode_max_kv_tokens`.
+- The leg keeps the engine inside its envelope.
+- No prefill-role engine meets the TTFT budget and the borrowed engine does, or no prefill-role engine is a candidate.
+
+Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer, and the request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
+
+#### The envelope check
 
 The leg stalls each resident decode stream on the engine for its profiled prefill time plus the engine's resident prefill work. For each resident stream, the router projects its TPOT over its whole output from these terms:
 
@@ -303,11 +308,11 @@ The engine stays inside its envelope when all of these hold:
 1. The engine's resident decode and prefill tokens plus the leg's prompt tokens stay within the profile's `decode_max_kv_tokens`.
 2. Every resident stream has a known remaining output.
 3. Every resident stream with output left projects a TPOT at or below `slo.tpot_s`.
-4. The share `u = stall / (stall + m)` is at or below `decode_prefill_max_share`, where `m` is the mean `left * d` over the resident streams. With no resident streams, `u` is `0`.
+4. The share `u = stall / (stall + m)` is at or below `decode_prefill_max_share`, where `m` is the mean `left * d` over the resident streams. With no resident streams, this check passes.
 
-`left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))` for a stall beside `left * d` seconds of decode.
+In the projection, `left * d + decode_prefill_slowdown * stall` is `left` tokens at the profile's slowed interval `d * (1 + decode_prefill_slowdown * u / (1 - u))` for a stall beside `left * d` seconds of decode.
 
-Placement chooses a borrowed engine only when no prefill-role engine meets the TTFT budget and a borrowed engine does, or when no prefill-role engine is a candidate. Among borrowed engines that meet the budget, the one with the fewest resident decode tokens ranks first, because the prefill cost starts with them. Queued admission prices a waiting request at the same engine. The request's decode leg avoids its producer. The request journal records the producer's role in [`prefill_role`](../telemetry/01-Journal.md#terminal-request-records).
+#### Effect on load
 
 Decode load leaves out the stall the envelope priced for a borrowed leg, and the prefill pool's load counts the leg's prefill work, as [Load definitions](#load-definitions) describes.
 
@@ -330,14 +335,7 @@ Decode load leaves out the stall the envelope priced for a borrowed leg, and the
 
 ### Request and prefill deadlines
 
-Set the deadlines from these inputs:
-
-| Field                       | Set from                                                             |
-| --------------------------- | -------------------------------------------------------------------- |
-| `serving.request_timeout_s` | Supported output length and the client deadline                      |
-| `serving.prefill_timeout_s` | Measurements of the longest admitted inputs under the supported load |
-
-For diagnostic profiling, `narwhal-profile --observation-timeout-s` sets the probe HTTP timeout.
+Set `serving.request_timeout_s` from the longest output the service supports and the client's own deadline. Set `serving.prefill_timeout_s` from the measured prefill time of the longest admitted inputs under the supported load. `narwhal-profile --observation-timeout-s` sets the HTTP timeout of profiling probes.
 
 A prefill, tokenization, or health call ends at the first of its phase, connection, or pool timeouts to expire.
 
@@ -394,13 +392,7 @@ Measure `engine.chars_per_token` for the served tokenizer and for every dialect 
 
 ### Connection, pool, and health timeouts
 
-Set these timeouts from latency measured under the intended load:
-
-| Field                      | Measured latency             |
-| -------------------------- | ---------------------------- |
-| `engine.connect_timeout_s` | Connection setup             |
-| `engine.pool_timeout_s`    | Pool waits                   |
-| `engine.health_timeout_s`  | Health and identity requests |
+Set `engine.connect_timeout_s` from the connection setup latency you measure under the intended load, `engine.pool_timeout_s` from pool waits, and `engine.health_timeout_s` from health and identity request latency.
 
 These timeouts decide a probe's outcome:
 
@@ -471,13 +463,12 @@ Controller decision details call load "pressure", as in the `mixed_pressure` eli
 
 ### Role floors
 
-In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count. A one-engine fleet has both floors at `1`.
+In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count. A one-engine fleet has both floors at `1`. Every role change keeps at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines. When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
 
-When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
+Engine monitoring repairs a shortfall one engine per pass:
 
-Every role change preserves `controller.min_decode`.
-
-When live decode engines drop below `controller.min_decode`, engine monitoring moves one eligible engine to decode per pass.
+- When live decode engines drop below `controller.min_decode`, it moves an eligible engine to decode.
+- When live prefill engines drop below `controller.min_prefill`, it moves an eligible decode engine to prefill while decode stays at or above `controller.min_decode`.
 
 Floor recoveries skip some move timers:
 
@@ -500,9 +491,7 @@ A decode-to-prefill move requires:
 
 ### Advisory rollout
 
-Before allowing role changes in production, run advisory mode against recorded traffic.
-
-Enable advisory mode:
+With `controller.advisory` set to `true`, the role controller keeps the live split and records each move it would have made. Run the router in this mode on representative live traffic before you allow role changes in production.
 
 ```json
 {
@@ -512,7 +501,7 @@ Enable advisory mode:
 }
 ```
 
-`/narwhal/state` and Prometheus expose each proposal's prefill and decode counts, caller, reason, and result.
+The request journal records each proposal as a `controller_decision` event with its prefill and decode counts, caller, reason, and result `advisory`. `/narwhal/state` reports the latest decision, and Prometheus exposes it as `narwhal_controller_last_decision` and `narwhal_controller_proposed_engines`, with `narwhal_controller_decisions_total` counting decisions by caller and result.
 
 ### Adjacent-split decisions
 
@@ -713,7 +702,7 @@ With enough samples in the short horizon of `controller.reactive.evidence_span_s
 short_horizon_demand > long_horizon_demand * (1 + controller.reactive.demand_rise_tolerance)
 ```
 
-A first-token timeout or a prefill-to-decode recovery move resets the arrival-evidence window.
+A first-token timeout, a move to decode, or a decode floor repair resets the arrival-evidence window.
 
 If projected prefill load exceeds `controller.thresholds.shrink`, moving an engine from decode to prefill bypasses the short-horizon pause and ignores arrival-evidence resets caused by prefill-to-decode moves. It is still blocked if the window was reset by a first-token timeout. When bypassed, `evidence_blocked_gate` reports which check was skipped.
 

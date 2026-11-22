@@ -170,7 +170,7 @@ Readmission checks:
 3. `profile generation`: every loaded profile variant's generation matches the verified live process generation.
 4. `model`: the engine serves the configured model.
 5. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
-6. `generation`: a direct completion probe returns a completion.
+6. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 7 tests generation.
 7. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
 8. `final health`: the engine health endpoint answers after KV transfer validation.
 

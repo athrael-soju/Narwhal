@@ -4,7 +4,7 @@ description: Write the fleet control service's private configuration, set its be
 
 # Setting up the control service
 
-Configure and start the fleet control service on the router host.
+The fleet control service runs on the router host. Write its configuration and bearer token, start it, and check that it answers.
 
 ## Prerequisites
 
