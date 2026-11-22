@@ -1763,9 +1763,19 @@ class OccupiedTransitionTests(unittest.IsolatedAsyncioTestCase):
             streams.append(response)
             return response
 
-        # Pins constrain role changes only; e1's cheaper decode makes it the occupied source.
+        # Pins constrain role changes only; e1's much larger decode headroom makes it the
+        # occupied source.
         fleet.scheduler.pinned = frozenset(f"e{i}" for i in range(2, 6))
-        fleet.profiles.put(replace(fleet.profiles.get("e1"), tpot_intercept=0.0001))
+        e1 = fleet.profiles.get("e1")
+        fleet.profiles.put(
+            replace(
+                e1,
+                tpot_intercept=0.0001,
+                tpot_slope=e1.tpot_slope / 100,
+                decode_max_kv_tokens=e1.decode_max_kv_tokens * 100,
+                kv_capacity_tokens=e1.kv_capacity_tokens * 100,
+            )
+        )
         for index in range(5):
             response = await request(f"old{index}")
             # The engine's one transport read reaches the client as one write.

@@ -218,11 +218,11 @@ For vLLM, the check also confirms:
 - the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
 
-For SGLang, the check also parses the serving arguments. For TensorRT-LLM, it also checks for `trtllm-serve` and reads block reuse from the `--config` file.
+For SGLang, the check also parses the serving arguments and confirms that the image's SGLang has each part that the launch wrapper replaces to [keep Mooncake registrations across role switches](../configuration/05-Engine-Launch.md#sglang-runtime-fields). For TensorRT-LLM, it also checks for `trtllm-serve` and reads block reuse from the `--config` file.
 
 The check writes [`checked.json`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
-A failed check names the failing package, tokenizer, or identity check.
+A failed check names the failing package, tokenizer, identity check, or missing SGLang part.
 
 The check uses the tokenizer at `runtime.tokenizer`, or the model directory when that field is unset.
 

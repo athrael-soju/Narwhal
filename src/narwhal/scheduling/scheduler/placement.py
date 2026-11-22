@@ -225,6 +225,19 @@ class GlobalScheduler:
             probation=probation,
         )
 
+    def decode_share(
+        self, request: Request, inst: Instance, *, probation: Collection[str] | None = None
+    ) -> float:
+        return costs.decode_share(
+            request,
+            inst,
+            monitor=self.monitor,
+            profiles=self.profiles,
+            slo=self.slo,
+            health=self.health,
+            probation=probation,
+        )
+
     def meets_slo(self, request: Request, cost: Cost, *, ttft_margin: float = 0.0) -> bool:
         return costs.meets_slo(request, cost, slo=self.slo, ttft_margin=ttft_margin)
 
@@ -519,7 +532,7 @@ class GlobalScheduler:
                 for i in candidates
             }
 
-        chosen, served = self._cheapest(request, candidates, prices, borrowed)
+        chosen, served = self._cheapest(request, candidates, prices, borrowed, probation)
         if request.phase is Phase.PREFILL:
             request.borrowed = chosen.iid in borrowed
         if not served:
@@ -562,9 +575,17 @@ class GlobalScheduler:
         candidates: list[Instance],
         prices: dict[str, Cost],
         borrowed: Collection[str] = frozenset(),
+        probation: Collection[str] | None = None,
     ) -> tuple[Instance, bool]:
         tier = self.prefill_tier(request, candidates, prices, borrowed)
         eligible = [i for i in tier if self.meets_slo(request, prices[i.iid])]
+        if request.phase is Phase.DECODE and eligible:
+            if probation is None and self.health is not None:
+                probation = self.health.probation_set()
+            shares = {i.iid: self.decode_share(request, i, probation=probation) for i in eligible}
+            return min(
+                eligible, key=lambda i: (prices[i.iid][0], shares[i.iid], prices[i.iid], i.iid)
+            ), True
         return min(eligible or tier, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
 
     def _cache_placement(

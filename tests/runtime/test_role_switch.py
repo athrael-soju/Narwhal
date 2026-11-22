@@ -2,6 +2,8 @@
 
 import unittest
 
+import httpx
+
 from narwhal.runtime.role_switch import EngineHeldRoles, restore_roles
 from narwhal.types import Role
 
@@ -63,6 +65,29 @@ class EngineHeldGenerationTests(unittest.IsolatedAsyncioTestCase):
         # b switched after a entered prefill; c may hold a's earlier endpoint.
         self.assertEqual(switcher.posted, ["a prefill", "b decode", "c prefill", "c decode"])
         self.assertEqual(modes, {"a": Role.PREFILL, "b": Role.DECODE, "c": Role.DECODE})
+
+    async def test_a_failed_engine_does_not_stop_the_restore(self):
+        modes = {"a": Role.DECODE, "b": Role.PREFILL, "c": Role.PREFILL}
+        switcher = FakeEngines(modes)
+        real = switcher.change_role
+
+        async def change_role(client, base, role, launch):
+            if base == "http://b":
+                raise httpx.ConnectError("down")
+            return await real(client, base, role, launch)
+
+        switcher.change_role = change_role
+        with self.assertRaisesRegex(ValueError, "^http://b: ConnectError: down$"):
+            await restore_roles(
+                switcher,
+                None,
+                {
+                    "http://a": (Role.PREFILL, LAUNCH),
+                    "http://b": (Role.DECODE, LAUNCH),
+                    "http://c": (Role.DECODE, LAUNCH),
+                },
+            )
+        self.assertEqual(modes, {"a": Role.PREFILL, "b": Role.PREFILL, "c": Role.DECODE})
 
     async def test_an_engine_already_in_the_role_keeps_its_generation(self):
         switcher = FakeEngines({"a": Role.PREFILL})

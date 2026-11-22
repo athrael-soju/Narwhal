@@ -122,6 +122,34 @@ def _decode_price(
     return float(tokens + request.length) - headroom + penalty / slo.tpot_s
 
 
+def decode_share(
+    request: Request,
+    inst: Instance,
+    *,
+    monitor: InstanceMonitor,
+    profiles: ProfileStore,
+    slo: SLO,
+    health: DriftTracker | None,
+    probation: Collection[str] | None = None,
+) -> float:
+    """Return the share of `inst`'s decode headroom that its residents and `request` would hold.
+
+    Placement ranks the decode engines that meet the TPOT budget by this share. The headroom of
+    engines on the same hardware differs by profiling noise, which the share keeps from
+    outweighing their load.
+    """
+    profile = _profile(profiles, inst.iid)
+    headroom = profile.max_tokens(
+        slo.tpot_s / monitor.decode_correction(inst.iid), len(inst.decode) + 1
+    )
+    if headroom <= 0:
+        return math.inf
+    held = (
+        inst.decode_tokens() + request.length + _penalty(inst.iid, health, probation) / slo.tpot_s
+    )
+    return held / headroom
+
+
 def decode_engine_prefill(
     request: Request,
     inst: Instance,
