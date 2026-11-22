@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import io
 import itertools
 import json
@@ -1860,6 +1861,65 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await fleet_probe.run(cfg, None), 0)
             self.assertEqual(active["peak"], len(cfg.engines))
             self.assertEqual(len(ProfileStore(cfg.profiles_path)), len(cfg.engines))
+
+    async def _run_with_role_switcher(self, restore):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder))
+            cfg.profiles_path = Path(folder) / "roles.json"
+            real_client = httpx.AsyncClient
+
+            def client(*args, **kwargs):
+                answer = httpx.MockTransport(lambda request: httpx.Response(200))
+                return real_client(transport=answer)
+
+            target = cfg.engines[0]
+            roles = {target.url: (Role.DECODE, None)}
+            switcher = SimpleNamespace(engine_held=True)
+            backend = load_backend(cfg.backend)
+            current = AsyncMock(return_value=roles)
+            order = []
+
+            async def measured(client, iid, *args, **kwargs):
+                order.append(f"measure {iid}")
+                return profile(iid)
+
+            restore.side_effect = restore.side_effect or (lambda *args: order.append("restore"))
+            with (
+                patch.object(httpx, "AsyncClient", side_effect=client),
+                patch.object(type(backend), "role_switcher", return_value=switcher),
+                patch.object(fleet_probe, "current_roles", current),
+                patch.object(fleet_probe, "restore_roles", restore),
+                patch.object(fleet_probe, "engine_context_limit", AsyncMock(return_value=16384)),
+                patch.object(
+                    fleet_probe,
+                    "read_generation",
+                    AsyncMock(
+                        return_value=GenerationEvidence("sha256:" + "a" * 64, {"engine": {}}, 100.0)
+                    ),
+                ),
+                patch.object(fleet_probe, "profile_instance", side_effect=measured),
+                redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                code = await fleet_probe.run(cfg, {target.iid})
+        self.assertIs(current.call_args.args[0], switcher)
+        self.assertEqual(current.call_args.args[2], {target.url: None})
+        restore.assert_awaited_once()
+        self.assertIs(restore.call_args.args[0], switcher)
+        self.assertEqual(restore.call_args.args[2], roles)
+        self.assertEqual(order, [f"measure {target.iid}", "restore"][: len(order)])
+        return code, order, errors.getvalue()
+
+    async def test_run_returns_each_switched_engine_to_its_role(self):
+        code, order, _ = await self._run_with_role_switcher(AsyncMock())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(order), 2)
+
+    async def test_a_failed_role_restore_fails_the_run(self):
+        restore = AsyncMock(side_effect=httpx.ConnectError("down"))
+        code, _, errors = await self._run_with_role_switcher(restore)
+        self.assertEqual(code, 1)
+        self.assertIn("role restore failed: ConnectError: down", errors)
 
     async def test_run_retains_per_peer_evidence_when_a_neighbour_stalls(self):
         with tempfile.TemporaryDirectory() as folder:

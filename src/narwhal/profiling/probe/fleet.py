@@ -23,7 +23,7 @@ from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import EngineDialect
 from ...observability.tools import ToolActivity
 from ...provenance import stamp
-from ...runtime.role_switch import RoleSwitcher, restore_roles
+from ...runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ...types import Role
 from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
@@ -431,15 +431,19 @@ async def run(
         cfg.engines,
         timeout_s=observation_timeout_s or cfg.health_timeout_s,
     )
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(
-            observation_timeout_s or 300.0,
-            connect=min(10.0, observation_timeout_s or 300.0),
-        ),
-        limits=pool,
-        headers=cfg.engine_headers(),
-        transport=pairing,
-    ) as client:
+    kept = _KeptRoles(cfg, switcher, [spec for spec in cfg.engines if spec.iid in used], launches)
+    async with (
+        kept,
+        httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                observation_timeout_s or 300.0,
+                connect=min(10.0, observation_timeout_s or 300.0),
+            ),
+            limits=pool,
+            headers=cfg.engine_headers(),
+            transport=pairing,
+        ) as client,
+    ):
 
         async def profile_engine(spec: EngineSpec, lane: list[EngineSpec]) -> None:
             r = await client.get(
@@ -641,5 +645,45 @@ async def run(
         except BaseException:
             await cancel_tasks(tasks)
             raise
+    if kept.error is not None:
+        return 1
     print(f"wrote {len(store)} profile(s) to {cfg.profiles_path}")
     return 0
+
+
+class _KeptRoles:
+    """Return each engine that the sweep may switch to the role it served before the sweep."""
+
+    def __init__(
+        self,
+        cfg: FleetConfig,
+        switcher: RoleSwitcher,
+        specs: list[EngineSpec],
+        launches: dict[str, dict],
+    ) -> None:
+        self.cfg = cfg
+        self.switcher = switcher
+        self.launches = {spec.url: launches.get(spec.iid) for spec in specs}
+        self.roles: dict[str, tuple[Role, Any]] = {}
+        self.error: str | None = None
+
+    def control(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self.cfg.health_timeout_s, headers=self.cfg.engine_headers()
+        )
+
+    async def __aenter__(self) -> _KeptRoles:
+        if self.switcher.engine_held and self.launches:
+            async with self.control() as control:
+                self.roles = await current_roles(self.switcher, control, self.launches)
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        if not self.roles:
+            return
+        try:
+            async with self.control() as control:
+                await restore_roles(self.switcher, control, self.roles)
+        except (httpx.HTTPError, ValueError) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            print(f"role restore failed: {self.error}", file=sys.stderr)
