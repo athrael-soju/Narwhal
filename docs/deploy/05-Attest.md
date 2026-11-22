@@ -45,6 +45,8 @@ For an SGLang engine, the capture writes fields from `/server_info` and the proc
 
 For a TensorRT-LLM engine, the capture writes `version` from `/version`, `tokens_per_block`, `max_batch_size` and `kv_cache_hash_algo` from `/server_info`, and the process start time to `server-info.json`. Generation fails when the launch's `engine.json` sets a block size other than the live `tokens_per_block`, when the live `max_batch_size` differs from `--max_batch_size`, or when `engine.json` names a transceiver backend other than the planned connector's. `model_dtype`, `kv_cache_dtype`, `connector` and `speculative_config` come from the launch. `transfer_version` records the `tensorrt_llm` version in `runtime.expected_packages`.
 
+Generation fails when an SGLang engine's live `decode_attention_backend` in `/server_info` differs from its `--decode-attention-backend` launch argument, or is set when the launch passes none.
+
 Generation fails when an SGLang engine's startup log reports a `max_running_requests` below its `--max-running-requests`. Lower `runtime.max_sequences` to the logged value, or raise the limit the log names, such as `--max-mamba-cache-size`, and then relaunch the engine.
 
 ### Capturing the model dimensions

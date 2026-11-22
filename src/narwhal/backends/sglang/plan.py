@@ -39,6 +39,7 @@ VALUE_OPTIONS = {
     "--mamba-ssm-dtype",
     "--max-mamba-cache-size",
     "--mamba-radix-cache-strategy",
+    "--decode-attention-backend",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",

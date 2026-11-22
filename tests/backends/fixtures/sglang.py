@@ -48,6 +48,7 @@ def attestation_evidence(run: Path, plan: dict, container_id: str) -> None:
         "dtype": "bfloat16",
         "kv_cache_dtype": "auto",
         "attention_backend": "triton",
+        "decode_attention_backend": None,
         "page_size": 1,
         "disaggregation_transfer_backend": "mooncake",
         "speculative_algorithm": None,

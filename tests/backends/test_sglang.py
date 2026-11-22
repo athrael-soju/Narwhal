@@ -578,6 +578,7 @@ class EngineDocumentTests(unittest.TestCase):
             "dtype": "bfloat16",
             "kv_cache_dtype": "auto",
             "attention_backend": "triton",
+            "decode_attention_backend": None,
             "page_size": 1,
             "disaggregation_transfer_backend": "mooncake",
             "speculative_algorithm": None,
@@ -644,6 +645,31 @@ class EngineDocumentTests(unittest.TestCase):
         self.assertEqual(document, expected)
         # The document is written in this key order.
         self.assertEqual(json.dumps(document), json.dumps(expected))
+
+    def test_the_live_decode_attention_backend_must_match_the_launch_plan(self):
+        connector = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
+        for planned, live in ((None, "flashinfer"), ("flashinfer", None), ("flashinfer", "triton")):
+            with self.subTest(planned=planned, live=live):
+                run = self.evidence("native", connector)
+                if planned:
+                    launch = json.loads((run / "launch.json").read_text())
+                    launch["args"] += ["--decode-attention-backend", planned]
+                    (run / "launch.json").write_text(json.dumps(launch))
+                    plan_hash = digest(run / "launch.json")
+                    for name in ("checked.json", "model-dimensions.json", "server-info.json"):
+                        record = json.loads((run / name).read_text())
+                        record["plan_sha256"] = plan_hash
+                        (run / name).write_text(json.dumps(record))
+                record = json.loads((run / "server-info.json").read_text())
+                record["server"]["decode_attention_backend"] = live
+                (run / "server-info.json").write_text(json.dumps(record))
+                with (
+                    patch.object(attestation_evidence, "live_native", return_value=PROCESS),
+                    self.assertRaisesRegex(
+                        ValueError, "^Live decode attention backend differs from the launch plan"
+                    ),
+                ):
+                    engine_document(run, run / "startup.log")
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []
