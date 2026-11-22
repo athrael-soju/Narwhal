@@ -19,3 +19,6 @@ src/narwhal/backends/vllm/icon.png is scaled from the vLLM project logo,
 https://github.com/vllm-project/vllm (Apache License 2.0).
 src/narwhal/backends/sglang/icon.png is scaled from the SGLang project logo,
 https://github.com/sgl-project/sglang (Apache License 2.0).
+src/narwhal/backends/trtllm/icon.png is the NVIDIA logo mark, a trademark of
+NVIDIA Corporation, rendered from the Simple Icons path data,
+https://simpleicons.org (CC0 1.0).
