@@ -35,9 +35,27 @@ def serve(args: list[str]) -> None:
 
 # SGLang starts its scheduler in a spawned process, so the fix is installed by a sitecustomize
 # module that every interpreter of the engine imports at startup.
-SITE_HOOK = "import launch_engine\nlaunch_engine.keep_mooncake_registrations()\n"
+SITE_HOOK = (
+    "import launch_engine\n"
+    "launch_engine.keep_mooncake_registrations()\n"
+    "launch_engine.run_next_sitecustomize(__file__)\n"
+)
 MOONCAKE_MODULE = "sglang.srt.disaggregation.mooncake.conn"
 METADATA_MODULE = "sglang.srt.disaggregation.utils"
+ROLE_SWITCH_MODULE = "sglang.srt.disaggregation.role_switch"
+DECODE_MODULE = "sglang.srt.disaggregation.decode"
+# The module, class (None for module functions) and functions that the fix replaces or calls.
+REGISTRATION_TARGETS = (
+    (
+        MOONCAKE_MODULE,
+        "MooncakeKVManager",
+        ("_registerable_regions", "register_buffer_to_engine", "deregister_buffer_to_engine"),
+    ),
+    (METADATA_MODULE, "MetadataBuffers", ("__init__",)),
+    (ROLE_SWITCH_MODULE, None, ("_reject_reason",)),
+    (DECODE_MODULE, "DecodeTransferQueue", ("has_pending_deferred_releases",)),
+)
+PENDING_RELEASES = "instance is not idle; deferred KV releases are pending"
 
 
 def registration_environment(environ: dict[str, str]) -> dict[str, str]:
@@ -47,6 +65,45 @@ def registration_environment(environ: dict[str, str]) -> dict[str, str]:
     return {**environ, "PYTHONPATH": f"{site}:{path}" if path else str(site)}
 
 
+def run_next_sitecustomize(own: str) -> None:
+    """Run the sitecustomize module that the hook's own one shadows, if any."""
+    own_directory = Path(own).resolve().parent
+    for entry in sys.path:
+        if not entry or Path(entry).resolve() == own_directory:
+            continue
+        candidate = Path(entry) / "sitecustomize.py"
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("_narwhal_next_sitecustomize", candidate)
+            if spec is not None and spec.loader is not None:
+                spec.loader.exec_module(importlib.util.module_from_spec(spec))
+            return
+
+
+def missing_registration_targets(sglang_root: Path) -> list[str]:
+    """Name each part of SGLang's source that the registration fix needs and cannot find."""
+    import ast
+
+    missing = []
+    for module, owner, functions in REGISTRATION_TARGETS:
+        source = sglang_root.joinpath(*module.split(".")[1:]).with_suffix(".py")
+        try:
+            tree = ast.parse(source.read_text())
+        except (OSError, SyntaxError):
+            missing.append(module)
+            continue
+        body: list[ast.stmt] | None = tree.body
+        if owner is not None:
+            classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == owner]
+            body = classes[0].body if classes else None
+        if body is None:
+            missing.append(f"{module}.{owner}")
+            continue
+        defined = {n.name for n in body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)}
+        prefix = f"{module}.{owner}" if owner else module
+        missing += [f"{prefix}.{name}" for name in functions if name not in defined]
+    return missing
+
+
 def keep_mooncake_registrations() -> None:
     """Keep each Mooncake memory registration for the life of the engine process.
 
@@ -54,27 +111,27 @@ def keep_mooncake_registrations() -> None:
     buffers, and the next role's manager registers them again under new remote keys. Peers keep
     the keys they read earlier, so their writes fail with remote access errors. Each region is
     registered once instead, and each metadata buffer shape is allocated once, so every key a
-    peer has read stays valid.
+    peer has read stays valid. The regions are never freed while the process runs; SGLang's
+    memory saver, which frees them, is not a launch option.
+
+    Deregistration also made a write that a prefill peer was still sending into an aborted
+    request's pages fail. Those pages stay held until the peer drains, so a switch is refused
+    while any such hold is pending instead.
     """
     registered: set[tuple[int, int]] = set()
     buffers: dict[str, Any] = {}
     lock = threading.Lock()
 
+    def report(message: str) -> None:
+        print(f"narwhal: {message}", file=sys.stderr, flush=True)
+
     def patch_manager(module: Any) -> None:
         manager = getattr(module, "MooncakeKVManager", None)
         if manager is None or not all(
-            hasattr(manager, name)
-            for name in (
-                "_registerable_regions",
-                "register_buffer_to_engine",
-                "deregister_buffer_to_engine",
-            )
+            hasattr(manager, name) for name in REGISTRATION_TARGETS[0][2]
         ):
-            print(
-                "narwhal: Mooncake registrations are not kept: this SGLang has no matching "
-                "MooncakeKVManager",
-                file=sys.stderr,
-                flush=True,
+            report(
+                "Mooncake registrations are not kept: this SGLang has no matching MooncakeKVManager"
             )
             return
 
@@ -93,10 +150,12 @@ def keep_mooncake_registrations() -> None:
 
         manager.register_buffer_to_engine = register_buffer_to_engine
         manager.deregister_buffer_to_engine = deregister_buffer_to_engine
+        report("Mooncake registrations are kept across role switches")
 
     def patch_metadata(module: Any) -> None:
         allocate = getattr(module, "MetadataBuffers", None)
         if allocate is None:
+            report("metadata buffers are reallocated: this SGLang has no MetadataBuffers")
             return
 
         def metadata_buffers(*args: Any, **kwargs: Any) -> Any:
@@ -108,8 +167,30 @@ def keep_mooncake_registrations() -> None:
 
         module.MetadataBuffers = metadata_buffers
 
+    def patch_role_switch(module: Any) -> None:
+        reject = getattr(module, "_reject_reason", None)
+        if reject is None:
+            report("role switches do not wait for deferred KV releases: no _reject_reason")
+            return
+
+        def reject_reason(scheduler: Any, new_role: str) -> Any:
+            rejection = reject(scheduler, new_role)
+            queue = getattr(scheduler, "disagg_decode_transfer_queue", None)
+            if rejection is None and queue is not None and queue.has_pending_deferred_releases():
+                return PENDING_RELEASES, True
+            return rejection
+
+        module._reject_reason = reject_reason
+
     sys.meta_path.insert(
-        0, PatchFinder({MOONCAKE_MODULE: patch_manager, METADATA_MODULE: patch_metadata})
+        0,
+        PatchFinder(
+            {
+                MOONCAKE_MODULE: patch_manager,
+                METADATA_MODULE: patch_metadata,
+                ROLE_SWITCH_MODULE: patch_role_switch,
+            }
+        ),
     )
 
 
@@ -118,16 +199,19 @@ class PatchFinder(importlib.abc.MetaPathFinder):
 
     def __init__(self, patches: dict[str, Any]) -> None:
         self.patches = patches
-        self.searching = False
+        self.searching: set[str] = set()
+        self.lock = threading.Lock()
 
     def find_spec(self, name: str, path: Any = None, target: Any = None) -> Any:
-        if name not in self.patches or self.searching:
-            return None
-        self.searching = True
+        with self.lock:
+            if name not in self.patches or name in self.searching:
+                return None
+            self.searching.add(name)
         try:
             spec = importlib.util.find_spec(name)
         finally:
-            self.searching = False
+            with self.lock:
+                self.searching.discard(name)
         if spec is None or spec.loader is None:
             return spec
         execute = spec.loader.exec_module
@@ -178,6 +262,10 @@ def settings(expected: dict[str, str], args: list[str]) -> dict:
         and ships_code(Path(tokenizer))
     ):
         raise ValueError("Tokenizer metadata requires --trust-remote-code in the launch record")
+    if missing := missing_registration_targets(Path(sglang.__file__).parent):
+        raise ValueError(
+            "this SGLang lacks what the Mooncake registration fix replaces: " + ", ".join(missing)
+        )
     events = json.loads(parsed.kv_events_config) if parsed.kv_events_config else None
     return {
         "sglang_version": sglang.__version__,

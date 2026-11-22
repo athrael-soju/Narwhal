@@ -35,6 +35,7 @@ from narwhal.serving.completion import reassemble
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Phase, Request, Role
 from tests.backends.fixtures.sglang import batch, page_stored
+from tests.backends.test_sglang_registrations import fake_sglang
 from tests.fixtures import fleet
 
 BACKEND = load("sglang")
@@ -448,9 +449,11 @@ PINS = {"sglang": "0.5.21", "mooncake-transfer-engine": "0.3.9"}
 CUSTOM_CODE = json.dumps({"auto_map": {"AutoTokenizer": "custom.Tokenizer"}})
 
 
-def sglang_modules() -> dict[str, ModuleType]:
+def sglang_modules(root: Path) -> dict[str, ModuleType]:
+    fake_sglang(root)
     sglang = ModuleType("sglang")
     sglang.__version__ = "0.5.21"  # type: ignore[attr-defined]
+    sglang.__file__ = str(root / "sglang/__init__.py")
     server_args = ModuleType("sglang.srt.server_args")
 
     class ServerArgs:
@@ -480,13 +483,23 @@ class SglangProbeTests(unittest.TestCase):
             tokenizer = Path(folder)
             (tokenizer / "tokenizer_config.json").write_text(CUSTOM_CODE)
             args = ["--model-path", "/model", "--tokenizer-path", str(tokenizer)]
-            with patch.dict(sys.modules, sglang_modules()):
+            with patch.dict(sys.modules, sglang_modules(Path(folder) / "image")):
                 with self.assertRaisesRegex(ValueError, "^Tokenizer metadata requires"):
                     runtime.settings({}, args)
                 trusted = runtime.settings({}, [*args, "--trust-remote-code"])
                 self.assertEqual(trusted["sglang_version"], "0.5.21")
                 (tokenizer / "tokenizer_config.json").write_text("{}")
                 self.assertTrue(runtime.settings({}, args)["prefix_caching"])
+
+    def test_the_probe_fails_an_sglang_without_the_registration_targets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            modules = sglang_modules(Path(folder))
+            (Path(folder) / "sglang/srt/disaggregation/role_switch.py").unlink()
+            with (
+                patch.dict(sys.modules, modules),
+                self.assertRaisesRegex(ValueError, "lacks what the Mooncake registration fix"),
+            ):
+                runtime.settings({}, ["--model-path", "/model"])
 
 
 IMAGE_ID = "sha256:" + "b" * 64
