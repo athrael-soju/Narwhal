@@ -64,7 +64,7 @@ Stop the engine when the check passes.
 
 1. Restart the engine and its attestation sidecar through their configured process manager.
 2. Check that the engine's `/health` returns HTTP 200.
-3. Check that `/v1/models` lists the configured model and that the engine identity describes the replacement process: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, or `/server_info` and the attestation sidecar's `/v1/process` on SGLang.
+3. Check that `/v1/models` lists the configured model and that the engine identity describes the replacement process: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, `/server_info` and the attestation sidecar's `/v1/process` on SGLang, or `/version` and the attestation sidecar's `/v1/process` on TensorRT-LLM.
 4. Check that the restarted attestation sidecar serves attestation bound to that process.
 5. Retain process manager output and new engine and sidecar identities.
 6. If the engine's [process generation](../Core-Concepts.md#terms) changed, [activate replacement profiles](#activating-replacement-profiles) while the engine stays excluded.
@@ -87,7 +87,7 @@ Readmission runs these checks in order, each named by its `checks` entry:
     - `attestation <fingerprint>`: attestation matches the live process and the `engine_contract`.
     - `profile generation`: every loaded profile variant is bound to the engine's live process generation.
     - `model`: `/v1/models` lists the configured model.
-2. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 3 tests generation.
+2. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM and TensorRT-LLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 3 tests generation.
 3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router pairs the replacement engine with the first live engine in the other role. With the `mooncake` connector, the router switches the replacement engine to its router role before the handoff.
 4. The replacement engine passes `final health`: its `/health` returns HTTP 200.
 5. The identities, attestation, and profile bindings of all participants match step 1.
@@ -118,7 +118,7 @@ Fabric checks by engine role:
 | --- | --- |
 | Pinned to prefill | `fabric produce to <peer>` |
 | Pinned to decode | `fabric consume from <peer>` |
-| Unpinned on vLLM | `fabric produce to <peer>` and `fabric consume from <peer>` |
+| Unpinned on vLLM or TensorRT-LLM | `fabric produce to <peer>` and `fabric consume from <peer>` |
 | Unpinned on SGLang | `fabric produce to <peer>` when its router role is prefill, `fabric consume from <peer>` when it is decode |
 
 Verify placement:

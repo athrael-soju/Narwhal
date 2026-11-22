@@ -286,10 +286,13 @@ The [fleet control service](docs/operate/06-Controlling-the-Fleet.md) runs `tool
 | `tools/fleet_control/journal.py`     | Router journal extracts for sessions and load jobs                      |
 | `tools/fleet_control/hooks.py`       | Hook commands, their logs and timeouts                                  |
 | `tools/fleet_control/engines.py`     | Engine hook actions, lifecycle drain and readmit, and engine state      |
+| `tools/fleet_control/engine_hook.py` | Reference engine hook for container launches                            |
 | `tools/fleet_control/overlays.py`    | Configuration overlays, cold restarts, restores and router readiness    |
 | `tools/fleet_control/jobs.py`        | The single load-job slot and the job runner interface                   |
 | `tools/fleet_control/workloads.py`   | Load settings, the workload library and job parameters                  |
 | `tools/fleet_control/aiperf.py`      | AIPerf commands, client results and the workload route                  |
+| `tools/fleet_control/live.py`        | Live load-job results from AIPerf's per-request records                 |
+| `tools/fleet_control/signals.py`     | Router readiness, firing alerts and the service's Prometheus metrics    |
 | `tools/fleet_control/console.py`     | Console page routes, its content security policy and Grafana panel URLs |
 | `tools/fleet_control/console.html`   | Console page                                                            |
 | `tools/fleet_control/cli.py`         | Options and command                                                     |
