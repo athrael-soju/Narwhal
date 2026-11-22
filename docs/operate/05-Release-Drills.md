@@ -54,10 +54,10 @@ Use `recovery.engine_restart_policy = individual` and the prerequisites in [Rest
 7. Request explicit readmission.
 8. Save the successful response.
 9. Confirm it shows `state = active`, `accepts_new = true`, a newer process start, and every [readmission check](03-Restart-Engines.md#request-readmission) passing.
-10. Send a routed request.
-11. Confirm its placement includes the returned engine.
-12. Match the client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) and the router's cumulative counters.
-13. Keep state snapshots from before and after the routed request.
+10. Send concurrent routed requests, at least twice as many as the live engines in the returned engine's role.
+11. Confirm that at least one placement includes the returned engine.
+12. Match each client response and request ID to the [journal's terminal event](../telemetry/01-Journal.md#diagnosing-a-request-from-the-journal) and the router's cumulative counters.
+13. Keep state snapshots from before and after the routed requests.
 
 ### Whole-wave drill
 
