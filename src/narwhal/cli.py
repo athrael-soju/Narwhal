@@ -193,7 +193,7 @@ def serve(argv: list[str] | None = None) -> int:
         )
     except (OSError, ValueError) as exc:
         return failure("narwhal-serve", f"configure router from {args.fleet}", exc, 2)
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=args.host,
         port=args.port,
@@ -202,7 +202,18 @@ def serve(argv: list[str] | None = None) -> int:
             args.graceful_timeout if args.graceful_timeout is not None else cfg.graceful_timeout_s
         ),
     )
+    YieldingServer(config).run()
     return 0
+
+
+class YieldingServer(uvicorn.Server):
+    """Hand router control to the standby before uvicorn drains open connections."""
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        yield_control = getattr(getattr(self.config.app, "state", None), "yield_control", None)
+        if yield_control is not None:
+            yield_control()
+        await super().shutdown(sockets=sockets)
 
 
 def _port_in_use(port: int, host: str = "127.0.0.1") -> str | None:

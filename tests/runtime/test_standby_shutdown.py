@@ -19,7 +19,7 @@ from narwhal.serving.app import create_app
 from narwhal.types import Role
 
 
-class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
+class FleetCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -62,6 +62,8 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+
+class ShutdownHandoffTests(FleetCase):
     async def test_standby_shutdown_preserves_polled_primary_handoff(self):
         owner = FileLease(self.root / "lease.json", "primary", 30)
         self.assertTrue(owner.claim())
@@ -135,3 +137,59 @@ class ShutdownHandoffTests(unittest.IsolatedAsyncioTestCase):
                 before = self.cfg.state_path.read_bytes()
                 app.state.router.served = 8
         self.assertEqual(self.cfg.state_path.read_bytes(), before)
+
+
+class YieldControlTests(FleetCase):
+    async def test_a_lease_holder_hands_off_as_shutdown_starts(self):
+        lease = FileLease(self.root / "lease.json", "primary", 30)
+        app = create_app(self.cfg, lease=lease)
+        async with app.router.lifespan_context(app):
+            router = app.state.router
+            self.assertTrue(lease.owned)
+            router.served = 5
+            app.state.yield_control()
+            self.assertTrue(router.standby)
+            self.assertEqual(router.failover_blocked, "shutting down")
+            self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 5)
+            # The standby claims the lease while this process still drains.
+            standby = FileLease(self.root / "lease.json", "standby", 30)
+            self.assertTrue(standby.claim())
+            self.addCleanup(standby.release)
+            # Requests that finish during the drain do not overwrite the handoff.
+            router.served = 6
+        self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 5)
+
+    async def test_a_router_without_a_lease_keeps_control_through_the_drain(self):
+        app = create_app(self.cfg)
+        async with app.router.lifespan_context(app):
+            app.state.yield_control()
+            self.assertFalse(app.state.router.standby)
+            app.state.router.served = 3
+        self.assertEqual(state.load(self.cfg.state_path)["counters"]["served"], 3)
+
+
+class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_server_yields_control_before_it_stops_accepting(self):
+        import uvicorn
+
+        from narwhal.cli import YieldingServer
+
+        order = []
+
+        class App:
+            pass
+
+        app = App()
+        app.state = type(
+            "State", (), {"yield_control": staticmethod(lambda: order.append("yield"))}
+        )()
+        server = YieldingServer(uvicorn.Config(app, timeout_graceful_shutdown=0))
+
+        class Listener:
+            def close(self):
+                order.append("close")
+
+        server.servers = [Listener()]
+        server.lifespan = type("Lifespan", (), {"shutdown": AsyncMock()})()
+        await server.shutdown()
+        self.assertEqual(order[:2], ["yield", "close"])

@@ -263,8 +263,24 @@ def create_app(
                 lease.release()
             journal.close()
 
+    def yield_control() -> None:
+        """Release a held lease as shutdown starts, before in-flight requests drain.
+
+        The standby takes over while this process finishes its open streams. Without a lease,
+        the router keeps control until the drain ends and writes its final handoff then.
+        """
+        if lease is None or not controls_fleet(router):
+            return
+        router.standby = True
+        router.failover_blocked = "shutting down"
+        with contextlib.suppress(OSError):
+            handoff_state.write(cfg.state_path, handoff_state.snapshot(router))
+        lease.release()
+        log.info("released the lease at epoch %d for shutdown", router.lease_epoch)
+
     app = FastAPI(title="narwhal", version=__version__, lifespan=lifespan)
     app.state.router = router
+    app.state.yield_control = yield_control
     app.add_middleware(ServingIngress, router=router)
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
