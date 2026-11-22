@@ -1,5 +1,6 @@
 """Fuzz admission, projection and placement against their cb41445 implementations."""
 
+import contextlib
 import copy
 import heapq
 import math
@@ -341,7 +342,29 @@ def reference_cheapest(
     prices: dict[str, Cost],
 ) -> tuple[Instance, bool]:
     eligible = [i for i in candidates if scheduler.meets_slo(request, prices[i.iid])]
+    if request.phase is Phase.DECODE and eligible:
+        return min(
+            eligible,
+            key=lambda i: (
+                prices[i.iid][0],
+                reference_share(scheduler, request, i),
+                prices[i.iid],
+                i.iid,
+            ),
+        ), True
     return min(eligible or candidates, key=lambda i: (prices[i.iid], i.iid)), bool(eligible)
+
+
+def reference_share(scheduler: GlobalScheduler, request: Request, inst: Instance) -> float:
+    profile = scheduler.profiles.get(inst.iid)
+    assert profile is not None
+    correction = scheduler.monitor.decode_correction(inst.iid)
+    headroom = profile.max_tokens(scheduler.slo.tpot_s / correction, len(inst.decode) + 1)
+    health = scheduler.health
+    penalty = health.penalty_s if health is not None and inst.iid in health.probation_set() else 0.0
+    if headroom <= 0:
+        return math.inf
+    return (inst.decode_tokens() + request.length + penalty / scheduler.slo.tpot_s) / headroom
 
 
 def reference_cache_placement(
@@ -714,7 +737,17 @@ class AdmissionReferenceTests(unittest.TestCase):
                 scheduler.schedule(request)
             self.assertEqual(probation.call_count, 1)
             self.assertIsNotNone(request.cache_placement)
-            checked += 1 if len(prefill) > 1 else 0
+            decode = scheduler.role_pool(Role.DECODE, scheduler.live_instances())
+            leg = Request("d", 40, phase=Phase.DECODE)
+            with (
+                patch.object(
+                    scheduler.health, "probation_set", return_value=fleet.probation
+                ) as probation,
+                contextlib.suppress(RuntimeError),
+            ):
+                scheduler.schedule(leg)
+            self.assertEqual(probation.call_count, 1)
+            checked += 1 if len(prefill) > 1 and len(decode) > 1 else 0
         self.assertTrue(checked)
 
     def test_output_estimates_follow_their_snapshot(self):
