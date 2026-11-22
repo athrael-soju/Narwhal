@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.0](https://github.com/athrael-soju/Narwhal/compare/v0.10.0...v0.11.0) (2026-11-22)
+
+
+### Features
+
+* **observability:** show the NVIDIA logo mark for TensorRT-LLM engines ([#437](https://github.com/athrael-soju/Narwhal/issues/437)) ([40e2c33](https://github.com/athrael-soju/Narwhal/commit/40e2c338165a0104b6b22ae013a2c5a219025a5b))
+* TensorRT-LLM engine backend (milestone 25) ([#425](https://github.com/athrael-soju/Narwhal/issues/425)) ([28cba69](https://github.com/athrael-soju/Narwhal/commit/28cba69218e642a275fff8d9baf2973a57c1dd29))
+
+
+### Fixes
+
+* **serving:** release the router lease when shutdown starts ([#436](https://github.com/athrael-soju/Narwhal/issues/436)) ([8980147](https://github.com/athrael-soju/Narwhal/commit/898014736318f1e415548a2d4e02b082adef87b8))
+* SGLang role-switch transfers, profiler role restore and decode spread ([#434](https://github.com/athrael-soju/Narwhal/issues/434)) ([8ae03b0](https://github.com/athrael-soju/Narwhal/commit/8ae03b0bd678ee4ac4e128c313593abbc5d046a6))
+
+
+### Documentation
+
+* name TensorRT-LLM on the llama.cpp page and the shutting-down router state ([#439](https://github.com/athrael-soju/Narwhal/issues/439)) ([d7566f0](https://github.com/athrael-soju/Narwhal/commit/d7566f0e81125f03db2cc669f4201208285d3845))
+* **operate:** name the readmission error a stopped sidecar causes in the whole-wave drill ([#432](https://github.com/athrael-soju/Narwhal/issues/432)) ([bce4af3](https://github.com/athrael-soju/Narwhal/commit/bce4af3800d6468a242b784b210af8d1e1d75153))
+* pre-release sweep of the operator and reference pages ([#438](https://github.com/athrael-soju/Narwhal/issues/438)) ([40a15c1](https://github.com/athrael-soju/Narwhal/commit/40a15c106a33207d22858edc0cb9b845e37419ee))
+
 ## [0.10.0](https://github.com/athrael-soju/Narwhal/compare/v0.9.0...v0.10.0) (2026-11-21)
 
 
