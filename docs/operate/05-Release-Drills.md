@@ -9,7 +9,7 @@ description: Validate every Narwhal release with drills on an idle fleet.
 Run the release drills on an idle fleet with external admission closed:
 
 1. Run the restart drill for your `recovery.engine_restart_policy`.
-2. Test [router failover](../troubleshoot/02-Router-Recovery.md#router-failover) through the production supervisor and load balancer.
+2. Run the [router failover drill](#router-failover-drill) through the production supervisor and load balancer.
 3. [Restore service](#restoring-service-after-the-drill).
 
 Keep the release, fleet configuration, profiles, engine build, supervisor commands, and drill results in the private deployment directory.
@@ -38,7 +38,8 @@ The unplanned whole-wave hold drill passes when:
 The router failover drill passes when:
 
 - The load balancer selects one lease holder.
-- Roles and cumulative counters survive takeover.
+- The standby admits traffic while the stopped primary finishes its open stream, and the stream completes.
+- Roles survive takeover, and the new primary's counters match the handoff.
 - The previous primary stays fenced.
 
 ### Individual restart drill
@@ -175,6 +176,17 @@ Already-stopped-engine case:
 4. Record the trigger and the branch tested.
 
 If the router has ejected the stopped engine at the drain request, the drain succeeds with the last process identity the router verified. If the stopped engine is in placement at the drain request, the drain fails and names the missing identity. Retry the drain after the router ejects the engine.
+
+### Router failover drill
+
+Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-router-pair).
+
+1. Start a streaming completion through the load balancer that runs for at least 10 seconds.
+2. After its first chunk, stop the active router with `SIGTERM` through the supervisor.
+3. Confirm that the stream completes with its final usage frame.
+4. While the stopped router drains, confirm that the standby's `/ready` returns HTTP 200 with a higher `epoch`, and that the load balancer marks the standby up.
+5. Compare the new primary's roles and counters in `/narwhal/state` with the stopped router's last `/narwhal/state`. The roles match. The counters include the open stream as offered but not served, and the stopped router's journal records its outcome.
+6. Confirm that the stopped router, restarted by the supervisor with `--standby-of` set to the new primary, returns HTTP 503 from `/ready` with reason `shadowing`.
 
 ### Restoring service after the drill
 
