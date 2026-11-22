@@ -4,7 +4,7 @@ description: How Narwhal runs llama.cpp engines in a development fleet, with the
 
 # llama.cpp engines
 
-The `llamacpp` backend routes requests over `llama-server` processes. `narwhal dev` starts them directly from a template with `"start": "direct"`, and [the quick start](Quick-Start.md) covers the commands. The backend serves development fleets on one host. A [deployed fleet](../Deploy.md) uses vLLM or SGLang.
+The `llamacpp` backend routes requests over `llama-server` processes. `narwhal dev` starts them directly from a template with `"start": "direct"`, and [the quick start](Quick-Start.md) covers the commands. The backend serves development fleets on one host. A [deployed fleet](../Deploy.md) uses vLLM, SGLang or TensorRT-LLM.
 
 ## Templates
 
@@ -74,6 +74,6 @@ The engines publish `llamacpp:` series on `/metrics`. The router reads `llamacpp
 
 ## Limits
 
-- Engine attestation, the profiling sweep of `narwhal-profile` and KV transfer evidence apply to vLLM and SGLang fleets.
-- `narwhal-engine` and the [deployment stages](../Deploy.md) launch vLLM and SGLang engines.
+- Engine attestation, the profiling sweep of `narwhal-profile` and KV transfer evidence apply to vLLM, SGLang and TensorRT-LLM fleets.
+- `narwhal-engine` and the [deployment stages](../Deploy.md) launch vLLM, SGLang and TensorRT-LLM engines.
 - The backend runs on x86-64 Linux and under WSL2, with every engine of a fleet on one host.

@@ -184,10 +184,12 @@ Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-ro
 
 1. Through the load balancer, start a streaming completion that runs for at least 10 seconds.
 2. After its first chunk, stop the active router with `SIGTERM` through the supervisor.
-3. Confirm that the stream completes with its final usage frame.
-4. While the stopped router drains, confirm that the standby's `/ready` returns HTTP 200 with a higher `epoch` and that the load balancer marks it up.
-5. Compare `/narwhal/state` on the new primary with the stopped router's last `/narwhal/state`. The roles match, and the new primary counts the open stream as offered but not served.
-6. After the supervisor restarts the stopped router with `--standby-of`, confirm that its `/ready` returns HTTP 503 with reason `shadowing`.
+3. Confirm that the stopped router's `/ready` returns HTTP 503 with reason `shutting down` and that its `/health` reports `fenced`.
+4. Confirm that the stream completes with its final usage frame.
+5. While the stopped router drains, confirm that the standby's `/ready` returns HTTP 200 with a higher `epoch` and that the load balancer marks it up.
+6. Confirm that the new primary is the only backend returning HTTP 200 from `/ready`.
+7. Compare `/narwhal/state` on the new primary with the stopped router's last `/narwhal/state`. The roles match, and the new primary counts the open stream as offered but not served.
+8. After the supervisor restarts the stopped router with `--standby-of`, confirm that its `/ready` returns HTTP 503 with reason `shadowing`.
 
 ### Restoring service after the drill
 

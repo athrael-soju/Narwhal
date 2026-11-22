@@ -49,6 +49,8 @@ Invalid requests return HTTP `400` in an OpenAI error envelope:
 - on vLLM, a `vllm_xargs` object that sets `kv_cache_report_mode`, `kv_transfer_params`, or `ec_transfer_params`
 - on SGLang, a `rid`, `bootstrap_host`, `bootstrap_port`, or `bootstrap_room` field
 - on SGLang, a `/v1/chat/completions` request that sets `return_token_ids`, `return_prompt_token_ids`, or `return_meta_info`
+- on TensorRT-LLM, a `disaggregated_params` or `prompt_token_ids` field
+- on llama.cpp, an `id_slot`, `cache_prompt`, or `n_predict` field
 
 Each invalid request writes one [terminal request record](../telemetry/01-Journal.md#terminal-request-records) with `terminal: "invalid"`.
 

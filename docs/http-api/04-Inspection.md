@@ -36,7 +36,7 @@ The earliest matching row sets `status`:
 | `status`      | Meaning                                                                                                |
 | ------------- | ------------------------------------------------------------------------------------------------------ |
 | `ok`          | Router admits new client requests                                                                      |
-| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, or an invalid active-router lease    |
+| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, an invalid active-router lease, or shutdown of the lease holder |
 | `maintenance` | Whole-wave drain, recovery, or restart hold                                                            |
 | `standby`     | Standby router                                                                                         |
 | `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement |
@@ -67,7 +67,7 @@ The earliest matching row sets `reason`:
 
 | Cause                               | `reason`                                                                                       |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Fencing or lease-storage failure    | Failover block, such as `lease renewal failed`                                                 |
+| Fencing, lease-storage failure or shutdown of the lease holder | Failover block, such as `lease renewal failed` or `shutting down` |
 | Whole-wave hold                     | `whole-wave drain <id>`, `whole-wave recovery <id>`, or `whole-wave restart required: <cause>` |
 | Engine-monitoring degradation       | `monitoring degraded: <stage> <class>`                                                         |
 | Standby state                       | `shadowing`                                                                                    |
