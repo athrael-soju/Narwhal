@@ -25,6 +25,7 @@ from ...runtime.lifecycle.manager import LifecycleManager
 from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
+from ...runtime.role_switch import ROLE_SWITCH_TIMEOUT_S
 from ...runtime.standby import ready as router_ready
 from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
@@ -63,8 +64,6 @@ if TYPE_CHECKING:
     from ...runtime.lease import FileLease
 
 log = logging.getLogger("narwhal.router")
-# An engine-side switch to decode captures decode graphs, which takes seconds.
-ROLE_SWITCH_TIMEOUT_S = 60.0
 
 
 class NarwhalRouter:

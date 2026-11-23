@@ -294,6 +294,21 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
                 await BACKEND.role_switch.switch(client, "http://engine", Role.DECODE, LAUNCH)
         self.assertEqual(len(posted), 3)
 
+    async def test_the_switch_request_outlasts_a_short_client_timeout(self):
+        # A first switch to decode on a GPU builds the decode attention kernels.
+        timeouts = {}
+
+        def handle(request):
+            timeouts[request.method] = request.extensions["timeout"]["read"]
+            if request.method == "GET":
+                state = {"disaggregation_mode": "prefill"}
+                return httpx.Response(200, json={"internal_states": [state]})
+            return httpx.Response(200, json={"success": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=5.0) as client:
+            await SglangRoleSwitch().switch(client, "http://engine", Role.DECODE, LAUNCH)
+        self.assertEqual(timeouts, {"GET": 5.0, "POST": 60.0})
+
     async def test_the_switcher_reads_the_engine_role_without_its_key(self):
         requests = []
 
