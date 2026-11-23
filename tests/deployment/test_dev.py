@@ -320,10 +320,7 @@ class DevTests(unittest.TestCase):
         runtime = launch["engines"]["engine-1"]["runtime"]
         self.assertEqual(runtime["backend"], "sglang")
         self.assertIn("--mem-fraction-static", runtime["extra_args"])
-        self.assertEqual(
-            runtime["extra_args"][-3:],
-            ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"],
-        )
+        self.assertEqual(runtime["extra_args"][-2:], ["--decode-attention-backend", "flashinfer"])
         # The profile's decode cohorts fit the engine's request cap.
         self.assertEqual(runtime["max_sequences"], spec["runtime"]["max_num_seqs"])
         self.assertLessEqual(max(spec["profile"]["decode_concurrency"]), runtime["max_sequences"])

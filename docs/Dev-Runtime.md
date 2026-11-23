@@ -13,7 +13,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | Template | Backend and KV transfer | Model | Engines |
 | --- | --- | --- | --- |
 | `small-cuda-v1.json`, the default | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 2 |
-| `small-cuda-sglang-v1.json` | SGLang 0.5.21 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
+| `small-cuda-sglang-v1.json` | SGLang 0.5.23 with Mooncake over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `small-cuda-trtllm-v1.json` | TensorRT-LLM 1.4.0rc3 with UCX over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
@@ -137,7 +137,7 @@ The [WSL2 monitoring setup](observability/04-WSL2.md) forwards these metrics to 
 
 ## Running SGLang engines
 
-The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through Mooncake over TCP. The checkpoint mixes linear-attention and full-attention layers, so the template launches the engines with `--mamba-radix-cache-strategy no_buffer` and `--disable-overlap-schedule`, as [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields) describes.
+The installed `small-cuda-sglang-v1.json` template runs one prefill and one decode SGLang engine with the Qwen3.5-0.8B checkpoint, each running at most 4 requests at once. The engines transfer KV through Mooncake over TCP. The template launches the engines with `--decode-attention-backend flashinfer`, as discovery does for SGLang 0.5.23 in [SGLang runtime fields](configuration/05-Engine-Launch.md#sglang-runtime-fields).
 
 1. Install the system libraries that Mooncake needs:
 
@@ -160,8 +160,8 @@ The installed `small-cuda-sglang-v1.json` template runs one prefill and one deco
     python3.12 -m venv .venv-sglang
     source .venv-sglang/bin/activate
     python -m pip install .
-    python -m pip install 'sglang==0.5.21' 'mooncake-transfer-engine-cuda13==0.3.13' \
-      'torch==2.13.0' 'transformers==5.12.1'
+    python -m pip install 'sglang==0.5.23' 'mooncake-transfer-engine-cuda13==0.3.13.post1' \
+      'torch==2.14.1' 'transformers==5.19.0'
     ```
 
 4. Download the checkpoint into the Hugging Face cache:
