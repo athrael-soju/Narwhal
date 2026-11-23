@@ -46,7 +46,7 @@ Run every later command from this directory with the virtual environment active.
 narwhal dev up
 ```
 
-On its first run, `up` sets up the instance in `runs/dev` and then starts the fleet. It accepts the options of `setup`.
+On its first run, `up` sets up the instance in `runs/dev` and then starts the fleet. It accepts the options of `setup`. The [`narwhal dev` reference](../cli/Dev.md) lists every subcommand and option.
 
 ```bash
 narwhal dev down --remove
