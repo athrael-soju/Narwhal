@@ -8,6 +8,10 @@ import httpx
 
 from ..types import Role, RoleModel
 
+# An engine-side switch to decode captures decode graphs, which takes seconds, and longer on the
+# first capture on a GPU, which builds the decode attention kernels.
+ROLE_SWITCH_TIMEOUT_S = 60.0
+
 
 class RoleSwitcher(ABC):
     model: ClassVar[RoleModel]

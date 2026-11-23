@@ -30,6 +30,7 @@ SERVER_FIELDS = (
     "dtype",
     "kv_cache_dtype",
     "attention_backend",
+    "decode_attention_backend",
     "page_size",
     "disaggregation_transfer_backend",
     "speculative_algorithm",
@@ -117,6 +118,8 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         raise ValueError("Live transfer backend differs from the launch plan")
     if str(server.get("page_size")) != option(plan["args"], "--page-size"):
         raise ValueError("Live page size differs from the launch plan")
+    if server.get("decode_attention_backend") != option(plan["args"], "--decode-attention-backend"):
+        raise ValueError("Live decode attention backend differs from the launch plan")
     env = read_env(run / env_file_name(plan))
     contract = {
         "connector_version": 0,

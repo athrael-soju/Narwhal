@@ -294,6 +294,27 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
                 await BACKEND.role_switch.switch(client, "http://engine", Role.DECODE, LAUNCH)
         self.assertEqual(len(posted), 3)
 
+    async def test_the_switch_request_outlasts_a_short_client_timeout(self):
+        # A first switch to decode on a GPU builds the decode attention kernels.
+        timeouts = {}
+
+        def handle(request):
+            timeouts[request.method] = request.extensions["timeout"]
+            if request.method == "GET":
+                state = {"disaggregation_mode": "prefill"}
+                return httpx.Response(200, json={"internal_states": [state]})
+            return httpx.Response(200, json={"success": True})
+
+        for limits, read in ((5.0, 60.0), (120.0, 120.0), (None, None)):
+            timeouts.clear()
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handle), timeout=limits
+            ) as client:
+                await SglangRoleSwitch().switch(client, "http://engine", Role.DECODE, LAUNCH)
+            self.assertEqual(timeouts["POST"]["read"], read)
+            self.assertEqual(timeouts["POST"]["connect"], limits)
+            self.assertEqual(timeouts["GET"]["read"], limits)
+
     async def test_the_switcher_reads_the_engine_role_without_its_key(self):
         requests = []
 
@@ -339,6 +360,10 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(expected_packages={"sglang": "0.5.21"}), "mooncake"),
             (runtime_record(decode_cuda_graph_memory_gb=0), "decode_cuda_graph_memory_gb"),
             (runtime_record(extra_args=["--page-size", "64"]), "--page-size"),
+            (
+                runtime_record(extra_args=["--decode-attention-backend", "flashinfer"] * 2),
+                "repeats --decode-attention-backend",
+            ),
             (runtime_record(environment={"SGLANG_HOST_IP": "x"}), "SGLANG_HOST_IP"),
             (runtime_record(environment={"SGLANG_SECRET": "x"}), "SGLANG_SECRET"),
             (runtime_record(environment={"VLLM_FOO": "1"}), "VLLM_FOO"),
@@ -578,6 +603,7 @@ class EngineDocumentTests(unittest.TestCase):
             "dtype": "bfloat16",
             "kv_cache_dtype": "auto",
             "attention_backend": "triton",
+            "decode_attention_backend": None,
             "page_size": 1,
             "disaggregation_transfer_backend": "mooncake",
             "speculative_algorithm": None,
@@ -644,6 +670,39 @@ class EngineDocumentTests(unittest.TestCase):
         self.assertEqual(document, expected)
         # The document is written in this key order.
         self.assertEqual(json.dumps(document), json.dumps(expected))
+
+    def test_the_live_decode_attention_backend_must_match_the_launch_plan(self):
+        connector = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
+        cases = (
+            (None, "flashinfer"),
+            ("flashinfer", None),
+            ("flashinfer", "triton"),
+            ("flashinfer", "flashinfer"),
+        )
+        for planned, live in cases:
+            with self.subTest(planned=planned, live=live):
+                run = self.evidence("native", connector)
+                if planned:
+                    launch = json.loads((run / "launch.json").read_text())
+                    launch["args"] += ["--decode-attention-backend", planned]
+                    (run / "launch.json").write_text(json.dumps(launch))
+                    plan_hash = digest(run / "launch.json")
+                    for name in ("checked.json", "model-dimensions.json", "server-info.json"):
+                        record = json.loads((run / name).read_text())
+                        record["plan_sha256"] = plan_hash
+                        (run / name).write_text(json.dumps(record))
+                record = json.loads((run / "server-info.json").read_text())
+                record["server"]["decode_attention_backend"] = live
+                (run / "server-info.json").write_text(json.dumps(record))
+                with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
+                    if planned == live:
+                        document = engine_document(run, run / "startup.log")
+                        self.assertEqual(document["schema"], "narwhal.attestation")
+                        continue
+                    with self.assertRaisesRegex(
+                        ValueError, "^Live decode attention backend differs from the launch plan"
+                    ):
+                        engine_document(run, run / "startup.log")
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []

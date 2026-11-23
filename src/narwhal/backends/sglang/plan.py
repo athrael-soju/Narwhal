@@ -39,6 +39,7 @@ VALUE_OPTIONS = {
     "--mamba-ssm-dtype",
     "--max-mamba-cache-size",
     "--mamba-radix-cache-strategy",
+    "--decode-attention-backend",
 }
 FLAG_OPTIONS = {
     "--trust-remote-code",
@@ -110,7 +111,13 @@ def validate_runtime(runtime: dict) -> None:
             "engine reserves it when it switches to decode"
         )
     check_settings(runtime, SETTINGS)
-    check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
+    args = runtime.get("extra_args", [])
+    check_extra_args(args, VALUE_OPTIONS, FLAG_OPTIONS)
+    repeated = sorted(
+        {arg for arg in args if arg in VALUE_OPTIONS | FLAG_OPTIONS and args.count(arg) > 1}
+    )
+    if repeated:
+        raise ValueError(f"runtime.extra_args repeats {', '.join(repeated)}")
     check_environment(runtime.get("environment", {}), MANAGED_ENV, ENV_PREFIXES)
 
 

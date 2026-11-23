@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from ...runtime.role_switch import EngineHeldRoles
+from ...runtime.role_switch import ROLE_SWITCH_TIMEOUT_S, EngineHeldRoles
 from ...types import Role
 from .identity import server_info
 from .plan import ROLE_SWITCH_CONNECTORS
@@ -59,9 +59,17 @@ class SglangRoleSwitch(EngineHeldRoles):
         body: dict[str, Any] = {"new_role": role.value}
         if role is Role.DECODE and (memory := graph_memory(state, launch)) is not None:
             body["decode_cuda_graph_memory_gb"] = memory
+        # The engine replies when the switch ends, which can outlast the caller's read timeout.
+        limits = client.timeout
+        timeout = httpx.Timeout(
+            connect=limits.connect,
+            read=None if limits.read is None else max(limits.read, ROLE_SWITCH_TIMEOUT_S),
+            write=limits.write,
+            pool=limits.pool,
+        )
         deadline = time.monotonic() + IDLE_WAIT_S
         while True:
-            response = await client.post(f"{base}{SWITCH_PATH}", json=body)
+            response = await client.post(f"{base}{SWITCH_PATH}", json=body, timeout=timeout)
             if "not idle" not in response.text or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(IDLE_POLL_S)
