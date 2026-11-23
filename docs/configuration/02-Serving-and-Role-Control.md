@@ -331,7 +331,7 @@ Decode load leaves out the stall the envelope priced for a borrowed leg, and the
 | `engine.chars_per_token`              | `3.8`   | Characters per token for the fallback estimate.                                             | Positive                                      |
 | `engine.connect_timeout_s`            | `10.0`  | TCP connect deadline for engine requests.                                                   | Positive                                      |
 | `engine.pool_timeout_s`               | `5.0`   | Maximum wait for a connection from the data or control connection pool.                     | Positive                                      |
-| `engine.health_timeout_s`             | `5.0`   | HTTP I/O timeout for preflight, breaker, readmission, and residency requests.               | Positive                                      |
+| `engine.health_timeout_s`             | `5.0`   | HTTP I/O timeout for preflight, breaker, readmission, and residency requests, except SGLang role switches. | Positive                                      |
 
 ### Request and prefill deadlines
 

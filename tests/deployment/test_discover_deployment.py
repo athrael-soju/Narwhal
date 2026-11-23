@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.backends.sglang import discovery as sglang_discovery
 from narwhal.deployment.engine_launch import load_launches
 from narwhal.deployment.launch_engine.plan import build, conv_state_layers
 from tools.deployment.deploy_hosts import prepare
@@ -322,6 +323,21 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(extra_args(), decode, version)
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--decode-attention-backend", "triton"])
         self.assertEqual(extra_args(), ["--decode-attention-backend", "triton"])
+        strategy = ["--mamba-radix-cache-strategy", "extra_buffer"]
+        env["NARWHAL_ENGINE_ARGS"] = json.dumps(strategy)
+        self.assertEqual(extra_args(), strategy + decode)
+        del env["NARWHAL_ENGINE_ARGS"]
+        # Earlier releases, their pre-releases and development builds keep both flags.
+        pins = ["--mamba-radix-cache-strategy", "no_buffer", "--disable-overlap-schedule"]
+        for version in ("0.5.22", "0.5.22.post1", "0.5.23rc0", "0.5.23.dev1"):
+            for observed in observations.values():
+                observed["packages"]["sglang"] = version
+            self.assertEqual(extra_args(), pins, version)
+
+    def test_an_unreadable_sglang_version_is_an_earlier_release(self):
+        for version in ("", "unknown", "0.5"):
+            self.assertFalse(sglang_discovery.at_least(version, (0, 5, 23)), version)
+        self.assertTrue(sglang_discovery.at_least("v0.5.23+cu130", (0, 5, 23)))
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):

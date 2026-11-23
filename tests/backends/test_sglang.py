@@ -299,15 +299,21 @@ class RoleSwitchTests(unittest.IsolatedAsyncioTestCase):
         timeouts = {}
 
         def handle(request):
-            timeouts[request.method] = request.extensions["timeout"]["read"]
+            timeouts[request.method] = request.extensions["timeout"]
             if request.method == "GET":
                 state = {"disaggregation_mode": "prefill"}
                 return httpx.Response(200, json={"internal_states": [state]})
             return httpx.Response(200, json={"success": True})
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=5.0) as client:
-            await SglangRoleSwitch().switch(client, "http://engine", Role.DECODE, LAUNCH)
-        self.assertEqual(timeouts, {"GET": 5.0, "POST": 60.0})
+        for limits, read in ((5.0, 60.0), (120.0, 120.0), (None, None)):
+            timeouts.clear()
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handle), timeout=limits
+            ) as client:
+                await SglangRoleSwitch().switch(client, "http://engine", Role.DECODE, LAUNCH)
+            self.assertEqual(timeouts["POST"]["read"], read)
+            self.assertEqual(timeouts["POST"]["connect"], limits)
+            self.assertEqual(timeouts["GET"]["read"], limits)
 
     async def test_the_switcher_reads_the_engine_role_without_its_key(self):
         requests = []
@@ -354,6 +360,10 @@ class LaunchTests(unittest.TestCase):
             (runtime_record(expected_packages={"sglang": "0.5.21"}), "mooncake"),
             (runtime_record(decode_cuda_graph_memory_gb=0), "decode_cuda_graph_memory_gb"),
             (runtime_record(extra_args=["--page-size", "64"]), "--page-size"),
+            (
+                runtime_record(extra_args=["--decode-attention-backend", "flashinfer"] * 2),
+                "repeats --decode-attention-backend",
+            ),
             (runtime_record(environment={"SGLANG_HOST_IP": "x"}), "SGLANG_HOST_IP"),
             (runtime_record(environment={"SGLANG_SECRET": "x"}), "SGLANG_SECRET"),
             (runtime_record(environment={"VLLM_FOO": "1"}), "VLLM_FOO"),
@@ -663,7 +673,13 @@ class EngineDocumentTests(unittest.TestCase):
 
     def test_the_live_decode_attention_backend_must_match_the_launch_plan(self):
         connector = {"transfer_backend": "mooncake", "launch_role": "decode", "role_switch": False}
-        for planned, live in ((None, "flashinfer"), ("flashinfer", None), ("flashinfer", "triton")):
+        cases = (
+            (None, "flashinfer"),
+            ("flashinfer", None),
+            ("flashinfer", "triton"),
+            ("flashinfer", "flashinfer"),
+        )
+        for planned, live in cases:
             with self.subTest(planned=planned, live=live):
                 run = self.evidence("native", connector)
                 if planned:
@@ -678,13 +694,15 @@ class EngineDocumentTests(unittest.TestCase):
                 record = json.loads((run / "server-info.json").read_text())
                 record["server"]["decode_attention_backend"] = live
                 (run / "server-info.json").write_text(json.dumps(record))
-                with (
-                    patch.object(attestation_evidence, "live_native", return_value=PROCESS),
-                    self.assertRaisesRegex(
+                with patch.object(attestation_evidence, "live_native", return_value=PROCESS):
+                    if planned == live:
+                        document = engine_document(run, run / "startup.log")
+                        self.assertEqual(document["schema"], "narwhal.attestation")
+                        continue
+                    with self.assertRaisesRegex(
                         ValueError, "^Live decode attention backend differs from the launch plan"
-                    ),
-                ):
-                    engine_document(run, run / "startup.log")
+                    ):
+                        engine_document(run, run / "startup.log")
 
     def server_info(self, payload: dict):
         requests: list[httpx.Request] = []

@@ -24,7 +24,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) 
     fields = discovered_launch_settings(setting)
     if observed.get("requires_trust_remote_code") and "--trust-remote-code" not in args:
         args.append("--trust-remote-code")
-    current = release(observed["packages"].get("sglang", "")) >= OVERLAP_RELEASE
+    current = at_least(observed["packages"].get("sglang", ""), OVERLAP_RELEASE)
     if current and "--decode-attention-backend" not in args:
         args += ["--decode-attention-backend", DECODE_ATTENTION_BACKEND]
     if (
@@ -58,8 +58,15 @@ def runtime(observed: dict, setting: Callable[[str, str], str], connector: str) 
     return {**record, "environment": environment, "extra_args": args}
 
 
-def release(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", version.split("+")[0])[:3])
+def at_least(version: str, release: tuple[int, int, int]) -> bool:
+    """Whether `version` is `release` or later; a pre-release or development build is earlier."""
+    match = re.fullmatch(r"v?(\d+)\.(\d+)(?:\.(\d+))?(.*)", version.split("+")[0].strip().lower())
+    if match is None:
+        return False
+    major, minor, patch, rest = match.groups()
+    numbers = (int(major), int(minor), int(patch or 0))
+    early = re.match(r"[-_.]?(a|b|c|rc|alpha|beta|pre|preview|dev)", rest) is not None
+    return numbers > release or (numbers == release and not early)
 
 
 def sequence_limit(runtime: dict) -> int:
