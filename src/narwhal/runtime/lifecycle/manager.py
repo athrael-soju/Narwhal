@@ -88,6 +88,11 @@ class LifecycleManager:
         self.refresh()
         return True
 
+    def forget(self, iid: str) -> None:
+        """Drop the record and process identity of an engine that left the fleet."""
+        self.records.pop(iid, None)
+        self.process_starts.pop(iid, None)
+
     def record_old_identity(self, iid: str, process_start: float | None, error: str = "") -> None:
         """Bind a drain to the process the supervisor is allowed to stop."""
         record = self.records[iid]

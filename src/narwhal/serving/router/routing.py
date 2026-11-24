@@ -12,7 +12,7 @@ import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...backends import load as load_backend
-from ...config import FleetConfig
+from ...config import EngineSpec, FleetConfig
 from ...contracts import STATE, versioned
 from ...engines.attestation import attested_launch
 from ...engines.client import EngineClient, client_options
@@ -112,25 +112,22 @@ class NarwhalRouter:
         )
         for spec in self.membership:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
+        # Shared-device group to its member engine IDs, from the snapshot.
+        self.shared_members = self._shared_members()
         shared_groups = {
-            spec.iid: spec.shared_device.group
-            for spec in self.membership
-            if spec.shared_device is not None
+            iid: group for group, members in self.shared_members.items() for iid in members
         }
         if shared_groups:
-            members: dict[str, list[str]] = {}
-            for iid, group in shared_groups.items():
-                members.setdefault(group, []).append(iid)
             self.profiles.bind_role_mix(
                 shared_groups,
                 lambda group: (
                     sum(
                         self.monitor.instances[iid].role is Role.PREFILL
-                        for iid in members.get(group, ())
+                        for iid in self.shared_members.get(group, ())
                     ),
                     sum(
                         self.monitor.instances[iid].role is Role.DECODE
-                        for iid in members.get(group, ())
+                        for iid in self.shared_members.get(group, ())
                     ),
                 ),
                 lambda iid: self.monitor.instances[iid].role,
@@ -143,7 +140,7 @@ class NarwhalRouter:
             clock=clock,
             eject_after=cfg.eject_after,
             flip_history=cfg.flip_history,
-            pinned=frozenset(e.iid for e in self.membership if e.pin),
+            pinned=frozenset(spec.iid for spec in self.membership if spec.pin),
             min_prefill=cfg.min_prefill,
             min_decode=cfg.min_decode,
             advisory=cfg.advisory,
@@ -185,9 +182,8 @@ class NarwhalRouter:
         self.role_switches: set[asyncio.Task[None]] = set()
         model = self.role_switch.model
         self.scheduler.availability.roles_bound = model is not RoleModel.ROUTER
-        if model is RoleModel.FIXED:
-            self.scheduler.pinned = frozenset(self.membership.ids)
-        elif model is RoleModel.ENGINE:
+        self.scheduler.pinned = self._pinned()
+        if model is RoleModel.ENGINE:
             self.scheduler.switch_requires_idle = self.role_switch.requires_idle
             self.scheduler.on_flip = self._begin_switch
             self.scheduler.stale_handoff = self.stale_handoff
@@ -278,6 +274,71 @@ class NarwhalRouter:
             clock, on_event=self.journal.write, on_degraded=self.wake_waiters
         )
 
+    def _shared_members(self) -> dict[str, list[str]]:
+        members: dict[str, list[str]] = {}
+        for spec in self.membership:
+            if spec.shared_device is not None:
+                members.setdefault(spec.shared_device.group, []).append(spec.iid)
+        return members
+
+    def _pinned(self) -> frozenset[str]:
+        """Return the members excluded from role changes: every member under fixed roles."""
+        if self.role_switch.model is RoleModel.FIXED:
+            return frozenset(self.membership.ids)
+        return frozenset(spec.iid for spec in self.membership if spec.pin)
+
+    def apply_membership(self, membership: Membership) -> None:
+        """Replace the snapshot and bring every per-engine table to its engine set.
+
+        This is the only writer of membership in the router process. A new member starts in its
+        spec's role with no resident work. A removed member's entries leave the monitor,
+        availability, drift, verifier, sizer, peer release, lifecycle, attested limits, launch
+        records, role changes and switch holds.
+        """
+        current = self.membership
+        if membership.generation <= current.generation:
+            raise ValueError(
+                f"membership generation {membership.generation} does not follow "
+                f"{current.generation}"
+            )
+        removed = [spec for spec in current if spec.iid not in membership]
+        added = [spec for spec in membership if spec.iid not in current]
+        changed = sorted(
+            spec.iid
+            for spec in membership
+            if spec.iid in current and current.spec(spec.iid) != spec
+        )
+        if changed:
+            raise ValueError(f"member spec changed in place: {', '.join(changed)}")
+        shared = sorted(spec.iid for spec in (*removed, *added) if spec.shared_device is not None)
+        if shared:
+            raise ValueError(f"shared-device membership cannot change: {', '.join(shared)}")
+        self.membership = membership
+        for spec in removed:
+            self._forget_engine(spec)
+        for spec in added:
+            self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
+        self.residency.sync(membership.specs)
+        self.shared_members = self._shared_members()
+        self.scheduler.pinned = self._pinned()
+        self.scheduler.refresh_floor_state()
+        self.monitor.on_capacity_change()
+        self.wake_waiters()
+
+    def _forget_engine(self, spec: EngineSpec) -> None:
+        iid = spec.iid
+        self.monitor.remove(iid)
+        self.scheduler.forget(iid)
+        self.verifier.forget(iid)
+        self.sizer.backoff.pop(iid, None)
+        self.peer_release.forget(iid)
+        self.lifecycle.forget(iid)
+        for table in (self.sequence_limits, self.kv_leases, self.launches):
+            table.pop(iid, None)
+        self.role_switch.forget(spec.url)
+        if self.transfer_refresh.held == iid:
+            self.transfer_refresh.held = None
+
     @property
     def failover_blocked(self) -> str:
         return self._failover_blocked
@@ -362,12 +423,16 @@ class NarwhalRouter:
         return None
 
     def stale_handoff(self, producer: str, consumer: str) -> bool:
+        # A producer that left the fleet after its prefill leg leaves nothing to refresh against.
         instances = self.monitor.instances
+        if producer not in instances or consumer not in instances:
+            return False
         return self.role_switch.stale_handoff(instances[producer].url, instances[consumer].url)
 
     def note_handoff(self, producer: str, consumer: str) -> None:
         instances = self.monitor.instances
-        self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
+        if producer in instances and consumer in instances:
+            self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
 
     def attested(self, iid: str, payload: Any) -> None:
         identity = self.backend.identity

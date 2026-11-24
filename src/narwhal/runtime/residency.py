@@ -59,8 +59,22 @@ class ResidencySubscriptions:
     """Keep a residency view per engine from its attestation sidecar."""
 
     def __init__(self, engines: Sequence[EngineSpec]) -> None:
-        self.views = {spec.iid: EngineResidency(spec.iid) for spec in engines}
-        self._specs = {spec.iid: spec for spec in engines}
+        self.views: dict[str, EngineResidency] = {}
+        self._specs: dict[str, EngineSpec] = {}
+        self.sync(engines)
+
+    def sync(self, engines: Sequence[EngineSpec]) -> None:
+        """Follow exactly `engines`: a new engine starts cold and a removed one is dropped."""
+        specs = {spec.iid: spec for spec in engines}
+        for iid in set(self.views) - set(specs):
+            del self.views[iid]
+        for iid, spec in specs.items():
+            previous = self._specs.get(iid)
+            if iid not in self.views or (
+                previous is not None and previous.attestation_url != spec.attestation_url
+            ):
+                self.views[iid] = EngineResidency(iid)
+        self._specs = specs
 
     def view(self, iid: str) -> EngineResidency:
         """Return the router's residency view of `iid`."""
@@ -124,8 +138,11 @@ class ResidencySubscriptions:
         await asyncio.gather(*(self._refresh_one(client, iid) for iid in self._specs))
 
     async def _refresh_one(self, client: httpx.AsyncClient, iid: str) -> None:
-        view = self.views[iid]
-        base = _sidecar_base(self._specs[iid])
+        view = self.views.get(iid)
+        spec = self._specs.get(iid)
+        if view is None or spec is None:
+            return
+        base = _sidecar_base(spec)
         if base is None:
             view.forget("engine has no attestation sidecar")
             return

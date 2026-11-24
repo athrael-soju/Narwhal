@@ -155,10 +155,35 @@ class InstanceMonitor:
         self._decoding[instance.iid] = [0, 0]
         self.requests_sent.setdefault(instance.iid, 0)
 
+    def remove(self, iid: str) -> None:
+        """Drop an engine and its interval state.
+
+        Requests still resident on it lose their engine-side accounting. Their completion calls
+        clear what each request holds and change no engine.
+        """
+        instance = self.instances.pop(iid, None)
+        for table in (
+            self._windows,
+            self._handoffs,
+            self._prices,
+            self._decode_tokens,
+            self._decoding,
+            self._last_output,
+            self._last_prefill_activity,
+            self._lent,
+            self.requests_sent,
+        ):
+            table.pop(iid, None)
+        for rid in [rid for rid, on in self._decoding_on.items() if on == iid]:
+            del self._decoding_on[rid]
+        if instance is not None and (instance.prefill or instance.decode):
+            self.on_capacity_change()
+
     def sent(self, *iids: str) -> None:
-        """Count one request the router sends to each of `iids`."""
+        """Count one request the router sends to each member among `iids`."""
         for iid in iids:
-            self.requests_sent[iid] = self.requests_sent.get(iid, 0) + 1
+            if iid in self.instances:
+                self.requests_sent[iid] = self.requests_sent.get(iid, 0) + 1
 
     def pool(self, role: Role) -> list[Instance]:
         """Return engines assigned to a role."""
@@ -236,6 +261,9 @@ class InstanceMonitor:
 
     def first_token(self, iid: str, rid: str) -> None:
         """Move a request out of prefill and start its token clock."""
+        if iid not in self.instances:
+            self._prefilled_at[rid] = self._last_token[rid] = self._clock()
+            return
         if self.instances[iid].prefill.pop(rid, None) is not None:
             self._prefill_changed(iid)
             self._unlend(iid, rid)
@@ -246,6 +274,10 @@ class InstanceMonitor:
     def output_token(self, iid: str, rid: str) -> None:
         """Record one decode token and its inter-token gap against the engine that served it."""
         now = self._clock()
+        if iid not in self.instances:
+            self._decode_started.add(rid)
+            self._last_token[rid] = now
+            return
         prev = self._last_token.get(rid)
         if prev is not None and rid in self._decode_started:
             inst = self.instances[iid]
@@ -290,7 +322,16 @@ class InstanceMonitor:
 
     def finished(self, iid: str, rid: str) -> None:
         """Remove all tracking state for a completed request."""
-        inst = self.instances[iid]
+        inst = self.instances.get(iid)
+        if inst is None:
+            # The engine left the fleet with the request resident.
+            self._last_token.pop(rid, None)
+            self._prefilled_at.pop(rid, None)
+            self._decode_started.discard(rid)
+            self._decode_ended.discard(rid)
+            self._decoding_on.pop(rid, None)
+            self.on_capacity_change()
+            return
         decoding = inst.decode.pop(rid, None)
         if decoding is not None:
             self._decode_tokens[iid] -= decoding.length

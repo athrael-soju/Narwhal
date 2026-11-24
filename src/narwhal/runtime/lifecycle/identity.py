@@ -140,6 +140,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             not controls_fleet(router)
             or router.lifecycle_blocked
             or iid in router.scheduler.draining
+            or iid not in router.membership
         ):
             return False
         if router.cfg.engine_restart_policy == "whole_wave" and iid in router.scheduler.ejected:
@@ -165,6 +166,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             not controls_fleet(router)
             or router.lifecycle_blocked
             or iid in router.scheduler.draining
+            or iid not in router.membership
         ):
             return False
         if not problems:

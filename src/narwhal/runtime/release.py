@@ -41,6 +41,11 @@ class PeerRelease:
         if not released:
             self.missed.clear()
 
+    def forget(self, iid: str) -> None:
+        """Drop the release rounds of an engine that left the fleet."""
+        self._rounds.pop(iid, None)
+        self.missed.discard(iid)
+
     def due(self) -> list[str]:
         now = self._clock()
         due = []

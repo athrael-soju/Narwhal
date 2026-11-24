@@ -49,6 +49,10 @@ class RoleSwitcher(ABC):
     def record_handoff(self, producer: str, consumer: str) -> None:
         return None
 
+    def forget(self, base: str) -> None:
+        """Drop the transfer state recorded for an engine that left the fleet."""
+        return None
+
     async def refresh(
         self,
         client: httpx.AsyncClient,
@@ -140,6 +144,12 @@ class EngineHeldRoles(RoleSwitcher):
         received = self._received.get(target)
         generation = self._generations.get(source, 0)
         return received is None or received.get(source, generation) != generation
+
+    def forget(self, base: str) -> None:
+        # A consumer that rejoins starts stale for every producer. A producer keeps its
+        # generation count, so a consumer that took its handoffs before it left reads as stale
+        # once it enters prefill again.
+        self._received.pop(base.rstrip("/"), None)
 
     def record_handoff(self, producer: str, consumer: str) -> None:
         if not self.stale_handoff(producer, consumer):

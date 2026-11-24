@@ -217,6 +217,9 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     groups = [healthy] if recovery_wave else [[iid] for iid in healthy]
     for engines in groups:
         iid = engines[0]
+        if not set(engines).issubset(router.membership.ids):
+            # Membership changed while the health probes ran.
+            continue
         if router.cfg.engine_contract is None:
             if iid in router.scheduler.inference_suspects:
                 await router.verifier.verify_inference(iid, router.monitor.instances[iid].url)

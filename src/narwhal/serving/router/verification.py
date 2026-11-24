@@ -33,6 +33,8 @@ class SuspectVerifier:
         self.probes: Counter[tuple[str, str, str]] = Counter()
 
     def _probe_outcome(self, iid: str, kind: str, outcome: str, **fields: Any) -> None:
+        if iid not in self.router.membership:
+            return
         self.probes[(iid, kind, outcome)] += 1
         try:
             self.router.journal.write(
@@ -47,6 +49,18 @@ class SuspectVerifier:
             )
         except Exception:
             log.exception("probe journal event write failed")
+
+    def forget(self, iid: str) -> None:
+        """Drop an engine that left the fleet, as a suspect and as a recorded producer."""
+        self.sources.pop(iid, None)
+        self.verified_at.pop(iid, None)
+        for peers in self.sources.values():
+            peers.discard(iid)
+            if not peers:
+                # An unknown producer, as for a suspect with no recorded peer.
+                peers.add("")
+        for key in [key for key in self.probes if key[0] == iid]:
+            del self.probes[key]
 
     def probe_counts(self) -> list[dict[str, Any]]:
         return [
@@ -66,6 +80,11 @@ class SuspectVerifier:
         if isinstance(exc, httpx.PoolTimeout):
             log.info("%s leg waited out the local HTTP pool; no breaker evidence", iid)
             return
+        if iid not in self.router.membership:
+            # The engine left the fleet while the leg ran.
+            return
+        if prefill_iid is not None and prefill_iid not in self.router.membership:
+            prefill_iid = None
         status = exc.status if isinstance(exc, EngineError) else 500
         if 400 <= status < 500 and status not in (408, 429):
             self.router.scheduler.record_answer(iid, "transport")

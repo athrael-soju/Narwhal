@@ -136,9 +136,29 @@ class EngineAvailability:
             self.refresh_floor_state()
         return released
 
+    def forget(self, iid: str) -> None:
+        """Drop every breaker, hold and counter entry of an engine that left the fleet."""
+        self.ejected.pop(iid, None)
+        self.draining.discard(iid)
+        self.switching.discard(iid)
+        for counter in self.failures.values():
+            counter.pop(iid, None)
+        self.liveness_misses.pop(iid, None)
+        self.quarantined.pop(iid, None)
+        self.hold_since.pop(iid, None)
+        self.verifying.difference_update([key for key in self.verifying if key[0] == iid])
+        self.inference_suspects.discard(iid)
+        for counts in (self.ejections, self.hold_starts, self.hold_ends, self.readmissions):
+            for key in [key for key in counts if key[0] == iid]:
+                del counts[key]
+        self.refresh_floor_state()
+
     def record_failure(self, iid: str, klass: str = LEG_CONNECTION) -> str | None:
         if klass not in _VERDICT_BY_CLASS:
             raise ValueError(f"unknown breaker class {klass!r}")
+        if iid not in self.monitor.instances:
+            # A leg that outlived its engine's membership.
+            return None
         counter = self.failures[klass]
         counter[iid] += 1
         if iid in self.ejected or counter[iid] < self.eject_after:
@@ -202,7 +222,7 @@ class EngineAvailability:
         ]
 
     def eject(self, iid: str, cause: str) -> bool:
-        if iid in self.ejected:
+        if iid in self.ejected or iid not in self.monitor.instances:
             return False
         self.ejected[iid] = self._clock()
         self.ejections[(iid, cause)] += 1
@@ -257,6 +277,8 @@ class EngineAvailability:
             classes = _EVIDENCE_CLASSES[evidence]
         except KeyError:
             raise ValueError(f"unknown breaker evidence {evidence!r}") from None
+        if iid not in self.monitor.instances:
+            return
         for klass in classes:
             if klass == LIVENESS:
                 self.liveness_misses.pop(iid, None)
