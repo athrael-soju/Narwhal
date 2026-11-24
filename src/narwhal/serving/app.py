@@ -140,11 +140,23 @@ def create_app(
         else:
             log.info("%s", calibration.summary(cfg.first_token_timeout_s))
         router.first_token_calibration = calibration
-        # A resumed engine set keeps the profiles of engines that left it.
+        # A resumed engine set keeps the profiles of engines that left it. A standby's store may
+        # already hold an engine that joined on the primary; its takeover checks the set it serves.
+        exact = not adopted and not standby_of
         if problem := engine_set_problem(
-            router.profiles, router.membership.ids, "configured", exact=not adopted
+            router.profiles, router.membership.ids, "configured", exact=exact
         ):
             raise RuntimeError(problem)
+        # The takeover refuses extra profiles unless it adopts a membership that holds them.
+        extra: str | None = None
+        if not exact and not adopted:
+            extra = engine_set_problem(
+                router.profiles, router.membership.ids, "configured", exact=True
+            )
+            if extra:
+                log.warning("standby profile store: %s", extra)
+        router.checked_engines = tuple(router.membership.ids)
+        router.checked_exact = exact or not extra
         generation_failures = await generation_problems(
             cfg, router.profiles, router.membership.specs, transport=lifecycle_transport
         )
