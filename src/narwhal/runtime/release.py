@@ -31,21 +31,34 @@ class PeerRelease:
         self.retry_at = 0.0
         # Engines that left the fleet while a round ran.
         self._departed: set[str] = set()
+        # Engines that left the fleet and keep their remaining rounds, so peers that mapped
+        # their memory release it on an idle fleet.
+        self._left: set[str] = set()
 
     def track(self, released: Mapping[str, str]) -> None:
         now = self._clock()
-        for iid in set(self._rounds) - set(released):
+        schedule = self.fabric.release_after_s
+        for iid in sorted(self._left):
+            if iid in released or self._rounds.get(iid, ("", 0.0, len(schedule)))[2] >= len(
+                schedule
+            ):
+                self._left.discard(iid)
+                if iid not in released:
+                    self._rounds.pop(iid, None)
+        for iid in set(self._rounds) - set(released) - self._left:
             del self._rounds[iid]
         for iid, reason in released.items():
             current = self._rounds.get(iid)
             if current is None or current[0] != reason:
                 self._rounds[iid] = (reason, now, 0)
-        if not released:
+        if not released and not self._left:
             self.missed.clear()
 
     def forget(self, iid: str) -> None:
-        """Drop the release rounds of an engine that left the fleet."""
-        self._rounds.pop(iid, None)
+        """Keep the remaining release rounds of an engine that left the fleet."""
+        reason, since, done = self._rounds.get(iid, ("left", self._clock(), 0))
+        self._rounds[iid] = (reason, since, done)
+        self._left.add(iid)
         self.missed.discard(iid)
         if self.tasks:
             self._departed.add(iid)
@@ -90,7 +103,12 @@ class PeerRelease:
                 ),
             }
             for iid, (_, since, done) in sorted(self._rounds.items())
+            if iid not in self._left
         }
+
+    def departed(self) -> list[str]:
+        """Return the engines that left the fleet and still have release rounds."""
+        return sorted(self._left)
 
 
 def released_engines(router: NarwhalRouter) -> dict[str, str]:
@@ -113,8 +131,8 @@ def release_peers(router: NarwhalRouter) -> None:
     only: set[str] | None = None
     if gone:
         release.missed = set()
-    elif released and release.retry_due():
-        gone, only = sorted(released), release.missed
+    elif (released or release.departed()) and release.retry_due():
+        gone, only = sorted({*released, *release.departed()}), release.missed
     else:
         return
     task = asyncio.create_task(release_round(router, gone, only))

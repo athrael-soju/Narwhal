@@ -23,6 +23,8 @@ class DrainRecord:
     new_process_start: float | None = None
     error: str = ""
     checks: list[str] = field(default_factory=list)
+    # The drain removes the engine from the fleet once it completes.
+    leaving: bool = False
 
 
 @dataclass

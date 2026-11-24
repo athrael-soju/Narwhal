@@ -222,6 +222,7 @@ Import each name from the subpackage module that defines it.
 | `runtime/lifecycle/identity.py`                                              | Process identity binding, capture and profile recovery checks            |
 | `runtime/lifecycle/readmission.py`                                           | Readmission validation                                                   |
 | `runtime/lifecycle/join.py`                                                  | Join validation and the generation that adds an engine                   |
+| `runtime/lifecycle/leave.py`                                                 | Leave drains and the generation that removes an engine                   |
 | `diagnostics/check/report.py`                                                | Gate outcomes                                                            |
 | `diagnostics/check/engines.py`                                               | Reach, calibration, contract, model, pace and tokenize gates             |
 | `diagnostics/check/profiles.py`                                              | Profile, profile generation and SLO gates                                |

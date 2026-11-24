@@ -231,6 +231,8 @@ class LifecycleManager:
         for iid in engines:
             record = self.records[iid]
             record.state = "active"
+            # Readmission returns a leaving engine to service and ends its leave.
+            record.leaving = False
             record.new_process_start = outcome.starts[iid]
             self.process_starts[iid] = outcome.starts[iid]
             record.checks = list(outcome.checks.get(iid, []))
@@ -318,6 +320,7 @@ class LifecycleManager:
                 "resident": {"prefill": prefill, "decode": decode},
                 "deadline_at": record.deadline_at if record is not None else None,
                 "restart_required": record.restart_required if record is not None else False,
+                "leaving": record.leaving if record is not None else False,
                 "wave_id": record.wave_id if record is not None else "",
                 "old_process_start": record.old_process_start if record is not None else None,
                 "new_process_start": record.new_process_start if record is not None else None,
@@ -413,6 +416,8 @@ class LifecycleManager:
                 raise LifecycleError("lifecycle wave_id and error must be strings")
             if not isinstance(record.restart_required, bool):
                 raise LifecycleError("lifecycle restart_required must be a boolean")
+            if not isinstance(record.leaving, bool):
+                raise LifecycleError("lifecycle leaving must be a boolean")
             if not isinstance(record.checks, list) or not all(
                 isinstance(check, str) for check in record.checks
             ):
