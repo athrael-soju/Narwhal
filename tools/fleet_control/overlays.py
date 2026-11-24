@@ -219,7 +219,8 @@ class Overlays:
             # Engines that left return before engines that joined leave, so capacity holds.
             for iid, spec in changes.get("left", {}).items():
                 await self._return(iid, spec, effect, steps)
-            steps.extend([await self._remove(iid, effect) for iid in changes.get("joined", [])])
+            for iid in changes.get("joined", []):
+                steps.append(await self._remove(iid, effect))  # noqa: PERF401 - each step is kept as it completes
             return effect
 
         return await self.service.act("config.restore", {}, restore, exclusive=True)
