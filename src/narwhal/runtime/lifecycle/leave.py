@@ -71,7 +71,10 @@ async def begin_leave(
     retry = (record := manager.records.get(iid)) is not None and record.leaving
     if not retry and (refusal := leave_refusal(router, iid)):
         raise LifecycleError(refusal)
-    if _held_alone(router, iid):
+    if retry and record is not None and record.state == "draining":
+        # The leave is already draining the engine.
+        pass
+    elif _held_alone(router, iid):
         # The engine is already out of placement; a failed readmission or identity capture
         # leaves it blocked. It drains again under the leave's deadline, so it reports drained
         # only once its resident work is gone and its identity is recorded.

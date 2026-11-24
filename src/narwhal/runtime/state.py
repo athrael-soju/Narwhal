@@ -257,6 +257,14 @@ def _adoption_problem(router: NarwhalRouter, saved: Membership) -> tuple[str, Pr
     return "", store
 
 
+def persist(router: NarwhalRouter) -> None:
+    """Write the router's handoff now; log a failure, which the next monitoring pass retries."""
+    try:
+        write(router.cfg.state_path, snapshot(router))
+    except OSError as exc:
+        log.warning("handoff write to %s failed: %s", router.cfg.state_path, exc)
+
+
 def write(path: Path, doc: dict[str, Any]) -> None:
     """Validate the handoff, fsync a unique temporary file and atomically
     replace the destination.

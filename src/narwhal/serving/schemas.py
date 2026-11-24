@@ -383,6 +383,64 @@ class DrainIn(BaseModel):
     deadline_s: float = 300.0
 
 
+class SharedDeviceIn(BaseModel):
+    """A shared-device allocation as the fleet file holds it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group: str
+    gpu_uuid: str
+    device_allowance: float
+    gpu_memory_utilization: float
+
+
+class EngineSpecIn(BaseModel):
+    """One engine entry as the fleet file holds it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    iid: str
+    url: str
+    role: Literal["prefill", "decode"] = "decode"
+    pin: bool = False
+    attestation_url: str = ""
+    shared_device: SharedDeviceIn | None = None
+
+
+class EngineSpecOut(BaseModel):
+    """One member's engine entry."""
+
+    iid: str
+    url: str
+    role: Literal["prefill", "decode"]
+    pin: bool = False
+    attestation_url: str = ""
+    shared_device: SharedDeviceIn | None = None
+
+
+class JoinOut(BaseModel):
+    """The result of one join request."""
+
+    iid: str
+    joined: bool
+    checks: list[str]
+    failures: list[str]
+
+
+class MembershipOut(BaseModel):
+    """The router's engine membership snapshot."""
+
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    schema_id: Literal["narwhal.membership"] = Field(alias="schema")
+    schema_version: Literal[1]
+    generation: int
+    engines: list[EngineSpecOut]
+    leaving: list[str]
+    error: str = ""
+    join: JoinOut | None = None
+
+
 class ReadmitIn(BaseModel):
     """One lifecycle validation and readmission action."""
 
@@ -415,6 +473,7 @@ class LifecycleEngineOut(BaseModel):
     resident: ResidentOut
     deadline_at: float | None
     restart_required: bool
+    leaving: bool = False
     wave_id: str
     old_process_start: float | None
     new_process_start: float | None

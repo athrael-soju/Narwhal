@@ -41,6 +41,7 @@ from ..runtime.standby import (
 )
 from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
+from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
 from .outcomes import error_response
@@ -336,6 +337,8 @@ def create_app(
     async def state() -> dict[str, Any]:
         return router.state()
 
+    add_engine_routes(app, router)
+
     @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state")
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
@@ -499,8 +502,7 @@ def _lifecycle_error(router: NarwhalRouter, status_code: int, message: str) -> R
 
 
 def _persist_handoff(router: NarwhalRouter) -> None:
-    with contextlib.suppress(OSError):
-        handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
+    handoff_state.persist(router)
 
 
 def _headers(request: HTTPRequest) -> dict[str, str]:
