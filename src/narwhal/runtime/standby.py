@@ -12,6 +12,7 @@ import httpx
 
 from ..contracts import ContractVersionError
 from ..profiling.calibration import verify_calibration
+from ..profiling.membership import engine_set_problem
 from . import state as handoff_state
 from .lease import FileLease, LeaseError
 
@@ -78,6 +79,38 @@ def _fresh(doc: dict[str, Any] | None, max_age_s: float) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return age <= max_age_s
+
+
+async def _takeover_problem(router: NarwhalRouter, report: handoff_state.HandoffReport) -> str:
+    """Return why the router cannot serve the engine set the handoff left it, or "".
+
+    The startup checks covered `router.checked_engines`. When the takeover serves another set, or
+    the startup profile check allowed extra profiles, the calibration and profile-set checks run
+    again over the served set. Ejected and draining engines are not read; recovery probes them.
+    """
+    served = tuple(router.membership.ids)
+    if served == router.checked_engines and router.checked_exact:
+        return ""
+    exact = not report.membership_adopted
+    if problem := engine_set_problem(router.profiles, served, "served", exact=exact):
+        return problem
+    scheduler = router.scheduler
+    live = {iid for iid in served if iid not in scheduler.ejected and iid not in scheduler.draining}
+    try:
+        calibration = await verify_calibration(
+            router.cfg,
+            engines=router.membership.specs,
+            live=live,
+            transport=router.lifecycle_transport,
+        )
+    except Exception as exc:
+        return f"first-token calibration check failed: {type(exc).__name__}: {exc}"
+    if calibration.status == "rejected":
+        return "; ".join(calibration.problems)
+    router.first_token_calibration = calibration
+    router.checked_engines = served
+    router.checked_exact = True
+    return ""
 
 
 async def standby_loop(
@@ -155,33 +188,9 @@ async def standby_loop(
                                 if not report.applied:
                                     router.failover_blocked = report.why
                                     return
-                                if report.membership_adopted:
-                                    # The calibration must cover the adopted engine set. Ejected
-                                    # and draining engines are not read; recovery probes them.
-                                    scheduler = router.scheduler
-                                    live = {
-                                        iid
-                                        for iid in router.membership.ids
-                                        if iid not in scheduler.ejected
-                                        and iid not in scheduler.draining
-                                    }
-                                    try:
-                                        calibration = await verify_calibration(
-                                            router.cfg,
-                                            engines=router.membership.specs,
-                                            live=live,
-                                            transport=router.lifecycle_transport,
-                                        )
-                                    except Exception as exc:
-                                        router.failover_blocked = (
-                                            "first-token calibration check failed: "
-                                            f"{type(exc).__name__}: {exc}"
-                                        )
-                                        return
-                                    if calibration.status == "rejected":
-                                        router.failover_blocked = "; ".join(calibration.problems)
-                                        return
-                                    router.first_token_calibration = calibration
+                                if problem := await _takeover_problem(router, report):
+                                    router.failover_blocked = problem
+                                    return
                                 if not lease.valid():
                                     router.failover_blocked = "lease expired while applying handoff"
                                     return

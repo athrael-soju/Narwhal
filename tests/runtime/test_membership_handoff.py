@@ -12,7 +12,7 @@ from narwhal.config.model import SharedDeviceAllocation
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
-from narwhal.runtime import state
+from narwhal.runtime import standby, state
 from narwhal.runtime.lease import FileLease
 from narwhal.runtime.standby import standby_loop
 from narwhal.serving.app import create_app
@@ -178,6 +178,41 @@ class MembershipHandoffTests(FleetCase):
         with self.assertRaisesRegex(RuntimeError, "unconfigured engines"):
             async with app.router.lifespan_context(app):
                 pass
+
+    def standby(self):
+        app = create_app(
+            self.cfg,
+            standby_of="http://primary.invalid",
+            lease_path=self.root / "lease.json",
+            lifecycle_transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+        )
+        self.addAsyncCleanup(app.state.router.engines.aclose)
+        return app
+
+    async def test_a_standby_starts_while_its_store_holds_a_joined_engine(self):
+        # The standby's fleet file names p and d; its store also holds x, joined on the primary.
+        app = self.standby()
+        with self.assertLogs("narwhal.app", level="WARNING") as logs:
+            async with app.router.lifespan_context(app):
+                self.assertTrue(app.state.router.standby)
+        self.assertTrue(any("stale profiles for unconfigured engines" in o for o in logs.output))
+
+    async def test_a_takeover_that_keeps_the_fleet_file_refuses_stale_profiles(self):
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        # The primary's membership never changed, so the takeover serves the fleet file.
+        report = state.apply(router, state.snapshot(router))
+        self.assertTrue(report.applied)
+        router.checked_engines, router.checked_exact = ("p", "d"), False
+        problem = await standby._takeover_problem(router, report)
+        self.assertIn("stale profiles for engines outside the served set: x", problem)
+
+    async def test_a_takeover_of_the_checked_set_runs_no_checks(self):
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        report = state.apply(router, state.snapshot(router))
+        router.checked_engines, router.checked_exact = ("p", "d"), True
+        self.assertEqual(await standby._takeover_problem(router, report), "")
 
     async def test_a_resumed_restart_restores_the_snapshot(self):
         state.write(self.cfg.state_path, self.doc)

@@ -95,6 +95,9 @@ class NarwhalRouter:
         self._failover_blocked = ""
         self._lifecycle_blocked = ""
         self.first_token_calibration = CalibrationCheck("uncalibrated")
+        # The engine set the startup checks covered, and whether its profile check was exact.
+        self.checked_engines: tuple[str, ...] = ()
+        self.checked_exact = True
         # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
         self.profiles = ProfileStore(cfg.profiles_path)
