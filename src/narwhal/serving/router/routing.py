@@ -315,6 +315,40 @@ class NarwhalRouter:
         shared = sorted(spec.iid for spec in (*removed, *added) if spec.shared_device is not None)
         if shared:
             raise ValueError(f"shared-device membership cannot change: {', '.join(shared)}")
+        self._install(membership, removed, added)
+        for spec in added:
+            self.scheduler.roles.joined(spec.iid)
+
+    def adopt_membership(self, membership: Membership) -> None:
+        """Take a saved snapshot, keeping its generation, on a resumed start or a takeover.
+
+        A member whose saved spec differs from this router's is replaced. Shared-device
+        membership must match.
+        """
+        current = self.membership
+        if membership.generation < current.generation:
+            raise ValueError(
+                f"saved membership generation {membership.generation} precedes this router's "
+                f"generation {current.generation}"
+            )
+        removed = [
+            spec
+            for spec in current
+            if spec.iid not in membership or membership.spec(spec.iid) != spec
+        ]
+        added = [
+            spec for spec in membership if spec.iid not in current or current.spec(spec.iid) != spec
+        ]
+        shared = sorted({spec.iid for spec in (*removed, *added) if spec.shared_device is not None})
+        if shared:
+            raise ValueError(f"shared-device membership differs: {', '.join(shared)}")
+        if not removed and not added and membership.generation == current.generation:
+            return
+        self._install(membership, removed, added)
+
+    def _install(
+        self, membership: Membership, removed: list[EngineSpec], added: list[EngineSpec]
+    ) -> None:
         self.membership = membership
         for spec in removed:
             self._forget_engine(spec)
@@ -322,7 +356,6 @@ class NarwhalRouter:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
             # A probe that finished after an earlier departure leaves a verification time.
             self.verifier.verified_at.pop(spec.iid, None)
-            self.scheduler.roles.joined(spec.iid)
         # The monitor keeps the snapshot's order, which placement iterates.
         ordered = [(iid, self.monitor.instances[iid]) for iid in membership.ids]
         # Reorder in place, since a caller may hold the table across an await.

@@ -13,12 +13,17 @@ from .generation import bound_profiles, generation_problem, nominal_problem, rea
 from .store import ProfileStore
 
 
-def engine_set_problem(store: ProfileStore, engines: Collection[str], noun: str) -> str | None:
+def engine_set_problem(
+    store: ProfileStore, engines: Collection[str], noun: str, *, exact: bool = True
+) -> str | None:
     """Return why the store does not hold a profile for exactly `engines`, or None.
 
-    `noun` names the engine set in the message, such as "configured".
+    `noun` names the engine set in the message, such as "configured". With `exact` false, a
+    profile for an engine outside the set is allowed.
     """
     missing, extra = store.engine_set_diff(engines)
+    if not exact:
+        extra = []
     if not missing and not extra:
         return None
     configured = noun == "configured"

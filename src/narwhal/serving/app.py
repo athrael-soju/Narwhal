@@ -116,6 +116,16 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # A resumed handoff that carries membership sets the engine set the checks cover.
+        adopted = False
+        if cfg.resume and not standby_of:
+            saved = handoff_state.load(cfg.state_path)
+            handoff = handoff_state.apply(router, saved)
+            adopted = handoff.membership_adopted
+            if not handoff.applied:
+                log.info("no control-plane handoff applied: %s", handoff.why)
+                if cfg.engine_contract is not None and cfg.state_path.exists():
+                    router.lifecycle.require_restart_wave(f"handoff rejected: {handoff.why}")
         calibration = await verify_calibration(
             cfg, engines=router.membership.specs, transport=lifecycle_transport
         )
@@ -129,7 +139,10 @@ def create_app(
         else:
             log.info("%s", calibration.summary(cfg.first_token_timeout_s))
         router.first_token_calibration = calibration
-        if problem := engine_set_problem(router.profiles, router.membership.ids, "configured"):
+        # A resumed engine set keeps the profiles of engines that left it.
+        if problem := engine_set_problem(
+            router.profiles, router.membership.ids, "configured", exact=not adopted
+        ):
             raise RuntimeError(problem)
         generation_failures = await generation_problems(
             cfg, router.profiles, router.membership.specs, transport=lifecycle_transport
@@ -172,12 +185,6 @@ def create_app(
                     transport=standby_transport,
                 )
             )
-        elif cfg.resume:
-            handoff = handoff_state.apply(router, handoff_state.load(cfg.state_path))
-            if not handoff.applied:
-                log.info("no control-plane handoff applied: %s", handoff.why)
-                if cfg.engine_contract is not None and cfg.state_path.exists():
-                    router.lifecycle.require_restart_wave(f"handoff rejected: {handoff.why}")
         journal.open()
         if controls_fleet(router):
             await check_process_identities(router)
