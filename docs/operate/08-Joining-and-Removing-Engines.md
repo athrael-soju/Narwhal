@@ -4,7 +4,7 @@ description: Add an engine to a running Narwhal fleet or remove one, and keep th
 
 # Joining and removing engines
 
-The router serves the engines in its [membership snapshot](../concepts/01-Request-and-Topology.md#engine-membership). You can add an engine to a running fleet, or remove one, without restarting the router. [Engine membership](../http-api/08-Engine-Membership.md) lists the routes, refusals and status codes.
+Add an engine to a running fleet, or remove one, without restarting the router. The router serves the engines in its [membership snapshot](../concepts/01-Request-and-Topology.md#engine-membership). [Engine membership](../http-api/08-Engine-Membership.md) lists the routes, refusals and status codes.
 
 Prerequisites:
 
@@ -73,6 +73,8 @@ PY
 
 ### Profile the engine
 
+The join requires a store with a profile for exactly the members and the new engine.
+
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 
     ```bash
@@ -126,8 +128,6 @@ PY
 
 8. Copy every file these steps wrote under `runs/` to the same path on the standby router host.
 
-The join requires a store that holds a profile for exactly the members and the new engine.
-
 ### Calibrate the first-token deadline
 
 When `engine.first_token_calibration_path` is set, the join requires a calibration that covers every directed pair of the candidate fleet. Calibrate against the candidate fleet file, with the current artifact as the base:
@@ -142,7 +142,7 @@ When `engine.first_token_calibration_path` is set, the join requires a calibrati
 
 Use the `--input-tokens` and `--samples` that the current artifact records in `input_tokens` and `samples_per_group`. When a recorded length leaves room for fewer than two output tokens, run the command without `--calibration-base`, with `--input-tokens` chosen as in [Calibrating the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). Set `--observation-timeout-s` above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`.
 
-With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches the engines of the measured pairs into the roles each probe needs directly on the engines, outside the router's role control, and returns every engine to its starting role at the end. Run it while the members carry no client traffic. The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
+With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches each measured pair's engines into the roles its probes need. It does this on the engines themselves, outside the router's role control, and returns every engine to its starting role at the end. Run it while the members carry no client traffic. The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
 
 When the command exits 0 and the artifact's `candidate_deadline_s` is below `engine.first_token_timeout_s`, keep a copy of the current artifact and install the new one:
 
