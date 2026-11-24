@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 
 import httpx
 
-from tests.fleet_control.test_engine_actions import FLEET, EngineCase, FakeRouter
+from tests.fleet_control.test_engine_actions import FLEET, NOW, EngineCase, FakeRouter, hook
 
 NEW = {
     "iid": "e9",
@@ -39,9 +39,15 @@ class MemberRouter(FakeRouter):
         self.refuse_join: set[str] = set()
         self.leave_status: int | None = None
         self.membership_status: int | None = None
+        # While set, the router refuses connections until the router_restart hook touches it.
+        self.down_until: Path | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if self.down_until is not None and not self.down_until.exists():
+            raise httpx.ConnectError("connection refused", request=request)
+        if path == "/ready":
+            return httpx.Response(200, json={"status": "ready", "reason": ""})
         if not path.startswith("/narwhal/engines"):
             return super().handle(request)
         body: Any = json.loads(request.content) if request.content else None
@@ -293,3 +299,39 @@ class MembershipActionTests(EngineCase):
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("e1", self.router.members)
+
+    async def test_restore_waits_for_a_started_member_to_return_to_service(self) -> None:
+        await self.start_session()
+        await self.client.post("/api/engines/e1/stop")
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        start = next(
+            entry for entry in self.record()["actions"] if entry["action"] == "engine.start"
+        )
+        self.assertTrue(start["result"]["service"]["in_service"])
+
+
+class RouterRestartRestoreTests(EngineCase):
+    router_class: ClassVar[type[FakeRouter]] = MemberRouter
+    router: MemberRouter
+    hooks: ClassVar[dict[str, Any]] = {
+        **EngineCase.hooks,
+        "router_restart": hook(
+            "router_restart",
+            "import os, pathlib; pathlib.Path(os.environ['STOPPED'], 'router-up').touch()",
+        ),
+    }
+
+    async def test_restore_restarts_a_router_that_does_not_answer(self) -> None:
+        await self.start_session()
+        session = self.service.session
+        assert session is not None
+        session.apply_configuration(
+            NOW.isoformat(), "overlay", {**session.configurations[0]["document"], "_x": 1}
+        )
+        self.router.down_until = self.stopped / "router-up"
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()["result"]
+        self.assertEqual(result["hook"]["exit_code"], 0)
+        self.assertTrue(result["changes"]["configuration"])

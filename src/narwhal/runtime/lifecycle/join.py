@@ -52,7 +52,8 @@ def spec_problem(spec: EngineSpec) -> str:
         return "iid must be nonempty and hold only letters, digits, '.', '_' and '-'"
     for name, url in (("url", spec.url), ("attestation_url", spec.attestation_url)):
         parts = urlsplit(url)
-        if url and (parts.scheme not in ("http", "https") or not parts.hostname):
+        # An empty attestation_url is refused later with its own reason.
+        if (url or name == "url") and (parts.scheme not in ("http", "https") or not parts.hostname):
             return f"{name} must be an http or https URL with a host"
     return ""
 

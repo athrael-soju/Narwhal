@@ -198,23 +198,21 @@ class Overlays:
             assert session is not None
             steps: list[dict[str, Any]] = []
             effect: dict[str, Any] = {"steps": steps}
-            members = await self._members(effect)
-            changes = session_changes(session, members)
-            effect["changes"] = changes
-            if changes["configuration"]:
+            # The session record alone says whether the configuration changed, so a router that
+            # does not answer can still restart with the baseline.
+            configuration = session_changes(session)["configuration"]
+            if configuration:
                 baseline = session.configurations[0]
                 hook = self._hook(ROUTER_RESTART_HOOK)
                 effect["hook"] = await self._run(hook, session, baseline["fleet"], effect)
                 session.apply_configuration(self.service.stamp(), "baseline", baseline["document"])
                 effect["readiness"] = await self._ready(effect)
-                # The restart can change the membership.
-                members = await self._members(effect)
-                changes = {**session_changes(session, members), "configuration": True}
-                effect["changes"] = changes
+            members = await self._members(effect)
+            changes = {**session_changes(session, members), "configuration": configuration}
+            effect["changes"] = changes
             undo = [(iid, change) for iid, each in changes["engines"].items() for change in each]
             for iid, change in undo:
-                engine = None if members is None else members.get(iid)
-                steps.append(await self._undo(iid, UNDO[change], effect, engine))
+                steps.append(await self._undo(iid, UNDO[change], effect))
             # Engines that left return before engines that joined leave, so capacity holds.
             for iid, spec in changes.get("left", {}).items():
                 await self._return(iid, spec, effect, steps)
@@ -234,13 +232,7 @@ class Overlays:
             raise ActionError(str(exc), status=exc.status, result=effect) from exc
         return None if current is None else current["engines"]
 
-    async def _undo(
-        self,
-        iid: str,
-        action: str,
-        effect: Mapping[str, Any],
-        engine: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    async def _undo(self, iid: str, action: str, effect: Mapping[str, Any]) -> dict[str, Any]:
         if self.engines is None:
             raise ActionError(f"engine actions are unavailable to {action} {iid}", result=effect)
         if action == "readmit":
@@ -252,10 +244,7 @@ class Overlays:
             if not state.get("draining") and lifecycle.get("state") not in READMITTABLE:
                 return {"engine": iid, "action": action, "seq": None}
         try:
-            if action == "readmit":
-                done = await self.engines.within(iid, action)
-            else:
-                done = await self.engines.within(iid, action, engine)
+            done = await self.engines.within(iid, action)
         except ActionError as exc:
             raise ActionError(
                 f"{action} {iid} failed: {exc}", status=exc.status, result=effect
