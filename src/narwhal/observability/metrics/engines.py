@@ -106,35 +106,38 @@ def render_availability(state: dict) -> list[str]:
         breaker,
         "ejections",
         "narwhal_engine_ejections_total",
-        "Engine ejections since router start, by cause",
+        "Engine ejections since router start or engine join, by cause",
         ("iid", "cause"),
     )
     out += _count_lines(
         breaker,
         "hold_starts",
         "narwhal_engine_hold_starts_total",
-        "Placement holds started since router start, by hold kind",
+        "Placement holds started since router start or engine join, by hold kind",
         ("iid", "kind"),
     )
     out += _count_lines(
         breaker,
         "hold_ends",
         "narwhal_engine_hold_ends_total",
-        "Placement holds ended since router start, by hold kind and cause",
+        "Placement holds ended since router start or engine join, by hold kind and cause",
         ("iid", "kind", "cause"),
     )
     out += _count_lines(
         breaker,
         "probes",
         "narwhal_engine_probes_total",
-        "Engine verification probe outcomes since router start, by probe kind",
+        "Engine verification probe outcomes since router start or engine join, by probe kind",
         ("iid", "kind", "outcome"),
     )
     out += _count_lines(
         breaker,
         "readmissions",
         "narwhal_engine_readmissions_total",
-        "Ejected engines returned to placement since router start, by recovery evidence",
+        (
+            "Ejected engines returned to placement since router start or engine join, "
+            "by recovery evidence"
+        ),
         ("iid", "evidence"),
     )
     streak_samples: list[tuple[Mapping[str, str], float | int]] = [
@@ -226,7 +229,10 @@ def render_requests(requests: Mapping[str, int]) -> list[str]:
     """Render the requests the router has sent to each engine."""
     return metric_lines(
         "narwhal_engine_requests_total",
-        "Requests the router has sent to each engine since it started, including its probes",
+        (
+            "Requests the router has sent to each engine since it started or the engine joined, "
+            "including its probes"
+        ),
         "counter",
         [({"iid": iid}, count) for iid, count in sorted(requests.items())],
     )

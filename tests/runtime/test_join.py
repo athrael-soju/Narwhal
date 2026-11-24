@@ -31,12 +31,16 @@ NEW = EngineSpec(
 )
 
 
-class JoinTests(unittest.IsolatedAsyncioTestCase):
+class JoinHarness(unittest.IsolatedAsyncioTestCase):
+    """A fleet whose engines and a joining candidate answer the join checks."""
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.cfg = fleet(Path(folder.name))
-        self.router = create_app(self.cfg).state.router
+        self.cfg.state_path = Path(folder.name) / "handoff.json"
+        self.app = create_app(self.cfg)
+        self.router = self.app.state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.manager = self.router.lifecycle
         self.starts = {"e0": 100.0, "e3": 100.0, "e6": 200.0}
@@ -103,6 +107,8 @@ class JoinTests(unittest.IsolatedAsyncioTestCase):
         async with self.manager.lock:
             return await join_engine(self.router, spec, transport=self.transport)
 
+
+class JoinTests(JoinHarness):
     def assert_refused(self, outcome, detail):
         self.assertFalse(outcome.joined)
         self.assertIn(detail, outcome.error)
