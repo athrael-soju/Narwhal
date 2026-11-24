@@ -297,6 +297,8 @@ An `engine_lifecycle` event carries `action`, `at` (Unix wall-clock seconds) and
 | `leave_started` | A leave request starts draining an engine. | `iid`, `generation` |
 | `left` | A leaving engine has drained and leaves the fleet. | `iid`, `generation`, `process_start` |
 
+`joined` and `left` carry the membership generation the change created. `join_started`, `join_refused` and `leave_started` carry the generation current when they are written. A join refused before its checks start, such as one that names an `iid` already in the fleet, writes `join_refused` without `join_started`.
+
 A failed profile-generation check ejects the engine and also writes an `engine_ejected` event with `cause: profile_generation`. Under `whole_wave`, it also writes `restart_required`.
 
 Inspect the engine's [profile generation evidence](02-Profiles.md#validating-the-engine-cost-model) before retrying recovery.

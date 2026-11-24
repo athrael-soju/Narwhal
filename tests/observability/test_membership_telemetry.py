@@ -113,6 +113,34 @@ class MembershipTelemetryTests(JoinHarness):
         self.assertEqual(rows[1]["role"], "decode")
         self.assertEqual(rows[1]["process_start"], 200.0)
 
+    async def test_every_series_of_a_removed_engine_stops(self):
+        response = await self.client.post("/narwhal/engines", json=NEW_ROW)
+        self.assertEqual(response.status_code, 200, response.text)
+        iid = NEW.iid
+        availability = self.router.scheduler.availability
+        availability.ejections[(iid, "liveness")] += 1
+        availability.hold_starts[(iid, "timed")] += 1
+        availability.hold_ends[(iid, "timed", "expired")] += 1
+        availability.readmissions[(iid, "probe")] += 1
+        availability.failures["stream"][iid] = 1
+        self.router.verifier.probes[(iid, "health", "ok")] += 1
+        self.router.scheduler.health.note(iid, 1.0)
+        self.router.monitor.sent(iid)
+        filled = {
+            *PER_ENGINE,
+            "narwhal_engine_ejections_total",
+            "narwhal_engine_hold_starts_total",
+            "narwhal_engine_hold_ends_total",
+            "narwhal_engine_readmissions_total",
+            "narwhal_engine_probes_total",
+            "narwhal_engine_breaker_streak",
+            "narwhal_health_windows_scored_total",
+        }
+        self.assertEqual(filled - await self.series(iid), set())
+        response = await self.client.delete(f"/narwhal/engines/{iid}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(await self.series(iid), set())
+
     async def test_a_refused_join_writes_its_reason_and_adds_no_series(self):
         self.starts["e6"] = 300.0
         response = await self.client.post(
@@ -140,7 +168,9 @@ class MembershipTelemetryContractTests(unittest.TestCase):
     def test_the_engine_variable_follows_the_router_scrape_targets(self):
         dashboard = json.loads((ROOT / "tools/observability/grafana-narwhal.json").read_text())
         variable = next(v for v in dashboard["spec"]["variables"] if v["spec"]["name"] == "iid")
-        self.assertEqual(variable["spec"]["definition"], 'label_values(up{job="engines"}, iid)')
+        query = 'label_values(up{job="engines"}, iid)'
+        self.assertEqual(variable["spec"]["query"]["spec"]["query"], query)
+        self.assertEqual(variable["spec"]["definition"], query)
         self.assertNotEqual(variable["spec"]["refresh"], "never")
         config = (ROOT / "tools/observability/prometheus.yml").read_text()
         job = config.split("- job_name: engines", 1)[1].split("- job_name:", 1)[0]
