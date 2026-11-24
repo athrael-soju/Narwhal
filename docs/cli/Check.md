@@ -40,7 +40,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--calibrate-first-token` | off | Measure fresh KV handoffs at each input length and report a first-token deadline. | |
-| `--input-tokens LIST` | none, required | Comma-separated input lengths. | Distinct positive lengths, each leaving room for one output token within both engines' live context limits. |
+| `--input-tokens LIST` | none, required | Comma-separated input lengths. | Distinct positive lengths, each leaving room for two output tokens within both engines' live context limits. |
 | `--observation-timeout-s SECONDS` | none, required | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
 | `--calibration-out PATH` | none, required | Raw samples and group summaries file. | A new JSON file |
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
@@ -124,7 +124,7 @@ A group is one directed pair at one input length, sampled `--samples` times. Swe
 
 A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), or the engine itself without one. In a round, each device slot produces at most once and consumes at most once, so `n` engines on separate slots that permit every pair need `n - 1` rounds per input length. On SGLang, calibration splits the pairs into phases that keep each engine in one role, runs every sweep within one phase before the next, and gives each device slot one leg per round. Round numbers continue across phases.
 
-Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
+Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or as few as two when the paired engines' live context limit leaves less room, and completes when it generates a token.
 
 With `--calibration-base`, calibration reuses a base group that completed every sample when both its engines keep their URL and process generation. An engine listed in the base's `changed_generations` or `generation_errors` counts as changed. Calibration measures the other groups, and each reused group's output line ends with `, reused`.
 

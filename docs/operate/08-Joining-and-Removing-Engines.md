@@ -134,15 +134,15 @@ When `engine.first_token_calibration_path` is set, the join requires a calibrati
 
 ```bash
 .venv/bin/narwhal-check --fleet "$RUN_DIR/fleet-with-$IID.json" \
-  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --calibrate-first-token --input-tokens 256,8192,16382 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-base runs/deployment/first-token-calibration.json \
   --calibration-out "$RUN_DIR/first-token-calibration.json"
 ```
 
-Use the `--input-tokens` and `--samples` that the current artifact records in `input_tokens` and `samples_per_group`. Set `--observation-timeout-s` above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`.
+Use the `--input-tokens` and `--samples` that the current artifact records in `input_tokens` and `samples_per_group`. When a recorded length leaves room for fewer than two output tokens, run the command without `--calibration-base`, with `--input-tokens` chosen as in [Calibrating the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). Set `--observation-timeout-s` above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`.
 
-With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches the engines of the measured pairs into the roles each probe needs directly on the engines, outside the router's role control, and returns every engine to its starting role at the end. Run it while the members carry no client traffic.
+With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches the engines of the measured pairs into the roles each probe needs directly on the engines, outside the router's role control, and returns every engine to its starting role at the end. Run it while the members carry no client traffic. The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
 
 When the command exits 0 and the artifact's `candidate_deadline_s` is below `engine.first_token_timeout_s`, keep a copy of the current artifact and install the new one:
 

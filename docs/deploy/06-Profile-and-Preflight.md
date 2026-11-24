@@ -77,16 +77,18 @@ Calibrate with the engines idle. `narwhal-check --calibrate-first-token` takes t
 
 | Flag                      | Value                                                                                                                   |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--input-tokens`          | Lengths spanning the served range, including the longest admitted input, with room for one output token on both engines |
+| `--input-tokens`          | Lengths spanning the served range, up to the longest input that leaves room for two output tokens on both engines |
 | `--observation-timeout-s` | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`                                            |
 | `--calibration-out`       | A fresh artifact path under the ignored `runs/` tree                                                                    |
 | `--samples`               | 100, the default and the minimum for qualifying evidence                                                                |
 
-For an engine launch limit of 16,384 total tokens, run the calibration from the router shell:
+The command reads each engine's live context limit and refuses a length without room for two output tokens, naming the limit. On SGLang the live limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length.
+
+For engines whose live context limit is 16,384 tokens, run the calibration from the router shell:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --calibrate-first-token --input-tokens 256,8192,16382 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-out runs/deployment/first-token-calibration.json
 ```
@@ -126,15 +128,15 @@ The deadline, the measured prefill and the router overhead must fit the client t
 After a change to the fleet or its engines, run preflight. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
 
 - the fabric route or host behind an unchanged engine URL
-- the longest admitted input, beyond the longest calibrated input
+- an engine's context limit, when it exceeds the longest calibrated input by more than two tokens
 
 The artifact stays valid when you remove or pin an engine. It stays valid across an engine restart only when the engine's attestation sidecar reports [launch evidence](../cli/Check.md#the-calibration-gate).
 
-To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`:
+To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`. When an artifact records a length that leaves room for fewer than two output tokens, recalibrate without `--calibration-base`.
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --calibrate-first-token --input-tokens 256,8192,16382 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-base runs/deployment/first-token-calibration.json \
   --calibration-out runs/deployment/first-token-calibration-2.json
