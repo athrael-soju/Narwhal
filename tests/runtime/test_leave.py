@@ -174,6 +174,88 @@ class LeaveTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(LifecycleError, "lifecycle action already active"):
             await self.leave()
 
+    async def test_a_decode_leg_waiting_for_a_seat_holds_the_producer(self):
+        monitor = self.router.monitor
+        request = Request("r", 64)
+        monitor.dispatched("e1", request)
+        await self.leave()
+        monitor.first_token("e1", "r")
+        monitor.finished("e1", "r")
+        # The decode leg waits in the queue with its KV still on the leaving producer.
+        request.phase = Phase.DECODE
+        request.prefill_instance = "e1"
+        monitor.waiting["r"] = request
+        self.assertEqual(monitor.pending_handoffs("e1"), 1)
+        self.assertEqual(complete_leaves(self.router), [])
+        self.assertFalse(self.manager.view()["engines"]["e1"]["ready_to_stop"])
+        del monitor.waiting["r"]
+        self.assertTrue(self.manager.view()["engines"]["e1"]["ready_to_stop"])
+        self.assertEqual(complete_leaves(self.router), ["e1"])
+
+    async def test_a_leave_takes_over_a_failed_readmission(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.leave()
+        self.router.monitor.finished("e1", "r")
+        self.manager.refresh()
+        self.manager.mark_validating(["e1"])
+        self.assertFalse(self.manager.records["e1"].leaving)
+        self.manager.validation_failed(ValidationOutcome(failures={"e1": ["health"]}))
+        self.assertEqual(self.manager.records["e1"].state, "blocked")
+        self.assertEqual(complete_leaves(self.router), [])
+        # The operator removes the engine that failed readmission.
+        await self.leave()
+        self.assertNotIn("e1", self.router.membership)
+
+    async def test_a_blocked_engine_can_leave_but_another_hold_still_refuses(self):
+        await self.manager_block("e1")
+        with self.assertRaisesRegex(LifecycleError, "lifecycle action already active for e1"):
+            await self.leave("e3")
+        await self.leave("e1")
+        self.assertNotIn("e1", self.router.membership)
+
+    async def manager_block(self, iid):
+        async with self.manager.lock:
+            self.manager.begin([iid], wave=False, deadline_s=60.0)
+        self.manager.records[iid].state = "blocked"
+        self.manager.records[iid].old_process_start = 100.0
+
+    async def test_a_router_fenced_during_capture_leaves_the_removal_to_the_next_owner(self):
+        async def fenced(cfg, engines, *, specs, transport=None):
+            self.router.standby = True
+            return dict.fromkeys(engines, 100.0), {}
+
+        self.capture.side_effect = fenced
+        record = await self.leave()
+        self.assertTrue(record.leaving)
+        self.assertIn("e1", self.router.membership)
+        self.router.standby = False
+        self.assertEqual(complete_leaves(self.router), ["e1"])
+
+    async def test_the_handoff_writes_leaving_only_when_set(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.leave()
+        self.manager.records["e3"] = replace(self.manager.records["e1"], iid="e3", leaving=False)
+        rows = {row["iid"]: row for row in self.manager.handoff()["records"]}
+        self.assertIs(rows["e1"]["leaving"], True)
+        self.assertNotIn("leaving", rows["e3"])
+
+    async def test_an_incomplete_engine_contract_refuses_a_leave(self):
+        with (
+            patch.object(self.cfg, "contract_missing", return_value=["kv_connector"]),
+            self.assertRaisesRegex(LifecycleError, "complete engine_contract"),
+        ):
+            await self.leave()
+        self.assertEqual(self.manager.records, {})
+
+    async def test_a_restart_wave_cancels_a_pending_leave(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.leave()
+        self.manager.require_restart_wave("engine identity changed")
+        self.assertFalse(any(record.leaving for record in self.manager.records.values()))
+        self.router.monitor.finished("e1", "r")
+        self.assertEqual(complete_leaves(self.router), [])
+        self.assertIn("e1", self.router.membership)
+
 
 if __name__ == "__main__":
     unittest.main()

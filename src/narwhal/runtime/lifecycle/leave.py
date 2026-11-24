@@ -6,11 +6,25 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from ..standby import controls_fleet
 from .identity import capture_process_identities
 from .records import DrainRecord, LifecycleError
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
+
+
+# Held states a leave takes over: the engine is out of placement and stays drained.
+TAKEN_OVER = frozenset({"drained", "deadline_exceeded", "blocked"})
+
+
+def _held_alone(router: NarwhalRouter, iid: str) -> bool:
+    """Return True when `iid` is the only held engine, outside a wave, in a state a leave
+    takes over, such as a failed readmission."""
+    records = router.lifecycle.records
+    record = records.get(iid)
+    others = [i for i, rec in records.items() if i != iid and rec.state != "active"]
+    return record is not None and not record.wave_id and record.state in TAKEN_OVER and not others
 
 
 def leave_refusal(router: NarwhalRouter, iid: str) -> str:
@@ -26,7 +40,7 @@ def leave_refusal(router: NarwhalRouter, iid: str) -> str:
     if membership.spec(iid).shared_device is not None:
         return "an engine in a shared-device group cannot leave"
     held = sorted(i for i, rec in router.lifecycle.records.items() if rec.state != "active")
-    if held:
+    if held and not _held_alone(router, iid):
         return f"lifecycle action already active for {', '.join(held)}"
     if not router.scheduler.live_instances(exclude={iid}):
         return "the last schedulable engine cannot leave"
@@ -56,7 +70,13 @@ async def begin_leave(
     retry = (record := manager.records.get(iid)) is not None and record.leaving
     if not retry and (refusal := leave_refusal(router, iid)):
         raise LifecycleError(refusal)
-    manager.begin([iid], wave=False, deadline_s=deadline_s)
+    if _held_alone(router, iid):
+        # The engine is already out of placement; a failed readmission leaves it blocked.
+        record = manager.records[iid]
+        if record.state == "blocked":
+            record.state = "drained"
+    else:
+        manager.begin([iid], wave=False, deadline_s=deadline_s)
     record = manager.records[iid]
     if not record.leaving:
         record.leaving = True
@@ -66,7 +86,9 @@ async def begin_leave(
             router.cfg, [iid], specs=router.membership.by_id(), transport=transport
         )
         manager.bind_drain_identities([iid], starts, failures)
-    complete_leaves(router)
+    # A router fenced during the identity capture leaves the removal to the next owner.
+    if controls_fleet(router):
+        complete_leaves(router)
     return record
 
 

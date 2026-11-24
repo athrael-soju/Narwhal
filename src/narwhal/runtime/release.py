@@ -42,9 +42,9 @@ class PeerRelease:
             if iid in released or self._rounds.get(iid, ("", 0.0, len(schedule)))[2] >= len(
                 schedule
             ):
+                # An engine that rejoined and is released again starts a fresh schedule.
                 self._left.discard(iid)
-                if iid not in released:
-                    self._rounds.pop(iid, None)
+                self._rounds.pop(iid, None)
         for iid in set(self._rounds) - set(released) - self._left:
             del self._rounds[iid]
         for iid, reason in released.items():

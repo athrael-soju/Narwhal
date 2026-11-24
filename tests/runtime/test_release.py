@@ -79,6 +79,23 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         now[0] += RELEASE_AFTER_S[0]
         self.assertEqual(release.due(), ["e6"])
 
+    def test_an_engine_that_rejoins_and_drains_again_starts_a_fresh_schedule(self):
+        now = [100.0]
+        release = PeerRelease(lambda: now[0], FABRIC)
+        release.track({"e5": "drained"})
+        now[0] += RELEASE_AFTER_S[0]
+        self.assertEqual(release.due(), ["e5"])
+        now[0] += 5.0
+        release.forget("e5")
+        release.track({})
+        now[0] += 25.0
+        # e5 rejoins and is drained again with the same reason.
+        release.track({"e5": "drained"})
+        self.assertEqual(release.departed(), [])
+        self.assertEqual(
+            release.snapshot(), {"e5": {"rounds": 0, "next_round_s": RELEASE_AFTER_S[0]}}
+        )
+
     def test_a_state_change_restarts_the_schedule(self):
         now = [100.0]
         release = PeerRelease(lambda: now[0], FABRIC)

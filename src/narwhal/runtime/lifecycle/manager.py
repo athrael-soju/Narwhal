@@ -204,6 +204,8 @@ class LifecycleManager:
         for iid in engines:
             record = self.records[iid]
             record.state = "validating"
+            # Readmitting a leaving engine cancels its leave.
+            record.leaving = False
             record.error = ""
             record.checks = []
             self._emit("validation_started", iid=iid, wave_id=record.wave_id)
@@ -306,11 +308,13 @@ class LifecycleManager:
             prefill = len(instance.prefill)
             decode = len(instance.decode)
             state = record.state if record is not None else "active"
+            # A decode leg still pulling KV from the engine keeps it running.
             ready_to_stop = bool(
                 record is not None
                 and record.old_process_start is not None
                 and state == "drained"
                 and (not record.wave_id or wave_ready)
+                and not self.router.monitor.pending_handoffs(iid)
             )
             engines[iid] = {
                 "state": state,
@@ -348,7 +352,11 @@ class LifecycleManager:
         self.refresh()
         return {
             "wave_id": self.wave_id,
-            "records": [asdict(record) for _, record in sorted(self.records.items())],
+            # `leaving` is written only when set, so an older release reads other records.
+            "records": [
+                {key: value for key, value in asdict(record).items() if key != "leaving" or value}
+                for _, record in sorted(self.records.items())
+            ],
             "events": list(self.events),
             "engine_restart_policy": self.router.cfg.engine_restart_policy,
             "process_starts": dict(self.process_starts),
