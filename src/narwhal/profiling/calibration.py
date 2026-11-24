@@ -6,7 +6,7 @@ import math
 import os
 import time
 from collections import Counter
-from collections.abc import Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, TypeGuard, TypeVar
@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 
 from ..backends import load as load_backend
-from ..config import FleetConfig
+from ..config import EngineSpec, FleetConfig
 from ..engines.attestation import attested_launches
 from ..engines.client import (
     EngineClient,
@@ -128,7 +128,14 @@ def exclusive_rounds(pairs: list[Pair], slots: Mapping[str, str]) -> list[list[P
     return [members for _, members in rounds]
 
 
-def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
+def evidence_problems(
+    cfg: FleetConfig,
+    document: dict[str, Any],
+    *,
+    engines: Sequence[EngineSpec] | None = None,
+) -> list[str]:
+    """Return why `document` does not calibrate `engines`, the configured fleet by default."""
+    engines = cfg.engines if engines is None else engines
     problems: list[str] = []
     if document.get("schema") != SCHEMA or document.get("schema_version") != 1:
         return ["first-token calibration has an unknown schema or version"]
@@ -144,7 +151,7 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
     contract = cfg.engine_contract.fingerprint() if cfg.engine_contract else None
     if document.get("contract_fingerprint") != contract:
         problems.append("first-token calibration engine contract differs from the fleet")
-    expected = {spec.iid: spec.url for spec in cfg.engines}
+    expected = {spec.iid: spec.url for spec in engines}
     urls = document.get("engine_urls")
     recorded = urls if isinstance(urls, dict) else {}
     if missing := [iid for iid in expected if iid not in recorded]:
@@ -182,7 +189,7 @@ def evidence_problems(cfg: FleetConfig, document: dict[str, Any]) -> list[str]:
         return problems
     expected_groups = {
         (src, dst, length)
-        for src, dst in validation_pairs(cfg.engines, mesh=True)
+        for src, dst in validation_pairs(list(engines), mesh=True)
         for length in lengths
     }
     groups = document.get("groups")
@@ -331,8 +338,18 @@ class CalibrationCheck:
 
 
 async def verify_calibration(
-    cfg: FleetConfig, *, transport: httpx.AsyncBaseTransport | None = None
+    cfg: FleetConfig,
+    *,
+    engines: Sequence[EngineSpec] | None = None,
+    live: Collection[str] | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> CalibrationCheck:
+    """Check the calibration file against `engines`, the configured fleet by default.
+
+    The calibration must cover every directed pair of `engines`. Only the engines in `live`,
+    every engine by default, must still run the process generation it measured.
+    """
+    engines = cfg.engines if engines is None else engines
     path = cfg.first_token_calibration_path
     if path is None:
         return CalibrationCheck("uncalibrated")
@@ -346,13 +363,15 @@ async def verify_calibration(
         return CalibrationCheck(
             "rejected", (f"first-token calibration {path} must be a JSON object",), path
         )
-    problems = evidence_problems(cfg, document)
+    problems = evidence_problems(cfg, document, engines=engines)
     saved = document.get("generations")
     if not isinstance(saved, dict):
         problems.append("first-token calibration has no process-generation evidence")
         return CalibrationCheck("rejected", tuple(problems), path)
-    live: dict[str, float] = {}
-    for spec in cfg.engines:
+    starts: dict[str, float] = {}
+    for spec in engines:
+        if live is not None and spec.iid not in live:
+            continue
         try:
             current = await read_generation(cfg, spec, transport=transport)
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -363,16 +382,16 @@ async def verify_calibration(
             continue
         if saved.get(spec.iid) != current.digest:
             problems.append(f"{spec.iid} process differs from first-token calibration")
-        live[spec.iid] = current.process_start_time_seconds
+        starts[spec.iid] = current.process_start_time_seconds
     if problems:
         return CalibrationCheck("rejected", tuple(problems), path)
-    engines = _labels(document["process_starts"], live)
+    labels = _labels(document["process_starts"], starts)
     return CalibrationCheck(
-        _status(engines),
+        _status(labels),
         path=path,
         captured_at_unix=document["captured_at_unix"],
         candidate_deadline_s=document["candidate_deadline_s"],
-        engines=engines,
+        engines=labels,
         process_starts=dict(document["process_starts"]),
     )
 
