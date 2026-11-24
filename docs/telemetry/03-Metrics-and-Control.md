@@ -43,7 +43,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
 | Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 
-`narwhal_engine_requests_total` counts the requests the router has sent to each engine since the router started or the engine joined, including its verification, readmission and peer release probes. The checks of a joining engine are not counted.
+`narwhal_engine_requests_total` counts the requests the router has sent to each engine since the router started or the engine joined, including its verification, readmission and peer release probes. A joining engine's count starts at 0 when the join adds it to the membership, after its join checks. A join's fabric check counts toward each member it pairs with.
 
 Series with an `iid` label cover the engines in the [membership snapshot](../http-api/08-Engine-Membership.md). When an engine leaves the fleet, its `iid` series stop. When an engine joins, its counters start at 0, including when it rejoins under an `iid` it held before.
 
