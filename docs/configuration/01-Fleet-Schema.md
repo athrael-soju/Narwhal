@@ -70,7 +70,7 @@ A fleet needs six fields:
 | `schema`         | `"narwhal.fleet"` | Identifies the fleet interface.                                                             |
 | `schema_version` | `2`               | The configuration version.                                                                  |
 | `model`          | string            | The exact model name the router exposes and every engine serves.                            |
-| `engines`        | nonempty array    | The engine instances.                                                                       |
+| `engines`        | nonempty array    | The engine instances, generation 0 of the router's [membership](../concepts/01-Request-and-Topology.md#engine-membership). |
 | `slo.ttft_s`     | positive seconds  | Time-to-first-token (TTFT) target for admission, placement, load projection, and control.   |
 | `slo.tpot_s`     | positive seconds  | Time-per-output-token (TPOT) target for admission, placement, load projection, and control. |
 

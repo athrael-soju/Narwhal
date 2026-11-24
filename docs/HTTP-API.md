@@ -16,6 +16,7 @@ description: Reference for the OpenAI-compatible completion routes and the healt
 | Hand state over to a standby router | [`GET /narwhal/handoff`](http-api/07-Handoff-and-Lifecycle.md#get-narwhalhandoff) |
 | Check whether engines are draining or awaiting readmission | [`GET /narwhal/lifecycle`](http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) |
 | Drain or readmit engines | [`POST /narwhal/lifecycle/drain`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain), [`POST /narwhal/lifecycle/readmit`](http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) |
+| List, join, or remove engines | [`GET /narwhal/engines`](http-api/08-Engine-Membership.md#get-narwhalengines), [`POST /narwhal/engines`](http-api/08-Engine-Membership.md#post-narwhalengines), [`DELETE /narwhal/engines/{iid}`](http-api/08-Engine-Membership.md#delete-narwhalenginesiid) |
 | Browse the OpenAPI schema | `GET /openapi.json`, `GET /docs` |
 
 A completion's refusals and status codes are in [Admission and responses](http-api/02-Admission-and-Responses.md), and its engine legs, timeouts and retries in [Backend execution and failures](http-api/03-Backend-and-Failures.md). [SLO attainment and demand accounting](http-api/06-SLO-and-Demand.md) covers the SLO and demand fields of `/narwhal/state`.
@@ -23,4 +24,4 @@ A completion's refusals and status codes are in [Admission and responses](http-a
 The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="2"} 1`.
 
 !!! warning
-    Keep `/narwhal/state`, `/narwhal/targets`, `/narwhal/handoff`, `/narwhal/lifecycle`, and the lifecycle action routes on your trusted control network.
+    Keep `/narwhal/state`, `/narwhal/targets`, `/narwhal/handoff`, `/narwhal/lifecycle`, `/narwhal/engines`, and the lifecycle action routes on your trusted control network.

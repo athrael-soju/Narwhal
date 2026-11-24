@@ -56,7 +56,7 @@ A malformed profile stops the operation with an error that names the file, engin
 profiles.json: profile n4: tpot_slope must be nonnegative
 ```
 
-The profile store must hold the same set of `iid` values as the configured fleet. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
+At startup without a saved membership at generation 1 or higher, and when an engine joins, the profile store must hold the same set of `iid` values as the fleet. A resumed restart or a standby takeover that adopts a saved membership needs a profile for each saved engine, and allows profiles for other engines. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
 
 ### Profile fields
 

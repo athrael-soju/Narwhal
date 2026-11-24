@@ -44,7 +44,7 @@ Preflight warns when an engine's profile measures decode below its sequence limi
 - regenerate the limits file, when the sidecar records a lower limit than the attestation.
 - pass shorter `--decode-input-lens`, or lower the engine's sequence limit and regenerate the limits file, when the sweep skipped cohorts that exceed the engine's KV capacity.
 
-Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
+Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. A resumed router that adopts the handoff's membership needs a profile for each saved engine and allows profiles for other engines. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 
 Set the service-level objective (SLO) targets before preflight:
 

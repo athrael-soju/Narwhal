@@ -62,7 +62,7 @@ While [demand is incomplete](../http-api/06-SLO-and-Demand.md#demand-completenes
 
 A pinned engine keeps its configured role. Moves keep at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines while enough healthy engines are available. Draining and recovering engines are on a lifecycle hold and take no new work.
 
-`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and the first such move waits the same time after the router starts. A moved engine stays in its new role for at least `controller.thresholds.dwell_s`. A move from decode to prefill gives up the least busy eligible decode engine, and with `controller.thresholds.flip_resident_guard` above `0`, that engine may have at most that many decode requests still running.
+`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and the first such move waits the same time after the router starts. A moved engine stays in its new role for at least `controller.thresholds.dwell_s`, and a joined engine stays in its joined role for that time. A move from decode to prefill gives up the least busy eligible decode engine, and with `controller.thresholds.flip_resident_guard` above `0`, that engine may have at most that many decode requests still running.
 
 While an engine is ejected, quarantined, draining, or recovering, the role controller scores splits on the remaining live engines. When that leaves a role with engines assigned and none of them live, it records a held decision.
 
@@ -73,6 +73,7 @@ An SGLang engine changes roles only while idle. When every engine in the source 
 A move to decode that passes its confirmations while its engine is busy stays approved as long as that engine stays held and the number of live prefill engines stays the same. While it is approved, each evaluation asks for the move again without new confirmations, and the move happens at the first evaluation that finds a prefill engine idle. The approval ends, and the engine returns to new placements, when any of these happens:
 
 - three `controller.reactive.step_s` intervals pass after the latest evaluation that found the move eligible
+- an engine joins or leaves the fleet
 - a move to prefill becomes eligible
 - a projected-TTFT recovery evaluation runs, or an evaluation with incomplete demand finds the decode recovery ratio below `controller.thresholds.expand`
 - an evaluation stops before scoring splits

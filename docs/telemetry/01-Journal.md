@@ -293,11 +293,11 @@ An `engine_lifecycle` event carries `action`, `at` (Unix wall-clock seconds) and
 | `profile_recovery_blocked` | A health or inference recovery probe finds a failed profile-generation check. | `iid`, `error` |
 | `join_started` | A join request starts its checks. | `iid`, `generation` |
 | `joined` | An engine passes the join checks and enters the fleet. | `iid`, `generation`, `process_start`, `role` |
-| `join_refused` | A join request fails its checks. | `iid`, `generation`, `error` |
+| `join_refused` | A join request is refused or fails its checks. | `iid`, `generation`, `error` |
 | `leave_started` | A leave request starts draining an engine. | `iid`, `generation` |
 | `left` | A leaving engine has drained and leaves the fleet. | `iid`, `generation`, `process_start` |
 
-`joined` and `left` carry the membership generation the change created. `join_started`, `join_refused` and `leave_started` carry the generation current when they are written. A join refused before its checks start, such as one that names an `iid` already in the fleet, writes `join_refused` without `join_started`.
+`joined` and `left` carry the [membership generation](../http-api/08-Engine-Membership.md#membership-document) the change created. `join_started`, `join_refused` and `leave_started` carry the generation current when they are written. A join refused before its checks start, such as one that names an `iid` already in the fleet, writes `join_refused` without `join_started`.
 
 A failed profile-generation check ejects the engine and also writes an `engine_ejected` event with `cause: profile_generation`. Under `whole_wave`, it also writes `restart_required`.
 

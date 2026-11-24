@@ -29,7 +29,7 @@ A command-line option takes precedence over the matching fleet configuration fie
 | `--journal PATH` | `journal.jsonl` beside `profiles.path` | Request journal, append mode. |
 | `--max-concurrent N` | Config `serving.max_connections` | Router [in-flight limit](../configuration/02-Serving-and-Role-Control.md#in-flight-limit), from 1 to `serving.max_connections` inclusive. |
 | `--graceful-timeout SECONDS` | Config `serving.graceful_timeout_s` | Uvicorn shutdown drain time, in whole seconds, zero or greater. |
-| `--resume` | Config `recovery.resume` | Restore roles, breaker holds, and counters from the last state handoff. |
+| `--resume` | Config `recovery.resume` | Restore engine membership, roles, breaker holds, and counters from the last state handoff. |
 
 `--resume` only turns resume on. To keep resume off, set `recovery.resume` to `false` and omit `--resume`.
 

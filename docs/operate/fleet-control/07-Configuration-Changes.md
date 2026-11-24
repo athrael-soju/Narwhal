@@ -40,13 +40,19 @@ The service validates the merged configuration as `narwhal config validate` does
 
 ## Restore the baseline
 
-Select **Restore baseline** to return the fleet to the state the session started from. Ending a session keeps its changes, so restore before you end it.
+Select **Restore baseline** to return the fleet to the state the session started from. For membership, that state is the set of engines the baseline fleet configuration names, so restore also removes an engine that joined before the session and returns a baseline engine that left before it. Ending a session keeps its changes, so restore before you end it.
 
 Restore baseline is an [exclusive action](04-Sessions.md#exclusive-actions) and undoes the session's changes in this order:
 
-1. If the current configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook and waits for readiness, as in [Router readiness](#router-readiness).
-2. For each engine the session paused, the service runs the `engine_resume` hook. For each engine it stopped, the service runs the `engine_start` hook.
-3. For each engine the session drained, the service calls the router's readmit.
+1. If the current configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook and waits for readiness, as in [Router readiness](#router-readiness). It then reads the router's membership again.
+2. For each member engine the session paused, the service runs the `engine_resume` hook. For each member engine it stopped, the service runs the `engine_start` hook.
+3. For each member engine the session drained, the service calls the router's readmit.
+4. For each engine the baseline configures that is not in the router's membership, the service runs the `engine_start` hook when it is configured, then joins the engine with its baseline entry. The hook runs even when the engine's process still runs, so it must succeed for a running engine.
+5. For each member engine the baseline does not configure, the service removes it from the router's membership.
+
+The service compares the router's `GET /narwhal/engines` with the baseline to find the engines of steps 4 and 5. With a router that has no such route, it uses the joins and leaves the session recorded.
+
+The run record holds each step as it completes. When a step fails, the restore fails with that step's status. Select **Restore baseline** again to continue from the fleet's current state.
 
 ## Router readiness
 

@@ -1,10 +1,10 @@
 ---
-description: Pause, resume, stop, start, drain, and readmit engines from the fleet control console.
+description: Pause, resume, stop, start, drain, readmit, join, and remove engines from the fleet control console.
 ---
 
 # Engine actions
 
-The **Engines** view lists each engine in the baseline fleet configuration with its role, router state, resident requests and last action. Its heading shows the prefill-to-decode split of the engines in service, such as `split 2P:6D`.
+The **Engines** view lists each engine in the router's [membership](../../http-api/08-Engine-Membership.md), or in the baseline fleet configuration when the router does not answer `GET /narwhal/engines`, with its role, router state, resident requests and last action. Its heading shows the prefill-to-decode split of the engines in service, such as `split 2P:6D`.
 
 ## Find an engine
 
@@ -46,6 +46,9 @@ Click an engine ID to open its details beside the list: its state, role, residen
 | **Start**   | Runs the `engine_start` hook, then waits until the router returns the engine to service                                                                                                                                        |
 | **Drain**   | Calls the router's [`POST /narwhal/lifecycle/drain`](../../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain). The router stops placing new requests on the engine and waits for its resident requests to finish |
 | **Readmit** | Calls the router's [`POST /narwhal/lifecycle/readmit`](../../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) for a drained engine                                                                           |
+| **Leave**   | Calls the router's [`DELETE /narwhal/engines/{iid}`](../../http-api/08-Engine-Membership.md#delete-narwhalenginesiid), then waits until the router removes the engine. The engine process keeps running                      |
+
+Each action first reads the engine's entry from the router's `GET /narwhal/engines`, so it fails while the router does not answer. With a router that has no such route, the action reads the entry from the baseline fleet configuration.
 
 Each row has a main button for the engine's current state and a **…** menu with the other actions:
 
@@ -60,7 +63,13 @@ Each row has a main button for the engine's current state and a **…** menu wit
 
 **Start** and **Resume** wait up to `router.timeout_s`, 600 seconds by default. While they wait, the engine's state reads `starting` or `resuming` with the seconds waited. The action fails if the engine stays ejected or quarantined for the whole wait, the router blocks its readmission, or the engine needs fresh profiles. To fix a failed action, follow [Start fails and the engine stays ejected](08-Troubleshooting.md#start-fails-and-the-engine-stays-ejected).
 
-The console asks for confirmation before **Pause**, **Stop** and **Drain**. A drain uses **Drain deadline** from the session strip, or the router's default of 300 seconds when that field is empty or 0. During a drain, a bar under the engine's resident requests shows the drained fraction.
+The console asks for confirmation before **Pause**, **Stop**, **Drain** and **Leave**. A drain or a leave uses **Drain deadline** from the session strip, or the router's default of 300 seconds when that field is empty or 0. **Leave** waits for the removal up to that deadline plus `router.timeout_s`, and fails when the drain passes its deadline with resident requests. The router still removes the engine once they finish. During a drain, a bar under the engine's resident requests shows the drained fraction.
+
+## Join an engine
+
+Below the engine list, **Join engine** takes one engine entry as the fleet file holds it. Fill in the entry, select **Join engine** and confirm. The service sends the entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines), and the feedback line shows the result. Before a join, prepare the engine's profiles and calibration as in [Joining and removing engines](../08-Joining-and-Removing-Engines.md#join-an-engine).
+
+Joins and leaves are [exclusive actions](04-Sessions.md#exclusive-actions).
 
 ## When an action is disabled
 
@@ -81,6 +90,6 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 ## Paused and stopped engines
 
-The console tracks paused and stopped engines within the session. **Restore baseline** returns them to service, and a cold restart clears those states.
+The console tracks paused and stopped engines within the session, and a cold restart clears those states. Engines that joined or left are the differences between the router's membership and the baseline. **Restore baseline** returns both to the baseline.
 
 The **Last action** line under the table shows the latest engine action and the change in the engine's state and resident requests. The run record holds the engine's full router state before and after each action.

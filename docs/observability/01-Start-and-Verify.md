@@ -99,7 +99,7 @@ curl -fsSG http://127.0.0.1:9090/api/v1/query \
   | python3 -m json.tool
 ```
 
-The response has one series for the router and one for each configured engine. A value of `1` marks a successful scrape, and `0` marks a failed scrape.
+The response has one series for the router and one for each member engine. A value of `1` marks a successful scrape, and `0` marks a failed scrape.
 
 If you set `NARWHAL_CONTROL_METRICS_URL`, check `up{job="fleet-control"}` the same way. If you set `NARWHAL_TOOL_METRICS_URL`, `up{job="narwhal-tools"}` is `1` while a tool runs preflight, first-token calibration or a live sweep.
 
