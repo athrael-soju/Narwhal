@@ -93,6 +93,7 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
             "engine.role": {**NEW, "role": "both"},
             "engine.pin must be a boolean": {**NEW, "pin": "yes"},
             "url must be an http or https URL with a host": {**NEW, "url": "ftp://engine"},
+            "must be an http or https URL": {**NEW, "url": ""},
             "iid must be nonempty": {**NEW, "iid": ""},
             "hold only letters": {**NEW, "iid": "a/b"},
             "cannot reference environment variables": {**NEW, "url": "${NARWHAL_URL}"},

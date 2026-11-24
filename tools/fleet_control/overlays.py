@@ -188,25 +188,52 @@ class Overlays:
         return await self.service.act("config.cold_restart", {}, restart, exclusive=True)
 
     async def restore(self) -> Action:
-        """Undo the session's configuration change, then each engine change."""
+        """Undo the session's configuration change, then each engine and membership change.
+
+        With a router that serves its membership, membership changes come from comparing the
+        live membership with the baseline, read again after the configuration restart.
+        """
 
         async def restore(session: Session | None) -> Mapping[str, Any]:
             assert session is not None
-            changes = session_changes(session)
             steps: list[dict[str, Any]] = []
-            effect: dict[str, Any] = {"changes": changes, "steps": steps}
-            if changes["configuration"]:
+            effect: dict[str, Any] = {"steps": steps}
+            # The session record alone says whether the configuration changed, so a router that
+            # does not answer can still restart with the baseline.
+            recorded = session_changes(session)
+            # A restore that fails before the membership read keeps the recorded changes.
+            effect["changes"] = recorded
+            configuration = recorded["configuration"]
+            if configuration:
                 baseline = session.configurations[0]
                 hook = self._hook(ROUTER_RESTART_HOOK)
                 effect["hook"] = await self._run(hook, session, baseline["fleet"], effect)
                 session.apply_configuration(self.service.stamp(), "baseline", baseline["document"])
                 effect["readiness"] = await self._ready(effect)
+            members = await self._members(effect)
+            changes = {**session_changes(session, members), "configuration": configuration}
+            effect["changes"] = changes
             undo = [(iid, change) for iid, each in changes["engines"].items() for change in each]
             for iid, change in undo:
                 steps.append(await self._undo(iid, UNDO[change], effect))
+            # Engines that left return before engines that joined leave, so capacity holds.
+            for iid, spec in changes.get("left", {}).items():
+                await self._return(iid, spec, effect, steps)
+            steps.extend([await self._remove(iid, effect) for iid in changes.get("joined", [])])
             return effect
 
         return await self.service.act("config.restore", {}, restore, exclusive=True)
+
+    async def _members(self, effect: Mapping[str, Any]) -> dict[str, Mapping[str, Any]] | None:
+        """Return the router's member engine entries, or None without a membership route."""
+        if self.engines is None:
+            return None
+        try:
+            async with self.engines._client() as client:
+                current = await self.engines.membership(client)
+        except ActionError as exc:
+            raise ActionError(str(exc), status=exc.status, result=effect) from exc
+        return None if current is None else current["engines"]
 
     async def _undo(self, iid: str, action: str, effect: Mapping[str, Any]) -> dict[str, Any]:
         if self.engines is None:
@@ -226,6 +253,52 @@ class Overlays:
                 f"{action} {iid} failed: {exc}", status=exc.status, result=effect
             ) from exc
         return {"engine": iid, "action": action, "seq": done.seq}
+
+    async def _return(
+        self,
+        iid: str,
+        spec: Mapping[str, Any],
+        effect: Mapping[str, Any],
+        steps: list[dict[str, Any]],
+    ) -> None:
+        """Start an engine that left, when an engine_start hook is configured, and join it.
+
+        Each completed step is added to `steps` at once, so a failed restore records it.
+        """
+        engines = self._actions(iid, "join", effect)
+        current = await self._members(effect)
+        if current is not None and iid in current:
+            steps.append({"engine": iid, "action": "join", "seq": None})
+            return
+        try:
+            if "engine_start" in self.service.config.hooks:
+                started = await engines.within(iid, "start", spec)
+                steps.append({"engine": iid, "action": "start", "seq": started.seq})
+            done = await engines.join_within(spec)
+        except ActionError as exc:
+            raise ActionError(
+                f"return of {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        steps.append({"engine": iid, "action": "join", "seq": done.seq})
+
+    async def _remove(self, iid: str, effect: Mapping[str, Any]) -> dict[str, Any]:
+        """Remove an engine that joined during the session from the router's membership."""
+        engines = self._actions(iid, "leave", effect)
+        current = await self._members(effect)
+        if current is not None and iid not in current:
+            return {"engine": iid, "action": "leave", "seq": None}
+        try:
+            done = await engines.leave_within(iid)
+        except ActionError as exc:
+            raise ActionError(
+                f"leave {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        return {"engine": iid, "action": "leave", "seq": done.seq}
+
+    def _actions(self, iid: str, action: str, effect: Mapping[str, Any]) -> EngineActions:
+        if self.engines is None:
+            raise ActionError(f"engine actions are unavailable to {action} {iid}", result=effect)
+        return self.engines
 
     def _hook(self, name: str) -> Hook:
         try:
