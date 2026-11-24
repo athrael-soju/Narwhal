@@ -310,6 +310,36 @@ class MembershipActionTests(EngineCase):
         )
         self.assertTrue(start["result"]["service"]["in_service"])
 
+    def reference_baseline(self, iid: str, name: str) -> None:
+        assert self.service.session is not None
+        for engine in self.service.session.baseline["engines"]:
+            if engine["iid"] == iid:
+                engine["url"] = "${" + name + "}"
+
+    async def test_restore_returns_a_departed_engine_with_the_router_entry(self) -> None:
+        await self.start_session()
+        self.reference_baseline("e1", "NARWHAL_TEST_E1_URL")
+        await self.client.post("/api/engines/e1/leave")
+        self.assertEqual(
+            (await self.changes())["left"]["e1"]["url"], "http://engine-1.invalid:8000"
+        )
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.router.members["e1"]["url"], "http://engine-1.invalid:8000")
+
+    async def test_restore_resolves_a_baseline_reference_from_its_environment(self) -> None:
+        await self.start_session()
+        self.reference_baseline("e1", "NARWHAL_TEST_E1_URL")
+        # The engine left before the session.
+        self.router._remove("e1")
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("does not resolve", response.json()["detail"])
+        self.service._env = {**self.service._env, "NARWHAL_TEST_E1_URL": "http://engine-1.test:9"}
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.router.members["e1"]["url"], "http://engine-1.test:9")
+
 
 class RouterRestartRestoreTests(EngineCase):
     router_class: ClassVar[type[FakeRouter]] = MemberRouter

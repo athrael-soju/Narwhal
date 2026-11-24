@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,8 @@ UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
 # Actions that clear the engine changes.
 CLEARING_ACTIONS = frozenset({"config.cold_restart"})
 RESTORE_ACTION = "config.restore"
+# A whole-value ${VARIABLE} endpoint reference, as the fleet file's reader accepts.
+ENDPOINT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Actions that change the router's membership.
 MEMBERSHIP_ACTIONS = frozenset({"engine.join", "engine.leave"})
 
@@ -51,7 +54,11 @@ def session_changes(
     axes: dict[str, dict[str, str]] = {}
     joined: list[str] = []
     left: dict[str, Any] = {}
+    # The router's resolved entry of each engine a leave named, whatever the leave's outcome.
+    departed: dict[str, Any] = {}
     for action in session.actions:
+        if action.name == "engine.leave" and (spec := (action.result or {}).get("spec")):
+            departed[str(action.params.get("engine"))] = spec
         if action.name == RESTORE_ACTION:
             # A restore step with no seq found the engine already in service.
             for step in (action.result or {}).get("steps", []):
@@ -99,7 +106,12 @@ def session_changes(
     if members is not None:
         configured = {str(engine["iid"]): engine for engine in session.baseline["engines"]}
         joined = [iid for iid in members if iid not in configured]
-        left = {iid: dict(engine) for iid, engine in configured.items() if iid not in members}
+        # An engine that left in the session returns with the entry the router held for it.
+        left = {
+            iid: dict(departed.get(iid) or engine)
+            for iid, engine in configured.items()
+            if iid not in members
+        }
         # An engine outside the membership returns through a join or stays out.
         axes = {iid: changes for iid, changes in axes.items() if iid in members}
     engines = {
@@ -173,6 +185,29 @@ class ControlService:
         """Return the session's changes against the router's live membership when it answers."""
         members = None if self.members is None else await self.members()
         return session_changes(session, members)
+
+    def resolved(self, engine: Mapping[str, Any], effect: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a baseline engine entry with its `${VARIABLE}` endpoints resolved.
+
+        The router refuses references in an entry sent over HTTP, so the service resolves them
+        from its own environment, as the fleet file's reader does.
+        """
+        resolved = dict(engine)
+        for field in ("url", "attestation_url"):
+            value = resolved.get(field)
+            if not isinstance(value, str) or "${" not in value:
+                continue
+            match = ENDPOINT_REFERENCE.fullmatch(value)
+            name = match[1] if match else ""
+            if not name or not self._env.get(name, "").strip():
+                raise ActionError(
+                    f"engine {engine.get('iid')} {field} {value} does not resolve in the "
+                    "control service environment",
+                    status=422,
+                    result=effect,
+                )
+            resolved[field] = self._env[name]
+        return resolved
 
     def stamp(self) -> str:
         """Return the current time as recorded in actions."""

@@ -127,7 +127,7 @@ When a job finishes or stops, the service copies the job's [journal extract](11-
 | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | 200    | The action finished. When it restarted the router, the router answered `GET /ready` with HTTP 200                             |
 | 409    | No session is active, or an exclusive action is in progress                                                                   |
-| 422    | Overlay only: the body is not a JSON object, changes nothing, changes another section, or fails the loader                    |
+| 422    | Overlay: the body is not a JSON object, changes nothing, changes another section, or fails the loader. Restore: a `${VARIABLE}` endpoint of an engine it returns does not resolve in the service's environment |
 | 501    | A hook the action needs is not configured                                                                                     |
 | 502    | A hook failed to start, exited non-zero or timed out, or a restore could not read or change an engine's router state          |
 | 504    | The router was not ready within `router.timeout_s`, an engine that restore started or resumed did not return to service, or an engine that restore removed did not leave in time |
