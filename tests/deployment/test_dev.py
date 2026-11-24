@@ -1,4 +1,5 @@
 import contextlib
+import ctypes
 import hashlib
 import io
 import json
@@ -1384,3 +1385,61 @@ class DevTests(unittest.TestCase):
         self.spec["model"]["tokenizer_sha256"] = {"config.json": "0" * 64}
         with self.assertRaisesRegex(ValueError, "tokenizer file config.json"):
             self.initialize()
+
+
+class FabricAddressTests(unittest.TestCase):
+    def test_reads_the_loopback_address_without_an_ip_command(self):
+        with patch.object(template.subprocess, "run", side_effect=AssertionError("ran a command")):
+            self.assertEqual(template._address("lo"), "127.0.0.1")
+
+    def test_counts_labelled_aliases_and_skips_other_interfaces(self):
+        entries = [
+            (b"fabric0", "192.0.2.1"),
+            (b"fabric0:1", "192.0.2.2"),
+            (b"fabric01", "192.0.2.3"),
+            (b"lo", "127.0.0.1"),
+        ]
+        nodes = [template._Ifaddrs() for _ in entries]
+        addresses = []
+        for index, (label, address) in enumerate(entries):
+            raw = (ctypes.c_ubyte * 16)()
+            ctypes.c_ushort.from_buffer(raw).value = socket.AF_INET
+            raw[4:8] = socket.inet_aton(address)
+            addresses.append(raw)
+            nodes[index].ifa_name = label
+            nodes[index].ifa_addr = ctypes.addressof(raw)
+            if index + 1 < len(nodes):
+                nodes[index].ifa_next = ctypes.pointer(nodes[index + 1])
+
+        class Libc:
+            def getifaddrs(self, out):
+                ctypes.cast(out, ctypes.POINTER(ctypes.POINTER(template._Ifaddrs)))[0] = (
+                    ctypes.pointer(nodes[0])
+                )
+                return 0
+
+            def freeifaddrs(self, head):
+                self.freed = True
+
+        libc = Libc()
+        with patch.object(template.ctypes, "CDLL", return_value=libc):
+            self.assertEqual(template._ipv4_addresses("fabric0"), ["192.0.2.1", "192.0.2.2"])
+        self.assertTrue(libc.freed)
+
+    def test_refuses_an_interface_name_with_other_characters(self):
+        with self.assertRaisesRegex(ValueError, "Linux network interface name"):
+            template._address("eth0; true")
+
+    def test_refuses_a_missing_interface(self):
+        with self.assertRaisesRegex(ValueError, "is unavailable"):
+            template._address("narwhal-missing0")
+
+    def test_refuses_an_interface_without_exactly_one_ipv4_address(self):
+        for found in ([], ["192.0.2.1", "192.0.2.2"]):
+            with (
+                self.subTest(found=found),
+                patch.object(socket, "if_nametoindex", return_value=1),
+                patch.object(template, "_ipv4_addresses", return_value=found),
+                self.assertRaisesRegex(ValueError, "one IPv4 address"),
+            ):
+                template._address("fabric0")

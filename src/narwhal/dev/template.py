@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import hashlib
 import json
 import os
@@ -65,28 +66,57 @@ def _gpu_rows() -> list[dict[str, str]]:
     return rows
 
 
+class _Ifaddrs(ctypes.Structure):
+    pass
+
+
+_Ifaddrs._fields_ = [
+    ("ifa_next", ctypes.POINTER(_Ifaddrs)),
+    ("ifa_name", ctypes.c_char_p),
+    ("ifa_flags", ctypes.c_uint),
+    ("ifa_addr", ctypes.c_void_p),
+    ("ifa_netmask", ctypes.c_void_p),
+    ("ifa_ifu", ctypes.c_void_p),
+    ("ifa_data", ctypes.c_void_p),
+]
+
+
+def _ipv4_addresses(interface: str) -> list[str]:
+    # getifaddrs(3) lists every address of every interface, as `ip address show` does. It names
+    # a labelled alias such as eth0:1 by its label, which `ip address show dev eth0` includes.
+    libc = ctypes.CDLL(None, use_errno=True)
+    name = os.fsencode(interface)
+    head = ctypes.POINTER(_Ifaddrs)()
+    if libc.getifaddrs(ctypes.byref(head)) != 0:
+        raise OSError(ctypes.get_errno(), "getifaddrs failed")
+    try:
+        found = []
+        node = head
+        while node:
+            entry = node.contents
+            label = entry.ifa_name
+            if entry.ifa_addr and label and (label == name or label.startswith(name + b":")):
+                family = ctypes.c_ushort.from_address(entry.ifa_addr).value
+                if family == socket.AF_INET:
+                    raw = ctypes.string_at(entry.ifa_addr + 4, 4)
+                    found.append(socket.inet_ntop(socket.AF_INET, raw))
+            node = entry.ifa_next
+        return found
+    finally:
+        libc.freeifaddrs(head)
+
+
 def _address(interface: str) -> str:
     if not interface or not all(char.isalnum() or char in "_.-" for char in interface):
         raise ValueError("fabric interface must be a Linux network interface name")
     try:
-        result = subprocess.run(  # noqa: S603 - validated interface, no shell
-            [shutil.which("ip") or "/usr/sbin/ip", "-json", "address", "show", "dev", interface],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        socket.if_nametoindex(interface)
+        addresses = _ipv4_addresses(interface)
+    except OSError as exc:
         raise ValueError(f"fabric interface {interface!r} is unavailable") from exc
-    addresses = [
-        entry["local"]
-        for device in json.loads(result.stdout)
-        for entry in device.get("addr_info", [])
-        if entry.get("family") == "inet"
-    ]
     if len(addresses) != 1:
         raise ValueError(f"select an interface with one IPv4 address: {interface}")
-    return str(addresses[0])
+    return addresses[0]
 
 
 def _check_packages(packages: dict[str, str]) -> None:
