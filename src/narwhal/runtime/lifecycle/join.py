@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -9,12 +10,15 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ...config import EngineSpec
+from ...profiling.generation import read_generation
 from ...profiling.membership import check_engine_set
 from ...types import RoleModel
+from ..standby import controls_fleet
 from .readmission import validate_readmission
 from .records import ValidationOutcome
 
 if TYPE_CHECKING:
+    from ...serving.router.membership import Membership
     from ...serving.router.routing import NarwhalRouter
 
 log = logging.getLogger("narwhal.lifecycle")
@@ -61,9 +65,27 @@ def join_refusal(router: NarwhalRouter, spec: EngineSpec) -> str:
 
 
 def _forget_candidate(router: NarwhalRouter, spec: EngineSpec) -> None:
-    for table in (router.sequence_limits, router.kv_leases, router.launches):
-        table.pop(spec.iid, None)
-    router.role_switch.forget(spec.url)
+    """Drop what validating a refused candidate recorded."""
+    # A member that took this id during validation keeps its tables.
+    if spec.iid not in router.membership:
+        for table in (router.sequence_limits, router.kv_leases, router.launches):
+            table.pop(spec.iid, None)
+    if all(member.url.rstrip("/") != spec.url.rstrip("/") for member in router.membership):
+        router.role_switch.forget(spec.url)
+        router.engines.kv.forget(spec.url)
+
+
+async def _attestation_problem(
+    router: NarwhalRouter, spec: EngineSpec, transport: httpx.AsyncBaseTransport | None
+) -> str:
+    """Return why the candidate's attestation does not match the engine contract, or ""."""
+    try:
+        await read_generation(router.cfg, spec, transport=transport)
+    except ValueError as exc:
+        return f"attestation does not match the engine contract: {exc}"
+    except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
+        return f"attestation unreadable: {type(exc).__name__}: {exc}"
+    return ""
 
 
 async def join_engine(
@@ -86,30 +108,89 @@ async def join_engine(
         manager._emit("join_refused", iid=spec.iid, generation=current.generation, error=refusal)
         return JoinOutcome(spec.iid, False, current.generation, refused=refusal)
     manager._emit("join_started", iid=spec.iid, generation=current.generation)
+    outcome = ValidationOutcome()
+    joined = False
+    try:
+        joined = await _validate_and_join(router, spec, current, outcome, transport)
+    except asyncio.CancelledError:
+        outcome.fail(spec.iid, "join cancelled")
+        raise
+    except Exception as exc:
+        log.exception("join validation of %s failed", spec.iid)
+        outcome.fail(spec.iid, f"validation raised {type(exc).__name__}: {exc}")
+    finally:
+        if not joined:
+            _forget_candidate(router, spec)
+            failures = _failures(spec, outcome)
+            manager._emit(
+                "join_refused",
+                iid=spec.iid,
+                generation=router.membership.generation,
+                error="; ".join(failures),
+            )
+    if not joined:
+        return JoinOutcome(
+            spec.iid,
+            False,
+            router.membership.generation,
+            checks=list(outcome.checks.get(spec.iid, [])),
+            failures=_failures(spec, outcome),
+        )
+    generation = router.membership.generation
+    manager._emit(
+        "joined",
+        iid=spec.iid,
+        generation=generation,
+        process_start=outcome.starts[spec.iid],
+        role=spec.role.value,
+    )
+    log.info("joined %s in generation %d as %s", spec.iid, generation, spec.role.value)
+    return JoinOutcome(spec.iid, True, generation, checks=list(outcome.checks.get(spec.iid, [])))
+
+
+def _failures(spec: EngineSpec, outcome: ValidationOutcome) -> list[str]:
+    """Return the candidate's failures, or every engine's when a peer failed."""
+    return list(outcome.failures.get(spec.iid, [])) or [
+        "; ".join(f"{iid}: {'; '.join(items)}" for iid, items in outcome.failures.items())
+    ]
+
+
+async def _validate_and_join(
+    router: NarwhalRouter,
+    spec: EngineSpec,
+    current: Membership,
+    outcome: ValidationOutcome,
+    transport: httpx.AsyncBaseTransport | None,
+) -> bool:
+    """Run the join checks into `outcome` and apply the new generation when all pass."""
+    if problem := await _attestation_problem(router, spec, transport):
+        outcome.fail(spec.iid, problem)
+        return False
     proposed = current.joined(spec)
     scheduler = router.scheduler
     live = {
         iid for iid in current.ids if iid not in scheduler.ejected and iid not in scheduler.draining
     } | {spec.iid}
     evidence = await check_engine_set(router.cfg, proposed.specs, live=live, transport=transport)
-    outcome = ValidationOutcome()
     if evidence.problems:
         for problem in evidence.problems:
             outcome.fail(spec.iid, problem)
-    else:
-        try:
-            outcome = await validate_readmission(
-                router,
-                [spec.iid],
-                wave=False,
-                transport=transport,
-                candidate=spec,
-                profiles=evidence.profiles,
-            )
-        except Exception as exc:
-            log.exception("join validation of %s failed", spec.iid)
-            outcome = ValidationOutcome()
-            outcome.fail(spec.iid, f"validation raised {type(exc).__name__}: {exc}")
+        return False
+    validated = await validate_readmission(
+        router,
+        [spec.iid],
+        wave=False,
+        transport=transport,
+        candidate=spec,
+        profiles=evidence.profiles,
+    )
+    outcome.checks.update(validated.checks)
+    outcome.starts.update(validated.starts)
+    for iid, items in validated.failures.items():
+        for item in items:
+            outcome.fail(iid, item)
+    if outcome.passed and not controls_fleet(router):
+        outcome.fail(spec.iid, "router control was fenced during validation")
     if outcome.passed and router.membership is not current:
         outcome.fail(spec.iid, "membership changed during validation")
     if outcome.passed and (refusal := join_refusal(router, spec)):
@@ -117,36 +198,10 @@ async def join_engine(
     if not outcome.passed or spec.iid not in outcome.starts or evidence.profiles is None:
         if outcome.passed:
             outcome.fail(spec.iid, "validation recorded no process identity")
-        _forget_candidate(router, spec)
-        failures = list(outcome.failures.get(spec.iid, [])) or [
-            "; ".join(f"{iid}: {'; '.join(items)}" for iid, items in outcome.failures.items())
-        ]
-        manager._emit(
-            "join_refused",
-            iid=spec.iid,
-            generation=router.membership.generation,
-            error="; ".join(failures),
-        )
-        return JoinOutcome(
-            spec.iid,
-            False,
-            router.membership.generation,
-            checks=list(outcome.checks.get(spec.iid, [])),
-            failures=failures,
-        )
+        return False
     router.profiles.adopt(evidence.profiles)
     if evidence.calibration.status != "uncalibrated":
         router.first_token_calibration = evidence.calibration
     router.apply_membership(proposed)
-    manager.process_starts[spec.iid] = outcome.starts[spec.iid]
-    manager._emit(
-        "joined",
-        iid=spec.iid,
-        generation=proposed.generation,
-        process_start=outcome.starts[spec.iid],
-        role=spec.role.value,
-    )
-    log.info("joined %s in generation %d as %s", spec.iid, proposed.generation, spec.role.value)
-    return JoinOutcome(
-        spec.iid, True, proposed.generation, checks=list(outcome.checks.get(spec.iid, []))
-    )
+    router.lifecycle.process_starts[spec.iid] = outcome.starts[spec.iid]
+    return True

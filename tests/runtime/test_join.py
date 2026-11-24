@@ -1,5 +1,6 @@
 """Join an engine to a running fleet through the readmission checks."""
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -136,19 +137,21 @@ class JoinTests(unittest.IsolatedAsyncioTestCase):
         other = AttestationDocument(contract, dict.fromkeys(fields, "fixture"))
         self.responses[("e6", "attestation")] = self.attestation("e6", other)
         outcome = await self.join()
-        self.assert_refused(outcome, "attestation:")
+        self.assert_refused(outcome, "attestation does not match the engine contract")
+        self.assertIn("engine_version", outcome.error)
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_a_failed_attestation_is_refused(self):
         self.responses[("e6", "attestation")] = httpx.Response(503)
         outcome = await self.join()
-        # The profile generation check reads the attestation first.
-        self.assert_refused(outcome, "e6 profile generation unreadable")
+        # The candidate's attestation is read before any other check.
+        self.assert_refused(outcome, "attestation unreadable")
         self.assertIn("503", outcome.error)
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_an_attestation_that_fails_during_validation_is_refused(self):
-        self.responses[("e6", "attestation")] = [self.attestation("e6"), httpx.Response(503)]
+        ok = self.attestation("e6")
+        self.responses[("e6", "attestation")] = [ok, ok, httpx.Response(503)]
         outcome = await self.join()
         self.assert_refused(outcome, "attestation unreadable")
         self.router.engines.prefill.assert_not_awaited()
@@ -192,6 +195,68 @@ class JoinTests(unittest.IsolatedAsyncioTestCase):
         switcher.model = RoleModel.FIXED
         self.router.role_switch = switcher
         self.assert_refused(await self.join(), "fixed roles must set pin")
+
+    async def test_a_join_under_engine_held_roles_switches_the_candidate_to_its_role(self):
+        switcher = Mock(spec=RoleSwitcher)
+        switcher.model = RoleModel.ENGINE
+        switcher.engine_held = True
+        switcher.switch = AsyncMock(return_value=None)
+        self.router.role_switch = switcher
+        self.router.scheduler.availability.roles_bound = True
+        outcome = await self.join()
+        self.assertTrue(outcome.joined, outcome.error)
+        urls = [(call.args[1], call.args[2]) for call in switcher.switch.await_args_list]
+        self.assertIn((NEW.url, Role.DECODE), urls)
+        self.assertIs(self.router.monitor.instances["e6"].role, Role.DECODE)
+
+    async def test_a_pinned_join_under_fixed_roles(self):
+        switcher = Mock(spec=RoleSwitcher)
+        switcher.model = RoleModel.FIXED
+        switcher.engine_held = False
+        self.router.role_switch = switcher
+        self.router.scheduler.availability.roles_bound = True
+        outcome = await self.join(replace(NEW, pin=True))
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertIn("e6", self.router.scheduler.pinned)
+
+    async def test_a_failed_role_switch_refuses_the_join(self):
+        switcher = Mock(spec=RoleSwitcher)
+        switcher.model = RoleModel.ENGINE
+        switcher.engine_held = True
+        switcher.switch = AsyncMock(side_effect=httpx.ConnectError("switch refused"))
+        self.router.role_switch = switcher
+        self.router.scheduler.availability.roles_bound = True
+        self.assert_refused(await self.join(), "ConnectError")
+
+    async def test_a_cancelled_join_leaves_no_state_and_is_journalled(self):
+        self.router.engines.prefill.side_effect = asyncio.CancelledError()
+        self.router.engines.kv.forget = Mock()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.join()
+        self.assertNotIn("e6", self.router.launches)
+        self.assertNotIn("e6", self.router.sequence_limits)
+        self.assertEqual(self.manager.events[-1]["action"], "join_refused")
+        self.assertIn("join cancelled", self.manager.events[-1]["error"])
+        self.router.engines.kv.forget.assert_called_once_with(NEW.url)
+
+    async def test_a_malformed_candidate_answer_is_refused_and_journalled(self):
+        async def malformed(cfg, spec, **kwargs):
+            if spec.iid == "e6":
+                raise AttributeError("'list' object has no attribute 'get'")
+            return await self.identity(cfg, spec, **kwargs)
+
+        with patch.object(generation, "fetch_spec_identity", malformed):
+            outcome = await self.join()
+        self.assert_refused(outcome, "attestation unreadable: AttributeError")
+        self.assertEqual(self.manager.events[-1]["action"], "join_refused")
+
+    async def test_a_peer_that_fails_to_answer_during_a_join_stays_in_service(self):
+        ok = self.attestation("e0")
+        self.responses[("e0", "attestation")] = [ok, ok, httpx.ReadTimeout("t")]
+        outcome = await self.join()
+        self.assertFalse(outcome.joined)
+        self.assertIn("identity changed or unavailable", outcome.error)
+        self.assertNotIn("e0", self.router.scheduler.ejected)
 
     async def test_preconditions_refuse_without_contacting_an_engine(self):
         shared = replace(NEW, shared_device=SharedDeviceAllocation("g", "GPU-x", 0.5, 0.4))

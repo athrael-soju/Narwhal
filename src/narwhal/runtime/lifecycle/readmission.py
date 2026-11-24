@@ -33,6 +33,10 @@ def _single_pairs(target: EngineSpec, peers: list[EngineSpec]) -> list[tuple[str
         raise LifecycleError(str(exc)) from exc
 
 
+class _Changed(ValueError):
+    """A participant's process or attestation changed during validation."""
+
+
 async def validate_readmission(
     router: NarwhalRouter,
     engines: list[str],
@@ -232,13 +236,13 @@ async def validate_readmission(
                     cfg, spec, transport=transport, headers=router.engines._auth(None)
                 )
                 if live != identities[spec.iid]:
-                    raise ValueError("process changed during validation")
+                    raise _Changed("process changed during validation")
                 async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
                     response = await client.get(spec.attestation_url)
                     response.raise_for_status()
                 payload = response.json()
                 if verify_attestation(payload, contract, live):
-                    raise ValueError("attestation changed during validation")
+                    raise _Changed("attestation changed during validation")
                 problems = profile_generation_problems(
                     store, spec.iid, binding_digest(payload), contract=True
                 )
@@ -252,7 +256,9 @@ async def validate_readmission(
                     spec.iid,
                     f"identity changed or unavailable during validation: {type(exc).__name__}",
                 )
-                router.scheduler.eject(spec.iid, "process_identity")
+                # During a join a peer that only failed to answer stays in service.
+                if candidate is None or spec is candidate or isinstance(exc, _Changed):
+                    router.scheduler.eject(spec.iid, "process_identity")
         if identity_failed and cfg.engine_restart_policy == "whole_wave":
             router.lifecycle.require_restart_wave(
                 "process identity changed during validation", reset=True
@@ -293,6 +299,8 @@ async def validate_readmission(
                 producer=router.launches.get(source),
             )
             if not await identities_unchanged():
+                await handoff.settle(cancel=True)
+                handoff.close()
                 return outcome
             tokens = 0
             async for batch in router.engines.decode_handoff(
