@@ -335,3 +335,15 @@ class RouterRestartRestoreTests(EngineCase):
         result = response.json()["result"]
         self.assertEqual(result["hook"]["exit_code"], 0)
         self.assertTrue(result["changes"]["configuration"])
+
+    async def test_a_restore_whose_router_restart_fails_keeps_its_changes(self) -> None:
+        await self.start_session()
+        session = self.service.session
+        assert session is not None
+        session.apply_configuration(
+            NOW.isoformat(), "overlay", {**session.configurations[0]["document"], "_x": 1}
+        )
+        self.service.config.hooks["router_restart"] = hook("router_restart", "raise SystemExit(3)")
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertTrue(response.json()["action"]["result"]["changes"]["configuration"])

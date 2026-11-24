@@ -200,7 +200,10 @@ class Overlays:
             effect: dict[str, Any] = {"steps": steps}
             # The session record alone says whether the configuration changed, so a router that
             # does not answer can still restart with the baseline.
-            configuration = session_changes(session)["configuration"]
+            recorded = session_changes(session)
+            # A restore that fails before the membership read keeps the recorded changes.
+            effect["changes"] = recorded
+            configuration = recorded["configuration"]
             if configuration:
                 baseline = session.configurations[0]
                 hook = self._hook(ROUTER_RESTART_HOOK)
