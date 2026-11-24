@@ -3,11 +3,14 @@
 import copy
 import json
 from dataclasses import asdict, replace
+from unittest.mock import patch
 
 import httpx
 
 from narwhal.config import EngineSpec
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.profiling import calibration
+from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime import state
 from narwhal.runtime.lease import FileLease
@@ -18,6 +21,7 @@ from tests.fixtures import calibration_document
 from tests.runtime.test_standby_shutdown import FleetCase
 
 JOINED = EngineSpec("x", "http://joined", Role.PREFILL)
+DIGEST = "sha256:" + "a" * 64
 
 
 class MembershipHandoffTests(FleetCase):
@@ -118,12 +122,14 @@ class MembershipHandoffTests(FleetCase):
         self.assertFalse(report.applied)
         self.assertIn("changes shared-device engines x", report.why)
 
-    async def test_a_takeover_refuses_a_calibration_that_misses_the_adopted_set(self):
+    async def take_over(self, covered, down=()):
+        """Take over with a calibration of `covered`, while engines in `down` do not answer."""
         path = self.root / "calibration.json"
-        generations = {"p": "sha256:" + "a" * 64, "d": "sha256:" + "a" * 64}
-        path.write_text(
-            json.dumps(calibration_document(self.cfg, generations, {"p": 100.0, "d": 100.0}))
-        )
+        generations = dict.fromkeys(covered, DIGEST)
+        specs = {spec.iid: spec for spec in (*self.cfg.engines, JOINED)}
+        fleet = replace(self.cfg, engines=[specs[iid] for iid in covered])
+        starts = dict.fromkeys(covered, 100.0)
+        path.write_text(json.dumps(calibration_document(fleet, generations, starts)))
         cfg = replace(self.cfg, first_token_calibration_path=path)
         state.write(cfg.state_path, self.doc)
         router = create_app(cfg).state.router
@@ -132,16 +138,46 @@ class MembershipHandoffTests(FleetCase):
         lease = FileLease(self.root / "lease.json", "standby", 30)
         self.addCleanup(lease.release)
         router.lease = lease
-        await standby_loop(
-            router,
-            "http://primary",
-            lease,
-            probe_interval_s=0.001,
-            takeover_after=1,
-            transport=httpx.MockTransport(lambda request: httpx.Response(503)),
-        )
+
+        async def generation(cfg, spec, **kwargs):
+            if spec.iid in down:
+                raise httpx.ConnectError("down")
+            return GenerationEvidence(DIGEST, {}, 100.0, DIGEST)
+
+        with patch.object(calibration, "read_generation", generation):
+            await standby_loop(
+                router,
+                "http://primary",
+                lease,
+                probe_interval_s=0.001,
+                takeover_after=1,
+                transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+            )
+        return router
+
+    async def test_a_takeover_refuses_a_calibration_that_misses_the_adopted_set(self):
+        router = await self.take_over(["p", "d"])
         self.assertTrue(router.standby)
-        self.assertIn("x", router.failover_blocked)
+        self.assertIn("no samples for x", router.failover_blocked)
+
+    async def test_a_takeover_does_not_read_an_ejected_engine_for_the_calibration(self):
+        self.primary.scheduler.ejected["x"] = 0.0
+        self.doc = state.snapshot(self.primary)
+        router = await self.take_over(["d", "x"], down={"x"})
+        self.assertFalse(router.standby, router.failover_blocked)
+        self.assertEqual(router.first_token_calibration.status, "measured")
+
+    async def test_a_resume_at_generation_zero_refuses_stale_profiles(self):
+        store = ProfileStore(self.cfg.profiles_path)
+        self.assertIsNotNone(store.get("x"))
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        state.write(self.cfg.state_path, state.snapshot(router))
+        app = create_app(replace(self.cfg, resume=True))
+        self.addAsyncCleanup(app.state.router.engines.aclose)
+        with self.assertRaisesRegex(RuntimeError, "unconfigured engines"):
+            async with app.router.lifespan_context(app):
+                pass
 
     async def test_a_resumed_restart_restores_the_snapshot(self):
         state.write(self.cfg.state_path, self.doc)

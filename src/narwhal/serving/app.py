@@ -121,7 +121,7 @@ def create_app(
         if cfg.resume and not standby_of:
             saved = handoff_state.load(cfg.state_path)
             handoff = handoff_state.apply(router, saved)
-            adopted = handoff.applied and handoff_state.membership_of(saved or {}) is not None
+            adopted = handoff.membership_adopted
             if not handoff.applied:
                 log.info("no control-plane handoff applied: %s", handoff.why)
                 if cfg.engine_contract is not None and cfg.state_path.exists():

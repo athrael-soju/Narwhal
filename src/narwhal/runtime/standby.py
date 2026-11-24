@@ -156,12 +156,28 @@ async def standby_loop(
                                     router.failover_blocked = report.why
                                     return
                                 if report.membership_adopted:
-                                    # The calibration must cover the adopted engine set.
-                                    calibration = await verify_calibration(
-                                        router.cfg,
-                                        engines=router.membership.specs,
-                                        transport=router.lifecycle_transport,
-                                    )
+                                    # The calibration must cover the adopted engine set. Ejected
+                                    # and draining engines are not read; recovery probes them.
+                                    scheduler = router.scheduler
+                                    live = {
+                                        iid
+                                        for iid in router.membership.ids
+                                        if iid not in scheduler.ejected
+                                        and iid not in scheduler.draining
+                                    }
+                                    try:
+                                        calibration = await verify_calibration(
+                                            router.cfg,
+                                            engines=router.membership.specs,
+                                            live=live,
+                                            transport=router.lifecycle_transport,
+                                        )
+                                    except Exception as exc:
+                                        router.failover_blocked = (
+                                            "first-token calibration check failed: "
+                                            f"{type(exc).__name__}: {exc}"
+                                        )
+                                        return
                                     if calibration.status == "rejected":
                                         router.failover_blocked = "; ".join(calibration.problems)
                                         return
