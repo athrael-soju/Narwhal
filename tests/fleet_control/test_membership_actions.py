@@ -341,6 +341,7 @@ class MembershipActionTests(EngineCase):
         self.service._env = nested
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("does not resolve", response.json()["detail"])
         self.service._env = {**self.service._env, "NARWHAL_TEST_E1_URL": "http://engine-1.test:9"}
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)

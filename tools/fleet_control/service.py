@@ -88,7 +88,19 @@ def session_changes(
                 if iid in joined:
                     joined.remove(iid)
                 else:
-                    left[iid] = (action.result or {}).get("spec") or {"iid": iid}
+                    # A baseline engine returns with its baseline entry.
+                    left[iid] = (
+                        next(
+                            (
+                                dict(engine)
+                                for engine in session.baseline["engines"]
+                                if str(engine["iid"]) == iid
+                            ),
+                            None,
+                        )
+                        or (action.result or {}).get("spec")
+                        or {"iid": iid}
+                    )
             continue
         verb = action.name.removeprefix("engine.")
         if verb == action.name or verb not in ENGINE_CHANGES:
