@@ -39,6 +39,15 @@ class RoleChanges:
         # Engine the latest change held out of new placements for an engine-side switch.
         self.held_donor: str | None = None
 
+    def joined(self, iid: str) -> None:
+        """Start a joined engine's role-change dwell at its join time."""
+        self._last_flip[iid] = self.scheduler._clock()
+
+    def membership_changed(self) -> None:
+        """Drop the sustained-panic count and the held donor that the previous engine set built."""
+        self._panic_sustained = 0
+        self.held_donor = None
+
     def forget(self, iid: str) -> None:
         """Drop the dwell, role and history entries of an engine that left the fleet."""
         self._last_flip.pop(iid, None)
