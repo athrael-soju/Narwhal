@@ -214,6 +214,22 @@ class MembershipHandoffTests(FleetCase):
         router.checked_engines, router.checked_exact = ("p", "d"), True
         self.assertEqual(await standby._takeover_problem(router, report), "")
 
+    async def test_a_standby_with_a_clean_store_takes_over_without_a_calibration_read(self):
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        state.write(self.cfg.state_path, state.snapshot(router))
+        store = ProfileStore(self.cfg.profiles_path)
+        store._by_id.pop("x")
+        store.put(store.get("d"))
+        app = self.standby()
+        async with app.router.lifespan_context(app):
+            standby_router = app.state.router
+            self.assertTrue(standby_router.checked_exact)
+            report = state.apply(standby_router, state.snapshot(router))
+            with patch.object(standby, "verify_calibration") as calibrate:
+                self.assertEqual(await standby._takeover_problem(standby_router, report), "")
+            calibrate.assert_not_called()
+
     async def test_a_resumed_restart_restores_the_snapshot(self):
         state.write(self.cfg.state_path, self.doc)
         # The fleet file still names the original engines.

@@ -148,14 +148,15 @@ def create_app(
         ):
             raise RuntimeError(problem)
         # The takeover refuses extra profiles unless it adopts a membership that holds them.
-        if (not exact and not adopted) and (
-            extra := engine_set_problem(
+        extra: str | None = None
+        if not exact and not adopted:
+            extra = engine_set_problem(
                 router.profiles, router.membership.ids, "configured", exact=True
             )
-        ):
-            log.warning("standby profile store: %s", extra)
+            if extra:
+                log.warning("standby profile store: %s", extra)
         router.checked_engines = tuple(router.membership.ids)
-        router.checked_exact = exact
+        router.checked_exact = exact or not extra
         generation_failures = await generation_problems(
             cfg, router.profiles, router.membership.specs, transport=lifecycle_transport
         )

@@ -94,6 +94,10 @@ async def _takeover_problem(router: NarwhalRouter, report: handoff_state.Handoff
     exact = not report.membership_adopted
     if problem := engine_set_problem(router.profiles, served, "served", exact=exact):
         return problem
+    if served == router.checked_engines:
+        # The startup calibration check covered this set.
+        router.checked_exact = True
+        return ""
     scheduler = router.scheduler
     live = {iid for iid in served if iid not in scheduler.ejected and iid not in scheduler.draining}
     try:
