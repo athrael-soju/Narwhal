@@ -61,9 +61,9 @@ class PeerRelease:
         return due
 
     def finish(self, task: asyncio.Task[dict[str, str]], *, retry: bool) -> None:
+        departed, self._departed = self._departed, set()
         if task.cancelled() or task.exception() is not None:
             return
-        departed, self._departed = self._departed, set()
         if retry:
             self.missed = set()
             return

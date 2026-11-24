@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import json
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, replace
@@ -6,13 +9,17 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.backends import load as load_backend
+from narwhal.backends.llamacpp.connector import SlotFileConnector
 from narwhal.config import EngineSpec
 from narwhal.config.model import SharedDeviceAllocation
 from narwhal.engines.client import EngineError
+from narwhal.engines.connector import PrefillResult
 from narwhal.observability.metrics.render import render
 from narwhal.runtime import state as handoff_state
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.monitoring import monitor_once, sweep_liveness
+from narwhal.runtime.release import PeerRelease
 from narwhal.runtime.role_switch import EngineHeldRoles
 from narwhal.scheduling.control import Flip
 from narwhal.scheduling.monitor import Instance
@@ -315,6 +322,54 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
         await switcher.switch(None, "http://p", Role.PREFILL)
         self.assertTrue(switcher.stale_handoff("http://p", "http://c"))
         self.assertFalse(switcher.stale_handoff("http://p", "http://fresh"))
+
+    async def test_a_count_whose_engines_leave_fails_with_the_engine_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = contract_free_router(self, Path(tmp))
+            router.cfg.tokenize = True
+            router.cfg.serving = replace(router.cfg.serving, max_attempts=6)
+            calls = []
+
+            async def tokenize(url, *args, **kwargs):
+                calls.append(url)
+                if len(calls) == 1:
+                    keep = next(s for s in router.membership if s.url == url)
+                    others = [s.iid for s in router.membership if s.iid != keep.iid]
+                    shrunk = router.membership
+                    for iid in others[:-1]:
+                        shrunk = shrunk.left(iid)
+                    router.apply_membership(shrunk)
+                raise EngineError("tokenize", url, 503, "busy")
+
+            router.engines.tokenize = tokenize  # type: ignore[method-assign]
+            with self.assertRaises(EngineError):
+                await router.sizer.size({"prompt": "hello"})
+            # The count tried the one engine left after the first failure, then stopped.
+            self.assertEqual(len(calls), 2)
+
+    async def test_late_release_and_slot_cleanup_after_a_departure(self) -> None:
+        now = [0.0]
+        release = PeerRelease(lambda: now[0], load_backend("vllm").fabric)
+
+        async def round_() -> dict[str, str]:
+            raise asyncio.CancelledError
+
+        task = asyncio.ensure_future(round_())
+        release.tasks.add(task)
+        release.forget("e4")
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        release.finish(task, retry=False)
+        self.assertEqual(release._departed, set())
+
+        slots = SlotFileConnector()
+        slots._free["http://e4"] = [1]
+        slots._held["http://e4"] = {7}
+        slots.forget("http://e4")
+        self.assertIn("http://e4", slots._free)
+        slots.discard(PrefillResult("slot-file", "http://e4", "", None, json.dumps({"file": 7})))
+        self.assertNotIn("http://e4", slots._free)
+        self.assertNotIn("http://e4", slots._held)
 
     async def test_the_monitor_follows_snapshot_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

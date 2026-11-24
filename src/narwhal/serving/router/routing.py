@@ -323,7 +323,10 @@ class NarwhalRouter:
             # A probe that finished after an earlier departure leaves a verification time.
             self.verifier.verified_at.pop(spec.iid, None)
         # The monitor keeps the snapshot's order, which placement iterates.
-        self.monitor.instances = {iid: self.monitor.instances[iid] for iid in membership.ids}
+        ordered = [(iid, self.monitor.instances[iid]) for iid in membership.ids]
+        # Reorder in place, since a caller may hold the table across an await.
+        self.monitor.instances.clear()
+        self.monitor.instances.update(ordered)
         self.residency.sync(membership.specs)
         self.shared_members = self._shared_members()
         self.scheduler.pinned = self._pinned()

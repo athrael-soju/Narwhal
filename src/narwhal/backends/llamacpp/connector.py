@@ -42,6 +42,8 @@ class SlotFileConnector(KvConnector):
         # File numbers each producer's handoffs hold from `export` until `discard`, so a
         # consumer never restores a file its producer is rewriting.
         self._held: dict[str, set[int]] = {}
+        # Engines that left the fleet while legs still waited or held files on them.
+        self._departed: set[str] = set()
         # Routers that share a slot directory write separate files.
         self._router = secrets.token_hex(4)
 
@@ -106,13 +108,20 @@ class SlotFileConnector(KvConnector):
         free = self._free.get(url)
         if free is not None and type(slot) is int and slot not in free:
             self._hand_on(url, slot)
+        self._drop_departed(url)
         return None
 
     def forget(self, url: str) -> None:
-        # Legs still waiting or holding files keep the engine's slots until they end.
-        if not self._waiting.get(url) and not self._held.get(url):
-            for table in (self._free, self._waiting, self._held):
-                table.pop(url, None)
+        # Legs still waiting or holding files keep the engine's slots until the last one ends.
+        self._departed.add(url)
+        self._drop_departed(url)
+
+    def _drop_departed(self, url: str) -> None:
+        if url not in self._departed or self._waiting.get(url) or self._held.get(url):
+            return
+        self._departed.discard(url)
+        for table in (self._free, self._waiting, self._held):
+            table.pop(url, None)
 
     def _hand_on(self, url: str, slot: int) -> None:
         waiting = self._waiting.get(url, [])
@@ -182,4 +191,5 @@ class SlotFileConnector(KvConnector):
         number = result.parameters().get("file")
         if type(number) is int:
             self._held.get(result.producer_url, set()).discard(number)
+        self._drop_departed(result.producer_url)
         return None
