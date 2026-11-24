@@ -64,6 +64,8 @@ class MemberRouter(FakeRouter):
                     self._remove(iid)
             return httpx.Response(200, json=self.document())
         if request.method == "POST":
+            if "${" in json.dumps(body):
+                return httpx.Response(422, json=self.document("cannot reference variables"))
             if body["iid"] == "invalid":
                 return httpx.Response(422, json={"detail": [{"msg": "Field required"}]})
             if body["iid"] == "refused" or body["iid"] in self.refuse_join:
@@ -316,13 +318,13 @@ class MembershipActionTests(EngineCase):
             if engine["iid"] == iid:
                 engine["url"] = "${" + name + "}"
 
-    async def test_restore_returns_a_departed_engine_with_the_router_entry(self) -> None:
+    async def test_restore_returns_a_rejoined_engine_with_its_baseline_entry(self) -> None:
         await self.start_session()
-        self.reference_baseline("e1", "NARWHAL_TEST_E1_URL")
         await self.client.post("/api/engines/e1/leave")
-        self.assertEqual(
-            (await self.changes())["left"]["e1"]["url"], "http://engine-1.invalid:8000"
-        )
+        moved = {**self.router.document()["engines"][0], "iid": "e1"}
+        moved["url"] = "http://elsewhere.invalid:9999"
+        await self.client.post("/api/engines/join", json=moved)
+        await self.client.post("/api/engines/e1/leave")
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.router.members["e1"]["url"], "http://engine-1.invalid:8000")
@@ -335,10 +337,18 @@ class MembershipActionTests(EngineCase):
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 422, response.text)
         self.assertIn("does not resolve", response.json()["detail"])
+        nested = {**self.service._env, "NARWHAL_TEST_E1_URL": "${NARWHAL_OTHER}"}
+        self.service._env = nested
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 422, response.text)
         self.service._env = {**self.service._env, "NARWHAL_TEST_E1_URL": "http://engine-1.test:9"}
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.router.members["e1"]["url"], "http://engine-1.test:9")
+        start = next(
+            entry for entry in self.record()["actions"] if entry["action"] == "engine.start"
+        )
+        self.assertIn("http://engine-1.test:9", start["result"]["hook"]["tail"])
 
 
 class RouterRestartRestoreTests(EngineCase):

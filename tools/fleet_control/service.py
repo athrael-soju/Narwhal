@@ -54,11 +54,7 @@ def session_changes(
     axes: dict[str, dict[str, str]] = {}
     joined: list[str] = []
     left: dict[str, Any] = {}
-    # The router's resolved entry of each engine a leave named, whatever the leave's outcome.
-    departed: dict[str, Any] = {}
     for action in session.actions:
-        if action.name == "engine.leave" and (spec := (action.result or {}).get("spec")):
-            departed[str(action.params.get("engine"))] = spec
         if action.name == RESTORE_ACTION:
             # A restore step with no seq found the engine already in service.
             for step in (action.result or {}).get("steps", []):
@@ -106,12 +102,7 @@ def session_changes(
     if members is not None:
         configured = {str(engine["iid"]): engine for engine in session.baseline["engines"]}
         joined = [iid for iid in members if iid not in configured]
-        # An engine that left in the session returns with the entry the router held for it.
-        left = {
-            iid: dict(departed.get(iid) or engine)
-            for iid, engine in configured.items()
-            if iid not in members
-        }
+        left = {iid: dict(engine) for iid, engine in configured.items() if iid not in members}
         # An engine outside the membership returns through a join or stays out.
         axes = {iid: changes for iid, changes in axes.items() if iid in members}
     engines = {
@@ -199,14 +190,16 @@ class ControlService:
                 continue
             match = ENDPOINT_REFERENCE.fullmatch(value)
             name = match[1] if match else ""
-            if not name or not self._env.get(name, "").strip():
+            found = self._env.get(name, "") if name else ""
+            # The same rules as the fleet file's reader: a whole value, set, and not nested.
+            if not found.strip() or "${" in found:
                 raise ActionError(
                     f"engine {engine.get('iid')} {field} {value} does not resolve in the "
                     "control service environment",
                     status=422,
                     result=effect,
                 )
-            resolved[field] = self._env[name]
+            resolved[field] = found
         return resolved
 
     def stamp(self) -> str:
