@@ -43,7 +43,7 @@ async def validate_readmission(
     cfg: FleetConfig = router.cfg
     contract = cfg.engine_contract
     if cfg.engine_restart_policy == "whole_wave":
-        if not wave or set(engines) != set(router.monitor.instances):
+        if not wave or set(engines) != set(router.membership.ids):
             for iid in engines:
                 outcome.fail(iid, "engine_restart_policy requires whole-wave readmission")
             return outcome
@@ -60,10 +60,10 @@ async def validate_readmission(
             outcome.fail(iid, "readmission requires a complete engine_contract")
         return outcome
 
-    by_id = {spec.iid: spec for spec in cfg.engines}
+    by_id = router.membership.by_id()
     targets = [by_id[iid] for iid in engines]
     if wave:
-        participants = list(cfg.engines)
+        participants = list(router.membership)
         pairs = validation_pairs(participants)
     else:
         live = router.scheduler.live_instances(exclude=set(engines))
@@ -84,7 +84,7 @@ async def validate_readmission(
         participants = targets + [by_id[iid] for iid in sorted(peer_ids)]
 
     participant_ids = {spec.iid for spec in participants}
-    if len(cfg.engines) == 1:
+    if len(router.membership) == 1:
         outcome.ok(engines[0], "fabric not applicable: single-engine fleet")
     elif len(participant_ids) < 2 or not pairs:
         for iid in engines:

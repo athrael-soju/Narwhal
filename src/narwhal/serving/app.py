@@ -145,7 +145,7 @@ def create_app(
                 "a profile for exactly the configured engine set."
             )
         generation_failures = []
-        for spec in cfg.engines:
+        for spec in router.membership:
             if cfg.engine_contract is not None and (
                 problem := nominal_problem(router.profiles, spec.iid)
             ):
@@ -308,7 +308,7 @@ def create_app(
         )
         return {
             "status": status,
-            "instances": len(router.monitor.instances),
+            "instances": len(router.membership),
             "available_instances": len(router.scheduler.live_instances()),
         }
 
@@ -355,7 +355,7 @@ def create_app(
 
     @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")
     async def targets() -> list[dict[str, Any]]:
-        return scrape_targets(cfg)
+        return scrape_targets(cfg, router.membership)
 
     @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
     async def state() -> dict[str, Any]:
@@ -369,7 +369,7 @@ def create_app(
     async def drain(action: DrainIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
-        engines = action.engines or (sorted(router.monitor.instances) if action.wave else [])
+        engines = action.engines or (router.membership.ids if action.wave else [])
         async with router.lifecycle.lock:
             try:
                 router.lifecycle.begin(engines, wave=action.wave, deadline_s=action.deadline_s)
@@ -381,6 +381,7 @@ def create_app(
             starts, failures = await capture_process_identities(
                 cfg,
                 capture,
+                specs=router.membership.by_id(),
                 transport=lifecycle_transport,
             )
             failures = router.lifecycle.bind_drain_identities(capture, starts, failures)
@@ -399,7 +400,7 @@ def create_app(
     async def readmit(action: ReadmitIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
-        engines = action.engines or (sorted(router.monitor.instances) if action.wave else [])
+        engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             if action.wave:
                 expected = {

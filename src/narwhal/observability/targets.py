@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from ..backends import load as load_backend
 
 if TYPE_CHECKING:
-    from ..config import FleetConfig
+    from ..config import EngineSpec, FleetConfig
 
 
-def scrape_targets(cfg: FleetConfig) -> list[dict[str, Any]]:
+def scrape_targets(cfg: FleetConfig, engines: Iterable[EngineSpec]) -> list[dict[str, Any]]:
     metrics = load_backend(cfg.backend).metrics
     groups = []
-    for spec in cfg.engines:
+    for spec in engines:
         url = urlsplit(spec.url)
         groups.append(
             {

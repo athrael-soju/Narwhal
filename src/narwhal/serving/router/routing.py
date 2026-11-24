@@ -57,6 +57,7 @@ from ..saturation import (
 )
 from ..seats import InputLengths
 from ..seats import snapshot as seats_snapshot
+from .membership import Membership
 from .sizing import RequestSizer
 from .verification import SuspectVerifier
 
@@ -97,7 +98,10 @@ class NarwhalRouter:
         # One injectable monotonic clock for scheduling and measurement.
         self._clock = clock
         self.profiles = ProfileStore(cfg.profiles_path)
-        self.residency = ResidencySubscriptions(cfg.engines)
+        # The only source of membership in the router process. `monitor.instances` holds each
+        # member's runtime state under the same engine IDs.
+        self.membership = Membership.initial(cfg.engines)
+        self.residency = ResidencySubscriptions(self.membership.specs)
         self.monitor = InstanceMonitor(
             clock=clock,
             profiles=self.profiles,
@@ -106,11 +110,11 @@ class NarwhalRouter:
             decode_correction_alpha=cfg.reactive_decode_correction_alpha,
             decode_correction_min_samples=cfg.reactive_decode_correction_min_samples,
         )
-        for spec in cfg.engines:
+        for spec in self.membership:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
         shared_groups = {
             spec.iid: spec.shared_device.group
-            for spec in cfg.engines
+            for spec in self.membership
             if spec.shared_device is not None
         }
         if shared_groups:
@@ -139,7 +143,7 @@ class NarwhalRouter:
             clock=clock,
             eject_after=cfg.eject_after,
             flip_history=cfg.flip_history,
-            pinned=frozenset(e.iid for e in cfg.engines if e.pin),
+            pinned=frozenset(e.iid for e in self.membership if e.pin),
             min_prefill=cfg.min_prefill,
             min_decode=cfg.min_decode,
             advisory=cfg.advisory,
@@ -182,7 +186,7 @@ class NarwhalRouter:
         model = self.role_switch.model
         self.scheduler.availability.roles_bound = model is not RoleModel.ROUTER
         if model is RoleModel.FIXED:
-            self.scheduler.pinned = frozenset(spec.iid for spec in cfg.engines)
+            self.scheduler.pinned = frozenset(self.membership.ids)
         elif model is RoleModel.ENGINE:
             self.scheduler.switch_requires_idle = self.role_switch.requires_idle
             self.scheduler.on_flip = self._begin_switch

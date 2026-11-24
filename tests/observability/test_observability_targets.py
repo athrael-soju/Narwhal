@@ -56,7 +56,7 @@ class EngineTargetTests(unittest.TestCase):
             backend="sglang",
         )
         self.assertEqual(
-            scrape_targets(cfg),
+            scrape_targets(cfg, cfg.engines),
             [
                 {
                     "targets": ["[fd00::10]:8002"],
@@ -85,12 +85,13 @@ class EngineTargetTests(unittest.TestCase):
 
         backend = replace(load_backend("vllm"), metrics=Elsewhere())
         with patch("narwhal.observability.targets.load_backend", return_value=backend):
-            [group] = scrape_targets(fleet(EngineSpec("e0", "http://127.0.0.2:8002/n1")))
+            cfg = fleet(EngineSpec("e0", "http://127.0.0.2:8002/n1"))
+            [group] = scrape_targets(cfg, cfg.engines)
         self.assertEqual(group["labels"]["__metrics_path__"], "/n1/prometheus/metrics")
 
     def test_targets_keep_the_engine_scheme_and_path_without_credentials(self) -> None:
         cfg = fleet(EngineSpec("e0", "https://user:secret@engine.internal:8443/n1"))
-        [group] = scrape_targets(cfg)
+        [group] = scrape_targets(cfg, cfg.engines)
         self.assertEqual(group["targets"], ["engine.internal:8443"])
         self.assertEqual(group["labels"]["__scheme__"], "https")
         self.assertEqual(group["labels"]["__metrics_path__"], "/n1/metrics")

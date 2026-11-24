@@ -545,11 +545,15 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
                 httpx.ReadTimeout("identity"),
             ],
         ):
-            starts, failures = await identity.capture_process_identities(self.cfg, ["e0", "e3"])
+            starts, failures = await identity.capture_process_identities(
+                self.cfg, ["e0", "e3"], specs=self.router.membership.by_id()
+            )
         self.assertEqual(starts, {"e0": 100})
         self.assertIn("ReadTimeout", failures["e3"])
         self.cfg.engine_contract = None
-        starts, failures = await identity.capture_process_identities(self.cfg, ["e0", "e3"])
+        starts, failures = await identity.capture_process_identities(
+            self.cfg, ["e0", "e3"], specs=self.router.membership.by_id()
+        )
         self.assertEqual(starts, {})
         self.assertEqual(set(failures), {"e0", "e3"})
 

@@ -258,7 +258,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
 
 
 async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
-    urls = {spec.iid: spec.attestation_url for spec in router.cfg.engines}
+    urls = {spec.iid: spec.attestation_url for spec in router.membership}
     async with httpx.AsyncClient(
         timeout=router.cfg.health_timeout_s, transport=router.lifecycle_transport
     ) as client:
