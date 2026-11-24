@@ -82,7 +82,9 @@ Calibrate with the engines idle. `narwhal-check --calibrate-first-token` takes t
 | `--calibration-out`       | A fresh artifact path under the ignored `runs/` tree                                                                    |
 | `--samples`               | 100, the default and the minimum for qualifying evidence                                                                |
 
-For an engine launch limit of 16,384 total tokens, run the calibration from the router shell:
+The command reads each engine's live context limit and refuses a length without room for two output tokens, naming the limit. On SGLang the live limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length.
+
+For engines whose live context limit is 16,384 tokens, run the calibration from the router shell:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
