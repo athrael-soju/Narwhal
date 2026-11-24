@@ -322,6 +322,7 @@ class NarwhalRouter:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
             # A probe that finished after an earlier departure leaves a verification time.
             self.verifier.verified_at.pop(spec.iid, None)
+            self.scheduler.roles.joined(spec.iid)
         # The monitor keeps the snapshot's order, which placement iterates.
         ordered = [(iid, self.monitor.instances[iid]) for iid in membership.ids]
         # Reorder in place, since a caller may hold the table across an await.
@@ -331,6 +332,7 @@ class NarwhalRouter:
         self.shared_members = self._shared_members()
         self.scheduler.pinned = self._pinned()
         self.scheduler.refresh_floor_state()
+        self.controller.membership_changed()
         self.monitor.on_capacity_change()
         self.wake_waiters()
 
