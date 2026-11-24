@@ -44,42 +44,9 @@ def load(path: str | Path) -> FleetConfig:
         problems.append("engines must be a list")
     else:
         for k, e in enumerate(raw["engines"]):
-            if not isinstance(e, dict):
-                problems.append(f"engines[{k}] must be an object")
-                continue
-            _check_unknown(problems, f"engines[{k}]", e, _ENGINE_SPEC_KEYS)
-            missing = [key for key in ("iid", "url") if key not in e]
-            problems.extend(f"engines[{k}] is missing {key!r}" for key in missing)
-            if missing:
-                continue
-            pin = e.get("pin", False)
-            if not isinstance(pin, bool):
-                problems.append(f"engines[{k}].pin must be a boolean")
-                continue
-            iid = _read_str(problems, f"engines[{k}].iid", e["iid"])
-            url = _read_endpoint(problems, f"engines[{k}].url", e["url"])
-            role_name = _read_str(problems, f"engines[{k}].role", e.get("role", "decode"))
-            try:
-                role = Role(role_name)
-            except ValueError:
-                problems.append(
-                    f"engines[{k}].role must be 'prefill' or 'decode', got {role_name!r}"
-                )
-                role = Role.DECODE
-            engines.append(
-                EngineSpec(
-                    iid=iid,
-                    url=url.rstrip("/"),
-                    role=role,
-                    pin=pin,
-                    attestation_url=_read_endpoint(
-                        problems,
-                        f"engines[{k}].attestation_url",
-                        e.get("attestation_url", ""),
-                    ),
-                    shared_device=_read_shared_device(problems, k, e.get("shared_device")),
-                )
-            )
+            spec = _read_engine(problems, f"engines[{k}]", e)
+            if spec is not None:
+                engines.append(spec)
     slo_raw = raw["slo"]
     slo: SLO
     if not isinstance(slo_raw, dict):
@@ -541,12 +508,54 @@ _ENGINE_SPEC_KEYS = {"iid", "url", "role", "pin", "attestation_url", "shared_dev
 _SHARED_DEVICE_KEYS = {"group", "gpu_uuid", "device_allowance", "gpu_memory_utilization"}
 
 
+def read_engine_spec(raw: object, label: str = "engine") -> EngineSpec:
+    """Read one engine entry as the fleet file holds it; raise ValueError naming each problem."""
+    problems: list[str] = []
+    spec = _read_engine(problems, label, raw)
+    if problems or spec is None:
+        raise ValueError("; ".join(problems))
+    return spec
+
+
+def _read_engine(problems: list[str], label: str, e: object) -> EngineSpec | None:
+    if not isinstance(e, dict):
+        problems.append(f"{label} must be an object")
+        return None
+    _check_unknown(problems, label, e, _ENGINE_SPEC_KEYS)
+    missing = [key for key in ("iid", "url") if key not in e]
+    problems.extend(f"{label} is missing {key!r}" for key in missing)
+    if missing:
+        return None
+    pin = e.get("pin", False)
+    if not isinstance(pin, bool):
+        problems.append(f"{label}.pin must be a boolean")
+        return None
+    iid = _read_str(problems, f"{label}.iid", e["iid"])
+    url = _read_endpoint(problems, f"{label}.url", e["url"])
+    role_name = _read_str(problems, f"{label}.role", e.get("role", "decode"))
+    try:
+        role = Role(role_name)
+    except ValueError:
+        problems.append(f"{label}.role must be 'prefill' or 'decode', got {role_name!r}")
+        role = Role.DECODE
+    return EngineSpec(
+        iid=iid,
+        url=url.rstrip("/"),
+        role=role,
+        pin=pin,
+        attestation_url=_read_endpoint(
+            problems, f"{label}.attestation_url", e.get("attestation_url", "")
+        ),
+        shared_device=_read_shared_device(problems, label, e.get("shared_device")),
+    )
+
+
 def _read_shared_device(
-    problems: list[str], index: int, raw: object
+    problems: list[str], label: str, raw: object
 ) -> SharedDeviceAllocation | None:
     if raw is None:
         return None
-    name = f"engines[{index}].shared_device"
+    name = f"{label}.shared_device"
     if not isinstance(raw, dict):
         problems.append(f"{name} must be an object")
         return None

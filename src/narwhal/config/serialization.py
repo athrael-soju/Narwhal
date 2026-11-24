@@ -8,20 +8,24 @@ from typing import TYPE_CHECKING, Any
 from ..contracts import FLEET, versioned
 
 if TYPE_CHECKING:
-    from .model import FleetConfig
+    from .model import EngineSpec, FleetConfig
+
+
+def engine_row(e: EngineSpec) -> dict[str, Any]:
+    """Return one engine entry as the fleet file holds it."""
+    return (
+        {"iid": e.iid, "url": e.url, "role": e.role.value}
+        | ({"pin": True} if e.pin else {})
+        | ({"attestation_url": e.attestation_url} if e.attestation_url else {})
+        | ({"shared_device": asdict(e.shared_device)} if e.shared_device else {})
+    )
 
 
 def document(config: FleetConfig) -> dict[str, Any]:
     """The document holds credential references, never secret values."""
     out = {
         "model": config.model,
-        "engines": [
-            {"iid": e.iid, "url": e.url, "role": e.role.value}
-            | ({"pin": True} if e.pin else {})
-            | ({"attestation_url": e.attestation_url} if e.attestation_url else {})
-            | ({"shared_device": asdict(e.shared_device)} if e.shared_device else {})
-            for e in config.engines
-        ],
+        "engines": [engine_row(e) for e in config.engines],
         "slo": {"ttft_s": config.slo.ttft_s, "tpot_s": config.slo.tpot_s},
         "controller": {
             "monitor_interval_s": config.monitor_interval_s,

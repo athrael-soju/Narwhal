@@ -13,10 +13,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..config.loading import read_engine_spec
+from ..config.serialization import engine_row
 from ..contracts import HANDOFF, validate_document, versioned
+from ..profiling.membership import engine_set_problem
+from ..profiling.store import ProfileStore
 from ..types import Role
 
 if TYPE_CHECKING:
+    from ..serving.router.membership import Membership
     from ..serving.router.routing import NarwhalRouter
 
 
@@ -63,6 +68,11 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "epoch": int(router.lease_epoch),
         "holder": str(router.lease_holder),
         "engines": sorted(router.membership.ids),
+        # The engine specs and generation a replacement process adopts.
+        "membership": {
+            "generation": router.membership.generation,
+            "engines": [engine_row(spec) for spec in router.membership],
+        },
         "roles": {iid: i.role.value for iid, i in router.monitor.instances.items()},
         "ejected": sorted(router.scheduler.ejected),
         "inference_sources": {
@@ -93,6 +103,9 @@ def validate(doc: Any) -> dict[str, Any]:
         raise ValueError("handoff epoch must be a nonnegative integer")
     if not isinstance(holder, str):
         raise ValueError("handoff holder must be a string")
+    membership = doc.get("membership")
+    if membership is not None:
+        _validate_membership(membership)
     lifecycle = doc.get("lifecycle")
     if not isinstance(lifecycle, dict):
         raise ValueError("handoff requires lifecycle state")
@@ -153,6 +166,68 @@ def validate(doc: Any) -> dict[str, Any]:
     return dict(doc)
 
 
+def _validate_membership(membership: Any) -> None:
+    if not isinstance(membership, dict) or set(membership) != {"generation", "engines"}:
+        raise ValueError("handoff membership must hold generation and engines")
+    generation = membership["generation"]
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+        raise ValueError("handoff membership generation must be a nonnegative integer")
+    rows = membership["engines"]
+    if not isinstance(rows, list):
+        raise ValueError("handoff membership engines must be a list")
+    ids = []
+    for index, row in enumerate(rows):
+        ids.append(read_engine_spec(row, f"handoff membership engines[{index}]").iid)
+    if len(set(ids)) != len(ids):
+        raise ValueError("handoff membership names an engine twice")
+
+
+def membership_of(doc: dict[str, Any]) -> Membership | None:
+    """Return the snapshot a validated handoff carries, or None for one without membership."""
+    from ..serving.router.membership import Membership
+
+    saved = doc.get("membership")
+    if saved is None:
+        return None
+    return Membership(
+        saved["generation"],
+        tuple(read_engine_spec(row) for row in saved["engines"]),
+    )
+
+
+def _adoption_problem(router: NarwhalRouter, saved: Membership) -> tuple[str, ProfileStore | None]:
+    """Return why `saved` cannot replace the router's snapshot, and the reloaded store."""
+    current = router.membership
+    if saved.generation < current.generation:
+        return (
+            f"handoff membership generation {saved.generation} precedes this router's "
+            f"generation {current.generation}",
+            None,
+        )
+    changed = {
+        spec.iid
+        for spec in (*current, *saved)
+        if (spec.iid not in current or spec.iid not in saved)
+        or current.spec(spec.iid) != saved.spec(spec.iid)
+    }
+    shared = sorted(
+        iid
+        for iid in changed
+        if (iid in current and current.spec(iid).shared_device is not None)
+        or (iid in saved and saved.spec(iid).shared_device is not None)
+    )
+    if shared:
+        return f"handoff membership changes shared-device engines {', '.join(shared)}", None
+    try:
+        store = ProfileStore(router.cfg.profiles_path)
+    except (OSError, ValueError) as exc:
+        return f"profile store {router.cfg.profiles_path} is unreadable: {exc}", None
+    problem = engine_set_problem(store, saved.ids, "saved", exact=False)
+    if problem:
+        return f"handoff membership lacks profiles: {problem}", None
+    return "", store
+
+
 def write(path: Path, doc: dict[str, Any]) -> None:
     """Validate the handoff, fsync a unique temporary file and atomically
     replace the destination.
@@ -205,9 +280,24 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
         return HandoffReport(applied=False, why="no handoff file")
     doc = validate(doc)
     declared = sorted(doc.get("engines") or [])
-    actual = sorted(router.membership.ids)
-    if declared != actual:
-        return HandoffReport(applied=False, why=f"handoff names {declared}, this fleet is {actual}")
+    saved = membership_of(doc)
+    store: ProfileStore | None = None
+    if saved is None:
+        actual = sorted(router.membership.ids)
+        if declared != actual:
+            return HandoffReport(
+                applied=False, why=f"handoff names {declared}, this fleet is {actual}"
+            )
+    else:
+        # The saved membership replaces this router's engine set.
+        actual = declared
+        if sorted(saved.ids) != declared:
+            return HandoffReport(
+                applied=False, why=f"handoff membership differs from its engine list {declared}"
+            )
+        why, store = _adoption_problem(router, saved)
+        if why:
+            return HandoffReport(applied=False, why=why)
     lifecycle = doc.get("lifecycle") or {}
     if lifecycle["engine_restart_policy"] != router.cfg.engine_restart_policy:
         return HandoffReport(applied=False, why="handoff engine restart policy mismatch")
@@ -218,6 +308,9 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
             return HandoffReport(
                 applied=False, why="handoff lacks an available engine's process identity"
             )
+    if saved is not None and store is not None:
+        router.adopt_membership(saved)
+        router.profiles.adopt(store)
     gap_s = max(0.0, now_wall - float(doc.get("at", now_wall)))
     roles = doc.get("roles") or {}
     applied = 0
