@@ -124,6 +124,53 @@ class EngineSetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(result.calibration.engines), {"e0", "e3", "e6"})
 
 
+class ContractEngineSetTests(unittest.IsolatedAsyncioTestCase):
+    """A fleet with an engine contract, which joins require."""
+
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.cfg = fleet(self.root)
+        self.assertIsNotNone(self.cfg.engine_contract)
+        self.cfg.profiles_path.unlink()
+        self.store = ProfileStore(self.cfg.profiles_path)
+        for iid in ("e0", "e3"):
+            self.store.put(measured(iid))
+        live_generations(self, {})
+
+    async def test_a_nominal_profile_for_the_new_engine_is_refused(self) -> None:
+        self.store.put(replace(profile("e6"), nominal=True))
+        result = await check_engine_set(self.cfg, joined(self.cfg))
+        self.assertIn(
+            "e6 has a nominal profile; engine_contract requires a measured one", result.problems
+        )
+        self.store.put(measured("e6"))
+        result = await check_engine_set(self.cfg, joined(self.cfg))
+        self.assertEqual(result.problems, ())
+
+    async def test_a_malformed_generation_answer_names_the_engine(self) -> None:
+        self.store.put(measured("e6"))
+
+        async def malformed(cfg, spec, **kwargs):
+            if spec.iid == "e6":
+                raise AttributeError("'list' object has no attribute 'get'")
+            return evidence()
+
+        with patch("narwhal.profiling.membership.read_generation", new=malformed):
+            result = await check_engine_set(self.cfg, joined(self.cfg))
+        self.assertEqual(len(result.problems), 1)
+        self.assertTrue(result.problems[0].startswith("e6 profile generation unreadable"))
+
+    async def test_a_failing_calibration_read_refuses_instead_of_raising(self) -> None:
+        self.store.put(measured("e6"))
+        failing = AsyncMock(side_effect=TypeError("bad identity"))
+        with patch("narwhal.profiling.membership.verify_calibration", new=failing):
+            result = await check_engine_set(self.cfg, joined(self.cfg))
+        self.assertEqual(result.calibration.status, "rejected")
+        self.assertEqual(result.problems, ("calibration check failed: TypeError: bad identity",))
+
+
 class CandidateFleetTests(unittest.TestCase):
     def setUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
@@ -161,6 +208,8 @@ class CandidateFleetTests(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             self.assertEqual(run.await_count, 1)
+            # The sweep measures only the `--only` engine.
+            self.assertEqual(run.await_args.args[1], {"e6"})
         merged = self.root / "merged.json"
         with redirect_stdout(io.StringIO()):
             code = profile_cli.main(

@@ -53,7 +53,8 @@ async def generation_problems(
             continue
         try:
             generation = await read_generation(cfg, spec, transport=transport)
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
+        # A malformed answer names the engine instead of raising.
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
             problems.append(
                 f"{spec.iid} profile generation unreadable: {exc}; "
                 "restart its attestation sidecar if it answers HTTP 503"
@@ -103,7 +104,13 @@ async def check_engine_set(
         problems.append(problem)
     checked = [spec for spec in engines if live is None or spec.iid in live]
     problems.extend(await generation_problems(cfg, store, checked, transport=transport))
-    calibration = await verify_calibration(cfg, engines=engines, live=live, transport=transport)
+    try:
+        calibration = await verify_calibration(cfg, engines=engines, live=live, transport=transport)
+    except Exception as exc:
+        # A malformed answer from a joining engine refuses the join instead of raising.
+        calibration = CalibrationCheck(
+            "rejected", problems=(f"calibration check failed: {type(exc).__name__}: {exc}",)
+        )
     if calibration.status == "rejected":
         problems.extend(calibration.problems)
     return EngineSetEvidence(store, calibration, tuple(problems))
