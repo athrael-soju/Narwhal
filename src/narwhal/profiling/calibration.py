@@ -35,6 +35,11 @@ from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
 from .tasks import cancel_tasks
 
+# At an input one token below the context limit, an SGLang decode leg asked for one output token
+# ended its stream without a token in most live attempts, so each calibration request asks for
+# at least two output tokens.
+MIN_OUTPUT_TOKENS = 2
+
 SCHEMA = "narwhal.first-token-calibration"
 RECALIBRATE = "recalibrate with narwhal-check --calibrate-first-token"
 _ATTEMPT_ERRORS = (EngineError, httpx.HTTPError, TimeoutError, ValueError, RuntimeError)
@@ -749,10 +754,11 @@ async def calibrate(
                             launch=attested.get(iid),
                         )
                     for target in input_tokens:
-                        if target + 1 > context_limit:
+                        if target + MIN_OUTPUT_TOKENS > context_limit:
                             raise ValueError(
-                                f"{iid}: requested {target} input tokens plus one output token "
-                                f"exceed live context limit {context_limit}"
+                                f"{iid}: requested {target} input tokens plus "
+                                f"{MIN_OUTPUT_TOKENS} output tokens exceed live context limit "
+                                f"{context_limit}"
                             )
                     context_limits[iid] = context_limit
                 launches = (

@@ -857,15 +857,17 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         ):
             code = await calibration.calibrate(
                 self.cfg,
-                input_tokens=(128, 1021, 1022, 1023),
+                input_tokens=(128, 1021, 1022),
                 samples_per_group=1,
                 observation_timeout_s=1.0,
                 out=output,
             )
-            with self.assertRaisesRegex(ValueError, "e3: requested 1024 input tokens"):
+            with self.assertRaisesRegex(
+                ValueError, "e3: requested 1023 input tokens plus 2 output tokens"
+            ):
                 await calibration.calibrate(
                     self.cfg,
-                    input_tokens=(1024,),
+                    input_tokens=(1023,),
                     samples_per_group=1,
                     observation_timeout_s=1.0,
                     out=Path(self.folder.name) / "oversized.json",
@@ -873,7 +875,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)  # Boundary behavior does not establish 100-sample qualification.
         document = json.loads(output.read_text())
         self.assertTrue(all(row["status"] == "completed" for row in document["attempts"]))
-        expected = {128: 4, 1021: 3, 1022: 2, 1023: 1}
+        expected = {128: 4, 1021: 3, 1022: 2}
         for row in document["attempts"]:
             self.assertEqual(row["requested_output_tokens"], expected[row["target_input_tokens"]])
         for body in requests:
