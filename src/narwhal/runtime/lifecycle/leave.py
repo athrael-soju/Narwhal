@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -71,10 +72,14 @@ async def begin_leave(
     if not retry and (refusal := leave_refusal(router, iid)):
         raise LifecycleError(refusal)
     if _held_alone(router, iid):
-        # The engine is already out of placement; a failed readmission leaves it blocked.
+        # The engine is already out of placement; a failed readmission or identity capture
+        # leaves it blocked. It drains again under the leave's deadline, so it reports drained
+        # only once its resident work is gone and its identity is recorded.
         record = manager.records[iid]
         if record.state == "blocked":
-            record.state = "drained"
+            record.state = "draining"
+            record.error = ""
+            record.deadline_at = time.time() + deadline_s
     else:
         manager.begin([iid], wave=False, deadline_s=deadline_s)
     record = manager.records[iid]
@@ -86,6 +91,7 @@ async def begin_leave(
             router.cfg, [iid], specs=router.membership.by_id(), transport=transport
         )
         manager.bind_drain_identities([iid], starts, failures)
+    manager.refresh()
     # A router fenced during the identity capture leaves the removal to the next owner.
     if controls_fleet(router):
         complete_leaves(router)

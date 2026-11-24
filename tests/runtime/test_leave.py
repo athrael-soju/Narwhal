@@ -219,6 +219,31 @@ class LeaveTests(unittest.IsolatedAsyncioTestCase):
         self.manager.records[iid].state = "blocked"
         self.manager.records[iid].old_process_start = 100.0
 
+    async def test_a_retried_leave_with_resident_work_drains_before_it_is_safe_to_stop(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        self.capture.side_effect = None
+        self.capture.return_value = ({}, {"e1": "process identity unreadable: ConnectError"})
+        record = await self.leave()
+        self.assertEqual(record.state, "blocked")
+        self.capture.side_effect = self.identities
+        record = await self.leave()
+        self.assertEqual(record.state, "draining")
+        engine = self.manager.view()["engines"]["e1"]
+        self.assertFalse(engine["ready_to_stop"])
+        self.router.monitor.finished("e1", "r")
+        self.assertEqual(complete_leaves(self.router), ["e1"])
+        self.assertIn(("drain_complete", "e1", None), self.actions())
+
+    async def test_a_leave_of_a_blocked_drain_with_resident_work_waits_for_it(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.manager_block("e1")
+        record = await self.leave("e1")
+        self.assertEqual(record.state, "draining")
+        self.assertFalse(self.manager.view()["engines"]["e1"]["ready_to_stop"])
+        self.assertIn("e1", self.router.membership)
+        self.router.monitor.finished("e1", "r")
+        self.assertEqual(complete_leaves(self.router), ["e1"])
+
     async def test_a_router_fenced_during_capture_leaves_the_removal_to_the_next_owner(self):
         async def fenced(cfg, engines, *, specs, transport=None):
             self.router.standby = True
