@@ -1,5 +1,7 @@
 """Check the membership routes: list, join and leave."""
 
+import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +126,10 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
         for status in ("409", "422", "503"):
             ref = operation["responses"][status]["content"]["application/json"]["schema"]
             self.assertEqual(ref, {"$ref": "#/components/schemas/MembershipOut"})
+        document = create_app(self.cfg).openapi()
+        refs = re.findall(r'"\$ref": "#/components/schemas/([^"]+)"', json.dumps(operation))
+        self.assertTrue(refs)
+        self.assertEqual(set(refs) - set(document["components"]["schemas"]), set())
 
     async def test_delete_drains_then_removes_the_engine(self):
         self.router.monitor.dispatched("e1", Request("r", 64))
@@ -152,6 +158,23 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(leave, "capture_process_identities", failed):
             body = self.document(await self.client.delete("/narwhal/engines/e1"), 503)
         self.assertIn("process identity unreadable", body["error"])
+
+    async def test_a_router_fenced_during_a_leave_answers_503(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+
+        async def fenced(cfg, engines, **kwargs):
+            self.router.standby = True
+            return dict.fromkeys(engines, 100.0), {}
+
+        with patch.object(leave, "capture_process_identities", AsyncMock(side_effect=fenced)):
+            body = self.document(await self.client.delete("/narwhal/engines/e1"), 503)
+        self.assertEqual(body["error"], "router control was fenced during the leave")
+        self.assertIn("e1", self.router.membership)
+
+    async def test_a_standby_answers_503_before_it_checks_the_deadline(self):
+        self.router.standby = True
+        response = await self.client.delete("/narwhal/engines/e1", params={"deadline_s": 0})
+        self.assertEqual(self.document(response, 503)["error"], engines_api.NOT_CONTROLLING)
 
     async def test_a_failed_handoff_write_is_logged(self):
         self.cfg.state_path.mkdir()
