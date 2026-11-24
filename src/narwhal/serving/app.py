@@ -41,6 +41,7 @@ from ..runtime.standby import (
 )
 from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
+from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
 from .outcomes import error_response
@@ -335,6 +336,8 @@ def create_app(
     @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
     async def state() -> dict[str, Any]:
         return router.state()
+
+    add_engine_routes(app, router)
 
     @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state")
     async def lifecycle() -> dict[str, Any]:

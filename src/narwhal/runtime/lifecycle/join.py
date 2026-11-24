@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -48,6 +49,12 @@ def join_refusal(router: NarwhalRouter, spec: EngineSpec) -> str:
         return "engine_restart_policy whole_wave changes engines only as one managed wave"
     if cfg.engine_contract is None or cfg.contract_missing():
         return "joining an engine requires a complete engine_contract"
+    if not spec.iid:
+        return "iid must be nonempty"
+    for name, url in (("url", spec.url), ("attestation_url", spec.attestation_url)):
+        parts = urlsplit(url)
+        if url and (parts.scheme not in ("http", "https") or not parts.hostname):
+            return f"{name} must be an http or https URL with a host"
     if spec.iid in router.membership:
         return f"engine {spec.iid} is already a member"
     if any(member.url.rstrip("/") == spec.url.rstrip("/") for member in router.membership):

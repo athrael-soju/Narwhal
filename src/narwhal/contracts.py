@@ -22,6 +22,7 @@ ATTESTATION = "attestation"
 CLI = "cli"
 COMMAND_RESULT = "command_result"
 DIAGNOSTIC_BUNDLE = "diagnostic_bundle"
+MEMBERSHIP = "membership"
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ CONTRACTS: dict[str, Contract] = {
     HANDOFF: Contract("narwhal.handoff"),
     LEASE: Contract("narwhal.router-lease"),
     LIFECYCLE: Contract("narwhal.lifecycle"),
+    MEMBERSHIP: Contract("narwhal.membership"),
     JOURNAL: Contract("narwhal.journal"),
     STATE: Contract("narwhal.state"),
     METRICS: Contract("narwhal.metrics", 2),

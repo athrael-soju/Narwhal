@@ -33,6 +33,7 @@ Interface versions in this release:
 | Router state handoff | `narwhal.handoff` | 1 | `handoff` |
 | Router lease | `narwhal.router-lease` | 1 | `lease` |
 | Engine lifecycle | `narwhal.lifecycle` | 1 | `lifecycle` |
+| Engine membership | `narwhal.membership` | 1 | `membership` |
 | Request journal | `narwhal.journal` | 1 | `journal` |
 | Live state | `narwhal.state` | 1 | `state` |
 | Prometheus metrics | `narwhal.metrics` | 2 | `metrics` |
