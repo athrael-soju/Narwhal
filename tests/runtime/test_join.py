@@ -141,6 +141,16 @@ class JoinTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("engine_version", outcome.error)
         self.router.engines.prefill.assert_not_awaited()
 
+    async def test_an_unreadable_identity_is_not_called_a_contract_mismatch(self):
+        async def blank(cfg, spec, **kwargs):
+            if spec.iid == "e6":
+                raise ValueError("/version returned no version")
+            return await self.identity(cfg, spec, **kwargs)
+
+        with patch.object(generation, "fetch_spec_identity", blank):
+            outcome = await self.join()
+        self.assert_refused(outcome, "attestation unreadable: ValueError")
+
     async def test_a_failed_attestation_is_refused(self):
         self.responses[("e6", "attestation")] = httpx.Response(503)
         outcome = await self.join()

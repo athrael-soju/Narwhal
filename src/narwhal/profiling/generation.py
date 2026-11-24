@@ -38,6 +38,10 @@ def identity_generation(identity: EngineIdentity) -> GenerationEvidence:
     )
 
 
+class AttestationMismatch(ValueError):
+    """An engine's attestation does not match the fleet's engine contract."""
+
+
 async def read_generation(
     cfg: FleetConfig,
     spec: EngineSpec,
@@ -59,7 +63,7 @@ async def read_generation(
         payload = response.json()
     failures = verify_attestation(payload, contract, identity)
     if failures:
-        raise ValueError(f"{spec.iid}: attestation: {'; '.join(failures)}")
+        raise AttestationMismatch(f"{spec.iid}: attestation: {'; '.join(failures)}")
     return GenerationEvidence(
         binding_digest(payload),
         payload,

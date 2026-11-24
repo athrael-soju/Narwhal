@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ...config import EngineSpec
-from ...profiling.generation import read_generation
+from ...profiling.generation import AttestationMismatch, read_generation
 from ...profiling.membership import check_engine_set
 from ...types import RoleModel
 from ..standby import controls_fleet
@@ -81,9 +81,9 @@ async def _attestation_problem(
     """Return why the candidate's attestation does not match the engine contract, or ""."""
     try:
         await read_generation(router.cfg, spec, transport=transport)
-    except ValueError as exc:
+    except AttestationMismatch as exc:
         return f"attestation does not match the engine contract: {exc}"
-    except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return f"attestation unreadable: {type(exc).__name__}: {exc}"
     return ""
 
