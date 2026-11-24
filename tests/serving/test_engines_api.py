@@ -85,22 +85,45 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
             body = self.document(await self.client.post("/narwhal/engines", json=NEW), 409)
         self.assertEqual(body["error"], "attestation: engine_version differs")
         self.assertFalse(body["join"]["joined"])
-        for payload in ({**NEW, "color": 1}, {"iid": "e6"}, {**NEW, "role": "both"}):
-            with self.subTest(payload=payload):
-                response = await self.client.post("/narwhal/engines", json=payload)
-                self.assertEqual(response.status_code, 422)
-        body = self.document(
-            await self.client.post("/narwhal/engines", json={**NEW, "url": "ftp://engine"}), 409
-        )
-        self.assertEqual(body["error"], "url must be an http or https URL with a host")
-        with patch.dict("os.environ", {}, clear=False):
-            body = self.document(
-                await self.client.post(
-                    "/narwhal/engines", json={**NEW, "url": "${NARWHAL_TEST_UNSET_URL}"}
-                ),
-                422,
+        invalid = {
+            "unknown engine key 'color'": {**NEW, "color": 1},
+            "engine is missing 'url'": {"iid": "e6"},
+            "engine.role": {**NEW, "role": "both"},
+            "engine.pin must be a boolean": {**NEW, "pin": "yes"},
+            "url must be an http or https URL with a host": {**NEW, "url": "ftp://engine"},
+            "iid must be nonempty": {**NEW, "iid": ""},
+            "hold only letters": {**NEW, "iid": "a/b"},
+            "cannot reference environment variables": {**NEW, "url": "${NARWHAL_URL}"},
+            "one engine entry object": [NEW],
+        }
+        with patch.object(engines_api, "join_engine", AsyncMock()) as join:
+            for reason, payload in invalid.items():
+                with self.subTest(payload=payload):
+                    response = await self.client.post("/narwhal/engines", json=payload)
+                    self.assertIn(reason, self.document(response, 422)["error"])
+            response = await self.client.post(
+                "/narwhal/engines", content=b"{", headers={"content-type": "application/json"}
             )
-        self.assertIn("engine.url: environment variable NARWHAL_TEST_UNSET_URL", body["error"])
+            self.assertIn("must be JSON", self.document(response, 422)["error"])
+        join.assert_not_awaited()
+
+    async def test_a_join_under_whole_wave_answers_409(self):
+        self.cfg.engine_restart_policy = "whole_wave"
+        body = self.document(await self.client.post("/narwhal/engines", json=NEW), 409)
+        self.assertIn("whole_wave", body["error"])
+        self.assertFalse(body["join"]["joined"])
+
+    def test_the_openapi_document_describes_the_join_body_and_its_422(self):
+        operation = create_app(self.cfg).openapi()["paths"]["/narwhal/engines"]["post"]
+        schema = operation["requestBody"]["content"]["application/json"]["schema"]
+        self.assertEqual(
+            set(schema["properties"]),
+            {"iid", "url", "role", "pin", "attestation_url", "shared_device"},
+        )
+        self.assertEqual(schema["additionalProperties"], False)
+        for status in ("409", "422", "503"):
+            ref = operation["responses"][status]["content"]["application/json"]["schema"]
+            self.assertEqual(ref, {"$ref": "#/components/schemas/MembershipOut"})
 
     async def test_delete_drains_then_removes_the_engine(self):
         self.router.monitor.dispatched("e1", Request("r", 64))
@@ -113,6 +136,28 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["generation"], 1)
         self.assertEqual(body["leaving"], [])
         self.assertNotIn("e1", [row["iid"] for row in body["engines"]])
+
+    async def test_a_repeated_delete_while_draining_answers_202(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        self.document(await self.client.delete("/narwhal/engines/e1"), 202)
+        body = self.document(await self.client.delete("/narwhal/engines/e1"), 202)
+        self.assertEqual(body["leaving"], ["e1"])
+        saved = handoff_state.load(self.cfg.state_path)
+        records = {row["iid"]: row for row in saved["lifecycle"]["records"]}
+        self.assertTrue(records["e1"]["leaving"])
+
+    async def test_a_delete_whose_identity_capture_fails_answers_503(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        failed = AsyncMock(return_value=({}, {"e1": "process identity unreadable"}))
+        with patch.object(leave, "capture_process_identities", failed):
+            body = self.document(await self.client.delete("/narwhal/engines/e1"), 503)
+        self.assertIn("process identity unreadable", body["error"])
+
+    async def test_a_failed_handoff_write_is_logged(self):
+        self.cfg.state_path.mkdir()
+        with self.assertLogs("narwhal.state", level="WARNING") as logs:
+            self.document(await self.client.delete("/narwhal/engines/e1"), 200)
+        self.assertIn("handoff write", logs.output[0])
 
     async def test_delete_of_an_idle_engine_removes_it_at_once(self):
         body = self.document(

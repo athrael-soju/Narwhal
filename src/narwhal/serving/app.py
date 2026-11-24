@@ -502,8 +502,7 @@ def _lifecycle_error(router: NarwhalRouter, status_code: int, message: str) -> R
 
 
 def _persist_handoff(router: NarwhalRouter) -> None:
-    with contextlib.suppress(OSError):
-        handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
+    handoff_state.persist(router)
 
 
 def _headers(request: HTTPRequest) -> dict[str, str]:
