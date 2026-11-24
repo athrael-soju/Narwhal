@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ..contracts import ContractVersionError
+from ..profiling.calibration import verify_calibration
 from . import state as handoff_state
 from .lease import FileLease, LeaseError
 
@@ -154,6 +155,17 @@ async def standby_loop(
                                 if not report.applied:
                                     router.failover_blocked = report.why
                                     return
+                                if report.membership_adopted:
+                                    # The calibration must cover the adopted engine set.
+                                    calibration = await verify_calibration(
+                                        router.cfg,
+                                        engines=router.membership.specs,
+                                        transport=router.lifecycle_transport,
+                                    )
+                                    if calibration.status == "rejected":
+                                        router.failover_blocked = "; ".join(calibration.problems)
+                                        return
+                                    router.first_token_calibration = calibration
                                 if not lease.valid():
                                     router.failover_blocked = "lease expired while applying handoff"
                                     return

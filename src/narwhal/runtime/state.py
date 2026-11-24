@@ -55,6 +55,8 @@ class HandoffReport:
     failed: int = 0
     unserved: int = 0
     epoch: int = 0
+    # True when the handoff's membership replaced this router's engine set.
+    membership_adopted: bool = False
     holder: str = ""
 
 
@@ -167,7 +169,8 @@ def validate(doc: Any) -> dict[str, Any]:
 
 
 def _validate_membership(membership: Any) -> None:
-    if not isinstance(membership, dict) or set(membership) != {"generation", "engines"}:
+    # Keys a later release adds are ignored.
+    if not isinstance(membership, dict) or not {"generation", "engines"} <= set(membership):
         raise ValueError("handoff membership must hold generation and engines")
     generation = membership["generation"]
     if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
@@ -177,7 +180,8 @@ def _validate_membership(membership: Any) -> None:
         raise ValueError("handoff membership engines must be a list")
     ids = []
     for index, row in enumerate(rows):
-        ids.append(read_engine_spec(row, f"handoff membership engines[{index}]").iid)
+        label = f"handoff membership engines[{index}]"
+        ids.append(read_engine_spec(row, label, strict=False).iid)
     if len(set(ids)) != len(ids):
         raise ValueError("handoff membership names an engine twice")
 
@@ -191,8 +195,33 @@ def membership_of(doc: dict[str, Any]) -> Membership | None:
         return None
     return Membership(
         saved["generation"],
-        tuple(read_engine_spec(row) for row in saved["engines"]),
+        tuple(read_engine_spec(row, strict=False) for row in saved["engines"]),
     )
+
+
+def _merged(router: NarwhalRouter, saved: Membership) -> Membership:
+    """Return `saved` with this router's own spec for each engine it already knows.
+
+    The saved generation and engine set win. An engine this router's fleet file names keeps the
+    spec from that file, so its edits and host-specific endpoints hold; an engine that joined
+    takes the saved spec.
+    """
+    from ..serving.router.membership import Membership
+
+    current = router.membership
+    specs = []
+    for spec in saved:
+        if spec.iid in current:
+            own = current.spec(spec.iid)
+            if own != spec:
+                log.warning(
+                    "handoff membership: %s keeps this router's engine entry, not the saved one",
+                    spec.iid,
+                )
+            specs.append(own)
+        else:
+            specs.append(spec)
+    return Membership(saved.generation, tuple(specs))
 
 
 def _adoption_problem(router: NarwhalRouter, saved: Membership) -> tuple[str, ProfileStore | None]:
@@ -281,6 +310,11 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     doc = validate(doc)
     declared = sorted(doc.get("engines") or [])
     saved = membership_of(doc)
+    if saved is not None and saved.generation == 0:
+        # Membership never changed: the fleet file's engine set and entries apply.
+        saved = None
+    if saved is not None:
+        saved = _merged(router, saved)
     store: ProfileStore | None = None
     if saved is None:
         actual = sorted(router.membership.ids)
@@ -308,6 +342,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
             return HandoffReport(
                 applied=False, why="handoff lacks an available engine's process identity"
             )
+    adopted = saved is not None and store is not None
     if saved is not None and store is not None:
         router.adopt_membership(saved)
         router.profiles.adopt(store)
@@ -368,6 +403,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
         unserved=router.scheduler.unserved,
         epoch=int(doc.get("epoch", 0)),
         holder=str(doc.get("holder", "")),
+        membership_adopted=adopted,
     )
     log.info(
         "handoff applied: gap %.2fs from run %s; %d roles, %d ejected; "

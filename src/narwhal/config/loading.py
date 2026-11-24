@@ -508,20 +508,27 @@ _ENGINE_SPEC_KEYS = {"iid", "url", "role", "pin", "attestation_url", "shared_dev
 _SHARED_DEVICE_KEYS = {"group", "gpu_uuid", "device_allowance", "gpu_memory_utilization"}
 
 
-def read_engine_spec(raw: object, label: str = "engine") -> EngineSpec:
-    """Read one engine entry as the fleet file holds it; raise ValueError naming each problem."""
+def read_engine_spec(raw: object, label: str = "engine", *, strict: bool = True) -> EngineSpec:
+    """Read one engine entry as the fleet file holds it; raise ValueError naming each problem.
+
+    With `strict` false, keys this release does not know are ignored, as a document a later
+    release wrote may carry them.
+    """
     problems: list[str] = []
-    spec = _read_engine(problems, label, raw)
+    spec = _read_engine(problems, label, raw, strict=strict)
     if problems or spec is None:
         raise ValueError("; ".join(problems))
     return spec
 
 
-def _read_engine(problems: list[str], label: str, e: object) -> EngineSpec | None:
+def _read_engine(
+    problems: list[str], label: str, e: object, *, strict: bool = True
+) -> EngineSpec | None:
     if not isinstance(e, dict):
         problems.append(f"{label} must be an object")
         return None
-    _check_unknown(problems, label, e, _ENGINE_SPEC_KEYS)
+    if strict:
+        _check_unknown(problems, label, e, _ENGINE_SPEC_KEYS)
     missing = [key for key in ("iid", "url") if key not in e]
     problems.extend(f"{label} is missing {key!r}" for key in missing)
     if missing:

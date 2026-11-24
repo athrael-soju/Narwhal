@@ -1,17 +1,20 @@
 """Carry membership through the handoff to a resumed router and a standby takeover."""
 
 import copy
-from dataclasses import replace
+import json
+from dataclasses import asdict, replace
 
 import httpx
 
 from narwhal.config import EngineSpec
+from narwhal.config.model import SharedDeviceAllocation
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime import state
 from narwhal.runtime.lease import FileLease
 from narwhal.runtime.standby import standby_loop
 from narwhal.serving.app import create_app
 from narwhal.types import Role
+from tests.fixtures import calibration_document
 from tests.runtime.test_standby_shutdown import FleetCase
 
 JOINED = EngineSpec("x", "http://joined", Role.PREFILL)
@@ -57,12 +60,88 @@ class MembershipHandoffTests(FleetCase):
             {"generation": True, "engines": []},
             {"generation": 1},
             {"generation": 1, "engines": [{"iid": "d"}]},
-            {"generation": 1, "engines": [{"iid": "d", "url": "http://a", "color": 1}]},
             {"generation": 1, "engines": [{"iid": "d", "url": "http://a"}] * 2},
         ):
             doc = {**copy.deepcopy(self.doc), "membership": membership}
             with self.subTest(membership=membership), self.assertRaises(ValueError):
                 state.validate(doc)
+
+    def test_keys_a_later_release_adds_are_ignored(self):
+        doc = copy.deepcopy(self.doc)
+        doc["membership"]["epoch_hint"] = 3
+        doc["membership"]["engines"][0]["weight"] = 2
+        state.validate(doc)
+        self.assertEqual(state.membership_of(doc).ids, ["d", "x"])
+
+    async def test_an_unchanged_membership_keeps_the_fleet_file_entries(self):
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        doc = state.snapshot(router)
+        self.assertEqual(doc["membership"]["generation"], 0)
+        # The operator edits the fleet file and restarts with --resume.
+        edited = replace(
+            self.cfg,
+            engines=[
+                replace(self.cfg.engines[0], pin=True),
+                replace(self.cfg.engines[1], url="http://decode-new"),
+            ],
+        )
+        resumed = create_app(edited).state.router
+        self.addAsyncCleanup(resumed.engines.aclose)
+        report = state.apply(resumed, doc)
+        self.assertTrue(report.applied, report.why)
+        self.assertFalse(report.membership_adopted)
+        self.assertEqual(resumed.membership.spec("d").url, "http://decode-new")
+        self.assertIn("p", resumed.scheduler.pinned)
+
+    async def test_a_changed_membership_keeps_this_routers_entry_for_known_engines(self):
+        edited = replace(
+            self.cfg, engines=[self.cfg.engines[0], replace(self.cfg.engines[1], url="http://d2")]
+        )
+        router = create_app(edited).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        with self.assertLogs("narwhal.state", level="WARNING") as logs:
+            report = state.apply(router, self.doc)
+        self.assertTrue(report.applied, report.why)
+        self.assertTrue(report.membership_adopted)
+        self.assertEqual(router.membership.spec("d").url, "http://d2")
+        self.assertEqual(router.membership.spec("x").url, JOINED.url)
+        self.assertIn("d keeps this router's engine entry", logs.output[0])
+
+    async def test_a_shared_device_membership_change_refuses_the_handoff(self):
+        allocation = SharedDeviceAllocation("g", "GPU-x", 0.5, 0.4)
+        doc = copy.deepcopy(self.doc)
+        doc["membership"]["engines"][1]["shared_device"] = asdict(allocation)
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        report = state.apply(router, doc)
+        self.assertFalse(report.applied)
+        self.assertIn("changes shared-device engines x", report.why)
+
+    async def test_a_takeover_refuses_a_calibration_that_misses_the_adopted_set(self):
+        path = self.root / "calibration.json"
+        generations = {"p": "sha256:" + "a" * 64, "d": "sha256:" + "a" * 64}
+        path.write_text(
+            json.dumps(calibration_document(self.cfg, generations, {"p": 100.0, "d": 100.0}))
+        )
+        cfg = replace(self.cfg, first_token_calibration_path=path)
+        state.write(cfg.state_path, self.doc)
+        router = create_app(cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        router.standby = True
+        lease = FileLease(self.root / "lease.json", "standby", 30)
+        self.addCleanup(lease.release)
+        router.lease = lease
+        await standby_loop(
+            router,
+            "http://primary",
+            lease,
+            probe_interval_s=0.001,
+            takeover_after=1,
+            transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+        )
+        self.assertTrue(router.standby)
+        self.assertIn("x", router.failover_blocked)
 
     async def test_a_resumed_restart_restores_the_snapshot(self):
         state.write(self.cfg.state_path, self.doc)
