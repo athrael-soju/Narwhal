@@ -294,7 +294,11 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
     )
     gone = []
     for iid, ok in zip(live, answers, strict=True):
-        if iid in router.scheduler.ejected or iid in router.scheduler.draining:
+        if (
+            iid in router.scheduler.ejected
+            or iid in router.scheduler.draining
+            or iid not in router.membership
+        ):
             continue
         if ok is True:
             # A health 200 clears the health-evidence classes and lifts the quarantine.

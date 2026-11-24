@@ -146,10 +146,11 @@ class EngineHeldRoles(RoleSwitcher):
         return received is None or received.get(source, generation) != generation
 
     def forget(self, base: str) -> None:
-        # A consumer that rejoins starts stale for every producer. A producer keeps its
-        # generation count, so a consumer that took its handoffs before it left reads as stale
-        # once it enters prefill again.
-        self._received.pop(base.rstrip("/"), None)
+        # A consumer that rejoins starts stale for every producer. A producer that rejoins
+        # opens a new endpoint, so every consumer that took its handoffs reads as stale.
+        base = base.rstrip("/")
+        self._received.pop(base, None)
+        self._generations[base] = self._generations.get(base, 0) + 1
 
     def record_handoff(self, producer: str, consumer: str) -> None:
         if not self.stale_handoff(producer, consumer):

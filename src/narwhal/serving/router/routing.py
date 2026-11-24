@@ -290,8 +290,10 @@ class NarwhalRouter:
     def apply_membership(self, membership: Membership) -> None:
         """Replace the snapshot and bring every per-engine table to its engine set.
 
-        This is the only writer of membership in the router process. A new member starts in its
-        spec's role with no resident work. A removed member's entries leave the monitor,
+        This is the only writer of membership in the router process. Callers that remove engines
+        hold `lifecycle.lock` or run with no await between their checks and the change, so no
+        lifecycle validation is in progress. A new member starts in its spec's role with no
+        resident work. A removed member's entries leave the monitor,
         availability, drift, verifier, sizer, peer release, lifecycle, attested limits, launch
         records, role changes and switch holds.
         """
@@ -318,6 +320,10 @@ class NarwhalRouter:
             self._forget_engine(spec)
         for spec in added:
             self.monitor.add(Instance(iid=spec.iid, url=spec.url, role=spec.role))
+            # A probe that finished after an earlier departure leaves a verification time.
+            self.verifier.verified_at.pop(spec.iid, None)
+        # The monitor keeps the snapshot's order, which placement iterates.
+        self.monitor.instances = {iid: self.monitor.instances[iid] for iid in membership.ids}
         self.residency.sync(membership.specs)
         self.shared_members = self._shared_members()
         self.scheduler.pinned = self._pinned()
@@ -336,6 +342,7 @@ class NarwhalRouter:
         for table in (self.sequence_limits, self.kv_leases, self.launches):
             table.pop(iid, None)
         self.role_switch.forget(spec.url)
+        self.engines.kv.forget(spec.url)
         if self.transfer_refresh.held == iid:
             self.transfer_refresh.held = None
 
@@ -397,15 +404,24 @@ class NarwhalRouter:
         return await self._engine_side(iid, role, refresh=False)
 
     async def resume_role(self, iid: str) -> str | None:
-        return await self.switch_role(iid, self.monitor.instances[iid].role)
+        instance = self.monitor.instances.get(iid)
+        if instance is None:
+            return "engine left the fleet"
+        return await self.switch_role(iid, instance.role)
 
     async def refresh_transfer_state(self, iid: str) -> str | None:
-        return await self._engine_side(iid, self.monitor.instances[iid].role, refresh=True)
+        instance = self.monitor.instances.get(iid)
+        if instance is None:
+            return "engine left the fleet"
+        return await self._engine_side(iid, instance.role, refresh=True)
 
     async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:
         switcher = self.role_switch
         if not switcher.engine_held:
             return None
+        instance = self.monitor.instances.get(iid)
+        if instance is None:
+            return "engine left the fleet"
         self.scheduler.availability.switching.add(iid)
         try:
             async with httpx.AsyncClient(
@@ -414,7 +430,7 @@ class NarwhalRouter:
                 transport=self.lifecycle_transport,
             ) as client:
                 change = switcher.refresh if refresh else switcher.switch
-                await change(client, self.monitor.instances[iid].url, role, self.launches.get(iid))
+                await change(client, instance.url, role, self.launches.get(iid))
         except (httpx.HTTPError, ValueError) as exc:
             return f"{type(exc).__name__}: {exc}"
         finally:
@@ -434,7 +450,10 @@ class NarwhalRouter:
         if producer in instances and consumer in instances:
             self.role_switch.record_handoff(instances[producer].url, instances[consumer].url)
 
-    def attested(self, iid: str, payload: Any) -> None:
+    def attested(self, iid: str, payload: Any, *, candidate: bool = False) -> None:
+        """Record a verified attestation's launch and limits for a member or a `candidate`."""
+        if iid not in self.membership and not candidate:
+            return
         identity = self.backend.identity
         self.launches[iid] = attested_launch(payload)
         for values, value in (

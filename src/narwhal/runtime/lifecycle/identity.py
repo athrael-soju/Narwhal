@@ -101,7 +101,7 @@ async def check_process_identities(
                     previous_process_start=previous,
                     observed_process_start=start,
                 )
-            elif start is not None:
+            elif start is not None and spec.iid in router.membership:
                 manager.process_starts[spec.iid] = start
         if excluded and cfg.engine_restart_policy == "whole_wave":
             manager.require_restart_wave("engine identity changed or could not be verified")

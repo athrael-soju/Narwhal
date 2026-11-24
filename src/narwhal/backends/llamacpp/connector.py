@@ -108,6 +108,12 @@ class SlotFileConnector(KvConnector):
             self._hand_on(url, slot)
         return None
 
+    def forget(self, url: str) -> None:
+        # Legs still waiting or holding files keep the engine's slots until they end.
+        if not self._waiting.get(url) and not self._held.get(url):
+            for table in (self._free, self._waiting, self._held):
+                table.pop(url, None)
+
     def _hand_on(self, url: str, slot: int) -> None:
         waiting = self._waiting.get(url, [])
         while waiting:

@@ -70,9 +70,8 @@ class ResidencySubscriptions:
             del self.views[iid]
         for iid, spec in specs.items():
             previous = self._specs.get(iid)
-            if iid not in self.views or (
-                previous is not None and previous.attestation_url != spec.attestation_url
-            ):
+            # A replaced spec, as a handoff can carry, starts cold too.
+            if iid not in self.views or (previous is not None and previous != spec):
                 self.views[iid] = EngineResidency(iid)
         self._specs = specs
 

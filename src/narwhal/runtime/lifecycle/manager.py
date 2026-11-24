@@ -226,6 +226,8 @@ class LifecycleManager:
 
     def readmitted(self, engines: list[str], outcome: ValidationOutcome) -> None:
         """Return a fully validated set to placement as one mutation."""
+        # An engine that left the fleet during validation has nothing to return.
+        engines = [iid for iid in engines if iid in self.records and iid in self.router.membership]
         for iid in engines:
             record = self.records[iid]
             record.state = "active"

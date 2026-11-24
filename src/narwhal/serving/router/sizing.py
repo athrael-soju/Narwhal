@@ -74,6 +74,10 @@ class RequestSizer:
             tried: set[str] = set()
             # Each failed count moves to another live engine, up to `serving.max_attempts`.
             for attempt in range(1, attempts + 1):
+                # An engine that left the fleet during an earlier count is not tried.
+                live = [inst for inst in live if inst.iid in self.router.membership]
+                if not live:
+                    break
                 engine = self._tokenize_engine(live, tried)
                 tried.add(engine.iid)
                 try:
@@ -96,6 +100,8 @@ class RequestSizer:
 
     def _count_failed(self, engine: Instance, exc: EngineError) -> None:
         """Back off `engine` and record breaker evidence for its failed count."""
+        if engine.iid not in self.router.membership:
+            return
         failures = self.backoff.get(engine.iid, (0, 0.0))[0] + 1
         delay = min(TOKENIZE_BACKOFF_S * 2 ** min(failures - 1, 16), TOKENIZE_BACKOFF_MAX_S)
         self.backoff[engine.iid] = (failures, self.router._clock() + delay)

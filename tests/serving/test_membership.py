@@ -8,11 +8,14 @@ import httpx
 
 from narwhal.config import EngineSpec
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.engines.client import EngineError
 from narwhal.observability.metrics.render import render
 from narwhal.runtime import state as handoff_state
 from narwhal.runtime.lifecycle.records import DrainRecord
-from narwhal.runtime.monitoring import monitor_once
+from narwhal.runtime.monitoring import monitor_once, sweep_liveness
+from narwhal.runtime.role_switch import EngineHeldRoles
 from narwhal.scheduling.control import Flip
+from narwhal.scheduling.monitor import Instance
 from narwhal.serving import app as serving_app
 from narwhal.serving.router.membership import Membership
 from narwhal.types import Phase, Request, Role
@@ -94,7 +97,12 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
             scheduler.eject("e4", "liveness")
             scheduler.availability.switching.add("e4")
             scheduler.verifying.add(("e4", "verify_health"))
-            scheduler.inference_suspects.add("e5")
+            scheduler.inference_suspects.update({"e4", "e5"})
+            scheduler.availability.quarantined["e4"] = now + 60
+            scheduler.availability.hold_since["e4"] = now
+            scheduler.availability.hold_starts[("e4", "quarantine")] = 1
+            scheduler.availability.hold_ends[("e4", "quarantine", "expired")] = 1
+            scheduler.availability.readmissions[("e4", "health")] = 1
             scheduler.switch_holds["e4"] = now
             scheduler.health.note("e4", 1.0)
             scheduler.roles._last_flip["e4"] = now
@@ -126,6 +134,8 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
                 scheduler.liveness_misses,
                 scheduler.availability.failures["timeout"],
                 scheduler.switch_holds,
+                scheduler.availability.quarantined,
+                scheduler.availability.hold_since,
                 scheduler.roles._last_flip,
                 scheduler.roles._last_flip_role,
                 router.verifier.sources,
@@ -143,6 +153,13 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertNotIn("e4", table)
             self.assertNotIn("e4", scheduler.availability.switching)
+            self.assertNotIn("e4", scheduler.inference_suspects)
+            for counts in (
+                scheduler.availability.hold_starts,
+                scheduler.availability.hold_ends,
+                scheduler.availability.readmissions,
+            ):
+                self.assertFalse(any(key[0] == "e4" for key in counts))
             self.assertNotIn("e4", router.peer_release.missed)
             self.assertFalse(any(iid == "e4" for iid, _ in scheduler.verifying))
             self.assertFalse(any(flip.iid == "e4" for flip in scheduler.roles.flips))
@@ -194,7 +211,10 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(router.scheduler.eject("e3", "liveness"))
             router.scheduler.record_answer("e3", "health")
+            self.assertNotIn(("e3", "health"), router.scheduler.availability.readmissions)
             self.assertIsNone(router.scheduler.record_failure("e3"))
+            for counts in router.scheduler.availability.failures.values():
+                self.assertNotIn("e3", counts)
             self.assertNotIn("e3", router.scheduler.ejected)
             self.assertEqual(router.verifier.sources.get("e4"), {""})
             self.assertFalse(router.stale_handoff("e0", "e4"))
@@ -243,6 +263,67 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
             saved = handoff_state.load(router.cfg.state_path)
             self.assertEqual(saved["engines"], sorted(router.membership.ids))
             self.assertEqual(sorted(router.state()["resident"]), sorted(router.membership.ids))
+
+    async def test_an_engine_that_leaves_during_a_probe_leaves_no_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = contract_free_router(self, Path(tmp))
+            gone = router.membership.spec("e4").url
+
+            async def leaves(url, *args, **kwargs):
+                if url == gone and "e4" in router.membership:
+                    router.apply_membership(router.membership.left("e4"))
+                return url != gone
+
+            router.engines.healthy = AsyncMock(side_effect=leaves)  # type: ignore[method-assign]
+            self.assertEqual(await sweep_liveness(router), [])
+            self.assertNotIn("e4", router.membership)
+            self.assertNotIn("e4", router.scheduler.liveness_misses)
+            e4 = EngineSpec("e4", gone, role=Role.DECODE)
+            router.apply_membership(router.membership.joined(e4))
+            router.scheduler.verifying.add(("e4", "verify_health"))
+            await router.verifier._verify_suspect("e4", "verify_health")
+            self.assertNotIn("e4", router.membership)
+            router.apply_membership(router.membership.joined(e4))
+            self.assertNotIn("e4", router.verifier.verified_at)
+
+    async def test_late_completions_do_not_restore_a_removed_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = contract_free_router(self, Path(tmp))
+            router.apply_membership(router.membership.left("e5"))
+            router.attested("e5", {})
+            self.assertNotIn("e5", router.launches)
+            router.sizer._count_failed(
+                Instance("e5", "http://gone", Role.DECODE),
+                EngineError("tokenize", "http://gone", 503, "busy"),
+            )
+            self.assertNotIn("e5", router.sizer.backoff)
+            self.assertEqual(await router.resume_role("e5"), "engine left the fleet")
+            self.assertEqual(await router.refresh_transfer_state("e5"), "engine left the fleet")
+
+    async def test_a_rejoined_producer_reads_stale_to_consumers_that_held_it(self) -> None:
+        class Switcher(EngineHeldRoles):
+            async def change_role(self, client, base, role, launch):
+                return False
+
+        switcher = Switcher()
+        switcher._received["http://c"] = {}
+        switcher.record_handoff("http://p", "http://c")
+        switcher._received["http://fresh"] = {}
+        self.assertFalse(switcher.stale_handoff("http://p", "http://c"))
+        switcher.forget("http://p")
+        # The rejoined producer serves prefill already, so no switch counts a new endpoint.
+        await switcher.switch(None, "http://p", Role.PREFILL)
+        self.assertTrue(switcher.stale_handoff("http://p", "http://c"))
+        self.assertFalse(switcher.stale_handoff("http://p", "http://fresh"))
+
+    async def test_the_monitor_follows_snapshot_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            router = contract_free_router(self, Path(tmp))
+            e1 = router.membership.spec("e1")
+            router.apply_membership(router.membership.left("e1"))
+            router.apply_membership(router.membership.joined(e1))
+            self.assertEqual(router.membership.ids[-1], "e1")
+            self.assertEqual(router.membership.ids, list(router.monitor.instances))
 
     async def test_profile_set_check_follows_a_replaced_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
