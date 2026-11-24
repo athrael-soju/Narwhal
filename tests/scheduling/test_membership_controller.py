@@ -55,9 +55,11 @@ class MembershipControllerTests(unittest.TestCase):
         self.assertIsNone(fleet.step())
         decision = fleet.scheduler.roles._last_decision
         self.assertEqual(decision["prefill"] + decision["decode"], 5)
+        # The count restarts on the new engine set.
+        self.assertEqual(fleet.controller.reactive.confirmations, 1)
         self.assertEqual(fleet.scheduler.roles.flips, [])
 
-    def test_runs_drains_and_urgent_events_reset(self) -> None:
+    def test_runs_and_drains_reset_and_urgent_events_stay(self) -> None:
         fleet = self.fleet
         policy = fleet.controller.reactive
         policy.settled_since = policy.balanced_since = 1.0
@@ -85,8 +87,9 @@ class MembershipControllerTests(unittest.TestCase):
         self.assertEqual(fleet.scheduler.switch_holds, {})
         self.assertEqual(fleet.scheduler.roles._panic_sustained, 0)
         self.assertIsNone(fleet.scheduler.roles.held_donor)
-        self.assertFalse(fleet.controller.prefill_risk_pending)
-        self.assertIsNone(fleet.controller._decode_urgency)
+        # Each urgent event is checked against the live pools when it is used.
+        self.assertTrue(fleet.controller.prefill_risk_pending)
+        self.assertIsNotNone(fleet.controller._decode_urgency)
 
     def test_floors_count_the_new_engine_set(self) -> None:
         controller = self.fleet.controller
