@@ -10,6 +10,7 @@ from ...engines.client import EngineError
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
 from ...profiling.generation import binding_digest, profile_generation_problems
+from ...profiling.store import ProfileStore
 from ...types import Instance, Role
 from .records import LifecycleError, ValidationOutcome
 
@@ -38,8 +39,16 @@ async def validate_readmission(
     *,
     wave: bool,
     transport: httpx.AsyncBaseTransport | None = None,
+    candidate: EngineSpec | None = None,
+    profiles: ProfileStore | None = None,
 ) -> ValidationOutcome:
+    """Run the readmission gates for `engines`.
+
+    A `candidate` is an engine outside the snapshot that asks to join: it is validated in its
+    spec's role against `profiles`, the reloaded store, and `engines` must name only it.
+    """
     outcome = ValidationOutcome()
+    store = router.profiles if profiles is None else profiles
     cfg: FleetConfig = router.cfg
     contract = cfg.engine_contract
     if cfg.engine_restart_policy == "whole_wave":
@@ -61,6 +70,10 @@ async def validate_readmission(
         return outcome
 
     by_id = router.membership.by_id()
+    if candidate is not None:
+        if wave or engines != [candidate.iid]:
+            raise LifecycleError("a joining engine is validated alone")
+        by_id[candidate.iid] = candidate
     targets = [by_id[iid] for iid in engines]
     if wave:
         participants = list(router.membership)
@@ -68,7 +81,11 @@ async def validate_readmission(
     else:
         live = router.scheduler.live_instances(exclude=set(engines))
         if router.scheduler.availability.roles_bound:
-            role = router.monitor.instances[targets[0].iid].role
+            role = (
+                candidate.role
+                if candidate is not None
+                else router.monitor.instances[targets[0].iid].role
+            )
             pairs = role_bound_pairs(targets[0].iid, role, live)
             if not pairs:
                 for iid in engines:
@@ -84,7 +101,7 @@ async def validate_readmission(
         participants = targets + [by_id[iid] for iid in sorted(peer_ids)]
 
     participant_ids = {spec.iid for spec in participants}
-    if len(router.membership) == 1:
+    if len(router.membership) == 1 and candidate is None:
         outcome.ok(engines[0], "fabric not applicable: single-engine fleet")
     elif len(participant_ids) < 2 or not pairs:
         for iid in engines:
@@ -130,13 +147,19 @@ async def validate_readmission(
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
-                router.attested(spec.iid, payload)
+                router.attested(spec.iid, payload, candidate=spec is candidate)
                 # A replacement process starts in its launch role; the fabric check runs in the
-                # router's role for it.
-                if spec.iid in engines and (switched := await router.resume_role(spec.iid)):
+                # router's role for it. A joining engine runs in its spec's role.
+                if spec is candidate:
+                    switched = await router.switch_spec_role(spec, spec.role)
+                elif spec.iid in engines:
+                    switched = await router.resume_role(spec.iid)
+                else:
+                    switched = None
+                if switched:
                     outcome.fail(spec.iid, f"role switch failed: {switched}")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, binding_digest(payload), contract=True
+                    store, spec.iid, binding_digest(payload), contract=True
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
@@ -158,18 +181,19 @@ async def validate_readmission(
 
         for spec in targets:
             target_identity = identities.get(spec.iid)
-            record = router.lifecycle.records[spec.iid]
+            record = router.lifecycle.records.get(spec.iid)
+            restart_required = record is not None and record.restart_required
             if target_identity is None:
                 continue
-            if record.restart_required and target_identity.process_start_time_seconds <= float(
-                record.old_process_start or 0.0
+            if restart_required and target_identity.process_start_time_seconds <= float(
+                (record.old_process_start if record is not None else None) or 0.0
             ):
                 outcome.fail(spec.iid, "engine process did not restart after drain")
                 continue
             outcome.starts[spec.iid] = target_identity.process_start_time_seconds
             outcome.ok(
                 spec.iid,
-                "new process identity" if record.restart_required else "process identity",
+                "new process identity" if restart_required else "process identity",
             )
             if router.engines.kv.concurrent:
                 # An engine with concurrent legs serves only paired legs; the fabric pairs generate.
@@ -216,7 +240,7 @@ async def validate_readmission(
                 if verify_attestation(payload, contract, live):
                     raise ValueError("attestation changed during validation")
                 problems = profile_generation_problems(
-                    router.profiles, spec.iid, binding_digest(payload), contract=True
+                    store, spec.iid, binding_digest(payload), contract=True
                 )
                 for problem in problems:
                     outcome.fail(spec.iid, problem)
@@ -245,6 +269,8 @@ async def validate_readmission(
     if router.scheduler.availability.roles_bound:
         # Each engine serves only its live role, so a pair runs from prefill to decode.
         roles = {iid: inst.role for iid, inst in router.monitor.instances.items()}
+        if candidate is not None:
+            roles[candidate.iid] = candidate.role
         pairs = [
             (source, target)
             for source, target in pairs
