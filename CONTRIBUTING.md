@@ -228,6 +228,7 @@ Import each name from the subpackage module that defines it.
 | `diagnostics/check/preflight.py`                                             | Gate order for one preflight run                                         |
 | `diagnostics/check/cli.py`                                                   | `narwhal-check`                                                          |
 | `serving/router/routing.py`                                                  | `NarwhalRouter` construction, request admission and live state           |
+| `serving/router/membership.py`                                               | `Membership` engine membership snapshot and its generation               |
 | `serving/router/sizing.py`                                                   | `RequestSizer` input counts and prefix-cache evidence                    |
 | `serving/router/verification.py`                                             | `SuspectVerifier` leg failure classes and suspect verification           |
 | `scheduling/scheduler/placement.py`                                          | `GlobalScheduler` placement, pricing, availability and engine health     |

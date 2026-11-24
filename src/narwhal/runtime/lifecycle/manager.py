@@ -34,7 +34,7 @@ class LifecycleManager:
         ids = list(dict.fromkeys(engines))
         if self.router.cfg.engine_restart_policy == "whole_wave" and not wave:
             raise LifecycleError("engine_restart_policy requires a whole-wave drain")
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         unknown = sorted(set(ids) - configured)
         if unknown:
             raise LifecycleError(f"unknown engine(s): {', '.join(unknown)}")
@@ -140,7 +140,7 @@ class LifecycleManager:
                 and name not in engines
             )
         }
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         if wave and set(engines) != configured:
             raise LifecycleError("whole-wave recovery must name every configured engine")
         if not wave and len(engines) != 1:
@@ -172,7 +172,7 @@ class LifecycleManager:
             return
         now = time.time()
         self.wave_id = f"wave-{uuid.uuid4().hex[:12]}"
-        for iid in self.router.monitor.instances:
+        for iid in self.router.membership.ids:
             self.router.scheduler.drain(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
@@ -353,7 +353,7 @@ class LifecycleManager:
             raise LifecycleError("handoff engine restart policy does not match this fleet")
         starts = payload.get("process_starts")
         if not isinstance(starts, dict) or any(
-            iid not in self.router.monitor.instances
+            iid not in self.router.membership
             or isinstance(start, bool)
             or not isinstance(start, int | float)
             or not math.isfinite(start)
@@ -367,7 +367,7 @@ class LifecycleManager:
         if not isinstance(records, list):
             raise LifecycleError("handoff lifecycle records must be a list")
         restored: dict[str, DrainRecord] = {}
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         for raw in records:
             if not isinstance(raw, dict):
                 raise LifecycleError("handoff lifecycle record must be an object")

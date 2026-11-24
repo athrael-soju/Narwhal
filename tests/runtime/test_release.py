@@ -18,6 +18,7 @@ from narwhal.runtime.release import (
     release_round,
     released_engines,
 )
+from narwhal.serving.router.membership import Membership
 from tests.fixtures import contract_free_router
 
 FABRIC = load_backend("vllm").fabric
@@ -114,8 +115,11 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e5", {iid for call in self.calls for iid in call})
 
     async def test_role_pins_limit_producers_and_consumers(self):
-        engines = self.cfg.engines
-        self.cfg.engines = [replace(spec, pin=spec.iid in ("e0", "e3")) for spec in engines]
+        current = self.router.membership
+        self.router.membership = Membership(
+            current.generation,
+            tuple(replace(spec, pin=spec.iid in ("e0", "e3")) for spec in current),
+        )
         self.router.scheduler.eject("e5", "liveness")
         await release_round(self.router, ["e5"])
         consumers = sorted(consumer for _, consumer in self.calls)

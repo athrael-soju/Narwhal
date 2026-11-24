@@ -14,7 +14,7 @@ from ..serving.policy import ServingPolicy
 from ..types import Role
 
 
-@dataclass
+@dataclass(frozen=True)
 class EngineSpec:
     iid: str
     url: str

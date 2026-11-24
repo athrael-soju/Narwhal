@@ -175,7 +175,7 @@ class ProfileGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_router_starts_with_evidence_for_a_pinned_engine(self):
         await self._serve_launch()
         await self._calibrate()
-        self.cfg.engines[1].pin = True
+        self.cfg.engines[1] = replace(self.cfg.engines[1], pin=True)
         app = create_app(self.cfg, lifecycle_transport=self.transport)
         async with app.router.lifespan_context(app):
             state = app.state.router.state()

@@ -112,7 +112,7 @@ def release_peers(router: NarwhalRouter) -> None:
 async def release_round(
     router: NarwhalRouter, gone: list[str], only: set[str] | None = None
 ) -> dict[str, str]:
-    specs = {spec.iid: spec for spec in router.cfg.engines}
+    specs = router.membership.by_id()
     live = [inst for inst in router.scheduler.live_instances() if inst.iid in specs]
     producers = [inst for inst in live if can_produce(specs[inst.iid])]
     consumers = [inst for inst in live if can_consume(specs[inst.iid])]

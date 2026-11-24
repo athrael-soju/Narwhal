@@ -551,7 +551,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_calibration_gate_accepts_evidence_for_a_pinned_engine(self):
         _, _, transport = await self._calibrated_engines()
-        self.cfg.engines[1].pin = True
+        self.cfg.engines[1] = replace(self.cfg.engines[1], pin=True)
         report = Report()
         with redirect_stdout(io.StringIO()):
             await engine_gates.gate_calibration(self.cfg, report, transport)

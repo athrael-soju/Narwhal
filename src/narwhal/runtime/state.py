@@ -62,7 +62,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
         "model": router.cfg.model,
         "epoch": int(router.lease_epoch),
         "holder": str(router.lease_holder),
-        "engines": sorted(router.monitor.instances),
+        "engines": sorted(router.membership.ids),
         "roles": {iid: i.role.value for iid, i in router.monitor.instances.items()},
         "ejected": sorted(router.scheduler.ejected),
         "inference_sources": {
@@ -205,7 +205,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
         return HandoffReport(applied=False, why="no handoff file")
     doc = validate(doc)
     declared = sorted(doc.get("engines") or [])
-    actual = sorted(router.monitor.instances)
+    actual = sorted(router.membership.ids)
     if declared != actual:
         return HandoffReport(applied=False, why=f"handoff names {declared}, this fleet is {actual}")
     lifecycle = doc.get("lifecycle") or {}
@@ -234,7 +234,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
             continue
 
     now = router._clock()
-    ejected = [iid for iid in doc.get("ejected", []) if iid in router.monitor.instances]
+    ejected = [iid for iid in doc.get("ejected", []) if iid in router.membership]
     for iid in ejected:
         # A far-past ejection time makes the readmission probe due at once.
         router.scheduler.ejected[iid] = now - 1e9
