@@ -371,6 +371,19 @@ class RouterMembershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("http://e4", slots._free)
         self.assertNotIn("http://e4", slots._held)
 
+    async def test_a_cancelled_wait_on_a_departed_engine_stays_cancelled(self) -> None:
+        slots = SlotFileConnector()
+        slots._free["http://e4"] = []
+        waiter = asyncio.ensure_future(slots.claim(None, "http://e4", "decode"))
+        await asyncio.sleep(0)
+        slots.forget("http://e4")
+        slots.release("http://e4", "decode", {"id_slot": 0})
+        self.assertNotIn("http://e4", slots._free)
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        self.assertNotIn("http://e4", slots._free)
+
     async def test_the_monitor_follows_snapshot_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             router = contract_free_router(self, Path(tmp))

@@ -131,7 +131,10 @@ class SlotFileConnector(KvConnector):
             if not turn.done():
                 turn.set_result(slot)
                 return
-        self._free[url].append(slot)
+        # A departed engine's tables may be gone once its last leg ended.
+        free = self._free.get(url)
+        if free is not None:
+            free.append(slot)
 
     async def export(
         self,
