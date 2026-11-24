@@ -171,6 +171,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         for name in ("engine_pause", "engine_resume", "engine_stop", "engine_start")
     }
     router_timeout_s = 5.0
+    router_class: ClassVar[type[FakeRouter]] = FakeRouter
 
     async def asyncSetUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
@@ -178,7 +179,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         self.runs = Path(folder.name) / "runs"
         self.stopped = stopped = Path(folder.name) / "stopped"
         stopped.mkdir()
-        self.router = FakeRouter(stopped)
+        self.router = self.router_class(stopped)
         config = ControlConfig(
             FLEET,
             dict(self.hooks),
@@ -264,9 +265,11 @@ class HookActionTests(EngineCase):
         self.assertTrue(result["before"]["ejected"])
         self.assertFalse(result["after"]["ejected"])
         self.assertTrue(result["service"]["in_service"])
+        # Each action reads the router's membership before the engine's state.
         self.assertEqual(
             [path for method, path, _ in self.router.requests],
-            ["/narwhal/state"] * 5,
+            ["/narwhal/engines", *["/narwhal/state"] * 2, "/narwhal/engines"]
+            + ["/narwhal/state"] * 3,
         )
 
 
@@ -483,9 +486,11 @@ class LifecycleActionTests(EngineCase):
         self.assertEqual(
             [(method, path) for method, path, _ in self.router.requests],
             [
+                ("GET", "/narwhal/engines"),
                 ("GET", "/narwhal/state"),
                 ("POST", "/narwhal/lifecycle/drain"),
                 ("GET", "/narwhal/state"),
+                ("GET", "/narwhal/engines"),
                 ("GET", "/narwhal/state"),
                 ("POST", "/narwhal/lifecycle/readmit"),
                 ("GET", "/narwhal/state"),
@@ -499,7 +504,7 @@ class LifecycleActionTests(EngineCase):
     async def test_drain_uses_the_router_default_deadline_unless_one_is_given(self) -> None:
         await self.start_session()
         await self.client.post("/api/engines/e0/drain")
-        self.assertEqual(self.router.requests[1][2], {"engines": ["e0"]})
+        self.assertEqual(self.router.requests[2][2], {"engines": ["e0"]})
 
     async def test_a_router_refusal_is_a_failed_action_with_its_state(self) -> None:
         await self.start_session()
@@ -573,7 +578,8 @@ class RefusalTests(EngineCase):
                     (entry["action"], entry["outcome"], entry["params"]),
                     (f"engine.{action}", "refused", {"engine": "e99"}),
                 )
-        self.assertEqual(self.router.requests, [])
+        # A router without the membership route leaves the baseline as the engine list.
+        self.assertEqual({path for _, path, _ in self.router.requests}, {"/narwhal/engines"})
 
     async def test_an_unknown_action_has_no_route(self) -> None:
         await self.start_session()
@@ -610,7 +616,10 @@ class FleetStateTests(EngineCase):
         response = await self.client.get("/api/engines")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(sorted(response.json()["engines"]), sorted(self.router.roles))
-        self.assertEqual(self.router.requests, [("GET", "/narwhal/state", None)])
+        self.assertEqual(
+            self.router.requests,
+            [("GET", "/narwhal/engines", None), ("GET", "/narwhal/state", None)],
+        )
         self.assertFalse((self.runs / "actions.jsonl").exists())
 
     async def test_outside_a_session_an_unreadable_fleet_file_is_reported(self) -> None:
@@ -736,7 +745,7 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(readmitted.result["after"]["process_start"], 101)
         self.assertTrue(readmitted.result["after"]["lifecycle"]["accepts_new"])
 
-    async def test_a_baseline_engine_the_router_lacks_is_reported_unknown(self) -> None:
+    async def test_a_baseline_engine_outside_the_router_membership_is_refused(self) -> None:
         assert self.service.session is not None
         state = await self.actions.fleet_state(list(baseline_engines(self.service.session)))
         self.assertEqual(state["e2"]["known"], False)
@@ -744,8 +753,8 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["e3"]["role"], "decode")
         with self.assertRaises(ActionError) as caught:
             await self.actions.act("e2", "drain", {})
-        self.assertEqual(caught.exception.status, 502)
-        self.assertIn("HTTP 409", str(caught.exception))
+        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(str(caught.exception), "engine 'e2' is not in the router's membership")
 
 
 class RouterConfigTests(unittest.TestCase):

@@ -33,22 +33,55 @@ UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
 # Actions that clear the engine changes.
 CLEARING_ACTIONS = frozenset({"config.cold_restart"})
 RESTORE_ACTION = "config.restore"
+# Actions that change the router's membership.
+MEMBERSHIP_ACTIONS = frozenset({"engine.join", "engine.leave"})
 
 
 def session_changes(session: Session) -> dict[str, Any]:
-    """Return the configuration and engine changes the session leaves in place, in undo order."""
+    """Return the configuration, engine and membership changes the session leaves in place.
+
+    Engine changes are in undo order. `joined`, when present, lists engines that joined during
+    the session and are still members; `left`, when present, maps each engine that left to its
+    engine entry.
+    """
     axes: dict[str, dict[str, str]] = {}
+    joined: list[str] = []
+    left: dict[str, Any] = {}
     for action in session.actions:
         if action.name == RESTORE_ACTION:
             # A restore step with no seq found the engine already in service.
             for step in (action.result or {}).get("steps", []):
-                if step.get("seq") is None:
-                    axes.get(str(step.get("engine")), {}).pop("lifecycle", None)
+                if step.get("seq") is not None:
+                    continue
+                iid = str(step.get("engine"))
+                # A join step found the engine a member; a leave step found it gone.
+                if step.get("action") == "join":
+                    left.pop(iid, None)
+                elif step.get("action") == "leave":
+                    if iid in joined:
+                        joined.remove(iid)
+                else:
+                    axes.get(iid, {}).pop("lifecycle", None)
             continue
         if action.outcome != "ok":
             continue
         if action.name in CLEARING_ACTIONS:
             axes.clear()
+            joined.clear()
+            left.clear()
+            continue
+        if action.name in MEMBERSHIP_ACTIONS:
+            iid = str(action.params.get("engine"))
+            if action.name == "engine.join":
+                if left.pop(iid, None) is None and iid not in joined:
+                    joined.append(iid)
+            else:
+                # The engine's drain and process changes leave with it.
+                axes.pop(iid, None)
+                if iid in joined:
+                    joined.remove(iid)
+                else:
+                    left[iid] = (action.result or {}).get("spec") or {"iid": iid}
             continue
         verb = action.name.removeprefix("engine.")
         if verb == action.name or verb not in ENGINE_CHANGES:
@@ -65,10 +98,16 @@ def session_changes(session: Session) -> dict[str, Any]:
         if changes
     }
     baseline = session.configurations[0]["digest"]
-    return {
+    changes: dict[str, Any] = {
         "configuration": session.configurations[-1]["digest"] != baseline,
         "engines": engines,
     }
+    # Membership keys appear only when the session changed membership.
+    if joined:
+        changes["joined"] = joined
+    if left:
+        changes["left"] = left
+    return changes
 
 
 class ActionError(Exception):

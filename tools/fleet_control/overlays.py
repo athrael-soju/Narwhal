@@ -204,6 +204,10 @@ class Overlays:
             undo = [(iid, change) for iid, each in changes["engines"].items() for change in each]
             for iid, change in undo:
                 steps.append(await self._undo(iid, UNDO[change], effect))
+            # Engines that left return before engines that joined leave, so capacity holds.
+            for iid, spec in changes.get("left", {}).items():
+                steps.extend(await self._return(session, iid, spec, effect))
+            steps.extend([await self._remove(iid, effect) for iid in changes.get("joined", [])])
             return effect
 
         return await self.service.act("config.restore", {}, restore, exclusive=True)
@@ -226,6 +230,48 @@ class Overlays:
                 f"{action} {iid} failed: {exc}", status=exc.status, result=effect
             ) from exc
         return {"engine": iid, "action": action, "seq": done.seq}
+
+    async def _return(
+        self, session: Session, iid: str, spec: Mapping[str, Any], effect: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Start an engine that left, when an engine_start hook is configured, and join it."""
+        engines = self._actions(iid, "join", effect)
+        steps: list[dict[str, Any]] = []
+        async with engines._client() as client:
+            current = await engines.membership(client)
+        if current is not None and iid in current["engines"]:
+            return [{"engine": iid, "action": "join", "seq": None}]
+        try:
+            if "engine_start" in self.service.config.hooks:
+                started = await engines.within(iid, "start", spec)
+                steps.append({"engine": iid, "action": "start", "seq": started.seq})
+            done = await engines.join_within(spec)
+        except ActionError as exc:
+            raise ActionError(
+                f"return of {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        steps.append({"engine": iid, "action": "join", "seq": done.seq})
+        return steps
+
+    async def _remove(self, iid: str, effect: Mapping[str, Any]) -> dict[str, Any]:
+        """Remove an engine that joined during the session from the router's membership."""
+        engines = self._actions(iid, "leave", effect)
+        async with engines._client() as client:
+            current = await engines.membership(client)
+        if current is not None and iid not in current["engines"]:
+            return {"engine": iid, "action": "leave", "seq": None}
+        try:
+            done = await engines.leave_within(iid)
+        except ActionError as exc:
+            raise ActionError(
+                f"leave {iid} failed: {exc}", status=exc.status, result=effect
+            ) from exc
+        return {"engine": iid, "action": "leave", "seq": done.seq}
+
+    def _actions(self, iid: str, action: str, effect: Mapping[str, Any]) -> EngineActions:
+        if self.engines is None:
+            raise ActionError(f"engine actions are unavailable to {action} {iid}", result=effect)
+        return self.engines
 
     def _hook(self, name: str) -> Hook:
         try:

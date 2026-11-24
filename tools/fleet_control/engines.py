@@ -1,4 +1,4 @@
-"""Engine pause, resume, stop, start, drain and readmit."""
+"""Engine pause, resume, stop, start, drain, readmit, join and leave."""
 
 from __future__ import annotations
 
@@ -34,10 +34,18 @@ LIFECYCLE_ACTIONS = {
     "drain": "/narwhal/lifecycle/drain",
     "readmit": "/narwhal/lifecycle/readmit",
 }
-ACTIONS = (*HOOK_ACTIONS, *LIFECYCLE_ACTIONS)
+# Leave drains the engine and removes it from the router's membership.
+ACTIONS = (*HOOK_ACTIONS, *LIFECYCLE_ACTIONS, "leave")
 # Optional request fields each action accepts beyond the engine it names.
-ACTION_PARAMS: dict[str, frozenset[str]] = {"drain": frozenset({"deadline_s"})}
+ACTION_PARAMS: dict[str, frozenset[str]] = {
+    "drain": frozenset({"deadline_s"}),
+    "leave": frozenset({"deadline_s"}),
+}
 STATE_PATH = "/narwhal/state"
+MEMBERSHIP_PATH = "/narwhal/engines"
+MEMBERSHIP_SCHEMA = "narwhal.membership"
+# The router's default drain deadline for a leave, in seconds.
+LEAVE_DEADLINE_S = 300.0
 # Timeout for router state reads, in seconds.
 STATE_TIMEOUT_S = 10.0
 # Actions that wait for the engine to return to service.
@@ -75,20 +83,31 @@ class EngineActions:
             name, {"engine": iid, **params}, self._operation(iid, action, params)
         )
 
-    async def within(self, iid: str, action: str) -> Action:
-        """Run and record `action` on engine `iid` within a running exclusive action."""
+    async def within(
+        self, iid: str, action: str, engine: Mapping[str, Any] | None = None
+    ) -> Action:
+        """Run and record `action` on engine `iid` within a running exclusive action.
+
+        `engine` names an engine entry outside the router's membership, such as one that left.
+        """
         name = f"engine.{action}"
         return await self.service._perform(
-            name, {"engine": iid}, self._operation(iid, action, {}), True
+            name, {"engine": iid}, self._operation(iid, action, {}, engine), True
         )
 
-    def _operation(self, iid: str, action: str, params: Mapping[str, Any]) -> Operation:
+    def _operation(
+        self,
+        iid: str,
+        action: str,
+        params: Mapping[str, Any],
+        known: Mapping[str, Any] | None = None,
+    ) -> Operation:
         async def operate(session: Session | None) -> Mapping[str, Any]:
             assert session is not None
-            engine = baseline_engine(session, iid)
             _check_params(action, params)
             hook = self._hook(action) if action in HOOK_ACTIONS else None
             async with self._client() as client:
+                engine = known or await self.member(client, session, iid)
                 before = await self.engine_state(client, iid)
                 try:
                     if hook is not None:
@@ -112,6 +131,159 @@ class EngineActions:
             return {"engine": iid, "before": before, **effect, "after": after}
 
         return operate
+
+    async def join(self, spec: Mapping[str, Any]) -> Action:
+        """Ask the router to validate `spec` and add it to the fleet, as an exclusive action."""
+        return await self.service.act(
+            "engine.join",
+            {"engine": spec.get("iid"), "spec": dict(spec)},
+            self._join(spec),
+            exclusive=True,
+        )
+
+    async def leave(self, iid: str, params: Mapping[str, Any]) -> Action:
+        """Drain engine `iid` and remove it from the fleet, as an exclusive action."""
+        return await self.service.act(
+            "engine.leave", {"engine": iid, **params}, self._leave(iid, params), exclusive=True
+        )
+
+    async def join_within(self, spec: Mapping[str, Any]) -> Action:
+        """Run and record a join within a running exclusive action."""
+        params = {"engine": spec.get("iid"), "spec": dict(spec)}
+        return await self.service._perform("engine.join", params, self._join(spec), True)
+
+    async def leave_within(self, iid: str) -> Action:
+        """Run and record a leave within a running exclusive action."""
+        return await self.service._perform(
+            "engine.leave", {"engine": iid}, self._leave(iid, {}), True
+        )
+
+    def _join(self, spec: Mapping[str, Any]) -> Operation:
+        async def operate(session: Session | None) -> Mapping[str, Any]:
+            assert session is not None
+            iid = spec.get("iid")
+            if not isinstance(iid, str) or not iid:
+                raise refused("the engine entry needs an iid", 422)
+            async with self._client() as client:
+                before = await self.membership(client)
+                try:
+                    response = await client.post(MEMBERSHIP_PATH, json=dict(spec))
+                except httpx.HTTPError as exc:
+                    raise ActionError(
+                        f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
+                    ) from exc
+                document = _document(response)
+                error = _lifecycle_error(response)
+                effect: dict[str, Any] = {
+                    "engine": iid,
+                    "router": {
+                        "path": MEMBERSHIP_PATH,
+                        "status": response.status_code,
+                        "error": error,
+                        "join": document.get("join"),
+                    },
+                    "generation": {
+                        "before": None if before is None else before["generation"],
+                        "after": document.get("generation"),
+                    },
+                }
+                if response.status_code != 200:
+                    raise ActionError(
+                        f"router refused join of {iid} with HTTP {response.status_code}: {error}",
+                        status=_relayed(response.status_code),
+                        result=effect,
+                    )
+                effect["after"] = await self.engine_state(client, iid)
+            return effect
+
+        return operate
+
+    def _leave(self, iid: str, params: Mapping[str, Any]) -> Operation:
+        async def operate(session: Session | None) -> Mapping[str, Any]:
+            assert session is not None
+            _check_params("leave", params)
+            deadline = float(params.get("deadline_s", LEAVE_DEADLINE_S))
+            async with self._client() as client:
+                current = await self.membership(client)
+                if current is None:
+                    raise ActionError("router membership is unavailable")
+                spec = current["engines"].get(iid)
+                if spec is None:
+                    raise refused(f"engine {iid!r} is not in the router's membership", 404)
+                before = await self.engine_state(client, iid)
+                path = f"{MEMBERSHIP_PATH}/{iid}"
+                try:
+                    response = await client.delete(path, params={"deadline_s": deadline})
+                except httpx.HTTPError as exc:
+                    raise ActionError(f"router {path} failed: {type(exc).__name__}: {exc}") from exc
+                effect: dict[str, Any] = {
+                    "engine": iid,
+                    "spec": spec,
+                    "before": before,
+                    "router": {
+                        "path": path,
+                        "status": response.status_code,
+                        "error": _lifecycle_error(response),
+                    },
+                }
+                if response.status_code not in (200, 202):
+                    raise ActionError(
+                        f"router refused leave of {iid} with HTTP {response.status_code}: "
+                        f"{effect['router']['error']}",
+                        status=_relayed(response.status_code),
+                        result=effect,
+                    )
+                effect["removal"] = await self._await_removal(client, iid, deadline, effect)
+            return effect
+
+        return operate
+
+    async def _await_removal(
+        self, client: httpx.AsyncClient, iid: str, deadline_s: float, effect: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Wait for the drain deadline plus `router.timeout_s` until the router removes `iid`."""
+        limit = deadline_s + self.service.config.router.timeout_s
+        started = time.monotonic()
+        while True:
+            current = await self.membership(client)
+            waited = round(time.monotonic() - started, 3)
+            if current is not None and iid not in current["engines"]:
+                return {"removed": True, "waited_s": waited, "generation": current["generation"]}
+            if waited >= limit:
+                raise ActionError(
+                    f"the router did not remove {iid} within {limit:g}s",
+                    status=504,
+                    result={**effect, "removal": {"removed": False, "waited_s": waited}},
+                )
+            await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
+
+    async def membership(self, client: httpx.AsyncClient) -> dict[str, Any] | None:
+        """Return the router's membership generation and engine entries, or None."""
+        timeout = min(STATE_TIMEOUT_S, self.service.config.router.timeout_s)
+        try:
+            response = await client.get(MEMBERSHIP_PATH, timeout=timeout)
+            document = response.json()
+            if response.status_code != 200 or document.get("schema") != MEMBERSHIP_SCHEMA:
+                return None
+            return {
+                "generation": document["generation"],
+                "engines": {str(row["iid"]): row for row in document["engines"]},
+            }
+        except (httpx.HTTPError, ValueError, LookupError, TypeError, AttributeError):
+            return None
+
+    async def member(
+        self, client: httpx.AsyncClient, session: Session, iid: str
+    ) -> Mapping[str, Any]:
+        """Return engine `iid` from the router's membership, or from the baseline file when
+        the router does not answer with one."""
+        current = await self.membership(client)
+        if current is None:
+            return baseline_engine(session, iid)
+        engine = current["engines"].get(iid)
+        if engine is None:
+            raise refused(f"engine {iid!r} is not in the router's membership", 404)
+        return engine
 
     def _hook(self, action: str) -> Hook:
         name = HOOK_ACTIONS[action]
@@ -297,6 +469,19 @@ def _check_params(action: str, params: Mapping[str, Any]) -> None:
         raise refused("deadline_s must be a positive number of seconds", 422)
 
 
+def _document(response: httpx.Response) -> dict[str, Any]:
+    try:
+        document = response.json()
+    except ValueError:
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _relayed(status: int) -> int:
+    """Return the control status for a router refusal: client errors pass through."""
+    return status if status in (404, 409, 422, 503) else 502
+
+
 def _lifecycle_error(response: httpx.Response) -> str:
     try:
         document = response.json()
@@ -313,6 +498,13 @@ def engine_routes(actions: EngineActions) -> APIRouter:
 
     @routes.get("")
     async def engines() -> JSONResponse:
+        async with actions._client() as client:
+            current = await actions.membership(client)
+        if current is not None:
+            iids = list(current["engines"])
+            return JSONResponse(
+                {"generation": current["generation"], "engines": await actions.fleet_state(iids)}
+            )
         if service.session is not None:
             iids = list(baseline_engines(service.session))
         else:
@@ -333,10 +525,23 @@ def engine_routes(actions: EngineActions) -> APIRouter:
                 params = None
             if not isinstance(params, dict):
                 return JSONResponse({"detail": f"{action} parameters must be a JSON object"}, 422)
+            if action == "leave":
+                return action_reply(await actions.leave(iid, params))
             return action_reply(await actions.act(iid, action, params))
 
         routes.add_api_route(f"/{{iid}}/{action}", run, methods=["POST"], name=f"engine_{action}")
 
     for action in ACTIONS:
         add(action)
+
+    @routes.post("/join")
+    async def join(request: Request) -> JSONResponse:
+        try:
+            spec = await request.json()
+        except ValueError:
+            spec = None
+        if not isinstance(spec, dict):
+            return JSONResponse({"detail": "join takes an engine entry as a JSON object"}, 422)
+        return action_reply(await actions.join(spec))
+
     return routes
