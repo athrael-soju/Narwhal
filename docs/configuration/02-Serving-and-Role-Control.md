@@ -19,6 +19,8 @@ In `predictive` mode, the router returns HTTP 429 when a request fails the time 
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
+With `engine.control_connections` at `0`, the router sizes the control pool from the fleet file's engine count at startup. Joins and removals leave the pool size unchanged. A health probe that waits out the pool is inconclusive: liveness keeps the engine's miss count, a recovery probe leaves the engine ejected for that pass, and a readmission or join fails its `health` check. For a fleet that will grow through joins, set `engine.control_connections` to `max(4, 2 × engine count)` for the largest engine count you plan, and restart the router.
+
 Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps) gives the measurement procedure.
 
 #### In-flight limit
@@ -463,7 +465,7 @@ Controller decision details call load "pressure", as in the `mixed_pressure` eli
 
 ### Role floors
 
-In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count. A one-engine fleet has both floors at `1`. Every role change keeps at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines. When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
+In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count, and the router refuses a [removal](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) that would leave fewer engines. A one-engine fleet has both floors at `1`. Every role change keeps at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines. When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
 
 Engine monitoring repairs a shortfall one engine per pass:
 
@@ -476,6 +478,8 @@ Floor recoveries skip some move timers:
 | ------------- | -------- | ---------------- |
 | Decode floor  | Skipped  | Applied          |
 | Prefill floor | Skipped  | Skipped          |
+
+A joined engine's dwell starts when it joins, so decode floor recovery waits `controller.thresholds.dwell_s` before it moves that engine.
 
 Both floor recoveries:
 

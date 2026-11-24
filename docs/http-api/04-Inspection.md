@@ -28,7 +28,7 @@ Returns HTTP `200` in every router state.
 | Field                 | Meaning                        |
 | --------------------- | ------------------------------ |
 | `status`              | Router state                   |
-| `instances`           | Configured fleet size          |
+| `instances`           | Engines in the membership snapshot |
 | `available_instances` | Engines eligible for placement |
 
 The earliest matching row sets `status`:
@@ -99,7 +99,7 @@ Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#prometheus-
 
 ## `GET /narwhal/targets`
 
-Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prometheus/latest/http_sd/) target group per configured engine. The target is the host and port of the engine's `url`. The labels carry the engine's `iid`, the fleet's `engine.backend`, the scheme of the `url`, and its path followed by `/metrics`:
+Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prometheus/latest/http_sd/) target group per engine in the [membership snapshot](08-Engine-Membership.md), so the list changes when an engine joins or leaves. The target is the host and port of the engine's `url`. The labels carry the engine's `iid`, the fleet's `engine.backend`, the scheme of the `url`, and its path followed by `/metrics`:
 
 ```json
 [

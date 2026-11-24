@@ -58,7 +58,7 @@ Each hook inherits the service's environment, minus the bearer token variable, p
 | `NARWHAL_CONTROL_BASELINE`   | Every hook                       | Absolute path of the session's copy of the baseline fleet configuration    |
 | `NARWHAL_CONTROL_ACTION`     | Engine hooks                     | `pause`, `resume`, `stop` or `start`                                       |
 | `NARWHAL_CONTROL_ENGINE`     | Engine hooks                     | Engine ID                                                                  |
-| `NARWHAL_CONTROL_ENGINE_URL` | Engine hooks                     | The engine's `url` from the baseline fleet configuration, or empty         |
+| `NARWHAL_CONTROL_ENGINE_URL` | Engine hooks                     | The engine's `url` from the router's membership, from the baseline fleet configuration when the router has no membership route, or from the baseline entry of an engine that restore returns; empty when unset |
 | `NARWHAL_CONTROL_FLEET`      | `router_restart`, `cold_restart` | Absolute path of the fleet configuration the restarted processes must load |
 
 Hooks run in the service's working directory, so relative paths in `argv` resolve against it.

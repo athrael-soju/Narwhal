@@ -36,18 +36,20 @@ A malformed request body returns HTTP 422 with a `detail` alone, and the service
 | `POST /api/engines/{iid}/start`   | Runs the `engine_start` hook, then waits until the router returns the engine to service  |
 | `POST /api/engines/{iid}/drain`   | Drains the engine. Accepts an optional `deadline_s`, a positive number of seconds        |
 | `POST /api/engines/{iid}/readmit` | Readmits the engine                                                                      |
-| `GET /api/engines`                | The router state of every baseline engine                                                |
+| `POST /api/engines/{iid}/leave`   | Removes the engine from the router's membership. Accepts an optional `deadline_s`        |
+| `POST /api/engines/join`          | Joins the engine entry in the body                                                       |
+| `GET /api/engines`                | The membership `generation` and the router state of every member engine                  |
 
 Engine actions return these statuses:
 
 | Status | Meaning                                                                                                                                                                                                                               |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 200    | The hook exited `0`, or the router accepted the lifecycle call                                                                                                                                                                        |
-| 404    | The engine ID is not in the session's baseline fleet configuration                                                                                                                                                                    |
+| 404    | The engine ID is not in the router's membership, or, when the router has no `GET /narwhal/engines` route, not in the session's baseline fleet configuration                                                                          |
 | 409    | No session is active, or an exclusive action is in progress                                                                                                                                                                           |
 | 422    | The body is not a JSON object, has a field the action does not accept, or has an invalid `deadline_s`                                                                                                                                 |
 | 501    | The action's hook is not configured                                                                                                                                                                                                   |
-| 502    | The hook failed to start, exited non-zero or timed out. The router was unreachable or refused the lifecycle call. After start or resume, the router blocked the engine's readmission or reported that the engine needs fresh profiles |
+| 502    | The hook failed to start, exited non-zero or timed out. The router was unreachable, its membership was unreadable, or it refused the lifecycle call. After start or resume, the router blocked the engine's readmission or reported that the engine needs fresh profiles |
 | 504    | Start or resume only. The engine did not return to service within `router.timeout_s`                                                                                                                                                  |
 
 Before and after each engine action, the service reads the router's `GET /narwhal/state` and records the engine's part of it:
@@ -60,7 +62,19 @@ Before and after each engine action, the service reads the router's `GET /narwha
 
 When the state read fails, the record holds the reason in `error` and the action still runs.
 
-`GET /api/engines` reads the engine IDs from the session's baseline, or from the `fleet` file outside a session. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
+`GET /api/engines` reads the engine IDs and `generation` from the router's `GET /narwhal/engines`. When that read fails, the route reads the engine IDs from the session's baseline, or from the `fleet` file outside a session, and leaves out `generation`. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
+
+`POST /api/engines/join` and `POST /api/engines/{iid}/leave` are exclusive actions and return these statuses:
+
+| Status | Meaning                                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| 200    | The engine joined, or the router removed the engine                                                                           |
+| 404    | Leave only. The engine is not in the router's membership                                                                      |
+| 409    | No session is active, an exclusive action is in progress, or the router refused the call with HTTP 409                        |
+| 422, 503 | The router refused the call with that status                                                                               |
+| 422    | Join: the body is not a JSON object or has no `iid`. Leave: the body is not a JSON object, has a field other than `deadline_s`, or has an invalid `deadline_s` |
+| 502    | The router was unreachable, its membership was unreadable, or it refused the call with another status                         |
+| 504    | Leave only. The router did not remove the engine within `deadline_s` plus `router.timeout_s`, or the engine's drain passed its deadline with resident requests. The router removes the engine once they finish |
 
 ## Load jobs
 
@@ -116,7 +130,7 @@ When a job finishes or stops, the service copies the job's [journal extract](11-
 | 422    | Overlay only: the body is not a JSON object, changes nothing, changes another section, or fails the loader                    |
 | 501    | A hook the action needs is not configured                                                                                     |
 | 502    | A hook failed to start, exited non-zero or timed out, or a restore could not read or change an engine's router state          |
-| 504    | The router was not ready within `router.timeout_s`, or an engine that restore started or resumed did not return to service    |
+| 504    | The router was not ready within `router.timeout_s`, an engine that restore started or resumed did not return to service, or an engine that restore removed did not leave in time |
 
 The check runs no hook. It returns HTTP 409 when no session is active, HTTP 422 when the body is not a JSON object, and otherwise HTTP 200 with:
 

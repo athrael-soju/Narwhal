@@ -13,7 +13,7 @@ Every engine in a fleet meets the same contract:
 - Sends KV to every peer eligible to receive it.
 - Has measured prefill and decode performance profiles.
 - Passes preflight validation before taking traffic.
-- Passes readmission checks after a hold, drain, failure, or maintenance event.
+- Passes readmission checks after a hold, drain, failure, or maintenance event, and before it joins a running fleet.
 
 The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract) that every engine must match.
 
@@ -24,6 +24,12 @@ A vLLM engine with the effective `kv_both` role transfers KV across the configur
 ### KV transfer for SGLang engines
 
 An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. Both legs of a request carry the producer's bootstrap host and port from its attestation, and the decode leg waits at most 30 seconds for its first token.
+
+## Engine membership
+
+The router serves the engines in its membership snapshot, and each snapshot has a generation. Generation 0 holds the fleet file's `engines`. Each [join or removal](../operate/08-Joining-and-Removing-Engines.md) replaces the snapshot with the next generation. A joined engine starts in its requested role with no resident work, and a removed engine leaves once it has drained. A resumed restart and a standby takeover adopt the snapshot from the [state handoff](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff). A router started with resume off begins again at generation 0. `--resume` or `recovery.resume` turns resume on.
+
+Joins and removals require `recovery.engine_restart_policy` `individual` and a complete `engine_contract`. Engines in a `shared_device` group cannot join or leave.
 
 ## Request execution
 

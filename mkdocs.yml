@@ -122,6 +122,7 @@ nav:
               - API reference: operate/fleet-control/10-API-Reference.md
               - Run record: operate/fleet-control/11-Run-Record.md
           - Choosing admission, queue and retry settings: operate/07-Admission-Queue-and-Retry-Settings.md
+          - Joining and removing engines: operate/08-Joining-and-Removing-Engines.md
       - Troubleshooting a fleet:
           - Overview: Troubleshoot.md
           - Engine and whole-wave recovery: troubleshoot/01-Engine-Recovery.md
@@ -160,6 +161,7 @@ nav:
           - Live router and scheduler state: http-api/05-Live-State.md
           - SLO and demand accounting: http-api/06-SLO-and-Demand.md
           - State handoff and lifecycle: http-api/07-Handoff-and-Lifecycle.md
+          - Engine membership: http-api/08-Engine-Membership.md
       - Telemetry and artifacts:
           - Overview: Telemetry-and-Artifacts.md
           - Request journal: telemetry/01-Journal.md

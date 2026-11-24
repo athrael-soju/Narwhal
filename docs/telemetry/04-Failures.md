@@ -31,7 +31,7 @@ These metrics track each engine's failure streaks, verification probes, and plac
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `narwhal_engine_breaker_streak` | gauge | `iid`, `class` | Current consecutive-failure streak for every configured engine and failure class. |
+| `narwhal_engine_breaker_streak` | gauge | `iid`, `class` | Current consecutive-failure streak for every member engine and failure class. |
 | `narwhal_engine_breaker_verifying` | gauge | `iid`, `kind` | `1` while an engine verification probe is running. |
 | `narwhal_engine_quarantined` | gauge | `iid` | `1` while a hold of either kind keeps the engine out of placement. |
 | `narwhal_engine_held` | gauge | `iid`, `kind` | `1` while a hold of this kind, `timed` or `inference`, keeps the engine out of placement. |

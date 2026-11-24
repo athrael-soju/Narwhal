@@ -148,7 +148,7 @@ With `engine_contract` set and `recovery.engine_restart_policy` `individual`, au
 
 With `engine_contract` unset, automatic recovery checks health, or reruns the inference probe for an inference suspect, and matches profiles to the live process identity.
 
-Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's [process generation](../configuration/01-Fleet-Schema.md#attestation). A profile mismatch excludes the engine from recovery, readmission and takeover. The running router keeps its loaded profiles until it restarts.
+Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's [process generation](../configuration/01-Fleet-Schema.md#attestation). A profile mismatch excludes the engine from recovery, readmission and takeover. The running router keeps its loaded profiles until it restarts or an engine joins, when it reads `profiles.path` again.
 
 An operator drain holds through healthy responses, resume and takeover until readmission clears it.
 
@@ -158,9 +158,9 @@ An admitted request that fails transiently before it shows any output retries on
 
 ## Durable control-plane state
 
-Each monitoring pass writes a state handoff that records engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router replaces the handoff file atomically, so a failed write leaves the previous handoff in place.
+Each monitoring pass writes a state handoff that records the membership snapshot, engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router replaces the handoff file atomically, so a failed write leaves the previous handoff in place.
 
-`narwhal-serve --resume` applies a saved handoff when its schema, engine set and engine restart policy match the configured fleet. With `engine_contract` configured, the handoff must also hold an accepted process identity for every engine it counts as available. Pinned engines take their configured roles, and saved ejections are probed for readmission at once. A saved inference suspect that another engine covers returns as an ejected engine due for a readmission probe. An engine whose readmission validation was running when the handoff was written resumes as `blocked`.
+`narwhal-serve --resume` applies a saved handoff when its schema and engine restart policy match the fleet. A saved [membership](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff) at generation 1 or higher replaces the fleet file's engines. A handoff at generation 0, or without membership, must name the fleet file's engines. With `engine_contract` configured, the handoff must also hold an accepted process identity for every engine it counts as available. Pinned engines take their configured roles, and saved ejections are probed for readmission at once. A saved inference suspect that another engine covers returns as an ejected engine due for a readmission probe. An engine whose readmission validation was running when the handoff was written resumes as `blocked`.
 
 [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
 

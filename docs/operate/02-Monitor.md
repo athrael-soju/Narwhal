@@ -13,8 +13,8 @@ description: Interpret Narwhal router health, readiness and placement state duri
 | Field | Value |
 | --- | --- |
 | `status` | Router state: `ok` when the router admits traffic, `fenced` after a failover block or with an invalid lease, `maintenance` during a whole-wave hold, `standby` on a standby, otherwise `degraded` |
-| `instances` | Configured fleet size |
-| `available_instances` | Engines eligible for placement: the configured fleet minus ejected, draining, quarantined, and role-switching engines |
+| `instances` | Engines in the [membership snapshot](../http-api/08-Engine-Membership.md) |
+| `available_instances` | Engines eligible for placement: the membership minus ejected, draining, quarantined, and role-switching engines |
 
 ### Backend exhaustion
 

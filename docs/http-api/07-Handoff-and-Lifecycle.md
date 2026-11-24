@@ -25,7 +25,8 @@ The handoff document carries these fields:
 | `model`             | Configured served model                                                               |
 | `epoch`             | Lease epoch, zero with HA fencing off                                                 |
 | `holder`            | Unique lease-holder token, empty with HA fencing off                                  |
-| `engines`           | Sorted configured engine IDs                                                          |
+| `engines`           | Sorted engine IDs of the membership snapshot                                          |
+| `membership`        | Snapshot `generation` and `engines`, each engine entry as the fleet file holds it      |
 | `roles`             | Engine ID mapped to `prefill` or `decode`                                             |
 | `ejected`           | Breaker-excluded engines                                                              |
 | `inference_sources` | Suspect engine ID mapped to its inference-probe producer IDs, `""` for a local probe  |
@@ -48,6 +49,7 @@ A new router process applies each handoff field as follows:
 
 | State                                                                                    | New router process                                       |
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `membership`                                                                             | Replaces the engine set and generation                   |
 | `roles`                                                                                  | Restored for unpinned engines                            |
 | `ejected`                                                                                | Restored, with a readmission probe due at once           |
 | `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
@@ -68,6 +70,21 @@ The new process resets:
 - ejection, hold, probe and readmission counts
 
 After a process restart, `narwhal-serve --resume` reads the state handoff from `recovery.state_path`, written by the running router. A warm standby takeover uses the latest polled, lease-validated state handoff.
+
+### Membership in the handoff
+
+A resumed restart and a standby takeover adopt a saved `membership` whose `generation` is `1` or higher in place of the fleet file's engines. An engine that the router's own fleet file names keeps its fleet-file entry, and the router logs a warning when the saved entry differs. An engine outside the fleet file takes its saved entry. The router refuses the handoff when:
+
+- `membership` names different engines from `engines`
+- its `generation` is below the router's own
+- it adds, removes or changes an engine that sets `shared_device`
+- the store at `profiles.path` lacks a profile for a saved engine
+
+Profiles for engines outside the saved membership are allowed. After a resumed restart adopts the membership, the router checks profiles and first-token calibration against the adopted engines. A standby takeover that adopts the membership checks first-token calibration against the adopted engines that are not ejected or draining. A rejected check blocks the failover, and the standby's `/ready` names the problems in `reason`.
+
+A handoff without `membership`, or with `membership` at generation `0`, applies only when its `engines` match the fleet file, and the engines keep their fleet-file entries. The router ignores keys it does not know in `membership` and in its engine entries.
+
+A router from a release without engine membership ignores `membership` and refuses a handoff whose `engines` differ from its fleet file. Do not join or remove engines while the active and standby routers run different releases.
 
 ## Lifecycle API
 
@@ -95,10 +112,11 @@ Engine record fields:
 | `state`             | `active`, `draining`, `drained`, `deadline_exceeded`, `blocked`, or `validating`                                         |
 | `draining`          | `true` while a lifecycle action holds the engine out of placement                                                        |
 | `accepts_new`       | `true` when the engine is eligible for placement                                                                         |
-| `ready_to_stop`     | `true` when the engine has drained with its process identity recorded and, for a wave member, the whole wave has drained |
+| `ready_to_stop`     | `true` when the engine has drained with its process identity recorded, no decode leg still reads KV from it and, for a wave member, the whole wave has drained |
 | `resident`          | Resident `prefill` and `decode` request counts                                                                           |
 | `deadline_at`       | Unix time when the drain deadline expires, `null` until the engine has a lifecycle record                                |
 | `restart_required`  | `true` when lifecycle readmission requires a process start newer than the drain record                                   |
+| `leaving`           | `true` while a [removal](08-Engine-Membership.md#delete-narwhalenginesiid) drains the engine                              |
 | `wave_id`           | Whole-wave ID, or empty                                                                                                  |
 | `old_process_start` | Process-start timestamp recorded at drain                                                                                |
 | `new_process_start` | Process-start timestamp accepted at lifecycle readmission                                                                |
@@ -109,18 +127,18 @@ Engine record fields:
 
 ### `POST /narwhal/lifecycle/drain`
 
-Drains one engine, or every configured engine as a whole wave.
+Drains one engine, or every member engine as a whole wave.
 
 | Field        | Type                | Default | Meaning                                   |
 | ------------ | ------------------- | ------- | ----------------------------------------- |
 | `engines`    | Array of engine IDs | `[]`    | Engines to drain                          |
-| `wave`       | Boolean             | `false` | Drain every configured engine as one wave |
+| `wave`       | Boolean             | `false` | Drain every member engine as one wave     |
 | `deadline_s` | Number of seconds   | `300`   | Drain deadline, positive and finite       |
 
 A drain request follows these rules:
 
 - With `wave: false`, name one engine while at least one other engine is eligible for placement.
-- With `wave: true`, name every configured engine, or send an empty `engines` list.
+- With `wave: true`, name every member engine, or send an empty `engines` list.
 - Under `recovery.engine_restart_policy: whole_wave`, every drain must be a whole-wave drain.
 
 ```json
@@ -160,7 +178,7 @@ Lifecycle readmission requires a complete `engine_contract`.
 A readmission request follows these rules:
 
 - With `wave: false`, name one engine.
-- With `wave: true`, the request readmits the active whole wave as one set, and an empty `engines` list names every configured engine.
+- With `wave: true`, the request readmits the active whole wave as one set, and an empty `engines` list names every member engine.
 - During an active whole wave, send `wave: true` with the wave's complete engine set.
 
 Readmission checks:

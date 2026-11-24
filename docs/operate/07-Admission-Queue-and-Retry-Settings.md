@@ -34,7 +34,7 @@ For vLLM and TensorRT-LLM engines, the router's [KV handoff bound](../configurat
 `serving.max_attempts` (default `2`, from 1 to 3) caps the complete prefill and decode attempts per request. The router retries only an attempt that fails before visible output, and each retry spends one credit from the pool that `serving.retry_budget` (default `10`) sizes. Each successful original request adds `serving.retry_replenish` credits (default `0.1`). [Retries](../http-api/03-Backend-and-Failures.md#retries) lists the retryable failures and the placement rules.
 
 - Set `serving.max_attempts` to `1` when clients retry failed requests themselves.
-- Set it to `3` only when each role keeps at least three live engines, including unpinned engines that [aggregate fallback](../concepts/02-Role-Control.md#aggregate-fallback) can use.
+- Set it to `3` only when each role keeps at least three live engines, including unpinned engines that [aggregate fallback](../concepts/02-Role-Control.md#aggregate-fallback) can use. Check this before you [remove an engine](08-Joining-and-Removing-Engines.md#remove-an-engine), which lowers the count.
 - Raise `serving.retry_budget` when `narwhal_retry_denied_total` rises during an engine failure and the remaining engines have spare capacity.
 - Lower `serving.retry_replenish` to limit prefill load from retries during a sustained failure.
 

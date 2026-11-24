@@ -4,7 +4,7 @@ description: Roll out and roll back Narwhal upgrades with compatible state hando
 
 # Upgrade and rollback
 
-Upgrade the standby, hand traffic to it, then upgrade the former active router, so one router admits traffic throughout. This needs both releases to write the same [handoff version](01-Start-Routers.md#keeping-one-deployment-set), because a router reads a handoff only when its `schema_version` equals the version its own build writes. When the versions differ, use the maintenance window below.
+Upgrade the standby, hand traffic to it, then upgrade the former active router, so one router admits traffic throughout. This needs both releases to write the same [handoff version](01-Start-Routers.md#keeping-one-deployment-set), because a router reads a handoff only when its `schema_version` equals the version its own build writes. When the versions differ, use the maintenance window below. Do not [join or remove engines](08-Joining-and-Removing-Engines.md) while the two routers run different releases.
 
 ## Rolling upgrade with compatible handoff versions
 

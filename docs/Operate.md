@@ -24,5 +24,6 @@ TLS, authentication, WAF, model routing
 - [Release drills](operate/05-Release-Drills.md): run restart, whole-wave, and failover drills for every release.
 - [Controlling the fleet](operate/06-Controlling-the-Fleet.md): run engine actions, configuration overlays, and load jobs from the control service and its console.
 - [Admission, queue and retry settings](operate/07-Admission-Queue-and-Retry-Settings.md): choose each setting from the client outcomes it produces.
+- [Joining and removing engines](operate/08-Joining-and-Removing-Engines.md): add an engine to a running fleet or remove one, and update the fleet file and profile store.
 - [Troubleshooting a fleet](Troubleshoot.md): start from the first visible symptom.
 - [Measuring a fleet](Measure.md): profile the fleet, calibrate SLOs, and measure a target workload.
