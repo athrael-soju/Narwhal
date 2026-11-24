@@ -13,6 +13,7 @@ import httpx
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle.identity import allow_profile_recovery, check_process_identities
+from .lifecycle.leave import complete_leaves
 from .lifecycle.readmission import validate_readmission
 from .lifecycle.records import ValidationOutcome
 from .release import release_peers
@@ -390,6 +391,9 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     with router.monitoring.stage("readmission"):
         await readmit(router, interval * router.cfg.readmit_every)
         release_peers(router)
+        # A lifecycle action in progress finishes before a leaving engine is removed.
+        if not router.lifecycle.lock.locked() and controls_fleet(router):
+            complete_leaves(router)
     with router.monitoring.stage("transfer_refresh"):
         refresh_consumers(router)
     if router.cfg.liveness_every and router.scheduler.sweep_due(

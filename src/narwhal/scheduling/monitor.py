@@ -179,6 +179,26 @@ class InstanceMonitor:
         if instance is not None and (instance.prefill or instance.decode):
             self.on_capacity_change()
 
+    def pending_handoffs(self, producer: str) -> int:
+        """Return the decode legs placed elsewhere that may still pull KV from `producer`.
+
+        A leg pulls its prefill's KV until its first decode token. A decode leg still waiting
+        for a seat counts too.
+        """
+        placed = sum(
+            1
+            for iid, inst in self.instances.items()
+            if iid != producer
+            for rid, leg in inst.decode.items()
+            if leg.prefill_instance == producer and rid not in self._decode_started
+        )
+        queued = sum(
+            1
+            for request in self.waiting.values()
+            if request.phase is Phase.DECODE and request.prefill_instance == producer
+        )
+        return placed + queued
+
     def sent(self, *iids: str) -> None:
         """Count one request the router sends to each member among `iids`."""
         for iid in iids:
