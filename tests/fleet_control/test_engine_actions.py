@@ -528,11 +528,9 @@ class LifecycleActionTests(EngineCase):
         self.router.down = True
         response = await self.client.post("/api/engines/e0/drain")
         self.assertEqual(response.status_code, 502)
-        self.assertIn("router /narwhal/lifecycle/drain failed: ConnectError", response.text)
-        result = self.last_action()["result"]
+        # The engine lookup reads the router's membership first.
+        self.assertIn("router /narwhal/engines failed: ConnectError", response.text)
         self.assertEqual(self.last_action()["outcome"], "failed")
-        for side in ("before", "after"):
-            self.assertIn("router state unavailable: ConnectError", result[side]["error"])
 
     async def test_an_invalid_deadline_or_parameter_is_refused(self) -> None:
         await self.start_session()
@@ -755,6 +753,20 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
             await self.actions.act("e2", "drain", {})
         self.assertEqual(caught.exception.status, 404)
         self.assertEqual(str(caught.exception), "engine 'e2' is not in the router's membership")
+
+    async def test_join_and_leave_relay_the_real_router_refusals(self) -> None:
+        entry = {"iid": "e9", "url": "http://engine-9.invalid:8000", "color": 1}
+        with self.assertRaises(ActionError) as caught:
+            await self.actions.join(entry)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("unknown engine key 'color'", str(caught.exception))
+        # The engine's process identity is unreadable, so the router keeps it out of placement.
+        with self.assertRaises(ActionError) as caught:
+            await self.actions.leave("e3", {"deadline_s": 1})
+        self.assertEqual(caught.exception.status, 503)
+        self.assertIn("router refused leave of e3 with HTTP 503: ", str(caught.exception))
+        assert caught.exception.result is not None
+        self.assertTrue(caught.exception.result["router"]["error"])
 
 
 class RouterConfigTests(unittest.TestCase):

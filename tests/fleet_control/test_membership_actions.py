@@ -21,8 +21,11 @@ NEW = {
 class MemberRouter(FakeRouter):
     """Add the membership routes to the fake router.
 
-    A join of an engine named `refused` answers 409. With `slow_leave` set, a leave answers
-    202 and the engine leaves on the second membership read after it.
+    A join of an engine named `refused`, or of one in `refuse_join`, answers 409, and a join of
+    an engine named `invalid` answers 422 with a validation `detail`. With `slow_leave` set, a
+    leave answers 202 and the engine leaves on the second membership read after it. With
+    `stuck_leave` set, a leave answers 202 and the drain passes its deadline. `leave_status`
+    replaces a leave's answer, and `membership_status` the membership read's.
     """
 
     def __init__(self, stopped: Path) -> None:
@@ -32,6 +35,10 @@ class MemberRouter(FakeRouter):
         self.slow_leave = False
         self._leaving: dict[str, int] = {}
         self.on_change: Any = None
+        self.stuck_leave = False
+        self.refuse_join: set[str] = set()
+        self.leave_status: int | None = None
+        self.membership_status: int | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -42,6 +49,8 @@ class MemberRouter(FakeRouter):
         if self.on_change is not None and request.method != "GET":
             self.on_change()
         if request.method == "GET":
+            if self.membership_status is not None:
+                return httpx.Response(self.membership_status, json={"detail": "router error"})
             for iid in list(self._leaving):
                 self._leaving[iid] -= 1
                 if self._leaving[iid] <= 0:
@@ -49,7 +58,9 @@ class MemberRouter(FakeRouter):
                     self._remove(iid)
             return httpx.Response(200, json=self.document())
         if request.method == "POST":
-            if body["iid"] == "refused":
+            if body["iid"] == "invalid":
+                return httpx.Response(422, json={"detail": [{"msg": "Field required"}]})
+            if body["iid"] == "refused" or body["iid"] in self.refuse_join:
                 return httpx.Response(409, json=self.document("attestation differs"))
             self.members[body["iid"]] = body
             self.roles[body["iid"]] = body["role"]
@@ -59,6 +70,11 @@ class MemberRouter(FakeRouter):
         iid = path.rsplit("/", 1)[1]
         if iid not in self.members:
             return httpx.Response(404, json=self.document(f"unknown engine: {iid}"))
+        if self.leave_status is not None:
+            return httpx.Response(self.leave_status, json=self.document("router control fenced"))
+        if self.stuck_leave:
+            self.records[iid] = "deadline_exceeded"
+            return httpx.Response(202, json=self.document())
         if self.slow_leave:
             self.records[iid] = "drained"
             self._leaving[iid] = 2
@@ -88,11 +104,9 @@ class MembershipActionTests(EngineCase):
     router_class: ClassVar[type[FakeRouter]] = MemberRouter
     router: MemberRouter
 
-    def changes(self) -> dict[str, Any]:
-        from tools.fleet_control.service import session_changes
-
+    async def changes(self) -> dict[str, Any]:
         assert self.service.session is not None
-        return session_changes(self.service.session)
+        return await self.service.changes(self.service.session)
 
     async def test_join_is_an_exclusive_recorded_action(self) -> None:
         await self.start_session()
@@ -107,7 +121,7 @@ class MembershipActionTests(EngineCase):
         self.assertEqual(entry["result"]["generation"], {"before": 0, "after": 1})
         self.assertEqual(entry["result"]["router"]["status"], 200)
         self.assertTrue(entry["result"]["after"]["known"])
-        self.assertEqual(self.changes()["joined"], ["e9"])
+        self.assertEqual((await self.changes())["joined"], ["e9"])
         listed = (await self.client.get("/api/engines")).json()
         self.assertEqual(listed["generation"], 1)
         self.assertIn("e9", listed["engines"])
@@ -121,7 +135,7 @@ class MembershipActionTests(EngineCase):
             "router refused join of refused with HTTP 409: attestation differs",
         )
         self.assertEqual(self.last_action()["outcome"], "failed")
-        self.assertNotIn("joined", self.changes())
+        self.assertNotIn("joined", await self.changes())
         for body in ([], {"url": "http://x"}):
             response = await self.client.post("/api/engines/join", json=body)
             self.assertEqual(response.status_code, 422)
@@ -137,7 +151,7 @@ class MembershipActionTests(EngineCase):
         self.assertEqual(result["spec"]["url"], "http://engine-1.invalid:8000")
         deletes = [(m, p) for m, p, _ in self.router.requests if m == "DELETE"]
         self.assertEqual(deletes, [("DELETE", "/narwhal/engines/e1")])
-        self.assertEqual(self.changes()["left"], {"e1": result["spec"]})
+        self.assertEqual((await self.changes())["left"], {"e1": result["spec"]})
 
     async def test_engine_actions_follow_the_router_membership(self) -> None:
         await self.start_session()
@@ -158,7 +172,7 @@ class MembershipActionTests(EngineCase):
         await self.client.post("/api/engines/e1/drain")
         await self.client.post("/api/engines/e1/leave")
         self.assertEqual(
-            self.changes(),
+            await self.changes(),
             {
                 "configuration": False,
                 "engines": {},
@@ -176,7 +190,7 @@ class MembershipActionTests(EngineCase):
         self.assertTrue(all(step["seq"] is not None for step in steps))
         self.assertEqual(sorted(self.router.members), ["e0", "e1", "e2", "e3", "e4", "e5"])
         self.assertEqual(self.router.members["e1"]["url"], "http://engine-1.invalid:8000")
-        self.assertEqual(self.changes(), {"configuration": False, "engines": {}})
+        self.assertEqual(await self.changes(), {"configuration": False, "engines": {}})
         self.assertIn(
             "start e1 http://engine-1.invalid:8000",
             self.record()["actions"][-4]["result"]["hook"]["tail"],
@@ -189,13 +203,93 @@ class MembershipActionTests(EngineCase):
         # The router lost the joined engine and regained e1 outside the session.
         self.router._remove("e9")
         self.router.members["e1"] = {"iid": "e1", "url": "http://engine-1.invalid:8000"}
+        self.assertEqual(await self.changes(), {"configuration": False, "engines": {}})
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(
-            response.json()["result"]["steps"],
-            [
-                {"engine": "e1", "action": "join", "seq": None},
-                {"engine": "e9", "action": "leave", "seq": None},
-            ],
+        self.assertEqual(response.json()["result"]["steps"], [])
+
+    async def test_a_leave_past_its_drain_deadline_stops_waiting_and_restore_returns_it(
+        self,
+    ) -> None:
+        await self.start_session()
+        self.router.stuck_leave = True
+        response = await self.client.post("/api/engines/e1/leave", json={"deadline_s": 30})
+        self.assertEqual(response.status_code, 504, response.text)
+        self.assertIn("resident work after its drain deadline", response.json()["detail"])
+        # The router removes the engine once its resident work ends.
+        self.router._remove("e1")
+        self.assertEqual(list((await self.changes())["left"]), ["e1"])
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("e1", self.router.members)
+
+    async def test_changes_follow_the_router_membership_across_a_cold_restart(self) -> None:
+        await self.start_session()
+        await self.client.post("/api/engines/join", json=NEW)
+        await self.client.post("/api/engines/e1/leave")
+
+        async def restarted(session: Any) -> dict[str, Any]:
+            return {}
+
+        await self.service.act("config.cold_restart", {}, restarted, exclusive=True)
+        # A router that resumes keeps the membership it had.
+        changes = await self.changes()
+        self.assertEqual(changes["joined"], ["e9"])
+        self.assertEqual(list(changes["left"]), ["e1"])
+
+    async def test_restore_leaves_engine_changes_of_non_members_to_the_membership_steps(
+        self,
+    ) -> None:
+        await self.start_session()
+        await self.client.post("/api/engines/join", json=NEW)
+        await self.client.post("/api/engines/e9/pause")
+        await self.client.post("/api/engines/e1/pause")
+        await self.client.post("/api/engines/e1/leave")
+        # The router lost the joined engine outside the session.
+        self.router._remove("e9")
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        steps = [(step["engine"], step["action"]) for step in response.json()["result"]["steps"]]
+        self.assertEqual(steps, [("e1", "start"), ("e1", "join")])
+
+    async def test_an_unreadable_membership_fails_the_action_without_the_baseline(self) -> None:
+        await self.start_session()
+        self.router.membership_status = 500
+        response = await self.client.post("/api/engines/e1/stop")
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("answered no membership document", response.json()["detail"])
+        self.assertFalse((self.stopped / "e1").exists())
+
+    async def test_router_refusals_relay_their_status_and_reason(self) -> None:
+        await self.start_session()
+        response = await self.client.post("/api/engines/join", json={**NEW, "iid": "invalid"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Field required", response.json()["detail"])
+        self.router.leave_status = 503
+        response = await self.client.post("/api/engines/e1/leave")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("router control fenced", response.json()["detail"])
+
+    async def test_leave_is_exclusive(self) -> None:
+        await self.start_session()
+        seen = []
+        self.router.on_change = lambda: seen.append(self.service.status()["in_progress"])
+        response = await self.client.post("/api/engines/e1/leave")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(seen, ["engine.leave"])
+
+    async def test_a_failed_restore_records_its_completed_steps_and_can_be_retried(self) -> None:
+        await self.start_session()
+        await self.client.post("/api/engines/e1/leave")
+        self.router.refuse_join = {"e1"}
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 409, response.text)
+        restore = next(
+            entry for entry in self.record()["actions"] if entry["action"] == "config.restore"
         )
-        self.assertEqual(self.changes(), {"configuration": False, "engines": {}})
+        steps = [(step["engine"], step["action"]) for step in restore["result"]["steps"]]
+        self.assertEqual(steps, [("e1", "start")])
+        self.router.refuse_join = set()
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("e1", self.router.members)

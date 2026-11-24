@@ -1169,7 +1169,7 @@ function sessionGate() {
 
 function busyGate() {
   if (state.health && state.health.in_progress) return shortName(state.health.in_progress) + " is in progress.";
-  if (state.pending.has("session") || state.pending.has("config")) return "Wait for the running action to finish.";
+  if (state.pending.has("session") || state.pending.has("config") || state.pending.has("join")) return "Wait for the running action to finish.";
   return "";
 }
 
@@ -1405,6 +1405,9 @@ function engineGate(iid, action, slice, process, others) {
     if (lifecycle === "active" && slice.ejected) return ejectedReason(iid, slice);
     if (restartPending(iid, slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
     if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+  } else if (action === "leave") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (others) return others + "; the router runs one lifecycle action at a time.";
   } else if (action === "pause") {
     if (paused) return iid + " is paused; resume it first.";
     if (stopped) return iid + " is stopped; start it first.";
@@ -1925,7 +1928,8 @@ async function engineAction(iid, action) {
       + (body.deadline_s ? ", for at most " + body.deadline_s + " s." : ", until the router's default deadline. Set Drain deadline in the session strip to limit it."),
     leave: "The router drains " + iid + " and removes it from the fleet once its resident requests finish"
       + (body.deadline_s ? ", waiting at most " + body.deadline_s + " s for the drain." : ".")
-      + " The engine process keeps running. Restore baseline starts it and joins it again.",
+      + " The engine process keeps running. When the baseline fleet configures " + iid + ", Restore baseline joins it again,"
+      + " running the engine_start hook first when one is configured.",
   };
   if (effects[action]) {
     const confirmed = await confirmAction(capital(action) + " engine " + iid + "?", effects[action], [], capital(action) + " " + iid);

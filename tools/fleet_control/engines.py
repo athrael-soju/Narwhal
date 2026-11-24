@@ -69,6 +69,16 @@ class EngineActions:
         self.service = service
         self._transport = transport
         self._poll_s = poll_s
+        service.members = self.live_members
+
+    async def live_members(self) -> dict[str, Mapping[str, Any]] | None:
+        """Return the router's member engine entries, or None when they cannot be read."""
+        try:
+            async with self._client() as client:
+                current = await self.membership(client)
+        except ActionError:
+            return None
+        return None if current is None else current["engines"]
 
     def _client(self) -> httpx.AsyncClient:
         router = self.service.config.router
@@ -112,7 +122,8 @@ class EngineActions:
                 try:
                     if hook is not None:
                         effect = await self._run_hook(hook, session, engine, action)
-                        if action in RETURNING_ACTIONS:
+                        # An engine outside the membership returns through a join.
+                        if action in RETURNING_ACTIONS and known is None:
                             effect["service"] = await self._await_service(
                                 client, iid, before, effect
                             )
@@ -245,10 +256,22 @@ class EngineActions:
         limit = deadline_s + self.service.config.router.timeout_s
         started = time.monotonic()
         while True:
-            current = await self.membership(client)
+            try:
+                current = await self.membership(client)
+            except ActionError:
+                current = None
             waited = round(time.monotonic() - started, 3)
             if current is not None and iid not in current["engines"]:
                 return {"removed": True, "waited_s": waited, "generation": current["generation"]}
+            state = await self.engine_state(client, iid)
+            if (state.get("lifecycle") or {}).get("state") == "deadline_exceeded":
+                # The router hands the engine to the operator; the leave completes when its
+                # resident work ends.
+                raise ActionError(
+                    f"{iid} still has resident work after its drain deadline",
+                    status=504,
+                    result={**effect, "removal": {"removed": False, "waited_s": waited}},
+                )
             if waited >= limit:
                 raise ActionError(
                     f"the router did not remove {iid} within {limit:g}s",
@@ -258,19 +281,32 @@ class EngineActions:
             await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
 
     async def membership(self, client: httpx.AsyncClient) -> dict[str, Any] | None:
-        """Return the router's membership generation and engine entries, or None."""
+        """Return the router's membership generation and engine entries.
+
+        Return None when the router has no membership route. Raise ActionError with HTTP 502
+        when the router does not answer or answers with anything else.
+        """
         timeout = min(STATE_TIMEOUT_S, self.service.config.router.timeout_s)
         try:
             response = await client.get(MEMBERSHIP_PATH, timeout=timeout)
+        except httpx.HTTPError as exc:
+            raise ActionError(
+                f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.status_code in (404, 405):
+            return None
+        try:
             document = response.json()
             if response.status_code != 200 or document.get("schema") != MEMBERSHIP_SCHEMA:
-                return None
+                raise ValueError(f"HTTP {response.status_code}")
             return {
                 "generation": document["generation"],
                 "engines": {str(row["iid"]): row for row in document["engines"]},
             }
-        except (httpx.HTTPError, ValueError, LookupError, TypeError, AttributeError):
-            return None
+        except (ValueError, LookupError, TypeError, AttributeError) as exc:
+            raise ActionError(
+                f"router {MEMBERSHIP_PATH} answered no membership document: {exc}"
+            ) from exc
 
     async def member(
         self, client: httpx.AsyncClient, session: Session, iid: str
@@ -487,8 +523,15 @@ def _lifecycle_error(response: httpx.Response) -> str:
         document = response.json()
     except ValueError:
         return response.text[:500]
-    error = document.get("error") if isinstance(document, dict) else None
-    return error if isinstance(error, str) else ""
+    if not isinstance(document, dict):
+        return ""
+    error = document.get("error")
+    if isinstance(error, str) and error:
+        return error
+    detail = document.get("detail")
+    if isinstance(detail, str):
+        return detail
+    return json.dumps(detail)[:500] if detail is not None else ""
 
 
 def engine_routes(actions: EngineActions) -> APIRouter:
@@ -499,7 +542,11 @@ def engine_routes(actions: EngineActions) -> APIRouter:
     @routes.get("")
     async def engines() -> JSONResponse:
         async with actions._client() as client:
-            current = await actions.membership(client)
+            try:
+                current = await actions.membership(client)
+            except ActionError:
+                # Each baseline engine's state then reports the router error.
+                current = None
         if current is not None:
             iids = list(current["engines"])
             return JSONResponse(

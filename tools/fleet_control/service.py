@@ -37,12 +37,16 @@ RESTORE_ACTION = "config.restore"
 MEMBERSHIP_ACTIONS = frozenset({"engine.join", "engine.leave"})
 
 
-def session_changes(session: Session) -> dict[str, Any]:
+def session_changes(
+    session: Session, members: Mapping[str, Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
     """Return the configuration, engine and membership changes the session leaves in place.
 
-    Engine changes are in undo order. `joined`, when present, lists engines that joined during
-    the session and are still members; `left`, when present, maps each engine that left to its
-    engine entry.
+    Engine changes are in undo order. `joined`, when present, lists member engines the baseline
+    does not configure; `left`, when present, maps each baseline engine that is not a member to
+    its engine entry. With `members`, the router's member engine entries, membership comes from
+    comparing them with the baseline, and engine changes cover members only. Without them, the
+    session's recorded actions give the membership changes.
     """
     axes: dict[str, dict[str, str]] = {}
     joined: list[str] = []
@@ -92,6 +96,12 @@ def session_changes(session: Session) -> dict[str, Any]:
             axes.get(iid, {}).pop(axis, None)
         else:
             axes.setdefault(iid, {})[axis] = change
+    if members is not None:
+        configured = {str(engine["iid"]): engine for engine in session.baseline["engines"]}
+        joined = [iid for iid in members if iid not in configured]
+        left = {iid: dict(engine) for iid, engine in configured.items() if iid not in members}
+        # An engine outside the membership returns through a join or stays out.
+        axes = {iid: changes for iid, changes in axes.items() if iid in members}
     engines = {
         iid: [changes[axis] for axis in ("process", "lifecycle") if axis in changes]
         for iid, changes in axes.items()
@@ -156,6 +166,13 @@ class ControlService:
         self._session_mark: Mark | None = None
         self._job_marks: dict[str, Mark | None] = {}
         self.jobs = None if runner is None else JobSlot(runner, self._job_finished, self.stamp)
+        # Returns the router's member engine entries, or None when they cannot be read.
+        self.members: Callable[[], Awaitable[Mapping[str, Mapping[str, Any]] | None]] | None = None
+
+    async def changes(self, session: Session) -> dict[str, Any]:
+        """Return the session's changes against the router's live membership when it answers."""
+        members = None if self.members is None else await self.members()
+        return session_changes(session, members)
 
     def stamp(self) -> str:
         """Return the current time as recorded in actions."""
@@ -251,7 +268,7 @@ class ControlService:
             await self._perform("job.stop", {}, self._stop_job, True)
         journal = self.journal_extract(session.directory, SESSION_EXTRACT, self._session_mark)
         session.ended_at = self.stamp()
-        return {"changes": session_changes(session), "journal": journal}
+        return {"changes": await self.changes(session), "journal": journal}
 
     def journal_extract(self, directory: Path, name: str, start: Mark | None) -> dict[str, Any]:
         """Copy the router journal rows appended since `start` into the session directory."""
