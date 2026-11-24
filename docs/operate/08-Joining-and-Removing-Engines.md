@@ -88,7 +88,7 @@ PY
     PY
     ```
 
-2. On an SGLang fleet, the sweep also switches and loads a peer engine, as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes. With `--only`, the peer is the first engine in the candidate fleet file. [Drain the peer](03-Restart-Engines.md#drain-the-engine) and keep it running until the sweep ends.
+2. On an SGLang fleet, the sweep also switches and loads a peer engine, as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes. With `--only`, the peer is the engine after the new one in the candidate fleet file, or the first engine when the new one is last, as the script above writes it. The peer serves no requests for the whole sweep. To choose another peer, sweep with a copy of the candidate fleet file that moves that engine to the front and keeps the new engine last. The merge and the join do not depend on engine order. [Drain the peer](03-Restart-Engines.md#drain-the-engine) and keep it running until the sweep ends.
 
 3. Profile the new engine alone, with the sweep options of the current profiles:
 

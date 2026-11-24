@@ -67,7 +67,7 @@ The console asks for confirmation before **Pause**, **Stop**, **Drain** and **Le
 
 ## Join an engine
 
-Below the engine list, **Join engine** takes one engine entry as the fleet file holds it. Fill in the entry, select **Join engine** and confirm. The service sends the entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines), and the feedback line shows the result. Before a join, prepare the engine's profiles and calibration as in [Joining and removing engines](../08-Joining-and-Removing-Engines.md#join-an-engine).
+Below the engine list, **Join engine** takes one engine entry as the fleet file holds it, with literal `url` and `attestation_url` values. The router refuses a `${VARIABLE}` reference in an entry sent over HTTP. Fill in the entry, select **Join engine** and confirm. The service sends the entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines), and the feedback line shows the result. Before a join, prepare the engine's profiles and calibration as in [Joining and removing engines](../08-Joining-and-Removing-Engines.md#join-an-engine).
 
 Joins and leaves are [exclusive actions](04-Sessions.md#exclusive-actions).
 
