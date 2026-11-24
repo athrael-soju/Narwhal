@@ -24,7 +24,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         self.cfg = fleet(self.root)
-        self.cfg.engines[0].pin = True
+        self.cfg.engines[0] = replace(self.cfg.engines[0], pin=True)
         self.router = create_app(self.cfg).state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.router.lifecycle.process_starts = {"e0": 100, "e3": 100}

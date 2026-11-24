@@ -234,7 +234,7 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
             continue
 
     now = router._clock()
-    ejected = [iid for iid in doc.get("ejected", []) if iid in router.monitor.instances]
+    ejected = [iid for iid in doc.get("ejected", []) if iid in router.membership]
     for iid in ejected:
         # A far-past ejection time makes the readmission probe due at once.
         router.scheduler.ejected[iid] = now - 1e9

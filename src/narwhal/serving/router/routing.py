@@ -315,7 +315,7 @@ class NarwhalRouter:
         return self.monitoring.degraded
 
     def profile_set_diff(self) -> tuple[list[str], list[str]]:
-        return self.profiles.engine_set_diff(self.monitor.instances)
+        return self.profiles.engine_set_diff(self.membership.ids)
 
     def _admission_mode(self) -> dict[str, Any]:
         return {"mode": self.cfg.admission, "margin": self.cfg.admission_margin}

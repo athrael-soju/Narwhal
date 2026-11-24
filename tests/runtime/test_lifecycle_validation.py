@@ -16,6 +16,7 @@ from narwhal.runtime.lifecycle.records import DrainRecord, LifecycleError, Valid
 from narwhal.runtime.monitoring import readmit
 from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.serving.app import create_app
+from narwhal.serving.router.membership import Membership
 from narwhal.types import Role
 from tests.fixtures import fleet
 
@@ -437,7 +438,13 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         outcome = await self.validate()
         self.assertIn("process identity unreadable", " ".join(outcome.failures["e0"]))
         self.identities.side_effect = self.identity
-        self.cfg.engines[0].attestation_url = ""
+        current = self.router.membership
+        self.router.membership = Membership(
+            current.generation,
+            tuple(
+                replace(spec, attestation_url="") if spec.iid == "e0" else spec for spec in current
+            ),
+        )
         outcome = await self.validate()
         self.assertIn("attestation_url is not configured", outcome.failures["e0"])
         self.router.engines.prefill.assert_not_awaited()

@@ -220,7 +220,7 @@ def create_app(
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
-            len(router.monitor.instances),
+            len(router.membership),
             cfg.slo.ttft_s,
             cfg.slo.tpot_s,
             cfg.monitor_interval_s,
@@ -369,7 +369,7 @@ def create_app(
     async def drain(action: DrainIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
-        engines = action.engines or (router.membership.ids if action.wave else [])
+        engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             try:
                 router.lifecycle.begin(engines, wave=action.wave, deadline_s=action.deadline_s)

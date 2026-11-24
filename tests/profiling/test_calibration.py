@@ -571,7 +571,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_engines_on_one_device_never_share_a_step_leg(self):
         self._four_engines()
         allocation = SharedDeviceAllocation("g0", "GPU-0", 0.5, 0.4)
-        self.cfg.engines[0].shared_device = self.cfg.engines[1].shared_device = allocation
+        engines = self.cfg.engines
+        engines[:2] = [replace(spec, shared_device=allocation) for spec in engines[:2]]
         client = RecordingClient()
         _, document = await self._run_recorded(client, samples=2)
         self.assertEqual(client.violations, [])
@@ -809,7 +810,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_calibration_reserves_available_output_at_context_boundary(self):
         """The real connector and client complete a one-token crossed handoff."""
-        self.cfg.engines[1].pin = True
+        self.cfg.engines[1] = replace(self.cfg.engines[1], pin=True)
         requests = []
 
         def handle(request):

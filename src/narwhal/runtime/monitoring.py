@@ -200,7 +200,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     recovery_wave = router.cfg.engine_contract is not None and not router.scheduler.live_instances()
     if recovery_wave:
         due = router.scheduler.probe_due(0.0)
-        if set(due) != set(router.monitor.instances):
+        if set(due) != set(router.membership.ids):
             return []
     answers = await asyncio.gather(
         *(router.engines.healthy(router.monitor.instances[iid].url) for iid in due),
@@ -212,7 +212,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
         healthy = await attested(router, healthy)
     back: list[str] = []
     # A recovery wave validates only the complete fleet, atomically.
-    if recovery_wave and set(healthy) != set(router.monitor.instances):
+    if recovery_wave and set(healthy) != set(router.membership.ids):
         return []
     groups = [healthy] if recovery_wave else [[iid] for iid in healthy]
     for engines in groups:
@@ -280,7 +280,7 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
     misses = router.scheduler.liveness_misses
     live = [
         iid
-        for iid in router.monitor.instances
+        for iid in router.membership.ids
         if iid not in router.scheduler.ejected and iid not in router.scheduler.draining
     ]
     if not live:
