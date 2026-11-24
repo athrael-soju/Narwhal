@@ -39,6 +39,14 @@ class RoleChanges:
         # Engine the latest change held out of new placements for an engine-side switch.
         self.held_donor: str | None = None
 
+    def forget(self, iid: str) -> None:
+        """Drop the dwell, role and history entries of an engine that left the fleet."""
+        self._last_flip.pop(iid, None)
+        self._last_flip_role.pop(iid, None)
+        self.flips[:] = [flip for flip in self.flips if flip.iid != iid]
+        if self.held_donor == iid:
+            self.held_donor = None
+
     def decode_floor_snapshot(self) -> dict:
         live_decode = self.scheduler.decode_live()
         return {

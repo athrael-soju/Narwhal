@@ -29,6 +29,8 @@ class PeerRelease:
         self.tasks: set[asyncio.Task[dict[str, str]]] = set()
         self.missed: set[str] = set()
         self.retry_at = 0.0
+        # Engines that left the fleet while a round ran.
+        self._departed: set[str] = set()
 
     def track(self, released: Mapping[str, str]) -> None:
         now = self._clock()
@@ -41,6 +43,13 @@ class PeerRelease:
         if not released:
             self.missed.clear()
 
+    def forget(self, iid: str) -> None:
+        """Drop the release rounds of an engine that left the fleet."""
+        self._rounds.pop(iid, None)
+        self.missed.discard(iid)
+        if self.tasks:
+            self._departed.add(iid)
+
     def due(self) -> list[str]:
         now = self._clock()
         due = []
@@ -52,12 +61,17 @@ class PeerRelease:
         return due
 
     def finish(self, task: asyncio.Task[dict[str, str]], *, retry: bool) -> None:
+        departed, self._departed = self._departed, set()
         if task.cancelled() or task.exception() is not None:
             return
         if retry:
             self.missed = set()
             return
-        self.missed = {iid for iid, outcome in task.result().items() if outcome not in SETTLED}
+        self.missed = {
+            iid
+            for iid, outcome in task.result().items()
+            if outcome not in SETTLED and iid not in departed
+        }
         self.retry_at = self._clock() + self.fabric.release_retry_s
 
     def retry_due(self) -> bool:

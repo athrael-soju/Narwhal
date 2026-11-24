@@ -89,6 +89,10 @@ class KvHandoff(ABC):
         """Free what `claim` reserved, once the leg and its steps have ended."""
         return None
 
+    def forget(self, url: str) -> None:
+        """Drop what the handoff keeps for the engine at `url` after it leaves the fleet."""
+        return None
+
     async def export(
         self,
         calls: EngineCalls,
