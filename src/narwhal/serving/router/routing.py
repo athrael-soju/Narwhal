@@ -406,6 +406,10 @@ class NarwhalRouter:
     async def switch_role(self, iid: str, role: Role) -> str | None:
         return await self._engine_side(iid, role, refresh=False)
 
+    async def switch_spec_role(self, spec: EngineSpec, role: Role) -> str | None:
+        """Switch an engine outside the snapshot, such as one asking to join, to `role`."""
+        return await self._engine_side(spec.iid, role, refresh=False, url=spec.url)
+
     async def resume_role(self, iid: str) -> str | None:
         instance = self.monitor.instances.get(iid)
         if instance is None:
@@ -418,13 +422,17 @@ class NarwhalRouter:
             return "engine left the fleet"
         return await self._engine_side(iid, instance.role, refresh=True)
 
-    async def _engine_side(self, iid: str, role: Role, *, refresh: bool) -> str | None:
+    async def _engine_side(
+        self, iid: str, role: Role, *, refresh: bool, url: str | None = None
+    ) -> str | None:
         switcher = self.role_switch
         if not switcher.engine_held:
             return None
-        instance = self.monitor.instances.get(iid)
-        if instance is None:
-            return "engine left the fleet"
+        if url is None:
+            instance = self.monitor.instances.get(iid)
+            if instance is None:
+                return "engine left the fleet"
+            url = instance.url
         self.scheduler.availability.switching.add(iid)
         try:
             async with httpx.AsyncClient(
@@ -433,7 +441,7 @@ class NarwhalRouter:
                 transport=self.lifecycle_transport,
             ) as client:
                 change = switcher.refresh if refresh else switcher.switch
-                await change(client, instance.url, role, self.launches.get(iid))
+                await change(client, url, role, self.launches.get(iid))
         except (httpx.HTTPError, ValueError) as exc:
             return f"{type(exc).__name__}: {exc}"
         finally:
