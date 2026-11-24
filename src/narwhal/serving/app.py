@@ -22,12 +22,7 @@ from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
-from ..profiling.generation import (
-    bound_profiles,
-    generation_problem,
-    nominal_problem,
-    read_generation,
-)
+from ..profiling.membership import engine_set_problem, generation_problems
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
@@ -121,7 +116,9 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        calibration = await verify_calibration(cfg, transport=lifecycle_transport)
+        calibration = await verify_calibration(
+            cfg, engines=router.membership.specs, transport=lifecycle_transport
+        )
         if calibration.status == "uncalibrated":
             log.warning(
                 "first-token deadline is uncalibrated; run narwhal-check "
@@ -132,40 +129,11 @@ def create_app(
         else:
             log.info("%s", calibration.summary(cfg.first_token_timeout_s))
         router.first_token_calibration = calibration
-        missing, extra = router.profile_set_diff()
-        if missing or extra:
-            detail = []
-            if missing:
-                detail.append(f"no profile for {', '.join(missing)}")
-            if extra:
-                detail.append(f"stale profiles for unconfigured engines: {', '.join(extra)}")
-            raise RuntimeError(
-                "; ".join(detail)
-                + ": run `narwhal-profile` against the fleet first. Placement requires "
-                "a profile for exactly the configured engine set."
-            )
-        generation_failures = []
-        for spec in router.membership:
-            if cfg.engine_contract is not None and (
-                problem := nominal_problem(router.profiles, spec.iid)
-            ):
-                generation_failures.append(problem)
-                continue
-            profiles = bound_profiles(router.profiles, spec.iid)
-            if not profiles:
-                continue
-            try:
-                generation = await read_generation(cfg, spec, transport=lifecycle_transport)
-            except (httpx.HTTPError, ValueError, KeyError) as exc:
-                generation_failures.append(
-                    f"{spec.iid} profile generation unreadable: {exc}; "
-                    "restart its attestation sidecar if it answers HTTP 503"
-                )
-                continue
-            for profile in profiles:
-                problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
-                if problem and problem not in generation_failures:
-                    generation_failures.append(problem)
+        if problem := engine_set_problem(router.profiles, router.membership.ids, "configured"):
+            raise RuntimeError(problem)
+        generation_failures = await generation_problems(
+            cfg, router.profiles, router.membership.specs, transport=lifecycle_transport
+        )
         if generation_failures:
             raise RuntimeError("; ".join(generation_failures))
         watch = None

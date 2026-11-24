@@ -38,7 +38,7 @@ class FleetCase(unittest.IsolatedAsyncioTestCase):
         profiles = ProfileStore(self.cfg.profiles_path)
         generation = "sha256:" + "a" * 64
         generation_reader = patch(
-            "narwhal.serving.app.read_generation",
+            "narwhal.profiling.membership.read_generation",
             new=AsyncMock(return_value=GenerationEvidence(generation, {"engine": {}}, 100.0)),
         )
         generation_reader.start()

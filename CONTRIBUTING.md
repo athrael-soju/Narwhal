@@ -216,6 +216,7 @@ Import each name from the subpackage module that defines it.
 | `profiling/probe/fleet.py`                                                   | Fleet profiling run                                                      |
 | `profiling/probe/offline.py`                                                 | TTFT refit and profile merge                                             |
 | `profiling/probe/cli.py`                                                     | `narwhal-profile`                                                        |
+| `profiling/membership.py`                                                    | Profile and calibration checks of an engine set                          |
 | `runtime/lifecycle/records.py`                                               | Lifecycle errors, drain records and readmission outcomes                 |
 | `runtime/lifecycle/manager.py`                                               | `LifecycleManager` drain and hold state                                  |
 | `runtime/lifecycle/identity.py`                                              | Process identity binding, capture and profile recovery checks            |
