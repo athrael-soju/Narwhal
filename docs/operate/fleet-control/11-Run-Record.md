@@ -72,7 +72,7 @@ The `result` depends on the action:
 | `session.start`                                                | `session`, `baseline_digest`                                                               |
 | `session.end`                                                  | `changes` and `journal`                                                                    |
 | `engine.pause`, `engine.stop`                                  | `engine`, `before`, `hook`, `after`                                                        |
-| `engine.resume`, `engine.start`                                | `engine`, `before`, `hook`, `service` with `in_service` and `waited_s` except for an engine restore returns, `after` |
+| `engine.resume`, `engine.start`                                | `engine`, `before`, `hook`, `service` with `in_service` and `waited_s` except for an engine that restore returns, `after` |
 | `engine.drain`, `engine.readmit`                               | `engine`, `before`, `router` with the call's `path`, `body`, `status` and `error`, `after` |
 | `engine.join`                                                  | `engine`, `router` with the call's `path`, `status`, `error` and `join`, `generation` with `before` and `after`, and `after` when the engine joined |
 | `engine.leave`                                                 | `engine`, `spec`, the engine's entry, `before`, `router` with the call's `path`, `status` and `error`, and `removal` with `removed`, `waited_s` and `generation` |

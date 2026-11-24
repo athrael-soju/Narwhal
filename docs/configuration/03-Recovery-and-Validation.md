@@ -89,7 +89,7 @@ A saved state handoff with an unknown schema or version aborts startup. A schema
 
 A successful resume restores roles, ejections, lifecycle holds and complete-backend-outage state. It clears per-engine dwell timestamps. The prefill-to-decode cooldown begins when Narwhal creates the replacement scheduler.
 
-A standby router's startup checks cover its fleet file's engines, and its profile store may also hold profiles for other engines, such as one that joined on the primary. The standby logs a warning that names them. At takeover, when the engine set it serves differs from its fleet file's, the standby checks the profile store and the first-token calibration against the served engines. When it serves its fleet file's engines and its store holds such profiles, it checks the profile store again, and refuses those profiles. A failed check blocks the takeover with its reason.
+A standby router's startup checks cover its fleet file's engines, and its profile store may also hold profiles for other engines, such as one that joined on the primary. The standby logs a warning that names them. At takeover, when the engine set it serves differs from its fleet file's, the standby checks the profile store and the first-token calibration against the served engines. When it serves its fleet file's engines from a handoff without membership at generation 1 or higher, and its store holds such profiles, it checks the profile store again and refuses those profiles. A takeover that adopts a saved membership allows profiles for engines outside it. A failed check blocks the takeover with its reason.
 
 Configure warm-standby takeover with the `narwhal-serve` options in [Starting a router pair](../operate/01-Start-Routers.md#starting-a-router-pair).
 
