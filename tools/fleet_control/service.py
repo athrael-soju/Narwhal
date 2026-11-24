@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,8 @@ UNDO = {"paused": "resume", "stopped": "start", "drained": "readmit"}
 # Actions that clear the engine changes.
 CLEARING_ACTIONS = frozenset({"config.cold_restart"})
 RESTORE_ACTION = "config.restore"
+# A whole-value ${VARIABLE} endpoint reference, as the fleet file's reader accepts.
+ENDPOINT_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 # Actions that change the router's membership.
 MEMBERSHIP_ACTIONS = frozenset({"engine.join", "engine.leave"})
 
@@ -85,7 +88,19 @@ def session_changes(
                 if iid in joined:
                     joined.remove(iid)
                 else:
-                    left[iid] = (action.result or {}).get("spec") or {"iid": iid}
+                    # A baseline engine returns with its baseline entry.
+                    left[iid] = (
+                        next(
+                            (
+                                dict(engine)
+                                for engine in session.baseline["engines"]
+                                if str(engine["iid"]) == iid
+                            ),
+                            None,
+                        )
+                        or (action.result or {}).get("spec")
+                        or {"iid": iid}
+                    )
             continue
         verb = action.name.removeprefix("engine.")
         if verb == action.name or verb not in ENGINE_CHANGES:
@@ -173,6 +188,31 @@ class ControlService:
         """Return the session's changes against the router's live membership when it answers."""
         members = None if self.members is None else await self.members()
         return session_changes(session, members)
+
+    def resolved(self, engine: Mapping[str, Any], effect: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a baseline engine entry with its `${VARIABLE}` endpoints resolved.
+
+        The router refuses references in an entry sent over HTTP, so the service resolves them
+        from its own environment, as the fleet file's reader does.
+        """
+        resolved = dict(engine)
+        for field in ("url", "attestation_url"):
+            value = resolved.get(field)
+            if not isinstance(value, str) or "${" not in value:
+                continue
+            match = ENDPOINT_REFERENCE.fullmatch(value)
+            name = match[1] if match else ""
+            found = self._env.get(name, "") if name else ""
+            # The same rules as the fleet file's reader: a whole value, set, and not nested.
+            if not found.strip() or "${" in found:
+                raise ActionError(
+                    f"engine {engine.get('iid')} {field} {value} does not resolve in the "
+                    "control service environment",
+                    status=422,
+                    result=effect,
+                )
+            resolved[field] = found
+        return resolved
 
     def stamp(self) -> str:
         """Return the current time as recorded in actions."""

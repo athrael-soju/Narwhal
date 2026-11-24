@@ -47,7 +47,7 @@ Restore baseline is an [exclusive action](04-Sessions.md#exclusive-actions) and 
 1. If the current configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook and waits for readiness, as in [Router readiness](#router-readiness).
 2. For each member engine the session paused, the service runs the `engine_resume` hook. For each member engine it stopped, the service runs the `engine_start` hook.
 3. For each member engine the session drained, the service calls the router's readmit.
-4. For each engine the baseline configures that is not in the router's membership, the service runs the `engine_start` hook when it is configured, then joins the engine with its baseline entry. The hook runs even when the engine's process still runs, so it must succeed for a running engine.
+4. For each engine the baseline configures that is not in the router's membership, the service runs the `engine_start` hook when it is configured, then joins the engine with its baseline entry, with each `${VARIABLE}` endpoint resolved from the service's environment as at session start. Set each such variable in the service's environment to the value the router uses. The hook runs even when the engine's process still runs, so it must succeed for a running engine.
 5. For each member engine the baseline does not configure, the service removes it from the router's membership.
 
 After step 1, the service reads the router's `GET /narwhal/engines` and compares it with the baseline to find the engines of steps 4 and 5. With a router that has no such route, it uses the joins and leaves the session recorded.

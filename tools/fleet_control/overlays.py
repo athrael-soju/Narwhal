@@ -271,6 +271,7 @@ class Overlays:
         if current is not None and iid in current:
             steps.append({"engine": iid, "action": "join", "seq": None})
             return
+        spec = self.service.resolved(spec, effect)
         try:
             if "engine_start" in self.service.config.hooks:
                 started = await engines.within(iid, "start", spec)
