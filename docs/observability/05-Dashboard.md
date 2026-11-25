@@ -37,6 +37,8 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. Both selectors default to All.
 
+With a [router pair](01-Start-and-Verify.md#monitoring-a-router-pair) selected, the panels that show router state read the [active router](#engines-and-engine-role-history): **Router**, the engine table, **Engine role history**, **Pool assignments**, **Pool pressure**, **Admission in-flight**, **Queue depth** and **Retry credits**. The panels that count requests, including **Requests**, **Latency** and the latency percentiles, add the counts of every selected router. Each router counts the requests it answered, so a takeover neither drops nor repeats a request.
+
 ## Colours
 
 Each colour keeps one meaning on every panel. In the headline row, cells that judge the service fill green, yellow or red, and count cells show plain values.
@@ -81,10 +83,11 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Dark purple  | `#A352CC` | admission queue and wait, and event-loop lag                                                                 |
 | Light purple | `#CA95E5` | seat time, requests in flight and event-loop busy share                                                      |
 | Cyan         | `#00BCD4` | membership change markers                                                                                    |
+| Light green  | `#96D98D` | router takeover markers                                                                                      |
 
 ## Headline row
 
-The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether each selected router that Prometheus scraped in the last 15 seconds admits traffic, named by its instance, and how many Narwhal alerts are firing now.
+The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the active router admits traffic, named by its instance, and how many Narwhal alerts are firing now. When no selected router answered its scrape in the last 15 seconds, **Router** shows each one as Offline.
 
 | Requests column                    | Shows                                                                          |
 | ---------------------------------- | ------------------------------------------------------------------------------ |
@@ -109,6 +112,8 @@ Status colours:
 | TTFT / SLO and TPOT / SLO | below 80%   | 80% to 100% | 100% or more         |
 | Admission                 | Ready       |             | Not ready or Offline |
 | Alerts                    | 0           |             | 1 or more            |
+
+**Router roles**, below the tables, gives each selected router a lane with its lease role over the displayed interval, from [`narwhal_router_role`](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges): Active in green, Standby in grey, Fenced in maroon, and Down in red while its scrape fails. A second lane for each router shows its `narwhal_router_lease_epoch`. In a takeover, the router that held the lease turns Fenced while it finishes its open streams, then Down, and Standby once it restarts. The other router turns Active at a higher epoch.
 
 ## Engines and engine role history
 
@@ -158,7 +163,9 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose. When no alert fired in the displayed interval, **Fleet events** shows one empty row labelled **No alerts in this window**.
 
-A cyan marker on every chart marks a membership change. The dashboard compares each router's [membership generation](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) at each point of the chart with the point before, and marks a change only on a router that reported ready at that earlier point. A join, a removal, and a router restart that returns to the fleet file's engines each change the generation. A standby that takes over is not marked, because it was not ready before. The marker appears at the first point after the change: up to 15 seconds later on short ranges, and up to one point later on long ranges, where one marker can cover several changes. Hover over a marker for the router instance.
+A cyan marker on every chart marks a membership change. The dashboard compares each router's [membership generation](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) at each point of the chart with the point before, and marks a change only on a router that reported ready at that earlier point and reports ready at this one. A join, a removal, and a router restart that returns to the fleet file's engines each change the generation. A standby that takes over is not marked, because it was not ready before, and a router that restarts as a standby is not marked, because it is not ready after. The marker appears at the first point after the change: up to 15 seconds later on short ranges, and up to one point later on long ranges, where one marker can cover several changes. Hover over a marker for the router instance.
+
+A light green marker on every chart marks a router takeover: a router that reports a higher `narwhal_router_lease_epoch` than at the point before. Hover over a marker for the router that claimed the lease.
 
 **Engine joins and leaves**, below **Fleet events**, counts the joins and removals in the displayed interval, in a **Join** row and a **Leave** row. **Completed** counts engines that joined or left. **Refused** counts refused requests and turns yellow from 1. **Cancelled** counts leaves that a readmission or a whole-wave hold ended before the engine left.
 

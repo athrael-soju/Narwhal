@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tests.observability.test_engine_state_promql import (
     RUN_TIMEOUT_S,
+    SHIPPED,
     STALLED,
     UNAVAILABLE,
     promtool,
@@ -44,6 +45,9 @@ class Phase:
     # A new process starts its counters at these values: 0, or adopted totals before metrics 3.
     restart: tuple[int, int] | None = None
     ejected: int = 0
+    # Decode engines in this router's pool view, and its membership generation.
+    pool: int = 2
+    generation: int = 3
 
 
 @dataclass
@@ -88,6 +92,9 @@ class Router:
                 put("narwhal_router_ready", self.labels, slot, phase.ready)
                 put("narwhal_router_lease_epoch", self.labels, slot, phase.epoch)
                 put("narwhal_ejected_instances", self.labels, slot, phase.ejected)
+                decode = {**self.labels, "role": "decode"}
+                put("narwhal_pool_instances", decode, slot, phase.pool)
+                put("narwhal_membership_generation", self.labels, slot, phase.generation)
                 for role in ROLES:
                     labels = {**self.labels, "role": role}
                     put("narwhal_router_role", labels, slot, int(role == phase.role))
@@ -108,14 +115,16 @@ def takeover(
         Phase(610, 625, "down"),
     ]
     if old_returns:
-        # The restarted process refuses 3 requests during the load balancer's 8 s grace.
+        # The restarted process refuses 3 requests during the load balancer's 8 s grace. Its
+        # pool view and membership generation come from the fleet file until it takes over.
+        restarted = {"pool": 3, "generation": 0}
         a += [
-            Phase(625, 630, "standby", refused=3, restart=(0, 0)),
-            Phase(630, LENGTH, "standby"),
+            Phase(625, 630, "standby", refused=3, restart=(0, 0), **restarted),
+            Phase(630, LENGTH, "standby", **restarted),
         ]
     else:
         a += [Phase(625, LENGTH, "down")]
-    b = [Phase(0, 605, "standby", ejected=standby_ejected)]
+    b = [Phase(0, 605, "standby", ejected=standby_ejected, pool=3, generation=0)]
     if standby_takes_over:
         adopted = (HISTORY + 1200 + 2, HISTORY + 1200 + 2) if adopt else None
         b += [
@@ -180,6 +189,46 @@ def expr_test(expr: str, at: int, value: float | None) -> list[str]:
     if value is not None:
         lines += ["          - labels: '{}'", f"            value: {value}"]
     return lines
+
+
+def samples_test(expr: str, at: int, expected: dict[str, float]) -> list[str]:
+    """Expect `expr` at `at` seconds to return exactly the `expected` labelled samples."""
+    lines = [
+        f"      - expr: {json.dumps(expr)}",
+        f"        eval_time: {at}s",
+        "        exp_samples:" + ("" if expected else " []"),
+    ]
+    for labels, value in sorted(expected.items()):
+        lines += [f"          - labels: {json.dumps(labels)}", f"            value: {value}"]
+    return lines
+
+
+def panel_query(panel: str, ref: str, window: str = "1m") -> str:
+    """The panel query as Grafana runs it over every router, with `window` for its ranges."""
+    element = artifacts.render_dashboard(SHIPPED)["spec"]["elements"][panel]["spec"]
+    expr = next(
+        query["spec"]["query"]["spec"]["expr"]
+        for query in element["data"]["spec"]["queries"]
+        if query["spec"]["refId"] == ref
+    )
+    return (
+        expr.replace("$router", ".*")
+        .replace("$iid", ".*")
+        .replace("$__rate_interval", window)
+        .replace("$__range", window)
+    )
+
+
+def marker_query(layer: str, step: int) -> str:
+    """The annotation layer's query as Grafana runs it at `step` seconds."""
+    annotations = artifacts.render_dashboard(SHIPPED)["spec"]["annotations"]
+    spec = next(item["spec"] for item in annotations if item["spec"]["name"] == layer)
+    return spec["query"]["spec"]["expr"].replace("$router", ".*").replace("$__interval", f"{step}s")
+
+
+def series_labels(name: str, router: dict[str, str], **extra: str) -> str:
+    labels = {"__name__": name, **router, **extra}
+    return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
 
 
 def within(expr: str, low: float, high: float) -> str:
@@ -251,6 +300,69 @@ class CounterContinuityTests(PromtoolCase):
         tests += expr_test(within(self.OFFERED, 1000, 1e9), 630, 1)
         tests += expr_test(within(self.TOTAL, 100_000, 1e9), LENGTH - 5, 1)
         self.run_promtool(takeover(adopt=True), tests)
+
+
+class DashboardTakeoverTests(PromtoolCase):
+    """The dashboard across a SIGTERM takeover with an immediate standby restart."""
+
+    def check(self, tests: list[str]) -> None:
+        self.run_promtool(takeover(), ["    promql_expr_test:", *tests])
+
+    def test_counter_panels_sum_the_pair_without_a_spike(self):
+        offered = panel_query("panel-11", "A")
+        tests = []
+        for at in range(90, LENGTH, 30):
+            tests += expr_test(within(offered, 1.0, 3.0), at, 1)
+        headline = panel_query("panel-105", "B", "19m")
+        tests += expr_test(within(headline, 2200, 2400), LENGTH - 5, 1)
+        self.check(tests)
+
+    def test_gauge_panels_and_the_router_stat_read_the_active_router(self):
+        pool = panel_query("panel-10", "A")
+        stat = panel_query("panel-1", "A")
+        tests = []
+        for at, router in ((300, A), (600, A), (615, B), (900, B)):
+            # The draining router holds the newest lease until the standby claims the next one.
+            decode = series_labels("narwhal_pool_instances", router, role="decode")
+            tests += samples_test(pool, at, {decode: 2})
+        for at, router in ((300, A), (615, B), (900, B)):
+            tests += samples_test(stat, at, {series_labels("narwhal_router_ready", router): 1})
+        self.check(tests)
+
+    def test_router_roles_show_each_role_and_lease_epoch(self):
+        roles = panel_query("panel-62", "A")
+        epochs = panel_query("panel-62", "B")
+        a, b = '{instance="a:8000"}', '{instance="b:8000"}'
+        active, standby, fenced, down = 1, 2, 3, 4
+        tests = []
+        for at, expected in (
+            (300, {a: active, b: standby}),
+            (605, {a: fenced, b: active}),
+            (615, {a: down, b: active}),
+            (900, {a: standby, b: active}),
+        ):
+            tests += samples_test(roles, at, expected)
+        tests += samples_test(epochs, 300, {a: 7, b: 0})
+        tests += samples_test(epochs, 900, {a: 0, b: 8})
+        self.check(tests)
+
+    def test_the_takeover_marker_marks_the_new_lease_once(self):
+        claimed = series_labels("narwhal_router_lease_epoch", B)
+        tests = []
+        for step, mark in ((15, 615), (60, 660)):
+            query = marker_query("Router takeovers", step)
+            for at in range(step, LENGTH, step):
+                tests += samples_test(query, at, {claimed: 8} if at == mark else {})
+        self.check(tests)
+
+    def test_the_membership_marker_skips_the_takeover_and_the_restarted_standby(self):
+        """The restarted router's generation changes after a step at which it was ready."""
+        tests = []
+        for step in (15, 45, 60):
+            query = marker_query("Membership changes", step)
+            for at in range(step, LENGTH, step):
+                tests += samples_test(query, at, {})
+        self.check(tests)
 
 
 class RouterAlertTests(PromtoolCase):

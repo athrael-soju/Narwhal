@@ -54,6 +54,7 @@ DASHBOARD_PALETTE = {
     "retry": "#B877D9",
     "unsized": "#8AB8FF",
     "membership": "#00BCD4",
+    "takeover": "#96D98D",
     "state leaving": "#4F6D7A",
 }
 
@@ -551,7 +552,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for name in rules:
             self.assertIn(f"| `{name}` |", guide)
 
-    async def test_dashboard_scopes_latency_quantiles_to_the_selected_router(self):
+    async def test_dashboard_scopes_latency_quantiles_to_the_selected_routers(self):
         elements = dashboard()["spec"]["elements"]
         panels = {
             elements[name]["spec"]["title"]: elements[name]
@@ -568,7 +569,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all("$iid" not in expr for expr in expressions))
                 for expression in expressions:
                     if "histogram_quantile" in expression:
-                        self.assertIn("sum by (instance, slo, le)", expression)
+                        # A request is observed by one router, so a pair's buckets add.
+                        self.assertIn("sum by (slo, le)", expression)
                         self.assertIn("[$__rate_interval]", expression)
 
         ttft_queries = panels["Time to first token"]["spec"]["data"]["spec"]["queries"]
@@ -807,11 +809,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
         self.assertTrue(latency["TPOT p95"].endswith(" * 1000"))
-        # Each router configuration's p95 is divided by that configuration's SLO.
+        # Each SLO configuration's p95, over the routers of a pair, is divided by that SLO.
         for metric in ("ttft", "tpot"):
             share = latency[f"{metric.upper()} / SLO"]
-            self.assertIn("sum by (instance, slo, le)", share)
-            self.assertIn("/ on(instance, slo)", share)
+            self.assertIn("sum by (slo, le)", share)
+            self.assertIn("/ on(slo)", share)
             self.assertIn("max_over_time(narwhal_slo_seconds{", share)
         # Status values colour their cells, as the engine table colours Role and State.
         for styles, name in (

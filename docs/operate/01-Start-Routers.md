@@ -111,3 +111,5 @@ At shutdown, the active lease holder writes its handoff and releases the lease, 
 ## Monitoring the router pair
 
 To scrape both routers and discover the engines through the load balancer, start the monitoring stack as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).
+
+On the dashboard, **Router roles** shows which router holds the lease, and a marker on every chart shows each takeover. [Selectors](../observability/05-Dashboard.md#selectors) lists the panels that read the active router and the panels that add both routers.
