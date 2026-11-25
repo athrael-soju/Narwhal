@@ -62,7 +62,9 @@ class EnginesApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["leaving"], [])
         self.assertIsNone(body["join"])
         self.router.standby = True
-        self.document(await self.client.get("/narwhal/engines"), 200)
+        response = await self.client.get("/narwhal/engines")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("engines", response.json())
 
     async def test_post_joins_a_validated_engine(self):
         async def joined(router, spec, *, transport=None):

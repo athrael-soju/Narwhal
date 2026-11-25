@@ -16,7 +16,7 @@ from narwhal.contracts import canonical_digest
 from .config import ControlConfig, Hook
 from .hooks import HookResult, run_hook
 from .jobs import Job, JobRunner, JobSlot
-from .journal import SESSION_EXTRACT, Mark, extract, mark
+from .journal import SESSION_EXTRACT, Marks, extract_all, marks
 from .records import Action, Outcome, RunStore, Session, timestamp
 
 Operation = Callable[[Session | None], Awaitable[Mapping[str, Any] | None]]
@@ -178,8 +178,8 @@ class ControlService:
         self._exclusive_since: str | None = None
         self._job_count = 0
         # Router journal positions where the session and each load job began.
-        self._session_mark: Mark | None = None
-        self._job_marks: dict[str, Mark | None] = {}
+        self._session_mark: Marks = None
+        self._job_marks: dict[str, Marks] = {}
         self.jobs = None if runner is None else JobSlot(runner, self._job_finished, self.stamp)
         # Returns the router's member engine entries, or None when they cannot be read.
         self.members: Callable[[], Awaitable[Mapping[str, Mapping[str, Any]] | None]] | None = None
@@ -290,7 +290,7 @@ class ControlService:
                 f"baseline fleet configuration is invalid: {exc}", status=500
             ) from exc
         self.session = self.store.open_session(self._now(), str(source), baseline)
-        self._session_mark = mark(self.config.router.journal)
+        self._session_mark = marks(self.config.router.journal_paths)
         self._job_count = 0
         if self.jobs is not None:
             self.jobs.clear()
@@ -310,10 +310,10 @@ class ControlService:
         session.ended_at = self.stamp()
         return {"changes": await self.changes(session), "journal": journal}
 
-    def journal_extract(self, directory: Path, name: str, start: Mark | None) -> dict[str, Any]:
+    def journal_extract(self, directory: Path, name: str, start: Marks) -> dict[str, Any]:
         """Copy the router journal rows appended since `start` into the session directory."""
         router = self.config.router
-        return extract(router.journal, start, directory, name, router.journal_max_bytes)
+        return extract_all(router.journal_paths, start, directory, name, router.journal_max_bytes)
 
     async def run_hook(
         self, hook: Hook, session: Session, extra_env: Mapping[str, str] | None = None
@@ -347,7 +347,7 @@ class ControlService:
             job_id = f"job-{self._job_count:03d}"
             directory = session.directory / "jobs" / job_id
             directory.mkdir(mode=0o700, parents=True)
-            self._job_marks[job_id] = mark(self.config.router.journal)
+            self._job_marks[job_id] = marks(self.config.router.journal_paths)
             job = self.jobs.start(Job(job_id, normalized, directory, self.stamp()))
             return {"job": job.document()}
 

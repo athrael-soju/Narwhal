@@ -45,7 +45,7 @@ _KEYS = {
     "console",
 }
 _HOOK_KEYS = {"argv", "timeout_s"}
-_ROUTER_KEYS = {"url", "timeout_s", "journal", "journal_max_bytes"}
+_ROUTER_KEYS = {"url", "timeout_s", "journal", "journals", "journal_max_bytes"}
 _CONSOLE_KEYS = {
     "grafana_url",
     "dashboard_uid",
@@ -83,6 +83,13 @@ class RouterEndpoint:
     timeout_s: float = DEFAULT_ROUTER_TIMEOUT_S
     journal: Path | None = None
     journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
+    # The journal of each router of a pair, in place of `journal`.
+    journals: tuple[Path, ...] = ()
+
+    @property
+    def journal_paths(self) -> tuple[Path, ...]:
+        """Return every router journal the service copies extracts from."""
+        return self.journals or (() if self.journal is None else (self.journal,))
 
 
 @dataclass(frozen=True)
@@ -233,6 +240,19 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
     if journal is not None and (not isinstance(journal, str) or not Path(journal).is_absolute()):
         problems.append("router.journal must be the absolute path of the router's journal file")
         journal = None
+    journals = raw.get("journals", [])
+    if "journals" in raw and (
+        not isinstance(journals, list)
+        or len(journals) < 2
+        or not all(isinstance(path, str) and Path(path).is_absolute() for path in journals)
+        or len({os.path.normpath(path) for path in journals}) != len(journals)
+    ):
+        problems.append(
+            "router.journals must list the distinct absolute journal paths of two or more routers"
+        )
+        journals = []
+    elif journals and journal is not None:
+        problems.append("set router.journal or router.journals, not both")
     max_bytes = raw.get("journal_max_bytes", DEFAULT_JOURNAL_MAX_BYTES)
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
         problems.append("router.journal_max_bytes must be a positive number of bytes")
@@ -242,6 +262,7 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
         float(timeout),
         None if journal is None else Path(journal),
         max_bytes,
+        tuple(Path(os.path.normpath(path)) for path in journals),
     )
 
 

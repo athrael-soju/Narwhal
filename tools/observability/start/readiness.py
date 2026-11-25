@@ -146,9 +146,12 @@ def _verify_targets(
             f"{router.get('health')}: {router.get('lastError', '')}"
         )
 
-    status, body = get(contract.engine_targets_url, 2.0)
+    try:
+        status, body = get(contract.engine_targets_url, 2.0)
+    except urllib.error.HTTPError as exc:
+        status, body = exc.code, exc.read().decode("utf-8", errors="replace")
     if status != 200:
-        raise StartupError(f"Router engine targets returned HTTP {status}")
+        raise StartupError(f"Router engine targets returned HTTP {status}{_refusal(body)}")
     expected_engines = {group["labels"]["iid"]: group["targets"][0] for group in json.loads(body)}
     engine_rows = [row for row in active if row.get("scrapePool") == "engines"]
     actual_engines: dict[str, str] = {}
@@ -184,6 +187,16 @@ def _verify_targets(
     value = result[0].get("value") if isinstance(result[0], dict) else None
     if not isinstance(value, list) or len(value) != 2 or value[1] != "1":
         raise StartupError("Prometheus router readiness metric reports zero")
+
+
+def _refusal(body: str) -> str:
+    """Return `: <message> (<reason>)` for a router's error body, such as a standby's refusal."""
+    try:
+        error = json.loads(body)["error"]
+        message, reason = error["message"], error.get("reason")
+    except (ValueError, LookupError, TypeError):
+        return ""
+    return f": {message}" + (f" ({reason})" if reason else "")
 
 
 def _scrape_authority(value: object) -> str:

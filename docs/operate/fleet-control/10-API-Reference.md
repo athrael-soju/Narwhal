@@ -63,6 +63,8 @@ Before and after each engine action, the service reads the router's `GET /narwha
 
 When the state read fails, the record holds the reason in `error` and the action still runs.
 
+The service repeats a read of `GET /narwhal/engines` or `GET /narwhal/state` that the router answers with HTTP 503, within the [read timeout](09-Configuration-Reference.md#router). When the membership read still answers HTTP 503, the action fails with HTTP 502 before it runs, and its error names the router's reason, such as `router /narwhal/engines answered HTTP 503: this router does not control the fleet (shadowing)`.
+
 `GET /api/engines` reads the engine IDs and `generation` from the router's `GET /narwhal/engines`. When that read fails, the route reads the engine IDs from the session's baseline, or from the `fleet` file outside a session, and leaves out `generation`. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
 
 `available` lists the baseline engines outside the router's membership, read from the session's baseline or from the `fleet` file outside a session. It is `null` when the router has no `GET /narwhal/engines` route. Otherwise it holds:
@@ -77,7 +79,7 @@ When the state read fails, the record holds the reason in `error` and the action
 | `engines[].error`     | Why the service cannot probe the engine, such as a `${VARIABLE}` endpoint that does not resolve, or `null`                                                                                                                      |
 | `error`               | Why the router's membership could not be read, with `engines` empty, or `null`                                                                                                                                                  |
 
-The service probes the engines at most once every 10 seconds, and again after each engine action.
+The service probes the engines at most once every 10 seconds, and again after each engine action. For the service's metrics, the reading reads the router's membership itself and repeats an HTTP 503 within 2 seconds. When the router still refuses, as a standby does, `engines` is empty, `error` names the router's reason, and `narwhal_control_membership_readable` reads `0`.
 
 `POST /api/engines/{iid}/join` sends the baseline entry with its `${VARIABLE}` endpoint references resolved from the service's environment, as **Restore baseline** does. The run record lists it as `engine.join` with the params `{"engine": "<iid>", "baseline": true}`.
 

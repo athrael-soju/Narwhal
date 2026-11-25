@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 from collections.abc import Callable
 from contextlib import redirect_stderr
+from email.message import Message
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 from unittest import mock
@@ -349,6 +350,44 @@ class ReadinessTests(unittest.TestCase):
             observe_services.StartupError, re.escape("expected {'e0': 'engine-a:8002'}")
         ):
             observe_readiness._verify_targets(self.services[0], self.contract, get)
+
+    def test_collection_names_a_standby_routers_refusal(self) -> None:
+        collection = self._collection_get()
+        refusal = {
+            "error": {
+                "message": "this router does not control the fleet",
+                "type": "standby",
+                "code": "standby",
+                "reason": "shadowing",
+            }
+        }
+        expected = (
+            "Router engine targets returned HTTP 503: "
+            "this router does not control the fleet (shadowing)"
+        )
+
+        def returned(url: str, timeout_s: float) -> tuple[int, str]:
+            if url == "http://router:8000/narwhal/targets":
+                return 503, json.dumps(refusal)
+            return collection(url, timeout_s)
+
+        def raised(url: str, timeout_s: float) -> tuple[int, str]:
+            if url == "http://router:8000/narwhal/targets":
+                raise urllib.error.HTTPError(
+                    url,
+                    503,
+                    "Service Unavailable",
+                    Message(),
+                    io.BytesIO(json.dumps(refusal).encode()),
+                )
+            return collection(url, timeout_s)
+
+        for get in (returned, raised):
+            with (
+                self.subTest(get=get.__name__),
+                self.assertRaisesRegex(observe_services.StartupError, re.escape(expected)),
+            ):
+                observe_readiness._verify_targets(self.services[0], self.contract, get)
 
     def test_collection_rejects_a_failed_engine_scrape(self) -> None:
         with self.assertRaisesRegex(

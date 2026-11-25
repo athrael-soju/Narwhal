@@ -17,6 +17,8 @@ import httpx
 
 from narwhal.dev.cli import main
 from narwhal.diagnostics import bundle
+from narwhal.serving.app import create_app
+from tests.fixtures import fleet
 
 
 class _InterruptedBody(httpx.AsyncByteStream):
@@ -96,6 +98,41 @@ class DiagnosticBundleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stat.S_IMODE((self.output / "manifest.json").stat().st_mode), 0o600)
         self.assertEqual(
             before, {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+        )
+
+    async def test_a_standby_bundle_keeps_its_state_and_lifecycle_documents(self):
+        """A router whose takeover blocked keeps its state and lifecycle as evidence."""
+        cfg = fleet(self.root / "router", engines=("e0", "e1"))
+        app = create_app(cfg)
+        router = app.state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        router.standby = True
+        router.failover_blocked = "no fresh handoff"
+        manifest = await bundle.collect(
+            "http://router.test", self.output, transport=httpx.ASGITransport(app=app)
+        )
+        rows = {
+            row["source"].removeprefix("http://router.test"): row for row in manifest["sources"]
+        }
+        self.assertEqual(rows["/ready"]["http_status"], 503)
+        for path in ("/narwhal/state", "/narwhal/lifecycle"):
+            with self.subTest(path=path):
+                self.assertEqual(rows[path]["http_status"], 200)
+                self.assertEqual(rows[path]["status"], "ok")
+        state = json.loads((self.output / rows["/narwhal/state"]["file"]).read_text())
+        self.assertEqual(state["ha"]["blocked"], "no fresh handoff")
+        lifecycle = json.loads((self.output / rows["/narwhal/lifecycle"]["file"]).read_text())
+        self.assertFalse(lifecycle["router"]["controls_fleet"])
+        # Readers without the header still receive the refusal.
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://router.test"
+        ) as client:
+            self.assertEqual((await client.get("/narwhal/state")).status_code, 503)
+
+    async def test_every_snapshot_request_carries_the_diagnostic_header(self):
+        await self.collect()
+        self.assertEqual(
+            {request.headers.get("x-narwhal-diagnostic") for request in self.requests}, {"true"}
         )
 
     async def test_degraded_unreachable_and_missing_sources_preserve_other_responses(self):

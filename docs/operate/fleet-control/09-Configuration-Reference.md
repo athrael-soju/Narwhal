@@ -99,11 +99,21 @@ The hook exits `2` before it runs Docker when it refuses the request, for exampl
 | `router.url`               | `http://127.0.0.1:8000` | Router base URL, `http` or `https`. AIPerf load jobs also send their requests here                                                        |
 | `router.timeout_s`         | `600`                   | Seconds, finite and above `0`. Limit for lifecycle calls, for the readiness wait after a restart or restore, and for an engine's return to service after start or resume |
 | `router.journal`           | absent                  | Absolute path of the router's request journal on this host. The file need not exist at startup                                            |
+| `router.journals`          | absent                  | For a router pair, in place of `router.journal`: the absolute journal path of each router, as this host reads it, two or more distinct paths |
 | `router.journal_max_bytes` | `268435456` (256 MiB)   | Largest journal extract copied for one session or load job, a positive number of bytes                                                    |
 
-Engine state reads use the shorter of 10 seconds and `router.timeout_s`.
+Engine state and membership reads use the shorter of 10 seconds and `router.timeout_s`. When the router answers a read with HTTP 503, as a standby does while the load balancer still routes to it during a takeover, the service repeats the read every 0.5 seconds within that time. The reads of one step share that time: the membership and state reads before an engine action, the two reads of `GET /api/engines`, and the reads of each poll while a leave or a start or resume waits, which also stop at the end of that wait.
 
-Set `router.journal` to the path the router writes: the value of `narwhal-serve --journal`, or by default `journal.jsonl` beside `profiles.path`. Sessions and load jobs record a [journal extract](11-Run-Record.md#journal-extracts) only when `router.journal` is set.
+Set `router.journal` to the path the router writes: the value of `narwhal-serve --journal`, or by default `journal.jsonl` beside `profiles.path`. Sessions and load jobs record a [journal extract](11-Run-Record.md#journal-extracts) only when `router.journal` or `router.journals` is set.
+
+For a [router pair](../01-Start-Routers.md#starting-a-router-pair), each router writes its own journal, and after a takeover the new active router's rows go to its journal. List both journals in `router.journals` so that each extract holds the rows of both routers:
+
+```json
+"router": {
+  "url": "http://127.0.0.1:8000",
+  "journals": ["/path/to/router-a/journal.jsonl", "/path/to/router-b/journal.jsonl"]
+}
+```
 
 ## Load
 

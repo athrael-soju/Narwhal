@@ -45,7 +45,7 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.router.cfg.state_path.is_file())
 
     async def test_standby_rejects_both_mutations_before_engine_calls(self):
-        """A standby returns 503 for drain and readmission and 200 for lifecycle state."""
+        """A standby returns 503 for drain, readmission and lifecycle state."""
         self.router.standby = True
         with patch.object(serving_app, "capture_process_identities", new=AsyncMock()) as capture:
             for action in ("drain", "readmit"):
@@ -56,7 +56,7 @@ class LifecycleApiTests(unittest.IsolatedAsyncioTestCase):
             capture.assert_not_awaited()
         self.assertEqual(self.router.lifecycle.records, {})
         response = await self.client.get("/narwhal/lifecycle")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
 
     async def test_invalid_engine_sets_preserve_placement(self):
         """Malformed lifecycle selections return conflicts before identity validation."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import stat
@@ -30,7 +31,9 @@ from tools.fleet_control.journal import (
     ROTATED,
     Mark,
     extract,
+    extract_all,
     mark,
+    marks,
 )
 from tools.fleet_control.service import ControlService
 
@@ -180,6 +183,139 @@ class JournalConfigTests(unittest.TestCase):
         config = load_config(ROOT / "config/fleet-control.example.json", {})
         self.assertIsNotNone(config.router.journal)
 
+    def test_a_router_pair_lists_each_routers_journal(self) -> None:
+        paths = ["/shared/router-a/journal.jsonl", "/shared/router-b/journal.jsonl"]
+        router = self.load({"journals": paths}).router
+        self.assertIsNone(router.journal)
+        self.assertEqual(router.journal_paths, tuple(Path(path) for path in paths))
+        single = self.load({"journal": paths[0]}).router
+        self.assertEqual((single.journals, single.journal_paths), ((), (Path(paths[0]),)))
+        self.assertEqual(self.load({}).router.journal_paths, ())
+
+    def test_an_invalid_journal_list_is_refused(self) -> None:
+        pair = ["/a/journal.jsonl", "/b/journal.jsonl"]
+        listed = "router.journals must list the distinct absolute journal paths"
+        for router, problem in (
+            ({"journals": "/a/journal.jsonl"}, listed),
+            ({"journals": ["/a/journal.jsonl"]}, listed),
+            ({"journals": ["/a/journal.jsonl", "b/journal.jsonl"]}, listed),
+            ({"journals": ["/a/journal.jsonl", "/a/journal.jsonl"]}, listed),
+            ({"journals": ["/a/journal.jsonl", "/a/../a//journal.jsonl"]}, listed),
+            ({"journals": pair, "journal": pair[0]}, "set router.journal or router.journals"),
+        ):
+            with self.subTest(router=router), self.assertRaises(ConfigError) as caught:
+                self.load(router)
+            self.assertIn(problem, str(caught.exception))
+
+
+class PairExtractTests(unittest.TestCase):
+    """One extract from the journals of both routers of a pair."""
+
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        self.journals = (root / "router-a.jsonl", root / "router-b.jsonl")
+        self.session = root / "session"
+        self.session.mkdir()
+
+    def run_extract(self, starts: Any, max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES) -> Any:
+        return extract_all(self.journals, starts, self.session, "session.jsonl", max_bytes)
+
+    def test_each_journal_is_copied_in_turn_after_its_own_mark(self) -> None:
+        first, second = self.journals
+        append(first, row("completed", n=0))
+        starts = marks(self.journals)
+        assert starts is not None
+        self.assertEqual(starts[1], Mark(None, 0))
+        old = [row("completed", run="a"), row("cancelled", run="a")]
+        append(first, *old)
+        new = [row("completed", run="b")]
+        append(second, *new)
+        result = self.run_extract(starts)
+        self.assertEqual((self.session / "journal/session.jsonl").read_bytes(), b"".join(old + new))
+        old_bytes, new_bytes = len(b"".join(old)), len(b"".join(new))
+        self.assertEqual(
+            result,
+            {
+                "extract": "journal/session.jsonl",
+                "lines": 3,
+                "bytes": old_bytes + new_bytes,
+                "terminal": {"cancelled": 1, "completed": 2},
+                "notes": [f"{second}: {CREATED}"],
+                "journals": [
+                    {
+                        "journal": str(first),
+                        "start_offset": starts[0].offset,
+                        "end_offset": starts[0].offset + old_bytes,
+                        "lines": 2,
+                        "bytes": old_bytes,
+                        "notes": [],
+                    },
+                    {
+                        "journal": str(second),
+                        "start_offset": 0,
+                        "end_offset": new_bytes,
+                        "lines": 1,
+                        "bytes": new_bytes,
+                        "notes": [CREATED],
+                    },
+                ],
+            },
+        )
+
+    def test_the_size_cap_covers_both_journals(self) -> None:
+        starts = marks(self.journals)
+        line = row("completed")
+        append(self.journals[0], line, line)
+        append(self.journals[1], line, line)
+        result = self.run_extract(starts, max_bytes=len(line) * 3)
+        self.assertEqual(result["lines"], 3)
+        self.assertEqual(
+            [entry["notes"] for entry in result["journals"]],
+            [[CREATED], [CREATED, f"truncated at {len(line) * 3} bytes"]],
+        )
+        first, second = (str(path) for path in self.journals)
+        self.assertEqual(
+            result["notes"],
+            [
+                f"{first}: {CREATED}",
+                f"{second}: {CREATED}",
+                f"{second}: truncated at {len(line) * 3} bytes",
+            ],
+        )
+
+    def test_a_rotated_journal_is_named_in_the_top_level_notes(self) -> None:
+        first, second = self.journals
+        append(first, row("completed"), row("completed"))
+        append(second, row("completed"))
+        starts = marks(self.journals)
+        with open(first, "r+b") as stream:
+            stream.truncate(0)
+        append(first, row("rejected"))
+        result = self.run_extract(starts)
+        self.assertEqual(result["notes"], [f"{first}: {ROTATED}"])
+        self.assertEqual(result["terminal"], {"rejected": 1})
+
+    def test_a_missing_journal_is_noted_and_the_other_copied(self) -> None:
+        starts = marks(self.journals)
+        append(self.journals[1], row("completed"))
+        result = self.run_extract(starts)
+        self.assertEqual(result["lines"], 1)
+        self.assertEqual(
+            result["journals"][0], {"journal": str(self.journals[0]), "notes": [MISSING]}
+        )
+        self.assertEqual(
+            result["notes"], [f"{self.journals[0]}: {MISSING}", f"{self.journals[1]}: {CREATED}"]
+        )
+        self.assertEqual(self.run_extract(None), {"extract": None, "notes": [NOT_CONFIGURED]})
+
+    def test_no_journal_present_copies_nothing(self) -> None:
+        result = self.run_extract(marks(self.journals))
+        self.assertEqual(result["extract"], None)
+        self.assertEqual(result["notes"], [f"{path}: {MISSING}" for path in self.journals])
+        self.assertFalse((self.session / "journal").exists())
+
 
 class SessionJournalTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -259,6 +395,32 @@ class SessionJournalTests(unittest.IsolatedAsyncioTestCase):
             ["journal/job-001.jsonl", "journal/job-002.jsonl"],
         )
         self.assertEqual(record["actions"][-1]["result"]["journal"], journal)
+
+    async def test_a_session_across_a_takeover_keeps_both_routers_rows(self) -> None:
+        standby = self.root / "router-b/journal.jsonl"
+        standby.parent.mkdir()
+        router = RouterEndpoint(journals=(self.journal, standby))
+        config = dataclasses.replace(self.service.config, router=router)
+        service = ControlService(config, env={"PATH": "/usr/bin:/bin"})
+        append(self.journal, row("completed", run="a"))
+        append(standby, row("rejected", run="b"))
+        await service.start_session()
+        # router-a serves until it stops, then router-b takes over and serves.
+        before = row("completed", run="a")
+        append(self.journal, before)
+        after = [row("completed", run="b"), row("completed", run="b")]
+        append(standby, *after)
+        ended = await service.end_session()
+        assert ended.result is not None
+        journal = ended.result["journal"]
+        self.assertEqual(journal["terminal"], {"completed": 3})
+        self.assertEqual(
+            [entry["journal"] for entry in journal["journals"]], [str(self.journal), str(standby)]
+        )
+        (directory,) = (self.runs / "sessions").iterdir()
+        self.assertEqual(
+            (directory / "journal/session.jsonl").read_bytes(), before + b"".join(after)
+        )
 
     async def test_a_missing_journal_does_not_fail_the_session(self) -> None:
         self.assertEqual((await self.client.post("/api/session")).status_code, 201)

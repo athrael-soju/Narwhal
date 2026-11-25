@@ -259,6 +259,24 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
         outcome = await self.sweep({"e1": DRAINED}, controls=False, router_url=ROUTER)
         self.assert_refused(outcome, RuntimeError, "does not control the fleet")
 
+    async def test_a_standby_refusal_names_the_routers_reason(self):
+        refusal = {
+            "error": {
+                "message": "this router does not control the fleet",
+                "type": "standby",
+                "code": "standby",
+                "reason": "shadowing",
+            }
+        }
+        outcome = await self.sweep(
+            router=lambda path: httpx.Response(503, json=refusal), router_url=ROUTER
+        )
+        self.assert_refused(
+            outcome,
+            RuntimeError,
+            r"narwhal/engines: HTTP 503: this router does not control the fleet \(shadowing\)",
+        )
+
     async def test_an_unreadable_router_is_refused(self):
         for name, response in (
             ("unreachable", httpx.ConnectError("refused")),

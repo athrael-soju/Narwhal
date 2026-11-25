@@ -10,7 +10,7 @@ description: Hand off router state and drain or readmit engines through the Narw
 
 Returns the `narwhal.handoff` schema version `1` document.
 
-The high-availability (HA) standby router polls this route before takeover.
+The high-availability (HA) standby router polls this route before takeover. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
 ### Handoff fields
 
@@ -90,7 +90,7 @@ A router from a release without engine membership ignores `membership` and refus
 
 ### `GET /narwhal/lifecycle`
 
-`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document.
+`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document. On a router that does not control the fleet, `GET /narwhal/lifecycle` returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead, and the two actions return HTTP `503` with the lifecycle document.
 
 | Field                   | Meaning                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------- |

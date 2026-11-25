@@ -17,7 +17,7 @@ Run these commands in the [installed router-role shell](../deploy/02-Install.md#
 
 ## Configuring the monitored deployment
 
-`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Write it as `http://host:port` with an explicit port and no path, query or credentials. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves. When the router moves to another origin, set the new value and rerun `make observe`, which recreates Prometheus with the new targets.
+`NARWHAL_ROUTER_URL` is the router origin Prometheus scrapes, direct or through a stable local tunnel. Write it as `http://host:port` with an explicit port and no path, query or credentials. Prometheus reads the engine targets from the router's [`GET /narwhal/targets`](../http-api/04-Inspection.md#get-narwhaltargets) every 15 seconds, so the targets follow the fleet the router serves. A router that does not hold the lease refuses that read with HTTP 503. Prometheus then keeps the targets of its last successful read, or holds none when no read has succeeded, and `make observe` fails its `engines` check with the router's reason. When the router moves to another origin, set the new value and rerun `make observe`, which recreates Prometheus with the new targets.
 
 Set it in the router-role shell:
 

@@ -18,6 +18,7 @@ from ..runtime.lifecycle.join import JoinOutcome, join_engine, spec_problem
 from ..runtime.lifecycle.leave import begin_leave
 from ..runtime.lifecycle.records import LifecycleError
 from ..runtime.standby import controls_fleet
+from .records import NOT_CONTROLLING
 from .schemas import EngineSpecIn, MembershipOut
 
 if TYPE_CHECKING:
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("narwhal.app")
 
-NOT_CONTROLLING = "this router does not control the fleet"
 # The join body as OpenAPI documents it; the fleet-file reader validates it at run time.
 ENGINE_SPEC_SCHEMA = {
     key: value
@@ -91,13 +91,18 @@ def _candidate(body: object) -> EngineSpec | str:
     return spec_problem(spec) or spec
 
 
-def add_engine_routes(app: FastAPI, router: NarwhalRouter) -> None:
-    """Register `GET` and `POST /narwhal/engines` and `DELETE /narwhal/engines/{iid}`."""
+def add_engine_routes(app: FastAPI, router: NarwhalRouter, controlled: dict[str, Any]) -> None:
+    """Register `GET` and `POST /narwhal/engines` and `DELETE /narwhal/engines/{iid}`.
+
+    `controlled` holds the route options that refuse the read unless the router controls the
+    fleet.
+    """
 
     @app.get(
         "/narwhal/engines",
         response_model=MembershipOut,
         summary="The engine membership snapshot and its generation",
+        **controlled,
     )
     async def engines() -> dict[str, Any]:
         return membership_document(router)

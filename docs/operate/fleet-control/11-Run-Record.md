@@ -102,6 +102,8 @@ Each load job and each session keeps a copy of the [router journal](../../teleme
 
 If the router restarted during a session, the extract holds rows from more than one router process. Each row's `run` field names its process.
 
+With [`router.journals`](09-Configuration-Reference.md#router), the service records each journal's size and copies the rows each one gained into the one extract, journal by journal in the listed order. The size limit covers the whole extract. A run that spans a takeover therefore holds the rows of both routers, each journal's rows in the order its router wrote them. Journal rows carry no wall-clock time, so the extract does not interleave the two routers' rows. Each row's `run` field names its router process.
+
 The service copies the extract while it handles the request, so a large extract delays other requests.
 
 The `journal` entry in a job document or a `session.end` result has:
@@ -109,9 +111,10 @@ The `journal` entry in a job document or a `session.end` result has:
 | Field          | Meaning                                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `extract`      | The extract file, or `null` when nothing was copied                                                                |
-| `start_offset` | Journal byte offset where the copy started                                                                         |
-| `end_offset`   | Journal byte offset after the last copied row                                                                      |
+| `start_offset` | Journal byte offset where the copy started, with `router.journal`                                                  |
+| `end_offset`   | Journal byte offset after the last copied row, with `router.journal`                                               |
 | `lines`        | Rows copied                                                                                                        |
 | `bytes`        | Bytes copied                                                                                                       |
 | `terminal`     | Count of finished requests by outcome, such as `completed` or `refused`                                            |
-| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit |
+| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit. With `router.journals`, each note starts with its journal's path |
+| `journals`     | With `router.journals`, one entry per journal in the listed order: `journal` (its path), `start_offset`, `end_offset`, `lines`, `bytes` and `notes`, or `journal` and `notes` alone when the journal is missing |

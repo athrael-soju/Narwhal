@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from fastapi import Header
+from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse
 
-from ..runtime.standby import control_ready
+from ..runtime.standby import control_ready, controls_fleet
 from ..types import Request
 from .admission import PlacementRefused
 from .lifecycle import RequestLifecycle
@@ -16,6 +18,10 @@ from .outcomes import DEADLINE_MESSAGE, error_response
 
 if TYPE_CHECKING:
     from .router.routing import NarwhalRouter
+
+NOT_CONTROLLING = "this router does not control the fleet"
+# The OpenAPI entry of a fleet-state read's refusal.
+CONTROLLED_READ: dict[int | str, dict[str, Any]] = {503: {"description": NOT_CONTROLLING}}
 
 # Decode admission checks in the order the router applies them.
 DECODE_CHECKS = ("slot_wait", "kv_capacity", "tpot")
@@ -101,6 +107,57 @@ def not_ready_response(
         )
     message = "No engines are available" if backend_unavailable else "Router is not ready"
     return error_response(503, code, message, headers={"retry-after": "1"}, code=code)
+
+
+class FleetNotControlled(Exception):
+    """A fleet-state read reached a router that does not hold the active lease."""
+
+
+async def require_control(request: HTTPRequest) -> None:
+    """Refuse a fleet-state read unless this router controls the fleet.
+
+    A standby or fenced router holds the fleet file's state, or state from before it lost the
+    lease, so its answer would misdescribe the fleet.
+    """
+    if not controls_fleet(request.app.state.router):
+        raise FleetNotControlled
+
+
+async def require_control_or_diagnostic(
+    request: HTTPRequest,
+    x_narwhal_diagnostic: bool = Header(
+        False,
+        description="`true` answers with this router's own document even when it does not "
+        "control the fleet. Diagnostic bundles send it",
+    ),
+) -> None:
+    """Refuse a fleet-state read unless this router controls the fleet or the read is diagnostic.
+
+    A diagnostic read keeps a standby's or a fenced router's state as failure evidence.
+    """
+    if not x_narwhal_diagnostic:
+        await require_control(request)
+
+
+def control_lost_reason(router: NarwhalRouter) -> str:
+    """Name why the router does not control the fleet.
+
+    The failover block comes first, then `shadowing` on a standby, then `lease expired`. `/ready`
+    can name another cause first, such as a whole-wave hold or degraded monitoring.
+    """
+    return router.failover_blocked or ("shadowing" if router.standby else "lease expired")
+
+
+async def not_controlling_response(request: HTTPRequest, exc: Exception) -> JSONResponse:
+    """Return the retryable 503 of a fleet-state read on a router without the lease."""
+    return error_response(
+        503,
+        "standby",
+        NOT_CONTROLLING,
+        headers={"retry-after": "1"},
+        code="standby",
+        reason=control_lost_reason(request.app.state.router),
+    )
 
 
 def ttft_refusal_cause(router: NarwhalRouter, req: Request, priced_s: float) -> str:

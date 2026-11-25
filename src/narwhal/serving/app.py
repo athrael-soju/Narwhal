@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse, Response
 
@@ -45,7 +45,15 @@ from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
 from .outcomes import error_response
-from .records import monitoring_degraded_reason, not_ready_response
+from .records import (
+    CONTROLLED_READ,
+    FleetNotControlled,
+    monitoring_degraded_reason,
+    not_controlling_response,
+    not_ready_response,
+    require_control,
+    require_control_or_diagnostic,
+)
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
@@ -270,6 +278,17 @@ def create_app(
     app.state.router = router
     app.state.yield_control = yield_control
     app.add_middleware(ServingIngress, router=router)
+    app.add_exception_handler(FleetNotControlled, not_controlling_response)
+    # Routes that describe the fleet answer only from the router that holds the lease.
+    controlled: dict[str, Any] = {
+        "dependencies": [Depends(require_control)],
+        "responses": CONTROLLED_READ,
+    }
+    # Diagnostic bundles keep a standby's state and lifecycle documents as evidence.
+    diagnosable: dict[str, Any] = {
+        "dependencies": [Depends(require_control_or_diagnostic)],
+        "responses": CONTROLLED_READ,
+    }
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
     async def models() -> dict[str, Any]:
@@ -323,7 +342,7 @@ def create_app(
             return JSONResponse(content=content)
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
-    @app.get("/narwhal/handoff", summary="The live control-plane handoff document")
+    @app.get("/narwhal/handoff", summary="The live control-plane handoff document", **controlled)
     async def handoff() -> dict[str, Any]:
         return handoff_state.snapshot(router)
 
@@ -341,17 +360,26 @@ def create_app(
             media_type=CONTENT_TYPE,
         )
 
-    @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")
+    @app.get(
+        "/narwhal/targets",
+        summary="Engine scrape targets for Prometheus HTTP discovery",
+        **controlled,
+    )
     async def targets() -> list[dict[str, Any]]:
         return scrape_targets(cfg, router.membership)
 
-    @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
+    @app.get(
+        "/narwhal/state",
+        response_model=StateOut,
+        summary="The live scheduler picture",
+        **diagnosable,
+    )
     async def state() -> dict[str, Any]:
         return router.state()
 
-    add_engine_routes(app, router)
+    add_engine_routes(app, router, controlled)
 
-    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state")
+    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **diagnosable)
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
 
