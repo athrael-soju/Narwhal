@@ -286,17 +286,18 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(
             launches["engines"]["engine-1"]["runtime"]["extra_args"][-1], "--language-model-only"
         )
-        # The operator keeps multimodal input for one engine or for the fleet.
-        env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"] = "false"
+        # The operator keeps multimodal input for the whole fleet.
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "false"
         _, launches, _, _ = records(multimodal)
-        self.assertIn(
-            "--language-model-only", launches["engines"]["engine-1"]["runtime"]["extra_args"]
-        )
-        self.assertNotIn(
-            "--language-model-only", launches["engines"]["engine-2"]["runtime"]["extra_args"]
-        )
-        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "no"
-        with self.assertRaisesRegex(ValueError, "engine-1: set LANGUAGE_MODEL_ONLY to true"):
+        for name in ("engine-1", "engine-2"):
+            self.assertNotIn(
+                "--language-model-only", launches["engines"][name]["runtime"]["extra_args"]
+            )
+        # One engine cannot differ, since a multimodal request could reach a text-only engine.
+        env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"] = "true"
+        with self.assertRaisesRegex(
+            ValueError, "set NARWHAL_LANGUAGE_MODEL_ONLY once for the fleet, not NARWHAL_NODE_2_"
+        ):
             records(multimodal)
         del env["NARWHAL_LANGUAGE_MODEL_ONLY"], env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"]
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--hf-config-path", "/model/config"])
@@ -353,6 +354,21 @@ class DiscoveryTests(unittest.TestCase):
         )
         env["NARWHAL_MODEL_SHA256"] = GGUF_SHA256
         with self.assertRaisesRegex(ValueError, "engine-1: model-file hash differs"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+        del env["NARWHAL_MODEL_SHA256"]
+        # A checkpoint deployment checks the fleet's language-only choice too.
+        for setting in ("true", "false"):
+            env["NARWHAL_LANGUAGE_MODEL_ONLY"] = setting
+            _, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+            self.assertNotIn(
+                "--language-model-only", launches["engines"]["engine-1"]["runtime"]["extra_args"]
+            )
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "no"
+        with self.assertRaisesRegex(ValueError, "engine-1: set LANGUAGE_MODEL_ONLY to true"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "true"
+        env["NARWHAL_NODE_1_LANGUAGE_MODEL_ONLY"] = "true"
+        with self.assertRaisesRegex(ValueError, "once for the fleet, not NARWHAL_NODE_1_"):
             build_records(hosts, env, observations, Path("/synthetic"))
 
     def test_env_only_discovery_feeds_real_preparation_and_launcher(self):

@@ -295,6 +295,10 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     backend.connector(connector)
     engine = backend.engine_launcher()
     pin = backend.role_switcher(connector).model is RoleModel.FIXED
+    for key in env:
+        match = re.fullmatch(r"NARWHAL_NODE_[0-9]+_(.+)", key)
+        if match and match[1] in engine.fleet_settings:
+            raise ValueError(f"set NARWHAL_{match[1]} once for the fleet, not {key}")
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()

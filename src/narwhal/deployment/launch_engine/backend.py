@@ -31,6 +31,9 @@ class EngineLauncher(ABC):
     version_label: ClassVar[str]
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
+    # Discovery settings that take one value for the fleet; a NARWHAL_NODE_<n>_ override is
+    # refused.
+    fleet_settings: ClassVar[frozenset[str]] = frozenset()
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...

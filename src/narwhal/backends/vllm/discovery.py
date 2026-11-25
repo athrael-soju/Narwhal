@@ -18,6 +18,8 @@ DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
 GGUF_ARGS = (("--load-format", "gguf"), ("--hf-config-path", MODEL_MOUNT))
 # A GGUF file holds the language model; this flag leaves out a multimodal model's encoders.
 LANGUAGE_MODEL_ONLY = "--language-model-only"
+# Every engine must accept the same request inputs, so this choice applies to the whole fleet.
+FLEET_SETTINGS = frozenset({"LANGUAGE_MODEL_ONLY"})
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
@@ -34,6 +36,9 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
             raise ValueError("convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
         environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
     launch = discovered_launch_settings(setting)
+    text_only = setting("LANGUAGE_MODEL_ONLY", "")
+    if text_only not in ("", "true", "false"):
+        raise ValueError("set LANGUAGE_MODEL_ONLY to true or false in .env")
     if observed.get("model_file"):
         if not observed["model_file"].endswith(".gguf"):
             raise ValueError("set NARWHAL_MODEL_PATH to a .gguf file")
@@ -42,9 +47,6 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         for flag, value in GGUF_ARGS:
             if flag not in args:
                 args.extend((flag, value))
-        text_only = setting("LANGUAGE_MODEL_ONLY", "")
-        if text_only not in ("", "true", "false"):
-            raise ValueError("set LANGUAGE_MODEL_ONLY to true or false in .env")
         if observed.get("multimodal") and text_only != "false" and LANGUAGE_MODEL_ONLY not in args:
             args.append(LANGUAGE_MODEL_ONLY)
         launch.setdefault("tokenizer", MODEL_MOUNT)

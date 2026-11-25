@@ -39,6 +39,7 @@ class VllmLauncher(
     check_summary = "Runtime identity, package pins, connector import and tokenizer passed."
     prefix_cache_name = "Prefix caching"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
+    fleet_settings = discovery.FLEET_SETTINGS
     version_label = "API"
 
     def validate_runtime(self, runtime: dict) -> None:
