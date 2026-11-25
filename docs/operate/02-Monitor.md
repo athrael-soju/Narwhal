@@ -22,7 +22,7 @@ When every engine is excluded from placement, the active router's `/health` repo
 
 ### Whole-wave lifecycle hold
 
-Until whole-wave readmission succeeds, the active router's `/health` reports `status: maintenance` and `/ready` returns HTTP 503 with the lifecycle reason, such as `whole-wave drain <id>`, as `reason`. New completion requests receive HTTP 503 with error code `standby` and the message `Router is not ready`. The journal's terminal row for each such request carries the lifecycle reason as `readiness_reason`.
+Until whole-wave readmission succeeds, the active router's `/health` reports `status: maintenance` and `/ready` returns HTTP 503 with the lifecycle reason, such as `whole-wave drain <id>`, as `reason`. New completion requests receive HTTP 503 with error code `not_ready`, the message `Router is not ready` and the lifecycle reason as `reason`. The journal's terminal row for each such request carries the lifecycle reason as `readiness_reason`.
 
 ### Temporary holds
 

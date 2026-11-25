@@ -142,7 +142,7 @@ The admission-seat price uses the local length estimate, from `engine.chars_per_
 
 Retries, decode-seat waits and `open` mode wait unpriced until a bound in the table above ends the wait. A decode-seat wait adds to the request's TTFT.
 
-A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `standby`, `Retry-After: 1`, and journal reason `not_ready`.
+A hold ends waiting requests with the HTTP 503 of a router that is [not ready](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics): error type `not_ready` from the lease holder or `standby` from a router that has lost its lease, the hold as `reason`, `Retry-After: 1`, and journal reason `not_ready`.
 
 | Hold begins                                                                | Requests that end with the 503                                                                           | Requests that continue                                      |
 | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
