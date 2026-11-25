@@ -150,7 +150,7 @@ class EngineLauncherTests(unittest.TestCase):
                     check(run, load(run))
                 docker.assert_not_called()
 
-    def test_start_and_native_start_shared_refuse_model_files_changed_after_the_check(self):
+    def test_start_and_native_starts_refuse_model_files_changed_after_the_check(self):
         for native in (False, True):
             with self.subTest(native=native), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
@@ -179,6 +179,20 @@ class EngineLauncherTests(unittest.TestCase):
                             launch_start._create_container(run, plan)
                     self.assertFalse((run / "container.id").exists())
                     self.assertLessEqual(docker.call_count, 2)
+                if native:
+                    # start-native refuses the plan before it reads the GPU or starts a process.
+                    with (
+                        patch.object(native_engine, "own_gpu", return_value="GPU-1"),
+                        patch.object(native_engine, "_memory_fraction", return_value=0.5),
+                        patch.object(native_engine, "_ports_free"),
+                        patch.object(native_engine, "gpu_memory") as memory,
+                        patch.object(native_engine.subprocess, "Popen") as popen,
+                        self.assertRaisesRegex(ValueError, "^model files changed"),
+                    ):
+                        native_engine.start_each([run], ready_seconds=30)
+                    memory.assert_not_called()
+                    popen.assert_not_called()
+                    self.assertFalse((run / "native-start.json").exists())
 
     def test_a_container_model_dir_link_out_of_the_mount_is_refused_and_native_follows_it(self):
         for native in (False, True):
