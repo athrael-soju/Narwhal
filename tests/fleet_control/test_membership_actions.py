@@ -286,7 +286,7 @@ class MembershipActionTests(EngineCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(seen, ["engine.leave"])
 
-    async def test_a_failed_restore_records_its_completed_steps_and_can_be_retried(self) -> None:
+    async def test_a_failed_restore_records_every_step_it_ran_and_can_be_retried(self) -> None:
         await self.start_session()
         await self.client.post("/api/engines/e1/leave")
         self.router.refuse_join = {"e1"}
@@ -296,7 +296,8 @@ class MembershipActionTests(EngineCase):
             entry for entry in self.record()["actions"] if entry["action"] == "config.restore"
         )
         steps = [(step["engine"], step["action"]) for step in restore["result"]["steps"]]
-        self.assertEqual(steps, [("e1", "start")])
+        # The failed join is a step too, after the start it followed.
+        self.assertEqual(steps, [("e1", "start"), ("e1", "join")])
         self.router.refuse_join = set()
         response = await self.client.post("/api/config/restore")
         self.assertEqual(response.status_code, 200, response.text)

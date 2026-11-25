@@ -365,6 +365,14 @@ class BelowFloorOut(BaseModel):
     cumulative_s: float = 0.0
 
 
+class MembershipStateOut(BaseModel):
+    """The membership generation and the join and leave outcomes since process start."""
+
+    generation: int = 0
+    joins: dict[str, int] = Field(default_factory=dict)
+    leaves: dict[str, int] = Field(default_factory=dict)
+
+
 class HAOut(BaseModel):
     """Router lease and readiness state."""
 
@@ -660,6 +668,7 @@ class StateOut(BaseModel):
     monitoring: MonitoringOut = Field(default_factory=lambda: MonitoringOut())
     ha: HAOut
     lifecycle: LifecycleViewOut
+    membership: MembershipStateOut = Field(default_factory=MembershipStateOut)
     admission: AdmissionOut
     # Failed, refused, rejected and expired counts by reason.
     outcome_reasons: dict[str, dict[str, int]] = Field(default_factory=dict)

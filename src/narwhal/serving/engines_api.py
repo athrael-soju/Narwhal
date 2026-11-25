@@ -153,6 +153,7 @@ def add_engine_routes(app: FastAPI, router: NarwhalRouter) -> None:
         if not controls_fleet(router):
             return _reply(router, 503, error=NOT_CONTROLLING)
         if not math.isfinite(deadline_s) or deadline_s <= 0:
+            router.lifecycle.membership_counts.leaves["refused"] += 1
             return _reply(router, 409, error="deadline_s must be positive")
         async with router.lifecycle.lock:
             if not controls_fleet(router):

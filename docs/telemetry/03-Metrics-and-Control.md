@@ -14,6 +14,7 @@ A new router process starts each series at these values:
 | --- | --- |
 | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
 | `narwhal_retry_credits` | `serving.retry_budget`. |
+| `narwhal_membership_generation` | The handoff's generation on resume and standby takeover when the handoff carries a changed membership, otherwise `0`. |
 | Reason series of `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, and `narwhal_expired_total` | Handoff values on resume and standby takeover, otherwise `0`. A handoff without reason counts restores its totals under `unclassified`. |
 | Histograms and every other counter | `0`. |
 
@@ -41,7 +42,8 @@ The router exports these series on `/metrics`, grouped by area:
 | Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total` |
 | Consolidation | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total` |
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
-| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
+| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_leaving`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
+| Membership | `narwhal_membership_generation`, `narwhal_engine_joins_total`, `narwhal_engine_leaves_total` |
 
 `narwhal_engine_requests_total` counts the requests the router has sent to each engine since the router started or the engine joined, including its verification, readmission and peer release probes. A joining engine's count starts at 0 when the join adds it to the membership, after its join checks. A join's fabric check counts toward each member it pairs with.
 
@@ -87,8 +89,31 @@ The lifecycle gauges report fields of each engine's record in [`GET /narwhal/lif
 | Metric | Type | Labels | Value |
 | --- | --- | --- | --- |
 | `narwhal_engine_draining` | gauge | `iid` | `1` when `draining` is `true`, otherwise `0`. |
+| `narwhal_engine_leaving` | gauge | `iid` | `1` when `leaving` is `true`, otherwise `0`. |
 | `narwhal_engine_ready_to_stop` | gauge | `iid` | `1` when `ready_to_stop` is `true`, otherwise `0`. |
 | `narwhal_engine_lifecycle_state` | gauge | `iid`, `state` | `1` on the series whose `state` label matches the engine's `state`. |
+
+## Reading membership changes
+
+The membership series report the router's [membership snapshot](../http-api/08-Engine-Membership.md) and the joins and removals the router process handled:
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_membership_generation` | gauge | | The snapshot's `generation`, as `GET /narwhal/engines` reports it. |
+| `narwhal_engine_joins_total` | counter | `outcome` | Join requests since the router started, by outcome. |
+| `narwhal_engine_leaves_total` | counter | `outcome` | Removal requests since the router started, by outcome. |
+
+Each outcome counts these events:
+
+| Series | Counts |
+| --- | --- |
+| `narwhal_engine_joins_total{outcome="joined"}` | Each `joined` [engine lifecycle event](01-Journal.md#engine-lifecycle-events). |
+| `narwhal_engine_joins_total{outcome="refused"}` | Each `join_refused` event. |
+| `narwhal_engine_leaves_total{outcome="left"}` | Each `left` event. |
+| `narwhal_engine_leaves_total{outcome="refused"}` | Each [`DELETE /narwhal/engines/{iid}`](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) answered with HTTP `409`: a removal rule refused it, or `deadline_s` is zero, negative or infinite. |
+| `narwhal_engine_leaves_total{outcome="cancelled"}` | Each leave that ended before the engine left, when one of these replaced the engine's drain: a readmission of the engine, a whole-wave restart hold, or a whole-wave drain that took over the held engines while no engine was schedulable. |
+
+Both counters export every outcome from process start, at `0` until it occurs. A standby reports the generation of its own snapshot until it takes over. A resumed router and a standby that takes over adopt the handoff's generation, and start both counters at `0`.
 
 ## Inspecting scheduling and role control
 

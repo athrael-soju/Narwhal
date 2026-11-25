@@ -54,15 +54,16 @@ These colours mark the engine roles, the phases and completed work on every pane
 
 The engine table and **Engine role history** colour engine states:
 
-| Colour       | Hex       | Meaning                                                |
-| ------------ | --------- | ------------------------------------------------------ |
-| Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80% |
-| Burnt orange | `#E0752D` | Quarantined                                            |
-| Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
-| Maroon       | `#A11D1D` | Blocked                                                |
-| Magenta      | `#9E4AA4` | Switching and Validating                               |
-| Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
-| Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight          |
+| Colour       | Hex       | Meaning                                                                    |
+| ------------ | --------- | -------------------------------------------------------------------------- |
+| Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80%                     |
+| Burnt orange | `#E0752D` | Quarantined                                                                |
+| Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%                                 |
+| Maroon       | `#A11D1D` | Blocked                                                                    |
+| Magenta      | `#9E4AA4` | Switching and Validating                                                   |
+| Grey         | `#8E9196` | Draining, Restarting, N/A, the engine table bars and **Available engines** |
+| Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight                              |
+| Slate        | `#4F6D7A` | Leaving                                                                    |
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
 
@@ -79,10 +80,11 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Purple       | `#B877D9` | retry attempts and retry credits                                                                             |
 | Dark purple  | `#A352CC` | admission queue and wait, and event-loop lag                                                                 |
 | Light purple | `#CA95E5` | seat time, requests in flight and event-loop busy share                                                      |
+| Cyan         | `#00BCD4` | membership change markers                                                                                    |
 
 ## Headline row
 
-The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing now.
+The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether each selected router that Prometheus scraped in the last 15 seconds admits traffic, named by its instance, and how many Narwhal alerts are firing now.
 
 | Requests column                    | Shows                                                                          |
 | ---------------------------------- | ------------------------------------------------------------------------------ |
@@ -110,7 +112,9 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's backend, current role, state and load, 8 engines per page. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the selected time range. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other.
+The engine table shows each engine the active router lists, with its backend, current role, state and load, 8 engines per page. The active router is the selected router that Prometheus scraped in the last 15 seconds and that reports ready. When no such router reports ready, as during a whole-wave drain, the panels follow the scraped router with the highest `narwhal_router_lease_epoch`, which is the router that holds or last held the lease. Routers that tie, such as routers without fencing, are all followed. When no router was scraped, the table lists the engines Prometheus scrapes.
+
+**Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the selected time range, following the router active at each moment. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other. Engines that left during the selected time range follow the current engines, each labelled with its ID and `(left)`, and each lane ends at the engine's last sample.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **Engine running** bars scale to the busiest engine.
 
@@ -128,22 +132,35 @@ The engine table shows each engine's backend, current role, state and load, 8 en
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
 
+### Available engines
+
+**Available engines**, below the engine table, lists the engines of the [fleet control](../operate/fleet-control/05-Engine-Actions.md#join-an-engine) baseline that are not members of the router's fleet, such as an engine that left and still runs. **Engine and sidecar** reads **Respond** when the engine's health route and its attestation sidecar both answer, and **Starting** when fleet control started the engine less than `router.timeout_s` ago and it has not answered since. Otherwise it reads **No response**. Its cells are grey because these engines take no placements. The table lists only fleet control's baseline engines. When it lists none, one row names the reason:
+
+- **Fleet control cannot read the router's membership.** Fleet control reports that it cannot read the router's membership or its baseline fleet configuration.
+- **Every baseline engine is a member.** Prometheus scrapes fleet control and a selected router.
+- **Prometheus cannot scrape the router.** Prometheus scrapes fleet control but no selected router.
+- **Fleet control is not scraped.** Prometheus has not scraped fleet control in the last 15 seconds. To scrape it, see [Dashboard annotations](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
+
 ## Request outcomes and fleet events
 
 **Request outcomes** plots client requests per second by outcome. In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went.
 
-| Series               | Requests per second                                                           |
-| -------------------- | ----------------------------------------------------------------------------- |
-| offered              | Original completion requests received, including early refusals               |
-| completed            | Requests completed successfully                                               |
-| failed               | Requests that ended in an error                                               |
-| refused (predictive) | Requests predictive admission refused for a projected TTFT or decode SLO miss |
-| rejected (capacity)  | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness  |
-| expired              | Requests terminated by their admission or total deadline                      |
-| cancelled            | Requests their client abandoned before completion                             |
-| invalid              | Requests rejected with HTTP 400 as invalid                                    |
+| Series               | Requests per second                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| offered              | Original completion requests received, including early refusals                                                                    |
+| completed            | Requests completed successfully                                                                                                    |
+| failed               | Requests that ended in an error                                                                                                    |
+| refused (predictive) | Requests the predictive admission checks refused with HTTP 429, for any [refusal cause](../telemetry/01-Journal.md#refusal-causes) |
+| rejected (capacity)  | Requests refused with HTTP 429 at the router in-flight limit or under router saturation, or with HTTP 503 for router readiness     |
+| expired              | Requests terminated by their admission or total deadline                                                                           |
+| cancelled            | Requests their client abandoned before completion                                                                                  |
+| invalid              | Requests rejected with HTTP 400 as invalid                                                                                         |
 
-Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose.
+Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose. When no alert fired in the displayed interval, **Fleet events** shows one empty row labelled **No alerts in this window**.
+
+A cyan marker on every chart marks a membership change. The dashboard compares each router's [membership generation](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) at each point of the chart with the point before, and marks a change only on a router that reported ready at that earlier point. A join, a removal, and a router restart that returns to the fleet file's engines each change the generation. A standby that takes over is not marked, because it was not ready before. The marker appears at the first point after the change: up to 15 seconds later on short ranges, and up to one point later on long ranges, where one marker can cover several changes. Hover over a marker for the router instance.
+
+**Engine joins and leaves**, below **Fleet events**, counts the joins and removals in the displayed interval, in a **Join** row and a **Leave** row. **Completed** counts engines that joined or left. **Refused** counts refused requests and turns yellow from 1. **Cancelled** counts leaves that a readmission or a whole-wave hold ended before the engine left.
 
 ## Pool assignments
 
@@ -212,6 +229,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
 | Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |
 | Draining    | An operator drain holds the engine out of placement                                                                | Out of service |
+| Leaving     | A removal drains the engine before it leaves the membership                                                        | Out of service |
 | Ejected     | The breaker removed the engine from placement                                                                      | Out of service |
 | Validating  | Readmission checks run against the engine                                                                          | Out of service |
 | Blocked     | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |

@@ -82,7 +82,7 @@ The `result` depends on the action:
 | `config.cold_restart`                                          | `fleet`, `digest`, `hook`, `readiness`                                                     |
 | `config.restore`                                               | `changes`, `steps`, and `hook` and `readiness` when the configuration changed              |
 
-`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, the changes each engine still carries: `paused` or `stopped`, then `drained`. When the router's membership differs from the baseline, `joined` lists the member engines the baseline does not configure, and `left` maps each baseline engine that is not a member to its baseline entry. `engines` then covers member engines only. Each `steps` entry names the `engine`, the `action` that undid one change and that action's `seq`, or `null` when the engine was already in service, already a member or already removed.
+`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, the changes each engine still carries: `paused` or `stopped`, then `drained`. When the router's membership differs from the baseline, `joined` lists the member engines the baseline does not configure, and `left` maps each baseline engine that is not a member to its baseline entry. `engines` then covers member engines only. Each `steps` entry names the `engine`, the `action` that undid one change, or that failed to, and that action's `seq`, or `null` when the engine was already in service, already a member or already removed.
 
 A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, and `tail`, the last 4096 bytes of output.
 

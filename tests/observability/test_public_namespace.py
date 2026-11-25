@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -17,6 +18,8 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tools.fleet_control.engines import Availability, AvailableEngine
+from tools.fleet_control.signals import metrics as control_metrics
 from tools.observability.artifacts import render_dashboard
 from tools.observability.start import readiness as observe_readiness
 
@@ -49,6 +52,8 @@ DASHBOARD_PALETTE = {
     "router occupancy": "#CA95E5",
     "retry": "#B877D9",
     "unsized": "#8AB8FF",
+    "membership": "#00BCD4",
+    "state leaving": "#4F6D7A",
 }
 
 
@@ -368,7 +373,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_and_alert_queries_name_exported_metrics(self):
         response = await self.client.get("/metrics")
         exported = set()
-        exposition = response.text + ToolActivity("preflight").render()
+        # The fleet control service exports the dashboard's narwhal_control_* series.
+        control = control_metrics(
+            SimpleNamespace(session=None, jobs=None, status=lambda: {"in_progress": None}),
+            Availability((AvailableEngine("e1", "vllm", True, True),)),
+        )
+        exposition = response.text + ToolActivity("preflight").render() + control
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":
@@ -564,6 +574,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             'state="validating"',
             "narwhal_ejected",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_engine_breaker_verifying",
             'narwhal_engine_quarantined{job="narwhal-router",instance=~"$router",iid=~"$iid"}',
             "narwhal_probation_instances",
@@ -630,6 +641,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Verifying",
                 "Quarantined",
                 "Draining",
+                "Leaving",
                 "Ejected",
                 "Validating",
                 "Blocked",
@@ -648,6 +660,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for source in (
             "narwhal_engine_quarantined",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_ejected",
             'state="validating"',
             'state="blocked"',
@@ -662,6 +675,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         held = (
             "Quarantined",
             "Draining",
+            "Leaving",
             "Ejected",
             "Validating",
             "Blocked",

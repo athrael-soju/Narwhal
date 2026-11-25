@@ -124,7 +124,9 @@ async def join_engine(
     """
     manager = router.lifecycle
     current = router.membership
+    counts = manager.membership_counts.joins
     if refusal := join_refusal(router, spec):
+        counts["refused"] += 1
         manager._emit("join_refused", iid=spec.iid, generation=current.generation, error=refusal)
         return JoinOutcome(spec.iid, False, current.generation, refused=refusal)
     manager._emit("join_started", iid=spec.iid, generation=current.generation)
@@ -142,6 +144,7 @@ async def join_engine(
         if not joined:
             _forget_candidate(router, spec)
             failures = _failures(spec, outcome)
+            counts["refused"] += 1
             manager._emit(
                 "join_refused",
                 iid=spec.iid,
@@ -157,6 +160,7 @@ async def join_engine(
             failures=_failures(spec, outcome),
         )
     generation = router.membership.generation
+    counts["joined"] += 1
     manager._emit(
         "joined",
         iid=spec.iid,

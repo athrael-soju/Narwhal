@@ -13,7 +13,7 @@ from .engines import (
     render_work,
 )
 from .exposition import Histogram, render_histograms
-from .runtime import render_runtime
+from .runtime import render_membership, render_runtime
 from .traffic import render_admission, render_outcomes, render_refusals, render_slo
 
 
@@ -29,6 +29,7 @@ def render(
     out: list[str] = []
     out += render_admission(state)
     out += render_runtime(state)
+    out += render_membership(state)
     out += render_roles(state)
     out += render_refusals(state)
     out += render_health(state)

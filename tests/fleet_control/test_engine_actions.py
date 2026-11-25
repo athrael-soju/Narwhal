@@ -189,7 +189,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         env = {"PATH": "/usr/bin:/bin", "NARWHAL_CONTROL_TOKEN": TOKEN, "STOPPED": str(stopped)}
         self.service = ControlService(config, env=env, now=lambda: NOW)
         transport = httpx.MockTransport(self.router.handle)
-        actions = EngineActions(self.service, transport, 0.02)
+        self.actions = actions = EngineActions(self.service, transport, 0.02)
         overlays = Overlays(self.service, engines=actions, transport=transport)
         app = create_app(
             self.service, TOKEN, routers=[engine_routes(actions), overlay_routes(overlays)]

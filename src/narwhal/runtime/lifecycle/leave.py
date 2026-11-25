@@ -69,22 +69,26 @@ async def begin_leave(
     """
     manager = router.lifecycle
     retry = (record := manager.records.get(iid)) is not None and record.leaving
-    if not retry and (refusal := leave_refusal(router, iid)):
-        raise LifecycleError(refusal)
-    if retry and record is not None and record.state == "draining":
-        # The leave is already draining the engine.
-        pass
-    elif _held_alone(router, iid):
-        # The engine is already out of placement; a failed readmission or identity capture
-        # leaves it blocked. It drains again under the leave's deadline, so it reports drained
-        # only once its resident work is gone and its identity is recorded.
-        record = manager.records[iid]
-        if record.state == "blocked":
-            record.state = "draining"
-            record.error = ""
-            record.deadline_at = time.time() + deadline_s
-    else:
-        manager.begin([iid], wave=False, deadline_s=deadline_s)
+    try:
+        if not retry and (refusal := leave_refusal(router, iid)):
+            raise LifecycleError(refusal)
+        if retry and record is not None and record.state == "draining":
+            # The leave is already draining the engine.
+            pass
+        elif _held_alone(router, iid):
+            # The engine is already out of placement; a failed readmission or identity capture
+            # leaves it blocked. It drains again under the leave's deadline, so it reports
+            # drained only once its resident work is gone and its identity is recorded.
+            record = manager.records[iid]
+            if record.state == "blocked":
+                record.state = "draining"
+                record.error = ""
+                record.deadline_at = time.time() + deadline_s
+        else:
+            manager.begin([iid], wave=False, deadline_s=deadline_s)
+    except LifecycleError:
+        manager.membership_counts.leaves["refused"] += 1
+        raise
     record = manager.records[iid]
     if not record.leaving:
         record.leaving = True
@@ -124,6 +128,7 @@ def complete_leaves(router: NarwhalRouter) -> list[str]:
         process_start = manager.records[iid].old_process_start
         membership = router.membership.left(iid)
         router.apply_membership(membership)
+        manager.membership_counts.leaves["left"] += 1
         manager._emit(
             "left",
             iid=iid,

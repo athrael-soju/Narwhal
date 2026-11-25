@@ -646,6 +646,12 @@ class NarwhalRouter:
                 "blocked": self.failover_blocked,
             },
             "lifecycle": self.lifecycle.view(),
+            # The snapshot generation and the joins and leaves since this process started.
+            "membership": {
+                "generation": self.membership.generation,
+                "joins": dict(self.lifecycle.membership_counts.joins),
+                "leaves": dict(self.lifecycle.membership_counts.leaves),
+            },
             "admission": {
                 "inflight": self.inflight,
                 "queued": len(self.admission_queue),
