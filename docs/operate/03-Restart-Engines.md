@@ -339,6 +339,8 @@ For a warm standby router:
 
 [Re-profile the replaced engines and merge their rows into the current store](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) with the recorded measurement recipe.
 
+On an SGLang fleet, pass `--router-url "$ROUTER_URL"`. The sweep also switches a peer of each replaced engine, chosen as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes. When the peer is a serving member, [drain it](#drain-the-engine) as well, keep it running until the sweep ends, and then [restart it](#restart-one-engine). The profiler stops before it contacts any engine while the router has not drained a replaced engine or its peer, as [Router drain check](../cli/Profile.md#router-drain-check) describes.
+
 ### Prepare the activation configuration
 
 Set `FLEET` to the current fleet file and `FRESH_PROFILES` to the complete profile store for the current processes, with every shared-GPU role variant the original fleet requires. Replace both example paths:

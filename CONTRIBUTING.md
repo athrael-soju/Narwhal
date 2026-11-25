@@ -217,6 +217,7 @@ Import each name from the subpackage module that defines it.
 | `profiling/probe/instance.py`                                                | One engine's profile from its sweeps                                     |
 | `profiling/probe/neighbours.py`                                              | Paced load on engines that share a GPU group                             |
 | `profiling/probe/fleet.py`                                                   | Fleet profiling run                                                      |
+| `profiling/probe/drain.py`                                                   | Router drain check of the engines a role-switching sweep uses            |
 | `profiling/probe/offline.py`                                                 | TTFT refit and profile merge                                             |
 | `profiling/probe/cli.py`                                                     | `narwhal-profile`                                                        |
 | `profiling/membership.py`                                                    | Profile and calibration checks of an engine set                          |

@@ -21,7 +21,6 @@ from ... import command_results as results
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
 from ...engines.dialect import EngineDialect
-from ...engines.metrics import EngineMetrics
 from ...observability.tools import ToolActivity
 from ...provenance import stamp
 from ...runtime.role_switch import RoleSwitcher, current_roles, restore_roles
@@ -30,7 +29,8 @@ from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
 from ..store import ProfileStore
 from ..tasks import cancel_tasks
-from .engine import engine_context_limit, engine_requests
+from .drain import refuse_undrained
+from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
 from .pairing import PairedTransport, paired_transport
@@ -48,8 +48,6 @@ class _Unhealthy(Exception): ...
 
 # The longest profile phase, a full decode sweep, ends well inside this wait.
 PHASE_WAIT_S = 3600.0
-# An engine that serves traffic holds a request at both ends of this window or finishes one in it.
-SERVING_WINDOW_S = 2.0
 
 
 def device_key(spec: EngineSpec) -> str:
@@ -127,55 +125,6 @@ async def _reset_caches(
             raise RuntimeError(f"cache reset failed on {url}: {type(exc).__name__}") from exc
         if r.status_code != 200:
             raise RuntimeError(f"cache reset failed on {url} ({r.status_code}): {r.text[:200]}")
-
-
-async def _refuse_serving(
-    cfg: FleetConfig,
-    metrics: EngineMetrics,
-    engines: list[EngineSpec],
-    targets: set[str],
-    timeout_s: float,
-) -> None:
-    """Raise when an engine the sweep switches serves requests, before the sweep sends any.
-
-    A role switch fails the requests the engine holds.
-    """
-    async with httpx.AsyncClient(timeout=timeout_s, headers=cfg.engine_headers()) as client:
-
-        async def sample() -> list[tuple[int, float] | None]:
-            return list(
-                await asyncio.gather(
-                    *(engine_requests(client, spec.url, metrics, timeout_s) for spec in engines)
-                )
-            )
-
-        before = await sample()
-        await asyncio.sleep(SERVING_WINDOW_S)
-        after = await sample()
-    serving = []
-    unread = []
-    for spec, first, last in zip(engines, before, after, strict=True):
-        if first is None or last is None:
-            unread.append(spec.iid)
-            continue
-        held = min(first[0], last[0])
-        finished = max(0.0, last[1] - first[1])
-        if held or finished:
-            name = spec.iid if spec.iid in targets else f"peer {spec.iid}"
-            serving.append(f"{name} ({held} held, {finished:g} finished in {SERVING_WINDOW_S:g} s)")
-    if unread:
-        raise RuntimeError(
-            f"cannot read the requests of {', '.join(unread)} from {metrics.path}; the sweep "
-            "switches an engine's role only when the engine serves no requests"
-        )
-    if serving:
-        raise RuntimeError(
-            "refusing to switch engines that still serve requests: "
-            + ", ".join(serving)
-            + ". A role switch fails their requests. Drain each one through the router with "
-            "POST /narwhal/lifecycle/drain and keep it running until the sweep ends, as in "
-            "Joining and removing engines"
-        )
 
 
 def _other(role: Role) -> Role:
@@ -267,7 +216,7 @@ def _lane_worker(
             phases=phases,
             done=done,
             # The parent process checked every lane's engines before it started the lanes.
-            serving_checked=True,
+            drain_checked=True,
         )
     )
 
@@ -389,7 +338,9 @@ async def run(
     phases: Any = None,
     activity: ToolActivity | None = None,
     done: MutableSequence[str] | None = None,
-    serving_checked: bool = False,
+    router_url: str | None = None,
+    no_router: bool = False,
+    drain_checked: bool = False,
 ) -> int:
     activity = activity or ToolActivity("profiling")
     if observation_timeout_s is not None and (
@@ -438,6 +389,15 @@ async def run(
         )
     if paired and len(cfg.engines) < 2:
         raise ValueError(f"profiling a {backend.label} engine needs a peer engine")
+    if router_url is not None and no_router:
+        raise ValueError("--router-url and --no-router are mutually exclusive")
+    if paired and only and router_url is None and not no_router and not drain_checked:
+        # A selected engine and its peer can be members of a running fleet.
+        raise ValueError(
+            f"a {backend.label} sweep with --only switches engine roles; pass --router-url "
+            "with the active router's URL to check that the router has drained them, or "
+            "--no-router when no router serves the fleet's engines"
+        )
     # A paired engine borrows a peer from its lane for its other leg.
     lanes = _profile_lanes(targets, colocated=colocated_workload is not None, paired=paired)
     used = {spec.iid for spec in targets}
@@ -461,10 +421,10 @@ async def run(
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
-    if paired and switcher.requires_idle and not serving_checked:
-        await _refuse_serving(
-            cfg,
-            metrics,
+    if paired and router_url is not None and not drain_checked:
+        # Before any engine request: the router sends requests to an engine it has not drained.
+        await refuse_undrained(
+            router_url,
             [spec for spec in cfg.engines if spec.iid in used],
             {spec.iid for spec in targets},
             observation_timeout_s or cfg.health_timeout_s,

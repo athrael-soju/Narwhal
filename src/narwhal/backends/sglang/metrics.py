@@ -19,25 +19,6 @@ _KV_CAPACITY = _gauge("sglang:max_total_num_tokens")
 _PAGE_SIZE = _gauge("sglang:page_size")
 _CACHED_TOKENS = _gauge("sglang:cached_tokens_total")
 _RUNNING = _gauge("sglang:num_running_reqs")
-# The scheduler's running and waiting requests, requests waiting for a grammar, and the
-# disaggregation queues that hold a request before and during its KV transfer. The decode host
-# receive queue is a subset of the decode transfer queue.
-_HELD = [
-    re.compile(rf"^{re.escape(name)}(\{{[^}}]*\}})?\s+([0-9.eE+-]+)$", re.MULTILINE)
-    for name in (
-        "sglang:num_running_reqs",
-        "sglang:num_queue_reqs",
-        "sglang:num_grammar_queue_reqs",
-        "sglang:num_prefill_bootstrap_queue_reqs",
-        "sglang:num_prefill_inflight_queue_reqs",
-        "sglang:num_decode_prealloc_queue_reqs",
-        "sglang:num_decode_transfer_queue_reqs",
-    )
-]
-# With priority scheduling, the engine also splits each queue by priority under this label.
-_PRIORITY = re.compile(r'\bpriority="[^"]+"')
-# Health checks finish without counting here.
-_FINISHED = _gauge("sglang:num_requests_total")
 _TRANSFER = re.compile(
     rf"^{TRANSFER_SERIES}_(count|sum)\{{([^}}]*)\}}\s+([0-9.eE+-]+)$", re.MULTILINE
 )
@@ -70,21 +51,6 @@ class SglangMetrics(EngineMetrics):
             "@sel})"
         ),
     }
-
-    def held_requests(self, metrics: str) -> int | None:
-        # The engine creates these series at its first scheduler report; before it, it holds none.
-        return round(
-            sum(
-                float(value)
-                for pattern in _HELD
-                for labels, value in pattern.findall(metrics)
-                if not _PRIORITY.search(labels)
-            )
-        )
-
-    def finished_requests(self, metrics: str) -> float | None:
-        # One series per streaming mode, created at the first finished request.
-        return sum(float(value) for value in _FINISHED.findall(metrics))
 
     def prefix_cache_hits(self, metrics: str) -> int | None:
         # One series per cache source: device, host and storage hits all skip prefill.

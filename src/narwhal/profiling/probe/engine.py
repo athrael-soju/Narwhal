@@ -42,17 +42,6 @@ async def prefix_cache_hits(
     return None if text is None else metrics.prefix_cache_hits(text)
 
 
-async def engine_requests(
-    client: httpx.AsyncClient, url: str, metrics: EngineMetrics, timeout_s: float = 30.0
-) -> tuple[int, float] | None:
-    """The requests the engine holds and has finished, or None when its metrics lack either."""
-    text = await _engine_metrics(client, url, metrics, timeout_s)
-    if text is None:
-        return None
-    held, finished = metrics.held_requests(text), metrics.finished_requests(text)
-    return None if held is None or finished is None else (held, finished)
-
-
 async def _probe_json(
     send: Awaitable[httpx.Response],
     url: str,

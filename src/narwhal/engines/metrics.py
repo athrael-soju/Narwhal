@@ -24,14 +24,6 @@ class EngineMetrics(ABC):
         values = {int(float(match)) for match in self.block_tokens_pattern.findall(metrics)}
         return values.pop() if len(values) == 1 and min(values) > 0 else None
 
-    def held_requests(self, metrics: str) -> int | None:
-        """Requests the engine runs or queues now, or None when its metrics do not report them."""
-        return None
-
-    def finished_requests(self, metrics: str) -> float | None:
-        """Client requests the engine has finished since it started, or None when unreported."""
-        return None
-
     @abstractmethod
     def prefix_cache_hits(self, metrics: str) -> int | None: ...
 
