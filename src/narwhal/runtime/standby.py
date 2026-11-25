@@ -151,8 +151,35 @@ async def standby_loop(
 ) -> None:
     """Shadow an active primary and claim its expired lease before takeover.
 
-    A valid primary lease blocks takeover even when the primary HTTP path is lost.
+    A valid primary lease blocks takeover even when the primary HTTP path is lost. Once the loop
+    ends, for any reason, no probe vouches for the primary, so the router counts its refusals as
+    client outcomes again.
     """
+    try:
+        await _shadow(
+            router,
+            primary,
+            lease,
+            probe_interval_s=probe_interval_s,
+            takeover_after=takeover_after,
+            max_handoff_age_s=max_handoff_age_s,
+            transport=transport,
+        )
+    finally:
+        router.primary_seen = False
+
+
+async def _shadow(
+    router: NarwhalRouter,
+    primary: str,
+    lease: FileLease,
+    *,
+    probe_interval_s: float,
+    takeover_after: int,
+    max_handoff_age_s: float,
+    transport: httpx.AsyncBaseTransport | None,
+) -> None:
+    """Probe the primary and take over once it misses `takeover_after` probes in a row."""
     doc = handoff_state.load(router.cfg.state_path)
     misses = 0
     # The block a failed takeover attempt set while the loop keeps shadowing, or "".

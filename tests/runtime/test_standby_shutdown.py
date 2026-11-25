@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.contracts import ContractVersionError
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
@@ -123,6 +124,46 @@ class StandbyRoleTests(FleetCase):
             loop.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await loop
+
+    async def test_a_loop_that_ends_on_an_unsupported_handoff_stops_vouching_for_the_primary(self):
+        owner = FileLease(self.root / "lease.json", "primary", 30)
+        self.assertTrue(owner.claim())
+        self.addCleanup(owner.release)
+        primary = create_app(self.cfg).state.router
+        self.addAsyncCleanup(primary.engines.aclose)
+        primary.lease_epoch, primary.lease_holder = owner.epoch, owner.holder
+        document = state.snapshot(primary)
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        router.standby = True
+        router.lease = FileLease(self.root / "lease.json", "standby", 30)
+        upgraded = False
+
+        def transport(request):
+            if request.url.path == "/ready":
+                return httpx.Response(200, json={"ready": True})
+            if upgraded:
+                return httpx.Response(200, json={**document, "schema_version": 99})
+            return httpx.Response(200, json=document)
+
+        loop = asyncio.create_task(
+            standby_loop(
+                router,
+                "http://primary",
+                router.lease,
+                probe_interval_s=0.005,
+                transport=httpx.MockTransport(transport),
+            )
+        )
+        for _ in range(2000):
+            if router.primary_seen:
+                break
+            await asyncio.sleep(0.005)
+        self.assertTrue(router.primary_seen)
+        upgraded = True
+        with self.assertRaises(ContractVersionError):
+            await asyncio.wait_for(loop, timeout=10)
+        self.assertFalse(router.primary_seen)
 
 
 class ShutdownHandoffTests(FleetCase):
