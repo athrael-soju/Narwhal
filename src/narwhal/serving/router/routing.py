@@ -27,6 +27,7 @@ from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
 from ...runtime.role_switch import ROLE_SWITCH_TIMEOUT_S
+from ...runtime.standby import lease_role
 from ...runtime.standby import ready as router_ready
 from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
@@ -225,7 +226,7 @@ class NarwhalRouter:
             terminal: Counter() for terminal in OUTCOME_REASONS
         }
         # The share of these totals that state handoffs carried in, which /metrics leaves out.
-        self.adopted = AdoptedCounts()
+        self.adopted = AdoptedCounts(exported=OUTCOME_REASONS)
         # Attempt failures by request phase and failure reason.
         self.attempt_failures: Counter[tuple[str, str]] = Counter()
         self.served_after_retry = 0
@@ -643,6 +644,7 @@ class NarwhalRouter:
             "monitoring": self.monitoring.snapshot(),
             "ha": {
                 "ready": router_ready(self),
+                "role": lease_role(self),
                 "standby": self.standby,
                 "epoch": self.lease_epoch,
                 "holder": self.lease_holder,

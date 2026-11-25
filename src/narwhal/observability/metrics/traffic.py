@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from ...contracts import METRICS, current
@@ -25,15 +26,19 @@ _ADMISSION = ("rejected", "refused")
 
 @dataclass
 class AdoptedCounts:
-    """Request totals that state handoffs added to this router process's own counts.
+    """Counts that state handoffs added to this router process's own counts.
 
     `/narwhal/state` and the next handoff report totals that include them. `/metrics` leaves
-    them out, so each counter counts the requests this process answered and changes only by its
-    own increments and its restart.
+    them out, so each counter counts what this process observed and changes only by its own
+    increments and its restart.
     """
 
+    # The reasons each terminal outcome exports from process start, at 0 until one occurs.
+    exported: Mapping[str, Collection[str]] = field(default_factory=dict)
     totals: Counter[str] = field(default_factory=Counter)
     reasons: defaultdict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
+    # Decode risk events behind narwhal_demand_evidence_risk_events_total, by kind.
+    risk_events: Counter[str] = field(default_factory=Counter)
 
     def add(
         self,
@@ -51,7 +56,7 @@ class AdoptedCounts:
                 self.reasons[terminal][reason] += counts[reason] - previous[reason]
 
     def local(self, state: dict) -> dict:
-        """Return `state` with the adopted totals and reason counts taken out."""
+        """Return `state` with the adopted counts taken out."""
         out = dict(state)
         for name in _TOP_LEVEL:
             if name in out:
@@ -63,15 +68,24 @@ class AdoptedCounts:
                     admission[name] = admission[name] - self.totals[name]
             out["admission"] = admission
         if "outcome_reasons" in out:
+            # Another reason appears once this process counts one.
             out["outcome_reasons"] = {
                 terminal: {
                     reason: local
                     for reason, count in counts.items()
                     if (local := count - self.reasons[terminal][reason])
-                    # A restored `unclassified` count appears once this process counts one.
-                    or reason != "unclassified"
+                    or reason in self.exported.get(terminal, ())
                 }
                 for terminal, counts in out["outcome_reasons"].items()
+            }
+        evidence = out.get("demand_evidence")
+        if isinstance(evidence, dict) and "risk_events" in evidence:
+            events = evidence["risk_events"]
+            out["demand_evidence"] = {
+                **evidence,
+                "risk_events": {
+                    kind: count - self.risk_events[kind] for kind, count in events.items()
+                },
             }
         return out
 

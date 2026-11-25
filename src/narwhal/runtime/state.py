@@ -404,12 +404,12 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     controller = router.controller
     risk = doc.get("demand_risk")
     if controller is not None and isinstance(risk, dict):
+        events = {str(name): int(count) for name, count in risk.get("events", {}).items()}
         # The carried event re-arms with its age re-anchored on this process's clock.
-        controller.safety.restore_risk(
-            kind=str(risk["kind"]),
-            age_s=float(risk.get("age_s", 0.0)),
-            events={str(name): int(count) for name, count in risk.get("events", {}).items()},
-        )
+        if controller.safety.restore_risk(
+            kind=str(risk["kind"]), age_s=float(risk.get("age_s", 0.0)), events=events
+        ):
+            router.adopted.risk_events.update(events)
 
     report = HandoffReport(
         applied=True,

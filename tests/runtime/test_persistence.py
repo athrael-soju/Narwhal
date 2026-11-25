@@ -120,8 +120,15 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         source.outcome_reasons["rejected"]["inflight_limit"] = 400
         source.scheduler.unserved = 12
         doc = state.snapshot(source)
-        # Expiries the handoff gives no reason for.
+        # Expiries the handoff gives no reason for, and a reason this release does not export.
         doc["counters"]["expired"] = 4
+        doc["counters"]["failed"] = 40
+        doc["outcome_reasons"]["failed"]["retired_reason"] = 1
+        doc["demand_risk"] = {
+            "kind": "first_token_timeout",
+            "age_s": 1.0,
+            "events": {"first_token_timeout": 2},
+        }
         # The standby answered three requests with a not-ready refusal before it took over.
         self.router.offered = self.router.rejected = 3
         self.router.outcome_reasons["rejected"]["not_ready"] = 3
@@ -143,8 +150,15 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sample("narwhal_failed_total"), 0)
         self.assertEqual(sample("narwhal_unserved_total"), 0)
         self.assertEqual(sample("narwhal_expired_total"), 0)
-        # This process has counted no unclassified expiry of its own.
+        # This process has counted no unclassified expiry or retired failure of its own.
         self.assertNotIn('reason="unclassified"', metrics())
+        self.assertNotIn('reason="retired_reason"', metrics())
+        # The adopted risk events stay out until this process records one.
+        self.assertNotIn("narwhal_demand_evidence_risk_events_total", metrics())
+        self.router.controller.safety.note_risk_event("first_token_timeout")
+        self.assertEqual(
+            sample('narwhal_demand_evidence_risk_events_total{kind="first_token_timeout"}'), 1
+        )
         self.router.offered += 2
         self.router.served += 2
         self.assertEqual((sample("narwhal_offered_total"), sample("narwhal_served_total")), (5, 2))

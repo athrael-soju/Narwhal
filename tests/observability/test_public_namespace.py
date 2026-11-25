@@ -12,6 +12,7 @@ from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.observability.tools import ToolActivity
+from narwhal.runtime.lease import FileLease
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.release import PeerRelease
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
@@ -209,13 +210,26 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             (True, "shutting down", "fenced"),
             (True, "lease renewal failed", "fenced"),
         )
-        for standby, blocked, role in cases:
-            with self.subTest(standby=standby, blocked=blocked):
-                self.router.standby, self.router.failover_blocked = standby, blocked
-                text = (await self.client.get("/metrics")).text
-                for name in ("active", "standby", "fenced"):
-                    value = 1 if name == role else 0
-                    self.assertIn(f'narwhal_router_role{{role="{name}"}} {value}', text)
+        with tempfile.TemporaryDirectory() as folder:
+            # A lease this process never claimed is as lapsed as one whose renewal is due.
+            lapsed = FileLease(Path(folder) / "lease.json", "router", 30)
+            for standby, blocked, lease, role in (
+                *((standby, blocked, None, role) for standby, blocked, role in cases),
+                (False, "", lapsed, "fenced"),
+            ):
+                with self.subTest(standby=standby, blocked=blocked, lease=lease):
+                    self.router.standby, self.router.failover_blocked = standby, blocked
+                    self.router.lease = lease
+                    text = (await self.client.get("/metrics")).text
+                    for name in ("active", "standby", "fenced"):
+                        value = 1 if name == role else 0
+                        self.assertIn(f'narwhal_router_role{{role="{name}"}} {value}', text)
+                    state = (await self.client.get("/narwhal/state")).json()
+                    self.assertEqual(state["ha"]["role"], role)
+                    # /health names the same role for a router that is not ready.
+                    health = (await self.client.get("/health")).json()["status"]
+                    if role != "active":
+                        self.assertEqual(health, role)
 
     async def test_flip_counters_start_at_zero_for_every_caller(self):
         response = await self.client.get("/metrics")

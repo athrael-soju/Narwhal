@@ -10,7 +10,7 @@ For the JSON state document, use [`GET /narwhal/state`](../http-api/05-Live-Stat
 
 A new router process starts every counter and histogram at `0`, and `narwhal_retry_credits` at `serving.retry_budget`. It starts `narwhal_membership_generation` at the handoff's generation on resume and standby takeover when the handoff carries a changed membership, otherwise at `0`.
 
-Each counter counts what that router process observed. On resume and standby takeover, the router adopts the request totals behind these counters from the state handoff: `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total` and `narwhal_cancelled_total`. [`GET /narwhal/state`](../http-api/05-Live-State.md) and the next handoff include the adopted totals, and `/metrics` leaves them out. Each counter therefore rises only with the process's own requests, and returns to `0` only when the process restarts, which Prometheus treats as a counter reset. To count the requests of a router pair, sum each counter over its routers.
+Each counter counts what that router process observed. On resume and standby takeover, the router adopts the request totals behind these counters from the state handoff: `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total` and `narwhal_cancelled_total`, and the risk-event counts behind `narwhal_demand_evidence_risk_events_total`. [`GET /narwhal/state`](../http-api/05-Live-State.md) and the next handoff include the adopted totals, and `/metrics` leaves them out. Each counter therefore rises only with the process's own requests, and returns to `0` only when the process restarts, which Prometheus treats as a counter reset. To count the requests of a router pair, sum each counter over its routers.
 
 Compare a router's counters with the journal rows of its process's `run`.
 
@@ -90,7 +90,7 @@ The `role` label takes these values:
 | --- | --- |
 | `active` | Controls the fleet. A router started without `--lease-path` is always active. |
 | `standby` | Shadows the active router, and takes over when the active router releases the lease or the lease expires. |
-| `fenced` | Released or lost the lease, or had its takeover blocked. The [`ha.blocked`](../http-api/05-Live-State.md#ha) field of `/narwhal/state` gives the reason, such as `shutting down` or `lease renewal failed`. |
+| `fenced` | Released or lost the lease, holds a lease that has lapsed before its renewal failed, or had its takeover blocked. The [`ha.blocked`](../http-api/05-Live-State.md#ha) field of `/narwhal/state` gives the reason, such as `shutting down` or `lease renewal failed`. A standby whose takeover attempt found no fresh handoff, or could not reach the lease, reports `standby` again once the active router answers its probe. |
 
 An active router can report `narwhal_router_ready` `0`, for example with no available engines. The router that claimed the lease most recently reports the highest `narwhal_router_lease_epoch`.
 
@@ -230,4 +230,4 @@ These metrics expose the consolidation evidence that gates decode-to-prefill mov
 | `narwhal_demand_evidence_envelope_decode_engines` | gauge | | Conservative decode-demand envelope in engine equivalents. |
 | `narwhal_demand_evidence_trend_ratio` | gauge | | Short-horizon demand over long-horizon demand, present once a long-horizon estimate exists. |
 | `narwhal_demand_evidence_refused` | gauge | `gate`: `risk`, `evidence`, `trend` | `1` when the gate blocks consolidation. |
-| `narwhal_demand_evidence_risk_events_total` | counter | `kind`: `first_token_timeout`, `p_to_d_recovery` | Risk-event count, present after the first risk event. |
+| `narwhal_demand_evidence_risk_events_total` | counter | `kind`: `first_token_timeout`, `p_to_d_recovery` | Risk-event count, present after this process records its first risk event. |

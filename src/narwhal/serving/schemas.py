@@ -377,6 +377,7 @@ class HAOut(BaseModel):
     """Router lease and readiness state."""
 
     ready: bool
+    role: Literal["active", "standby", "fenced"]
     standby: bool
     epoch: int
     holder: str

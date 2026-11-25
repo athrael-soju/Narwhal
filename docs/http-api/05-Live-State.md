@@ -83,6 +83,7 @@ The `ha` object reports the router's lease and readiness:
 | Field     | Meaning                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------- |
 | `ready`   | `true` when the router controls the fleet and admits new work, as `/ready` reports       |
+| `role`    | Lease role: `active`, `standby` or `fenced`, as [`narwhal_router_role`](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges) reports |
 | `standby` | `true` for a standby router                                                              |
 | `epoch`   | Lease epoch                                                                              |
 | `holder`  | Lease-holder token                                                                       |
