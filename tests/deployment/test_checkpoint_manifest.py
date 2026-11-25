@@ -23,7 +23,21 @@ class CheckpointManifestTests(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertEqual(json.loads(result.stdout)["file_count"], 1)
+            output = json.loads(result.stdout)
+            self.assertEqual(output["file_count"], 1)
+            # File status is host-local, so discovery records content only.
+            self.assertNotIn("status_sha256", output)
+
+    def test_the_tree_digest_keeps_its_manifest_version_2_value(self):
+        # Discovery on the engine host and prepare must agree, across releases too.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text("{}")
+            (root / "model.safetensors").write_bytes(b"weights")
+            self.assertEqual(
+                inspect_checkpoint(root)["model_tree_sha256"],
+                "3213e532964e545274c2459da0ef2172da8155bacbc479fc3f8a1f42cbdc4b94",
+            )
 
     def test_content_changes_and_missing_files_change_the_tree_digest(self):
         with tempfile.TemporaryDirectory() as folder:

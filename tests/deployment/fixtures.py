@@ -155,8 +155,8 @@ def process_group_with_worker():
 
 def model_file_fields(plan):
     """Return the model file digests that `prepare` records for `plan`."""
-    tree, status = model_files(plan)
-    return {"model_tree_sha256": tree, "model_status_sha256": status}
+    files = model_files(plan)
+    return {"model_tree_sha256": files.tree, "model_status_sha256": files.status}
 
 
 def launch_document():

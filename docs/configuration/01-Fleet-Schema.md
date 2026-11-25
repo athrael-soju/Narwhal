@@ -213,7 +213,7 @@ An attestation document with launch evidence adds two fields to each sidecar res
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence
 
-An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`. A change to any model file changes `launch.model_tree_sha256`, and with it the `launch_digest`.
+An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`. Preparing a launch from changed model files gives it a new `model_tree_sha256` and `launch_digest`.
 
 The process generation is the identity that saved profiles and first-token calibrations bind to:
 

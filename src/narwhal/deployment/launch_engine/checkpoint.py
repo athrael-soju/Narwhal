@@ -86,6 +86,8 @@ def main() -> int:
     try:
         inputs = json.load(sys.stdin)
         result = inspect_checkpoint(Path(inputs["model_dir"]))
+        # File status holds host-local inode numbers and times.
+        del result["status_sha256"]
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Checkpoint inspection failed: {error}", file=sys.stderr)
         return 1

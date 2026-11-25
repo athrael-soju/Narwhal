@@ -168,6 +168,15 @@ class JoinTests(JoinHarness):
         self.assertTrue(outcome.joined, outcome.error)
         self.assertIn("model identity", outcome.checks)
 
+    async def test_an_engine_whose_only_difference_is_its_model_revision_label_joins(self):
+        for iid in ("e0", "e3"):
+            self.launch_model(iid, model_revision="a" * 40)
+        # The same files under a sha256: label instead of a commit.
+        self.launch_model("e6", model_revision="sha256:" + "b" * 64)
+        outcome = await self.join()
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertIn("model identity", outcome.checks)
+
     async def test_an_engine_with_other_model_files_is_refused(self):
         for field in MODEL_IDENTITY_FIELDS:
             with self.subTest(field=field):

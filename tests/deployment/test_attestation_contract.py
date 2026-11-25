@@ -87,7 +87,9 @@ class AttestationContractTests(unittest.TestCase):
     def native_evidence(
         self, root: Path, plan_fields: dict | None = None
     ) -> tuple[Path, Path, dict]:
-        run, log = self.engine_evidence(root, plan_fields=plan_fields)
+        run, log = self.engine_evidence(
+            root, plan_fields={"backend": "native", **(plan_fields or {})}
+        )
         plan = read_json(run / "launch.json")
         plan.update(
             backend="native",
@@ -725,7 +727,7 @@ class AttestationContractTests(unittest.TestCase):
                     engine_document(run, log)
                 weights.unlink()
                 weights.write_bytes(b"other")
-                with self.assertRaisesRegex(ValueError, "Model file changed"):
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
                     engine_document(run, log)
 
     def test_native_gguf_launch_attests_the_model_file(self):
@@ -752,7 +754,7 @@ class AttestationContractTests(unittest.TestCase):
                 document = engine_document(run, log)
                 self.assertEqual(document["launch"]["model_sha256"], fields["model_sha256"])
                 weights.write_bytes(b"other")
-                with self.assertRaisesRegex(ValueError, "Model file changed"):
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
                     engine_document(run, log)
 
     def test_checkpoint_launch_attests_no_model_file(self):
@@ -805,6 +807,11 @@ class AttestationContractTests(unittest.TestCase):
                         ValueError, "differs from current serving evidence"
                     ):
                         serve(run)
+                    model = Path(read_json(run / "launch.json")["model_dir"])
+                    (model / "model.safetensors").write_bytes(b"other weights")
+                    with self.assertRaisesRegex(ValueError, "^model files changed"):
+                        serve(run)
+                    self.assertEqual(start.call_count, 1)
             finally:
                 os.chdir(previous)
 

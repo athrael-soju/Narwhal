@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +17,7 @@ from narwhal.backends.vllm.captures import handshake_policy
 from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
+from narwhal.deployment import native_engine
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine import start as launch_start
@@ -23,6 +25,7 @@ from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspect_checkpoint
 from narwhal.deployment.launch_engine.plan import (
     build,
+    check_model_files,
     load,
     prepare,
     releases_peers,
@@ -107,7 +110,7 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env, backend="native")
             model.write_bytes(b"changed")
             with patch("narwhal.deployment.stages.run") as invoke:
-                with self.assertRaisesRegex(ValueError, "model file changed"):
+                with self.assertRaisesRegex(ValueError, "^model files changed"):
                     check(run, load(run))
                 invoke.assert_not_called()
 
@@ -124,6 +127,58 @@ class EngineLauncherTests(unittest.TestCase):
             plan = load(root / "launch")
             self.assertEqual(plan["model_tree_sha256"], tree)
             self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_check_refuses_a_status_change_that_keeps_the_content(self):
+        for change in ("chmod", "hard link"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                weights = root / "model/model.safetensors"
+                weights.write_bytes(b"weights")
+                run = root / "launch"
+                prepare(run, env)
+                # Step past the file system's timestamp granularity.
+                time.sleep(0.05)
+                if change == "chmod":
+                    weights.chmod(0o600)
+                else:
+                    os.link(weights, root / "linked.safetensors")
+                with (
+                    patched_docker() as docker,
+                    self.assertRaisesRegex(ValueError, "^model files changed"),
+                ):
+                    check(run, load(run))
+                docker.assert_not_called()
+
+    def test_start_and_native_start_shared_refuse_model_files_changed_after_the_check(self):
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                if native:
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend="native" if native else "container")
+                plan = load(run)
+                output = vllm_check_output(plan, packages=plan["expected_packages"])
+                image = json.dumps([{"Id": env.get("NARWHAL_ENGINE_IMAGE")}])
+                with (
+                    patched_docker(side_effect=[image, output]) as docker,
+                    patch("narwhal.deployment.stages.run") as invoke,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
+                    check(run, plan)
+                    (root / "model/model.safetensors").write_bytes(b"weights")
+                    with self.assertRaisesRegex(ValueError, "^model files changed"):
+                        if native:
+                            native_engine._checked_plan(run, plan)
+                        else:
+                            launch_start._create_container(run, plan)
+                    self.assertFalse((run / "container.id").exists())
+                    self.assertLessEqual(docker.call_count, 2)
 
     def test_check_refuses_model_files_replaced_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -162,11 +217,25 @@ class EngineLauncherTests(unittest.TestCase):
                 record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
                 record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
                 Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+                directory = inspect_checkpoint(root / "model")["model_tree_sha256"]
+                # The pin names the model directory's digest, as discovery computes it.
+                env["NARWHAL_MODEL_TREE_SHA256"] = directory
                 prepare(root / "launch", env, backend="native")
                 trees.append(load(root / "launch")["model_tree_sha256"])
-                directory = inspect_checkpoint(root / "model")["model_tree_sha256"]
         self.assertNotEqual(trees[0], trees[1])
         self.assertNotIn(directory, trees)
+
+    def test_a_native_model_path_outside_the_model_dir_must_be_a_regular_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            model = root / "plan"
+            model.mkdir()
+            (model / "config.json").write_text("{}")
+            fifo = root / "weights.gguf"
+            os.mkfifo(fifo)
+            plan = {"backend": "native", "model_dir": str(model), "model_path": str(fifo)}
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                launch_plan.model_files(plan)
 
     def test_native_gguf_keeps_snapshot_path_for_sidecar_files(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -189,6 +258,57 @@ class EngineLauncherTests(unittest.TestCase):
             plan, _ = build(record, env, root / "launch", backend="native")
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
+
+    def test_prepare_reads_a_model_file_once(self):
+        def container(root):
+            _, env, model = self.gguf_inputs(root)
+            return env, model, "container"
+
+        def native_snapshot(root):
+            # A Hugging Face snapshot links each file to a blob outside the model directory.
+            _, env, weights = self.gguf_inputs(root)
+            blob = root / "blobs/weights"
+            blob.parent.mkdir()
+            weights.rename(blob)
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            (snapshot / "weights.gguf").symlink_to(blob)
+            # The model directory is a tokenizer snapshot with the same layout.
+            config = root / "model/config.json"
+            config.rename(blob.parent / "config")
+            config.symlink_to(Path("../blobs/config"))
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_PATH"] = str(snapshot / "weights.gguf")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            return env, blob, "native"
+
+        opened: list[Path] = []
+        real_os_open, real_io_open = os.open, io.open
+
+        def os_open(path, *args, **kwargs):
+            opened.append(Path(path).resolve())
+            return real_os_open(path, *args, **kwargs)
+
+        def io_open(path, *args, **kwargs):
+            if not isinstance(path, int):
+                opened.append(Path(path).resolve())
+            return real_io_open(path, *args, **kwargs)
+
+        for layout in (container, native_snapshot):
+            with self.subTest(layout.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder).resolve()
+                env, weights, backend = layout(root)
+                opened.clear()
+                with (
+                    patch("os.open", os_open),
+                    patch("io.open", io_open),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    prepare(root / "launch", env, backend=backend)
+                self.assertEqual(opened.count(weights), 1)
+                plan = load(root / "launch")
+                self.assertEqual(plan["model_sha256"], env["NARWHAL_MODEL_SHA256"])
+                check_model_files(plan)
 
     def gguf_inputs(
         self, root: Path, pins: dict[str, str] | None = None
@@ -440,9 +560,9 @@ class EngineLauncherTests(unittest.TestCase):
                 check(run, plan)
             model.write_bytes(b"changed")
             with patched_docker() as docker:
-                with self.assertRaisesRegex(ValueError, "model file changed after launch"):
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
                     check(run, plan)
-                with self.assertRaisesRegex(ValueError, "model file changed; prepare a fresh"):
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
                     launch_start.start(run, plan)
                 docker.assert_not_called()
             self.assertFalse((run / "container.id").exists())

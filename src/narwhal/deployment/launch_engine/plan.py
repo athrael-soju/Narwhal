@@ -9,6 +9,7 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 from .backend import (
@@ -261,21 +262,21 @@ def container_model_file(model_dir: str, path: str) -> str:
 
 
 def model_file_changed(plan: dict) -> bool:
-    """Whether the model file that `prepare` hashed is missing or differs from its hash.
+    """Whether the model file that `prepare` hashed is missing or no longer a file.
 
     A container plan's file must also remain a regular file in the mounted model directory at
-    the path the engine loads.
+    the path the engine loads. `check_model_files` covers the file's content.
     """
     if not plan.get("model_sha256"):
         return False
     path = Path(plan["model_path"])
     if plan.get("backend") == "native":
-        return not path.is_file() or digest(path) != plan["model_sha256"]
+        return not path.is_file()
     model_flag = plan_launcher(plan).launch_settings.model_flag
     try:
         if container_model_file(plan["model_dir"], str(path)) != option(plan["args"], model_flag):
             return True
-        return regular_file_digest(path) != plan["model_sha256"]
+        return not stat.S_ISREG(os.lstat(path).st_mode)
     except (OSError, ValueError):
         return True
 
@@ -494,13 +495,13 @@ def build(
     return plan, values
 
 
-def model_file_digest(plan: dict, env: dict[str, str], backend: str) -> str | None:
-    """Hash the planned model file and check it against NARWHAL_MODEL_SHA256.
+def check_model_file(plan: dict, env: dict[str, str], backend: str) -> bool:
+    """Check the planned model file before `prepare` hashes it, and return whether one is named.
 
-    A container launch requires the pin; a native launch checks it when it is set.
+    A container launch requires NARWHAL_MODEL_SHA256; a native launch checks it when it is set.
     """
     if "model_path" not in plan:
-        return None
+        return False
     path = Path(plan["model_path"])
     container = backend == "container"
     pinned = env.get("NARWHAL_MODEL_SHA256", "")
@@ -511,7 +512,7 @@ def model_file_digest(plan: dict, env: dict[str, str], backend: str) -> str | No
             raise ValueError(
                 "NARWHAL_MODEL_SHA256 pins a model file; set NARWHAL_MODEL_PATH to that file"
             )
-        return None
+        return False
     if container and path.is_symlink():
         raise ValueError(
             "NARWHAL_MODEL_PATH must name a regular file, not a symbolic link, because the "
@@ -519,10 +520,7 @@ def model_file_digest(plan: dict, env: dict[str, str], backend: str) -> str | No
         )
     if container and not pinned:
         raise ValueError("set NARWHAL_MODEL_SHA256 to the SHA-256 of NARWHAL_MODEL_PATH")
-    value = regular_file_digest(path) if container else digest(path)
-    if pinned and value != pinned:
-        raise ValueError("model file differs from its supplied hash")
-    return value
+    return True
 
 
 def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
@@ -531,13 +529,16 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     plan, values = build(record, env, output.resolve(), backend=backend)
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
-    model_sha256 = model_file_digest(plan, env, backend)
+    names_file = check_model_file(plan, env, backend)
     # Later stages compare file status instead of reading the model files again.
-    tree, status = model_files(plan)
+    files = model_files(plan)
     pinned = env.get("NARWHAL_MODEL_TREE_SHA256")
-    if pinned and tree != pinned:
-        raise ValueError("model files differ from NARWHAL_MODEL_TREE_SHA256")
-    plan.update(model_tree_sha256=tree, model_status_sha256=status)
+    if pinned and files.directory != pinned:
+        raise ValueError("model directory files differ from NARWHAL_MODEL_TREE_SHA256")
+    supplied = env.get("NARWHAL_MODEL_SHA256")
+    if names_file and supplied and files.model_file != supplied:
+        raise ValueError("model file differs from its supplied hash")
+    plan.update(model_tree_sha256=files.tree, model_status_sha256=files.status)
     engine = plan_launcher(plan)
     capture = cache_capture(engine) is not None
     if capture:
@@ -569,8 +570,8 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
             cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
         )
     plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
-    if model_sha256 is not None:
-        plan["model_sha256"] = model_sha256
+    if names_file:
+        plan["model_sha256"] = files.model_file
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
     for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):
@@ -595,9 +596,10 @@ def _outside_model_dir(plan: dict) -> Path | None:
 
 
 def _hashed_file(path: Path) -> tuple[str, str]:
-    before = path.stat()
-    content = digest(path)
-    status = file_status(path.name, path.stat())
+    resolved = path.resolve(strict=True)
+    before = resolved.stat()
+    content = regular_file_digest(resolved)
+    status = file_status(path.name, resolved.stat())
     if status != file_status(path.name, before):
         raise ValueError(f"model file changed during inspection: {path}")
     return content, json_digest(status)
@@ -607,24 +609,60 @@ def _combined(model_dir: str, outside: str | None) -> str:
     return model_dir if outside is None else json_digest([model_dir, outside])
 
 
-def model_files(plan: dict) -> tuple[str, str]:
-    """Hash the launch's model files, returning their tree digest and status fingerprint.
+class ModelFiles(NamedTuple):
+    """The digests `prepare` records for a launch's model files."""
+
+    # The digest of every model file the launch reads.
+    tree: str
+    # The status fingerprint that later stages compare instead of reading the files.
+    status: str
+    # The tree digest of `model_dir` alone, which discovery computes.
+    directory: str
+    # The SHA-256 of the model file the plan names, or None for a model directory.
+    model_file: str | None
+
+
+def _manifest_file(manifest: dict, root: str, path: Path) -> str | None:
+    """Return the manifest SHA-256 of `path`, or None when the manifest omits it."""
+    roots = {Path(root), Path(root).resolve()}
+    names = {
+        candidate.relative_to(base).as_posix()
+        for candidate in (path, path.resolve())
+        for base in roots
+        if candidate.is_relative_to(base)
+    }
+    return next((row["sha256"] for row in manifest["files"] if row["path"] in names), None)
+
+
+def model_files(plan: dict) -> ModelFiles:
+    """Hash the launch's model files once.
 
     The files are those under `model_dir`, plus a native launch's model file or directory
-    outside it.
+    outside it. A model file in `model_dir` takes its SHA-256 from the directory's manifest.
     """
     manifest = inspect_checkpoint(Path(plan["model_dir"]))
+    directory = manifest["model_tree_sha256"]
+    path = Path(os.path.abspath(plan["model_path"])) if plan.get("model_path") else None
     outside = _outside_model_dir(plan)
     if outside is None:
-        return manifest["model_tree_sha256"], manifest["status_sha256"]
+        model_file = None
+        if path is not None and path.is_file():
+            model_file = _manifest_file(manifest, plan["model_dir"], path)
+            if model_file is None:
+                raise ValueError(f"model file is excluded from the model file digest: {path}")
+        return ModelFiles(directory, manifest["status_sha256"], directory, model_file)
     if outside.is_dir():
         extra = inspect_checkpoint(outside)
         content, status = extra["model_tree_sha256"], extra["status_sha256"]
+        model_file = None
     else:
         content, status = _hashed_file(outside)
-    return (
-        _combined(manifest["model_tree_sha256"], content),
+        model_file = content
+    return ModelFiles(
+        _combined(directory, content),
         _combined(manifest["status_sha256"], status),
+        directory,
+        model_file,
     )
 
 
