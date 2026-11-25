@@ -54,15 +54,16 @@ These colours mark the engine roles, the phases and completed work on every pane
 
 The engine table and **Engine role history** colour engine states:
 
-| Colour       | Hex       | Meaning                                                |
-| ------------ | --------- | ------------------------------------------------------ |
-| Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80% |
-| Burnt orange | `#E0752D` | Quarantined                                            |
-| Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
-| Maroon       | `#A11D1D` | Blocked                                                |
-| Magenta      | `#9E4AA4` | Switching and Validating                               |
+| Colour       | Hex       | Meaning                                                                    |
+| ------------ | --------- | -------------------------------------------------------------------------- |
+| Amber        | `#C8963E` | Backlogged, Probation, Verifying and KV cache from 80%                     |
+| Burnt orange | `#E0752D` | Quarantined                                                                |
+| Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%                                 |
+| Maroon       | `#A11D1D` | Blocked                                                                    |
+| Magenta      | `#9E4AA4` | Switching and Validating                                                   |
 | Grey         | `#8E9196` | Draining, Restarting, N/A, the engine table bars and **Available engines** |
-| Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight          |
+| Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight                              |
+| Slate        | `#4F6D7A` | Leaving                                                                    |
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
 
@@ -223,6 +224,7 @@ The **State** column shows the most serious state that applies to an engine. The
 | Verifying   | A breaker health or inference probe is in flight                                                                   | In service     |
 | Quarantined | A failure quarantine or inference-probe hold keeps the engine out of placement                                     | Out of service |
 | Draining    | An operator drain holds the engine out of placement                                                                | Out of service |
+| Leaving     | A removal drains the engine before it leaves the membership                                                        | Out of service |
 | Ejected     | The breaker removed the engine from placement                                                                      | Out of service |
 | Validating  | Readmission checks run against the engine                                                                          | Out of service |
 | Blocked     | The engine waits for an operator, for example after a failed readmission check or during a whole-wave restart hold | Out of service |

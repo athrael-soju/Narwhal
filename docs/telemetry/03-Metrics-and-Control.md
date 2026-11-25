@@ -42,7 +42,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Attainment evidence | `narwhal_attainment_evidence_covered_seconds`, `narwhal_attainment_evidence_outcomes`, `narwhal_attainment_evidence_buckets`, `narwhal_attainment_evidence_pruned_total` |
 | Consolidation | `narwhal_demand_evidence_span_seconds`, `narwhal_demand_evidence_arrivals`, `narwhal_demand_evidence_closed`, `narwhal_demand_evidence_risk_age_seconds`, `narwhal_demand_evidence_short_decode_engines`, `narwhal_demand_evidence_envelope_decode_engines`, `narwhal_demand_evidence_trend_ratio`, `narwhal_demand_evidence_refused`, `narwhal_demand_evidence_risk_events_total` |
 | Latency | `narwhal_slo_seconds`, `narwhal_ttft_seconds`, `narwhal_tpot_seconds`, `narwhal_seat_seconds` |
-| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
+| Lifecycle | `narwhal_engine_draining`, `narwhal_engine_leaving`, `narwhal_engine_ready_to_stop`, `narwhal_engine_lifecycle_state` |
 | Membership | `narwhal_membership_generation`, `narwhal_engine_joins_total`, `narwhal_engine_leaves_total` |
 
 `narwhal_engine_requests_total` counts the requests the router has sent to each engine since the router started or the engine joined, including its verification, readmission and peer release probes. A joining engine's count starts at 0 when the join adds it to the membership, after its join checks. A join's fabric check counts toward each member it pairs with.
@@ -89,6 +89,7 @@ The lifecycle gauges report fields of each engine's record in [`GET /narwhal/lif
 | Metric | Type | Labels | Value |
 | --- | --- | --- | --- |
 | `narwhal_engine_draining` | gauge | `iid` | `1` when `draining` is `true`, otherwise `0`. |
+| `narwhal_engine_leaving` | gauge | `iid` | `1` when `leaving` is `true`, otherwise `0`. |
 | `narwhal_engine_ready_to_stop` | gauge | `iid` | `1` when `ready_to_stop` is `true`, otherwise `0`. |
 | `narwhal_engine_lifecycle_state` | gauge | `iid`, `state` | `1` on the series whose `state` label matches the engine's `state`. |
 

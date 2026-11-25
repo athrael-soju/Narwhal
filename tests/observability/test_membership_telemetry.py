@@ -251,6 +251,31 @@ class MembershipMetricTests(MembershipCase):
             await self.membership_metrics(), self.expected(generation=1, joined=1, cancelled=1)
         )
 
+    async def leaving(self):
+        text = (await self.client.get("/metrics")).text
+        return {
+            line.split('"')[1]: line.rsplit(" ", 1)[1]
+            for line in text.splitlines()
+            if line.startswith("narwhal_engine_leaving{")
+        }
+
+    async def test_the_leaving_gauge_follows_a_removal_drain(self):
+        response = await self.client.post("/narwhal/engines", json=NEW_ROW)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(set((await self.leaving()).values()), {"0"})
+        self.router.monitor.dispatched(NEW.iid, Request("r", 64))
+        response = await self.client.delete(f"/narwhal/engines/{NEW.iid}")
+        self.assertEqual(response.status_code, 202, response.text)
+        gauges = await self.leaving()
+        self.assertEqual(gauges.pop(NEW.iid), "1")
+        self.assertEqual(set(gauges.values()), {"0"})
+        # Readmission cancels the removal and the gauge returns to 0.
+        self.router.monitor.finished(NEW.iid, "r")
+        self.manager.refresh()
+        self.manager.mark_validating([NEW.iid])
+        self.manager.readmitted([NEW.iid], ValidationOutcome(starts={NEW.iid: 200.0}))
+        self.assertEqual((await self.leaving())[NEW.iid], "0")
+
 
 class MembershipTelemetryContractTests(unittest.TestCase):
     def test_the_journal_page_documents_every_lifecycle_action(self):

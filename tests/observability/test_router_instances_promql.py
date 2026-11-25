@@ -256,3 +256,42 @@ class RouterInstanceQueryTests(unittest.TestCase):
             [(empty, END, {})],
         )
         self.check(engines("n1"), [(empty, END, {"{}": 0})])
+
+    def test_leaving_outranks_draining_in_the_table_and_the_role_history(self):
+        labels = 'job="narwhal-router",instance="r1:8000"'
+        times = scrapes(0)
+        fleet = {
+            **router("r1:8000", 0, LENGTH, {"n1": "prefill", "n2": "decode"}),
+            **engines("n1", "n2"),
+        }
+        for iid, leaving in (("n1", "1"), ("n2", "0")):
+            fleet[f'narwhal_engine_draining{{{labels},iid="{iid}"}}'] = dict.fromkeys(times, "1")
+            fleet[f'narwhal_engine_leaving{{{labels},iid="{iid}"}}'] = dict.fromkeys(times, leaving)
+        table = state_codes("panel-7")
+        history = state_codes("panel-8")
+        self.check(
+            fleet,
+            [
+                (
+                    panel_query("panel-7", "S"),
+                    60,
+                    {'{iid="n1"}': table["Leaving"], '{iid="n2"}': table["Draining"]},
+                ),
+                (
+                    at_step(panel_query("panel-8", "A"), 60),
+                    END,
+                    {'{iid="n1"}': history["Leaving"], '{iid="n2"}': history["Draining"]},
+                ),
+            ],
+        )
+
+
+def state_codes(panel: str) -> dict[str, int]:
+    """Map each state name to its code in the panel's value mappings."""
+    spec = SHIPPED["spec"]["elements"][panel]["spec"]["vizConfig"]["spec"]["fieldConfig"]
+    if panel == "panel-7":
+        [override] = [o for o in spec["overrides"] if o["matcher"]["options"] == "State"]
+        options = override["properties"][0]["value"][0]["options"]
+    else:
+        options = spec["defaults"]["mappings"][0]["options"]
+    return {entry["text"]: int(code) for code, entry in options.items()}

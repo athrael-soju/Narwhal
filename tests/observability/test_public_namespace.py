@@ -53,6 +53,7 @@ DASHBOARD_PALETTE = {
     "retry": "#B877D9",
     "unsized": "#8AB8FF",
     "membership": "#00BCD4",
+    "state leaving": "#4F6D7A",
 }
 
 
@@ -573,6 +574,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             'state="validating"',
             "narwhal_ejected",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_engine_breaker_verifying",
             'narwhal_engine_quarantined{job="narwhal-router",instance=~"$router",iid=~"$iid"}',
             "narwhal_probation_instances",
@@ -639,6 +641,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Verifying",
                 "Quarantined",
                 "Draining",
+                "Leaving",
                 "Ejected",
                 "Validating",
                 "Blocked",
@@ -657,6 +660,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for source in (
             "narwhal_engine_quarantined",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_ejected",
             'state="validating"',
             'state="blocked"',
@@ -671,6 +675,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         held = (
             "Quarantined",
             "Draining",
+            "Leaving",
             "Ejected",
             "Validating",
             "Blocked",

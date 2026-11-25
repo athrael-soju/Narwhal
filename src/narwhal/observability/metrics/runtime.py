@@ -90,6 +90,15 @@ def render_runtime(state: dict) -> list[str]:
         ],
     )
     out += metric_lines(
+        "narwhal_engine_leaving",
+        "1 while a removal drains the engine before it leaves the membership",
+        "gauge",
+        [
+            ({"iid": iid}, 1 if entry.get("leaving") else 0)
+            for iid, entry in lifecycle_engines.items()
+        ],
+    )
+    out += metric_lines(
         "narwhal_engine_ready_to_stop",
         "1 after a drained engine has no resident work and a recorded process identity",
         "gauge",
