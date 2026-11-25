@@ -55,7 +55,7 @@ Each original completion request and its retries share one terminal row.
 | `first_byte_s`                 | Seconds from arrival to the first visible output.                                                                  |
 | `decode_tpot_s`                | Time from first to last observed output token divided by `output_len - 1`.                                         |
 | `prefill_iid`, `decode_iid`    | Engines of the final attempt's prefill and decode legs.                                                            |
-| `prefill_role`                 | Role of `prefill_iid` when placement chose it: `prefill`, or `decode` for a [prefill leg on a decode engine](../configuration/02-Serving-and-Role-Control.md#prefill-legs-on-decode-engines). With `serving.prefill_on_decode` off, it also reads `decode` when no live engine holds the prefill role and the connector lets any engine serve either leg. Null when no prefill leg was placed. |
+| `prefill_role`                 | Role of `prefill_iid` when placement chose it: `prefill`, or `decode` for a [prefill leg on a decode engine](../configuration/02-Serving-and-Role-Control.md#prefill-legs-on-decode-engines). With `serving.prefill_on_decode` off, `prefill_role` is also `decode` when every live engine is in the decode role and the connector lets any engine serve either leg. Null when no prefill leg was placed. |
 | `crossed`                      | `true` when `decode_iid` differs from `prefill_iid`.                                                               |
 | `cached_tokens`                | Prompt tokens each listed engine serves from its prefix cache at the last prefill-placement recheck, by engine ID. |
 | `cache_placement`              | The prefill placement priced with [cache evidence](#cache-placement).                                              |
@@ -69,6 +69,7 @@ Each original completion request and its retries share one terminal row.
 | `status`                       | HTTP status of the router's response.                                                                              |
 | `error_type`, `error_code`     | `type` and `code` of the client error body or terminal stream event.                                               |
 | `readiness_reason`             | On a `not_ready` rejection, the reason `/ready` reports.                                                           |
+| `standby_refusal`              | `true` on a `rejected` row that a standby counted in `narwhal_standby_refusals_total`. Written only on those rows. |
 | `attempts`, `decode_attempts`  | Prefill and decode dispatch counts for the original request.                                                       |
 | `attempt_failures`             | One [entry](#attempt-failures) per failed attempt, retried or final.                                               |
 | `queue_waits`                  | Seconds waited at each stage: `admission`, `prefill` seat, and `decode` seat.                                      |
@@ -202,8 +203,6 @@ The router prices each attempt's prefill placement in both [admission modes](../
 | `slot_headroom_s` | The slot-wait headroom added to that check when `slot_wait_s` is above zero, else `0`. Null in `open` mode.                                                                                                                              |
 
 `backlog_s` and `price_s` are null when aggregate prefill has no calibrated price. `own_prefill_s` and `backlog_s` are null when the placed engine is outside the profile store.
-
-Compare `price_s` plus `slot_wait_s` with `first_byte_s` on completed rows to check the price against the observed TTFT.
 
 Remove engine IDs and engine URLs from failure text before publishing timing journals.
 

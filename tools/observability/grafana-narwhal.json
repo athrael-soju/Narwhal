@@ -110,7 +110,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1)",
+              "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1) and on(job, instance) (narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} == 1)",
               "step": "15s",
               "titleFormat": "Membership change",
               "textFormat": "{{instance}}",
@@ -122,10 +122,40 @@
           "iconColor": "#00BCD4",
           "name": "Membership changes",
           "legacyOptions": {
-            "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1)",
+            "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1) and on(job, instance) (narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} == 1)",
             "step": "15s",
             "titleFormat": "Membership change",
             "textFormat": "{{instance}}",
+            "useValueForTime": false
+          }
+        }
+      },
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "query": {
+            "kind": "prometheus",
+            "spec": {
+              "expr": "(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} > 0) and on(job, instance) (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval))",
+              "step": "15s",
+              "titleFormat": "Router takeover",
+              "textFormat": "{{instance}} claimed a new lease epoch",
+              "useValueForTime": false
+            }
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "#96D98D",
+          "name": "Router takeovers",
+          "legacyOptions": {
+            "expr": "(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} > 0) and on(job, instance) (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval))",
+            "step": "15s",
+            "titleFormat": "Router takeover",
+            "textFormat": "{{instance}} claimed a new lease epoch",
             "useValueForTime": false
           }
         }
@@ -180,7 +210,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or ((-1 * (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == bool 0)) < 0)",
+                        "expr": "(last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (((-1 * (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == bool 0)) < 0) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))",
                         "legendFormat": "{{instance}}",
                         "instant": true
                       }
@@ -1705,7 +1735,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.50, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.50, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p50"
                       }
                     },
@@ -1722,7 +1752,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p95"
                       }
                     },
@@ -1739,7 +1769,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.99, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.99, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p99"
                       }
                     },
@@ -1756,7 +1786,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}",
+                        "expr": "max by (metric, slo) (narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
                         "legendFormat": "SLO"
                       }
                     },
@@ -1889,7 +1919,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.50, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.50, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p50"
                       }
                     },
@@ -1906,7 +1936,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p95"
                       }
                     },
@@ -1923,7 +1953,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.99, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.99, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p99"
                       }
                     },
@@ -1940,7 +1970,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}",
+                        "expr": "max by (metric, slo) (narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
                         "legendFormat": "SLO"
                       }
                     },
@@ -2073,7 +2103,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"admission\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"admission\"}[$__rate_interval])))",
                         "legendFormat": "admission wait p95"
                       }
                     },
@@ -2090,7 +2120,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"prefill\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"prefill\"}[$__rate_interval])))",
                         "legendFormat": "prefill seat wait p95"
                       }
                     },
@@ -2107,7 +2137,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"decode\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"decode\"}[$__rate_interval])))",
                         "legendFormat": "decode seat wait p95"
                       }
                     },
@@ -2124,7 +2154,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_seat_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_seat_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "seat time p95"
                       }
                     },
@@ -2243,7 +2273,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_pool_load{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_pool_load{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "{{role}}"
                       }
                     },
@@ -2448,7 +2478,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "{{role}}"
                       }
                     },
@@ -2465,7 +2495,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "ejected"
                       }
                     },
@@ -2939,7 +2969,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(instance, slo) max by (instance, slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}[$__range])))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(slo) max by (slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}[$__range])))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2958,7 +2988,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(instance, slo) max by (instance, slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}[$__range])))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(slo) max by (slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}[$__range])))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2977,7 +3007,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2996,7 +3026,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) * 1000",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) * 1000",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -3342,7 +3372,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_admission_inflight{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_admission_inflight{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "in-flight"
                       }
                     },
@@ -3359,7 +3389,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_admission_inflight_limit{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_admission_inflight_limit{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "limit"
                       }
                     },
@@ -3463,7 +3493,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_queued{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_queued{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "admission"
                       }
                     },
@@ -3480,7 +3510,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_waiting_prefill{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_waiting_prefill{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "prefill"
                       }
                     },
@@ -3497,7 +3527,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_waiting_decode{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_waiting_decode{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "decode"
                       }
                     },
@@ -3602,7 +3632,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_retry_credits{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_retry_credits{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "available"
                       }
                     },
@@ -4018,6 +4048,141 @@
             }
           }
         }
+      },
+      "panel-62": {
+        "kind": "Panel",
+        "spec": {
+          "id": 62,
+          "title": "Router roles",
+          "description": "Each selected router's lease role over time, from narwhal_router_role: Active holds the lease, Standby can take over, Fenced released or lost the lease or had its takeover blocked, and Down failed its scrape. Each router's lane below shows its lease epoch. A Router takeover marker on every chart marks each new lease epoch.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "((max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"active\"}[15s])) + 2 * max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"standby\"}[15s])) + 3 * max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"fenced\"}[15s]))) and on(instance) max by (instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on(instance) (4 * max by (instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == bool 0))",
+                        "legendFormat": "{{instance}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (instance) (last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))",
+                        "legendFormat": "{{instance}} lease epoch"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "state-timeline",
+            "spec": {
+              "options": {
+                "alignValue": "center",
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": false
+                },
+                "mergeValues": true,
+                "rowHeight": 0.8,
+                "showValue": "auto",
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "custom": {
+                    "fillOpacity": 75
+                  },
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "transparent"
+                  },
+                  "noValue": "No router scraped"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "1": {
+                                "text": "Active",
+                                "color": "#56A64B"
+                              },
+                              "2": {
+                                "text": "Standby",
+                                "color": "#8E9196"
+                              },
+                              "3": {
+                                "text": "Fenced",
+                                "color": "#A11D1D"
+                              },
+                              "4": {
+                                "text": "Down",
+                                "color": "#D44A3A"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "transparent"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -4082,6 +4247,19 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-1"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 8,
+                        "width": 24,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-62"
                         }
                       }
                     }

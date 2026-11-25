@@ -65,7 +65,7 @@ Configure the load balancer from the shipped [HAProxy configuration](https://git
 
 When the supervisor restarts a stopped router at once, HAProxy has already taken the stopped router out of rotation. The restarted process answers `/ready` with HTTP 503 while it shadows the new holder, so HAProxy sends it no requests, and new requests wait for the new holder.
 
-When a router answers HTTP 503 while both routers are in rotation, HAProxy retries the request, alternating between them up to 10 times. Both are in rotation only during a takeover, after the standby passes `/ready` and before HAProxy's next check of the old router. One client request can reach one router up to 6 times. Each router journals every attempt it answers: a `standby` or not-ready refusal as `rejected` with reason `not_ready`, and a `no_schedulable_engines` failure, or a `backend_unavailable` failure after prefill, as `failed` with reason `no_engine`. A request that a router fails after prefill can therefore run there in up to 6 rows, each recording up to `serving.max_attempts` attempts in its `attempts` field. The 503 retry applies to requests up to about 127 KiB, headers included.
+When a router answers HTTP 503 while both routers are in rotation, HAProxy retries the request, alternating between them up to 10 times. Both are in rotation only during a takeover, after the standby passes `/ready` and before HAProxy's next check of the old router. One client request can reach one router up to 6 times. Each router journals every attempt it answers: a `standby` or not-ready refusal as `rejected` with reason `not_ready`, and a `no_schedulable_engines` failure, or a `backend_unavailable` failure after prefill, as `failed` with reason `no_engine`. A request that a router fails after prefill can therefore appear in up to 6 journal rows on that router. Each row's `attempts` field lists up to `serving.max_attempts` attempts. The 503 retry applies to requests up to about 127 KiB, headers included.
 
 A router that does not hold the lease answers the fleet-state reads, such as `GET /narwhal/engines` and `GET /narwhal/state`, with an HTTP 503 [fleet-state refusal](../http-api/04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease). Through HAProxy, a read during a takeover therefore reaches the active router or returns that 503, which names the reason.
 
@@ -109,3 +109,9 @@ Admission sequence:
 A router that holds a valid lease and admits traffic returns HTTP 200 from `/ready`. During a network partition, the active lease holder fences itself before its local lease deadline, and the standby claims the lease at expiry. When shared storage becomes unavailable, both routers withdraw readiness.
 
 At shutdown, the active lease holder stops accepting connections, so its `/ready` check fails. It closes its idle connections and, for 0.1 seconds, still admits the requests it has already received. Then it writes its handoff, releases the lease and finishes its open streams. The standby takes over during that drain and counts the drained streams as offered but not served. A standby or fenced router retains its saved primary state handoff when it shuts down.
+
+## Monitoring the router pair
+
+To scrape both routers and discover the engines through the load balancer, start the monitoring stack as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).
+
+On the dashboard, **Router roles** shows which router holds the lease, and a marker on every chart shows each takeover. [Selectors](../observability/05-Dashboard.md#selectors) lists the panels that read the active router and the panels that add both routers.

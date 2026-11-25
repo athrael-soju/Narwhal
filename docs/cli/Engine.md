@@ -50,7 +50,7 @@ For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit 
 - the KV side-channel address, and the side-channel port from `NARWHAL_KV_SIDE_CHANNEL_PORT`
 - the engine credential from `NARWHAL_ENGINE_API_KEY`, if you set it
 
-A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to `NARWHAL_NODE_<n>_IP`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, and the credential as `VLLM_API_KEY`.
+A vLLM engine gets `NIXL_HOST_IP` and `VLLM_NIXL_SIDE_CHANNEL_HOST`, both set to `NARWHAL_NODE_<n>_IP`, and `VLLM_NIXL_SIDE_CHANNEL_PORT`, set to `NARWHAL_KV_SIDE_CHANNEL_PORT`. When a credential is set, the engine gets it as `VLLM_API_KEY`.
 
 An SGLang engine gets `SGLANG_HOST_IP`, set to `NARWHAL_NODE_<n>_IP` for SGLang to advertise to decode peers, `NARWHAL_SGLANG_BOOTSTRAP_PORT`, `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=30`, and the credential as `NARWHAL_SGLANG_API_KEY`. `NARWHAL_SGLANG_BOOTSTRAP_HOST` is the engine's HTTP bind address, or `NARWHAL_NODE_<n>_IP` when the engine binds every interface, as a container engine does. The launcher passes the port to SGLang as `--disaggregation-bootstrap-port` and the credential as `--api-key`.
 
@@ -78,7 +78,7 @@ These actions check their inputs:
 
 | Action | Checks |
 | --- | --- |
-| `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
+| `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For an engine on a shared GPU, it also checks that the engine uses a single NVIDIA GPU with `tensor_parallel_size` 1, and that the engine's memory flag (`--gpu-memory-utilization`, `--mem-fraction-static` or `--free_gpu_memory_fraction`) is set to `shared_device.gpu_memory_utilization`. |
 | `check` | For `container`, image identity. For `native`, the model path. For both, the model file status that `prepare` recorded, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
 | `start-native` | One GPU for each plan, free memory, readiness and identity for each engine. |

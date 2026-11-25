@@ -36,6 +36,7 @@ from ..runtime.standby import (
     control_ready,
     controls_fleet,
     lease_renew_loop,
+    lease_role,
     ready,
     standby_loop,
 )
@@ -299,13 +300,12 @@ def create_app(
 
     @app.get("/health", response_model=HealthOut, summary="Liveness, and the configured fleet size")
     async def health() -> dict[str, Any]:
-        lease_invalid = not router.standby and router.lease is not None and not router.lease.valid()
         status = (
             "ok"
             if ready(router)
             else (
                 "fenced"
-                if router.failover_blocked or lease_invalid
+                if lease_role(router) == "fenced"
                 else (
                     "maintenance"
                     if router.lifecycle_blocked
@@ -356,6 +356,7 @@ def create_app(
                 router.seat,
                 router.queue_wait,
                 router.monitor.requests_sent,
+                adopted=router.adopted,
             ),
             media_type=CONTENT_TYPE,
         )

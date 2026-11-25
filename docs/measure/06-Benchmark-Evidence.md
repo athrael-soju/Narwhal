@@ -83,6 +83,8 @@ The collector reconciles each point with these comparisons and raises the listed
 | Client offers against journal terminals, joined on `client_rid` | Points where both sides supply IDs | `client_journal_ids` |
 | Terminal classes against router counter deltas | Each `journal_run`, from that process's baseline and final sample | `counter_mismatch` |
 
+The client comparisons leave out journal rows marked `standby_refusal`, because the load balancer retried each of those attempts on the active router, whose row ends the request. The counter comparison matches those rows with `narwhal_standby_refusals_total`, and the other rows with the remaining counters.
+
 `counter_deltas_by_run` in `evidence.json` holds each `journal_run`'s deltas of these counters:
 
 ```text
@@ -91,6 +93,7 @@ narwhal_served_total
 narwhal_failed_total
 narwhal_refused_total
 narwhal_rejected_total
+narwhal_standby_refusals_total
 narwhal_expired_total
 narwhal_invalid_requests_total
 narwhal_cancelled_total
@@ -98,12 +101,7 @@ narwhal_flips_total
 narwhal_event_loop_busy_seconds_total
 ```
 
-Router counters at process start:
-
-| Counter | At process start |
-| --- | --- |
-| `narwhal_offered_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_flips_total`, `narwhal_event_loop_busy_seconds_total` | Resets to `0` |
-| `narwhal_served_total`, `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Restores from the saved handoff state |
+Each router process starts these counters at `0`, and a resume or standby takeover leaves them unchanged.
 
 The collector also raises these diagnostics:
 

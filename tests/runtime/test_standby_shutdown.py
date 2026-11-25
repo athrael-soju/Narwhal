@@ -1,6 +1,7 @@
 """Preserve primary handoffs when a non-owning router shuts down."""
 
 import asyncio
+import contextlib
 import json
 import tempfile
 import unittest
@@ -10,11 +11,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from narwhal.config import SLO, EngineSpec, FleetConfig
+from narwhal.contracts import ContractVersionError
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.model import Profile
 from narwhal.profiling.store import ProfileStore
 from narwhal.runtime import state
 from narwhal.runtime.lease import FileLease
+from narwhal.runtime.standby import lease_role, standby_loop
 from narwhal.serving.app import create_app
 from narwhal.types import Role
 
@@ -61,6 +64,106 @@ class FleetCase(unittest.IsolatedAsyncioTestCase):
                     generation_digest=generation,
                 )
             )
+
+
+class StandbyRoleTests(FleetCase):
+    async def test_a_standby_reports_standby_again_once_shadowing_resumes(self):
+        """A takeover attempt that found no fresh handoff fences the standby until the
+        primary answers again, and no longer."""
+        owner = FileLease(self.root / "lease.json", "primary", 30)
+        self.assertTrue(owner.claim())
+        self.addCleanup(owner.release)
+        primary = create_app(self.cfg).state.router
+        self.addAsyncCleanup(primary.engines.aclose)
+        primary.lease_epoch, primary.lease_holder = owner.epoch, owner.holder
+        document = state.snapshot(primary)
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        router.standby = True
+        router.lease = FileLease(self.root / "lease.json", "standby", 30)
+        answering = False
+
+        def transport(request):
+            if not answering:
+                return httpx.Response(503, json={"control_ready": False})
+            if request.url.path == "/ready":
+                return httpx.Response(200, json={"ready": True})
+            return httpx.Response(200, json=document)
+
+        async def until(condition):
+            for _ in range(2000):
+                if condition():
+                    return
+                await asyncio.sleep(0.005)
+            self.fail("the standby loop did not reach the expected state")
+
+        loop = asyncio.create_task(
+            standby_loop(
+                router,
+                "http://primary",
+                router.lease,
+                probe_interval_s=0.005,
+                takeover_after=2,
+                transport=httpx.MockTransport(transport),
+            )
+        )
+        try:
+            await until(lambda: router.failover_blocked == "no fresh handoff")
+            self.assertEqual(lease_role(router), "fenced")
+            self.assertFalse(router.primary_seen)
+            answering = True
+            await until(lambda: router.failover_blocked == "")
+            self.assertEqual(lease_role(router), "standby")
+            self.assertTrue(router.standby)
+            # A probe that finds the primary controlling the fleet marks it live, and the next
+            # probe that does not, such as after the primary is killed, clears the mark.
+            self.assertTrue(router.primary_seen)
+            answering = False
+            await until(lambda: not router.primary_seen)
+        finally:
+            loop.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await loop
+
+    async def test_a_loop_that_ends_on_an_unsupported_handoff_stops_vouching_for_the_primary(self):
+        owner = FileLease(self.root / "lease.json", "primary", 30)
+        self.assertTrue(owner.claim())
+        self.addCleanup(owner.release)
+        primary = create_app(self.cfg).state.router
+        self.addAsyncCleanup(primary.engines.aclose)
+        primary.lease_epoch, primary.lease_holder = owner.epoch, owner.holder
+        document = state.snapshot(primary)
+        router = create_app(self.cfg).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        router.standby = True
+        router.lease = FileLease(self.root / "lease.json", "standby", 30)
+        upgraded = False
+
+        def transport(request):
+            if request.url.path == "/ready":
+                return httpx.Response(200, json={"ready": True})
+            if upgraded:
+                return httpx.Response(200, json={**document, "schema_version": 99})
+            return httpx.Response(200, json=document)
+
+        loop = asyncio.create_task(
+            standby_loop(
+                router,
+                "http://primary",
+                router.lease,
+                probe_interval_s=0.005,
+                transport=httpx.MockTransport(transport),
+            )
+        )
+        for _ in range(2000):
+            if router.primary_seen:
+                break
+            await asyncio.sleep(0.005)
+        self.assertTrue(router.primary_seen)
+        upgraded = True
+        with self.assertRaises(ContractVersionError):
+            await asyncio.wait_for(loop, timeout=10)
+        self.assertFalse(router.primary_seen)
 
 
 class ShutdownHandoffTests(FleetCase):

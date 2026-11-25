@@ -10,7 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from tools.measurement import benchmark_runner
-from tools.measurement.benchmark_evidence import client_row, counter_deltas, metric_values
+from tools.measurement.benchmark_evidence import (
+    client_row,
+    counter_deltas,
+    metric_values,
+    reconcile,
+)
 
 CLIENT = """
 import json, pathlib, sys, time, urllib.request
@@ -92,6 +97,78 @@ class CounterDeltaTests(unittest.TestCase):
         )
         self.assertNotIn("narwhal_event_loop_busy_seconds_total", deltas["run-a"])
         self.assertEqual(diagnostics, [])
+
+
+# Every outcome counter a router exports, at 0.
+ZERO = dict.fromkeys(
+    (
+        "narwhal_offered_total",
+        "narwhal_served_total",
+        "narwhal_failed_total",
+        "narwhal_refused_total",
+        "narwhal_rejected_total",
+        "narwhal_expired_total",
+        "narwhal_invalid_requests_total",
+        "narwhal_cancelled_total",
+    ),
+    0,
+)
+
+
+class StandbyRefusalReconcileTests(unittest.TestCase):
+    """A standby's refusal, retried on the primary, reconciles with its own counter."""
+
+    def sample(self, run, at, counters):
+        metrics = "".join(f"{name} {value}\n" for name, value in counters.items())
+        return {
+            "at": at,
+            "monotonic": float(at),
+            "state": {"journal_run": run},
+            "router_metrics": metrics,
+        }
+
+    def reconcile(self, standby_counters):
+        clients = [{"client_rid": rid, "sent": True, "outcome": "completed"} for rid in "ab"]
+        journal = [
+            {"run": "primary", "client_rid": "a", "terminal": "completed"},
+            {"run": "primary", "client_rid": "b", "terminal": "completed"},
+            # The load balancer tried the restarted standby first, then retried on the primary.
+            {
+                "run": "standby",
+                "client_rid": "a",
+                "terminal": "rejected",
+                "reason": "not_ready",
+                "standby_refusal": True,
+            },
+        ]
+        zero = ZERO
+        primary = {**ZERO, "narwhal_offered_total": 2, "narwhal_served_total": 2}
+        samples = [
+            self.sample("primary", 0, zero),
+            self.sample("standby", 0, {**zero, "narwhal_standby_refusals_total": 0}),
+            self.sample("primary", 1, primary),
+            self.sample("standby", 1, standby_counters),
+        ]
+        return reconcile("p1", clients, journal, samples, 1.0)
+
+    def test_a_standby_refusal_matches_its_counter_and_no_client_request(self):
+        counted_apart = {**ZERO, "narwhal_standby_refusals_total": 1}
+        result = self.reconcile(counted_apart)
+        self.assertEqual(result["diagnostics"], [])
+        self.assertEqual(result["journal"]["terminal"], 2)
+
+    def test_a_refusal_counted_as_a_client_request_is_a_mismatch(self):
+        counted = {
+            **ZERO,
+            "narwhal_offered_total": 1,
+            "narwhal_rejected_total": 1,
+            "narwhal_standby_refusals_total": 0,
+        }
+        kinds = {
+            (item["kind"], item.get("metric")) for item in self.reconcile(counted)["diagnostics"]
+        }
+        self.assertIn(("counter_mismatch", "narwhal_offered_total"), kinds)
+        self.assertIn(("counter_mismatch", "narwhal_standby_refusals_total"), kinds)
 
 
 class ClientRowTests(unittest.TestCase):

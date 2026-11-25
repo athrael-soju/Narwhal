@@ -58,14 +58,6 @@ cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
 For a vLLM engine, the capture reads the dimensions from the live engine into `model-dimensions.live.json`, and requires the live container's plan and launcher hashes to match `launch.json`.
-
-| Dimension            | Source                                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `head_size`          | `ModelConfig.get_head_size()`, or `kv_lora_rank + qk_rope_head_dim` on a DeepSeek-style model with MLA enabled |
-| `kv_heads`           | `get_total_num_kv_heads()`                                                                                     |
-| `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
-| `model_architecture` | Resolved architecture                                                                                          |
-
 For an SGLang or TensorRT-LLM engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`, the file to read in place of `model-dimensions.live.json`. `config.json` must match `model_config_sha256` in `launch.json`.
 
 ### Capturing the cache grouping
@@ -287,8 +279,6 @@ In each engine's role shell, with that engine's `ENGINE_RUN`, run these sections
 8. [Checking the sidecar from the router](#checking-the-sidecar-from-the-router)
 9. [Verifying the sidecar against the engine](#verifying-the-sidecar-against-the-engine)
 
-When every engine has passed step 9, run [finalizing the fleet contract](#finalizing-the-fleet-contract) once.
-
 ### Finalizing the fleet contract
 
 Run once from the router shell after every sidecar passes:
@@ -307,6 +297,8 @@ Run once from the router shell after every sidecar passes:
 
 - `engine_contract` in `runs/deployment/fleet.json`.
 - A copy of the previous fleet file at `runs/fleet.before-attestation-<id>.json`.
+
+If the fleet file already has an `engine_contract`, `finalize-fleet` checks it against the live contract instead. On a mismatch, `finalize-fleet` exits with status 1 and prints `Existing router contract differs from the live sidecars`.
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 

@@ -69,7 +69,7 @@ The state document carries these top-level fields:
 | `flips_refused`           | The 20 most recent refused role changes                                                                       |
 | `flips`                   | The most recent role changes, up to `flip_history`                                                            |
 
-After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero.
+After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero. Its [Prometheus counters](../telemetry/03-Metrics-and-Control.md#prometheus-metrics) leave the restored totals out.
 
 - [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle): the drain state, resident work and lifecycle events in `lifecycle`.
 - [SLO attainment and demand accounting](06-SLO-and-Demand.md): the `attainment`, `demand_history` and `demand_evidence` objects.
@@ -83,6 +83,7 @@ The `ha` object reports the router's lease and readiness:
 | Field     | Meaning                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------- |
 | `ready`   | `true` when the router controls the fleet and admits new work, as `/ready` reports       |
+| `role`    | Lease role: `active`, `standby` or `fenced`, as [`narwhal_router_role`](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges) reports |
 | `standby` | `true` for a standby router                                                              |
 | `epoch`   | Lease epoch                                                                              |
 | `holder`  | Lease-holder token                                                                       |
@@ -254,6 +255,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `saturation_threshold_s` | Value of `loop_lag_s` or `sizing_delay_s` at which the router answers a saturation 429, a quarter of `slo.ttft_s`                                    |
 | `rejected`               | HTTP `429` in-flight-limit and saturation rejections, and HTTP `503` router-readiness rejections                                                     |
 | `refused`                | Requests refused by global predictive admission                                                                                                      |
+| `standby_refusals`       | Requests refused by this standby while its last probe found its primary controlling the fleet, by `rejected` reason, apart from `rejected`           |
 | `engine_auth`            | `boundary` or `engine-credential`                                                                                                                    |
 | `mode`                   | `serving.admission`: `predictive` or `open`                                                                                                          |
 | `margin`                 | `serving.admission_margin`                                                                                                                           |

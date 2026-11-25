@@ -62,7 +62,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines. |
 | `slo` | Each engine's profile meets the [SLO targets](#the-slo-gate). |
 
-Between `reach` and `calibration`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
+Between `reach` and `calibration`, under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
 
 When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`.
 
@@ -111,7 +111,7 @@ After an engine restart or a configuration change, record new evidence.
 
 Calibration measures how long fresh KV handoffs take to produce their first token, and reports a candidate deadline that `engine.first_token_timeout_s` must exceed. Follow the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) to run it before you record evidence for a fleet.
 
-`--calibrate-first-token` needs `--input-tokens`, `--observation-timeout-s` and `--calibration-out`. Those options, and a `--samples` value other than 100, apply only to calibration. Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
+Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
 
 Calibration needs at least one directed pair that role pins permit and an engine tokenizer route that returns exact counts. It exits with status 0 when the artifact is `complete` and every switched engine returns to its starting role, and 1 otherwise.
 
@@ -147,7 +147,7 @@ The artifact at `--calibration-out` holds these fields:
 | `attempts` | Every attempt, with its `attempt` sweep number, its `round` (`null` in sweep 1), timings, and `status` |
 | `candidate_deadline_s` | The largest group candidate |
 
-A group's candidate deadline is the larger of its maximum and 1.2 times its p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
+A group's candidate deadline is the larger of its maximum and 1.2 times its nearest-rank p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
 
 The artifact is `complete` when all of these hold:
 
@@ -171,7 +171,7 @@ The `calibration` gate reads the artifact at `engine.first_token_calibration_pat
 
 It then compares each running engine's [process generation](../configuration/01-Fleet-Schema.md#attestation) with `generations`.
 
-An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. A restarted engine keeps its calibration only when its sidecar reports launch evidence.
+An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start matches the one in `process_starts`, and `reused` when its process start differs.
 
 | Status | Condition | Output |
 | --- | --- | --- |

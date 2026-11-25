@@ -8,6 +8,7 @@ import math
 import os
 import time
 import uuid
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,10 +82,7 @@ def snapshot(router: NarwhalRouter) -> dict[str, Any]:
             iid: sorted(router.verifier.sources.get(iid, {""}))
             for iid in sorted(router.scheduler.inference_suspects)
         },
-        "counters": {
-            **{name: getattr(router, name) for name in HANDOFF_COUNTERS},
-            "unserved": router.scheduler.unserved,
-        },
+        "counters": _totals(router),
         # Reason counts behind the failed, refused, rejected and expired counters.
         "outcome_reasons": {
             terminal: dict(counts) for terminal, counts in router.outcome_reasons.items()
@@ -292,6 +290,14 @@ def load(path: Path) -> dict[str, Any] | None:
     return validate(doc)
 
 
+def _totals(router: NarwhalRouter) -> dict[str, int]:
+    """Return the request totals a handoff carries."""
+    return {
+        **{name: getattr(router, name) for name in HANDOFF_COUNTERS},
+        "unserved": router.scheduler.unserved,
+    }
+
+
 def _restore_reasons(router: NarwhalRouter, saved: Any) -> None:
     """Restore reason counts; counts a handoff leaves unexplained stay `unclassified`."""
     for terminal, counts in router.outcome_reasons.items():
@@ -384,21 +390,26 @@ def apply(router: NarwhalRouter, doc: dict[str, Any] | None) -> HandoffReport:
     # apply() bypasses the scheduler paths that normally update floor state.
     router.scheduler.refresh_floor_state()
 
+    before = _totals(router)
+    reasons_before = {
+        terminal: Counter(counts) for terminal, counts in router.outcome_reasons.items()
+    }
     counters = doc.get("counters") or {}
     for name in HANDOFF_COUNTERS:
         setattr(router, name, int(counters.get(name, 0)))
     router.scheduler.unserved = int(counters.get("unserved", 0))
     _restore_reasons(router, doc.get("outcome_reasons"))
+    router.adopted.add(before, _totals(router), reasons_before, router.outcome_reasons)
     router.lifecycle.restore(doc.get("lifecycle"))
     controller = router.controller
     risk = doc.get("demand_risk")
     if controller is not None and isinstance(risk, dict):
+        events = {str(name): int(count) for name, count in risk.get("events", {}).items()}
         # The carried event re-arms with its age re-anchored on this process's clock.
-        controller.safety.restore_risk(
-            kind=str(risk["kind"]),
-            age_s=float(risk.get("age_s", 0.0)),
-            events={str(name): int(count) for name, count in risk.get("events", {}).items()},
-        )
+        if controller.safety.restore_risk(
+            kind=str(risk["kind"]), age_s=float(risk.get("age_s", 0.0)), events=events
+        ):
+            router.adopted.risk_events.update(events)
 
     report = HandoffReport(
         applied=True,

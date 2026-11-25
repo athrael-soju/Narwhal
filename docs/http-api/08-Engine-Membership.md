@@ -4,7 +4,7 @@ description: List, join and remove the engines a Narwhal router serves through t
 
 # Engine membership
 
-The router serves the engines in its membership snapshot. Generation `0` holds the fleet file's `engines`. Each join or removal replaces the snapshot with the next generation. [Joining and removing engines](../operate/08-Joining-and-Removing-Engines.md) gives the operator procedure.
+The router serves the engines in its [membership snapshot](../concepts/01-Request-and-Topology.md#engine-membership). [Joining and removing engines](../operate/08-Joining-and-Removing-Engines.md) gives the operator procedure.
 
 ## Membership document
 
@@ -116,15 +116,15 @@ When every check passes, the router loads the store and the calibration it read,
 
 Drains the engine and removes it from the fleet. The query parameter `deadline_s` sets the drain deadline in seconds. It defaults to `300` and must be positive and finite.
 
-The drain holds the engine out of placement and records its process identity, as [`POST /narwhal/lifecycle/drain`](07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain) does. On each monitoring pass, the router removes a drained engine that has no resident requests and from which no decode leg, placed or waiting for a seat, still reads KV. At the deadline, the engine's lifecycle `state` becomes `deadline_exceeded`, and the removal still waits for its resident requests to finish. The router does not stop the engine process.
+The drain holds the engine out of placement and records its process identity, as [`POST /narwhal/lifecycle/drain`](07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain) does. On each monitoring pass, the router removes a drained engine after its requests finish and every decode leg reading KV from it is done, including legs still queued for a decode seat. At the deadline, the engine's lifecycle `state` becomes `deadline_exceeded`, and the removal still waits for its resident requests to finish. The router does not stop the engine process.
 
 The router refuses the removal when:
 
 - `recovery.engine_restart_policy` is `whole_wave`
 - the fleet's `engine_contract` is incomplete
 - the engine sets `shared_device`
-- a lifecycle action holds any engine, except when it holds only this engine, outside a wave, in `drained`, `blocked` or `deadline_exceeded`
-- no other engine is eligible for placement
+- another engine is in a lifecycle action
+- this engine is in a lifecycle action, unless it is `drained`, `blocked` or `deadline_exceeded` and outside a wave- no other engine is eligible for placement
 - fewer engines than `controller.min_prefill` plus `controller.min_decode` would remain
 
 |  HTTP | Meaning                                                                                       |

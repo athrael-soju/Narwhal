@@ -99,11 +99,11 @@ Every mode validates these options:
 | `--decode-input-lens LIST` | `512,4096,8192` | Comma-separated prompt lengths for the decode sweep. Each engine keeps the lengths whose input plus `--decode-tokens` stays below its [context limit](../measure/01-Profile.md#decode-sweep). | At least two distinct positive values, and two that remain for each engine |
 | `--decode-concurrency LIST` | `1,4,16,48` | Candidate stream counts. [Decode sweep](../measure/01-Profile.md#decode-sweep) describes how each engine's sequence limit and KV capacity change them. | At least two distinct values of at least 1, and two that remain for each engine |
 | `--decode-tokens N` | `64` | Tokens per decode stream. | At least 3 |
-| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | Positive, with at least two distinct values and five prefix and suffix cases |
+| `--cached-prefix-lens LIST` | `2048,4096,8192` | Comma-separated cached prefix lengths for the warm prefill sweep. | Positive, with at least two distinct values. The number of distinct prefix lengths times the number of distinct `--cached-suffix-lens` lengths must be at least 5. |
 | `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | Positive, with at least two distinct values |
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input length and concurrency. | At least 1 |
-| `--warmup-requests N` | `0` | Requests each engine serves before its sweep. An SGLang engine serves `N` in the prefill role and then `N` in the decode role. A vLLM or TensorRT-LLM engine serves `2N` in its configured role. Each request takes at most the shortest prefill length as input, shortened to leave room for `--decode-tokens` within the context limit, and asks for `--decode-tokens` output tokens. | At least 0 |
+| `--warmup-requests N` | `0` | Requests each engine serves before its sweep. An SGLang engine serves `N` in the prefill role and then `N` in the decode role. A vLLM or TensorRT-LLM engine serves `2N` in its configured role. Each request takes at most the shortest prefill length as input, shortened to leave room for `--decode-tokens` within the context limit, and asks for `--decode-tokens` output tokens. When `N` is above 0, the sample sidecar's `sweep` record holds it as `warmup_requests`. | At least 0 |
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`. On TensorRT-LLM, it is `--max_seq_len` in the engine's attested launch.
 
@@ -147,6 +147,7 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 
 - an engine's `/health` returns a status other than 200
 - a probe, including the context-limit probe, fails or returns an incomplete response
+- a warm-up request returns a status other than 200
 - an engine serves prompt tokens from its prefix cache during the prefill sweep, the decode sweep, or a cold control of the warm prefill sweep
 - the decode fit error exceeds `profiles.max_decode_fit_mape`, its leave-one-cell-out error exceeds `profiles.max_decode_cv_mape`, or its measured domain is a single point on either axis
 - a neighbour fails a request or completes zero requests during the target's measurement

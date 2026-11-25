@@ -11,12 +11,10 @@ Prerequisites:
 - `recovery.engine_restart_policy` set to `individual`
 - a complete [`engine_contract`](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract) in the fleet configuration
 - an engine outside any `shared_device` group
-- every engine's `state` is `active` in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle), except that a removal also accepts the engine it removes in the held states that [`DELETE /narwhal/engines/{iid}`](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) lists
+- every engine's `state` is `active` in [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle). For a removal, the engine you remove can instead be `drained`, `blocked` or `deadline_exceeded` outside a wave
 - for a join, an `engine.control_connections` sized for the engine count after the join, as [Global admission](../configuration/02-Serving-and-Role-Control.md#global-admission) describes
-- the same Narwhal release on both routers
+- the same Narwhal release on both routers, so the standby can [adopt the membership](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff) after a join or removal
 - a shell on the router host, in the environment and working directory of the router's launch, with `curl` and Python 3
-
-A standby router from a release without engine membership ignores the handoff's `membership` and refuses a handoff whose engines differ from its own fleet file, so it cannot take over after a join or removal.
 
 The commands below use the fleet file `runs/deployment/fleet.json`, the profile store `runs/profiles.json` at its `profiles.path`, the calibration artifact `runs/deployment/first-token-calibration.json` at its `engine.first_token_calibration_path`, and the limits file `runs/deployment/profiling-limits.json`. Replace them with your paths. Before each join or removal, set `ROUTER_URL` to the active router and `IID` to the engine ID, and create a private run directory:
 
@@ -56,7 +54,7 @@ cat > "$RUN_DIR/$IID.json" <<'JSON'
 JSON
 ```
 
-`role` sets the role the engine joins in. When `engine.connector` keeps the backend's engine roles fixed, `narwhal config validate` requires `pin` on every engine, so also set `pin` to `true`. Write literal URLs, because the router refuses a join entry that contains `${`.
+`role` sets the role the engine joins in. When `engine.connector` keeps the backend's engine roles fixed, set `pin` to `true`. Write each URL in full: the router refuses `${VARIABLE}` references in a join entry.
 
 Add the entry to a copy of the fleet file and validate it:
 
@@ -186,7 +184,7 @@ else:
 PY
 ```
 
-On HTTP 200, the engine takes new requests in its requested role. On HTTP 409, `error` names the refusal or the failed checks. Fix the cause and repeat the request. HTTP 422 names a problem in the entry, and HTTP 503 means the router does not control the fleet.
+On HTTP 200, the engine takes new requests in its entry's `role`. On HTTP 409, `error` gives the refusal or the failed checks. Fix the cause and repeat the request. HTTP 422 reports a problem in the entry, and HTTP 503 means the router does not control the fleet.
 
 To abandon a refused join, install the pre-join store again on both router hosts:
 
@@ -195,13 +193,11 @@ cp "runs/profiles-before-$STAMP.json" runs/profiles.json
 cp "runs/profiles-before-$STAMP.samples.json" runs/profiles.samples.json
 ```
 
-Otherwise a router that starts with resume off, or resumes a handoff at generation 0, fails with `stale profiles for unconfigured engines`. If you installed a new calibration artifact, also copy `$RUN_DIR/first-token-calibration-before.json` back over `runs/deployment/first-token-calibration.json`.
+Without the pre-join store, a router that starts with resume off, or resumes a handoff at generation 0, fails with `stale profiles for unconfigured engines`. If you installed a new calibration artifact, also copy `$RUN_DIR/first-token-calibration-before.json` back over `runs/deployment/first-token-calibration.json`.
 
 ### Keep the engine across restarts
 
-A resumed restart and a standby takeover adopt the snapshot from the state handoff. A router started with resume off serves the fleet file's `engines`. [`--resume` or `recovery.resume`](../configuration/03-Recovery-and-Validation.md#resume-shutdown-and-warm-standby-state) turns resume on. Once the join succeeds, install `$RUN_DIR/fleet-with-$IID.json` as `runs/deployment/fleet.json` on both router hosts, so that every restart keeps the engine.
-
-When a router adopts the handoff, an engine that its fleet file names keeps the fleet file's entry. After an engine rejoins under the same ID with a different entry, install the new fleet file on each router host before the next restart or failover.
+Once the join succeeds, install `$RUN_DIR/fleet-with-$IID.json` as `runs/deployment/fleet.json` on both router hosts, so that every restart keeps the engine. After an engine rejoins under the same ID with a different entry, install the new fleet file on each router host before the next restart or failover.
 
 ## Remove an engine
 
@@ -230,7 +226,7 @@ print(iid, "removed in generation", doc["generation"])
 PY
 ```
 
-[`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) shows the engine's drain `state` and `resident` requests. The removal waits for resident requests past the deadline.
+[`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) shows the engine's drain `state` and `resident` requests.
 
 On HTTP 409, `error` names the rule that refused the removal. On HTTP 503 with a process-identity error, the engine stays out of placement. Repeat the request once the engine and its attestation sidecar answer.
 

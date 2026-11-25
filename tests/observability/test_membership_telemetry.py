@@ -305,7 +305,7 @@ class MembershipTelemetryContractTests(unittest.TestCase):
         self.assertEqual(
             query["expr"],
             f"({series} != ({series} offset $__interval)) and on(job, instance) "
-            f"(({ready} offset $__interval) == 1)",
+            f"(({ready} offset $__interval) == 1) and on(job, instance) ({ready} == 1)",
         )
         self.assertEqual((query["step"], query["useValueForTime"]), ("15s", False))
         self.assertEqual(layer["legacyOptions"], query)

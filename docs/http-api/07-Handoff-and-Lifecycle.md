@@ -52,7 +52,7 @@ A new router process applies each handoff field as follows:
 | `membership`                                                                             | Replaces the engine set and generation                   |
 | `roles`                                                                                  | Restored for unpinned engines                            |
 | `ejected`                                                                                | Restored, with a readmission probe due at once           |
-| `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
+| `inference_sources` suspect whose placed roles other live engines can still serve       | Ejected, with a readmission probe due at once            |
 | Other `inference_sources` suspect outside `ejected`                                      | Kept live, with an inference probe due at once           |
 | `counters`, `outcome_reasons`, `lifecycle`                                               | Restored                                                 |
 | `demand_risk`                                                                            | Restored, with its age measured on the new process clock |
@@ -84,7 +84,7 @@ Profiles for engines outside the saved membership are allowed. After a resumed r
 
 A handoff without `membership`, or with `membership` at generation `0`, applies only when its `engines` match the fleet file, and the engines keep their fleet-file entries. The router ignores keys it does not know in `membership` and in its engine entries.
 
-A router from a release without engine membership ignores `membership` and refuses a handoff whose `engines` differ from its fleet file. Do not join or remove engines while the active and standby routers run different releases.
+A router from a release without engine membership ignores `membership` and refuses a handoff whose `engines` differ from its fleet file.
 
 ## Lifecycle API
 
@@ -194,7 +194,7 @@ Readmission checks:
 8. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
 9. `final health`: the engine health endpoint answers after KV transfer validation.
 
-Checks 1 to 4 cover the candidate and its role-permitted peers.
+Checks 1 to 4 cover the candidate and its role-permitted peers. On an SGLang fleet, the router pairs the candidate with the first live engine in the other role for check 8. With the `mooncake` connector, the router switches the candidate to the role the router assigns it before check 8. After check 9, the router confirms that the identity, attestation, and profile bindings of every participant still match checks 1 to 4.
 
 `checks` lists the checks that passed, in this order. The failed checks appear in the engine's `error`, or in `join.failures` for a [join](08-Engine-Membership.md#post-narwhalengines). A `model identity` failure does not stop checks 6 and 7, so a refused engine can list `process identity` or `new process identity`, and `generation`, in `checks`. Checks 8 and 9 run only after checks 1 to 7 pass for every engine.
 
