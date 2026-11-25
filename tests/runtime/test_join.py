@@ -21,6 +21,7 @@ from narwhal.engines.attestation import (
 from narwhal.engines.stream import parse_event
 from narwhal.profiling import generation
 from narwhal.profiling.store import ProfileStore
+from narwhal.runtime import standby, state
 from narwhal.runtime.lifecycle import identity, leave, readmission
 from narwhal.runtime.lifecycle.join import join_engine
 from narwhal.runtime.lifecycle.leave import begin_leave
@@ -447,6 +448,30 @@ class JoinAfterLeaveTests(JoinHarness):
         outcome = await self.join(LATER)
         self.assertTrue(outcome.joined, outcome.error)
         self.assertNotIn("e6", {iid for iid, _ in self.requests})
+
+    async def test_a_resume_and_a_takeover_adopt_a_store_with_a_departed_engines_rows(self):
+        await self.join_and_leave()
+        self.bind_profile("e7")
+        self.assertTrue((await self.join(LATER)).joined)
+        doc = state.snapshot(self.router)
+        state.write(self.cfg.state_path, doc)
+        self.assertIsNotNone(ProfileStore(self.cfg.profiles_path).get("e6"))
+        app = create_app(replace(self.cfg, resume=True), lifecycle_transport=self.transport)
+        resumed = app.state.router
+        self.addAsyncCleanup(resumed.engines.aclose)
+        async with app.router.lifespan_context(app):
+            self.assertEqual(resumed.membership.generation, 3)
+            self.assertEqual(list(resumed.membership.ids), ["e0", "e3", "e7"])
+            self.assertIsNotNone(resumed.profiles.get("e6"))
+        # A standby whose startup check allowed extra rows checks the adopted set again.
+        router = create_app(self.cfg, lifecycle_transport=self.transport).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        report = state.apply(router, doc)
+        self.assertTrue(report.applied, report.why)
+        self.assertTrue(report.membership_adopted)
+        router.checked_engines, router.checked_exact = ("e0", "e3"), False
+        self.assertEqual(await standby._takeover_problem(router, report), "")
+        self.assertEqual(router.checked_engines, ("e0", "e3", "e7"))
 
 
 if __name__ == "__main__":
