@@ -1331,7 +1331,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval]))",
+                        "expr": "sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\",reason!=\"not_ready\"}[$__rate_interval]))",
                         "legendFormat": "rejected (capacity)"
                       }
                     },
@@ -1340,6 +1340,23 @@
                       "uid": "${DS_PROMETHEUS}"
                     },
                     "refId": "E"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "sum(rate(narwhal_rejected_total{job=\"narwhal-router\",instance=~\"$router\",reason=\"not_ready\"}[$__rate_interval]))",
+                        "legendFormat": "rejected (not ready)"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "I"
                   }
                 },
                 {
@@ -1494,6 +1511,21 @@
                         "value": {
                           "mode": "fixed",
                           "fixedColor": "#FF9830"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "rejected (not ready)"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "#B877D9"
                         }
                       }
                     ]

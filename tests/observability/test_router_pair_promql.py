@@ -44,6 +44,8 @@ class Phase:
     refused: int = 0
     # Requests that expired at their deadline in each scrape interval.
     expired: int = 0
+    # Requests rejected at the router in-flight limit in each scrape interval.
+    overloaded: int = 0
     # Attempts a standby refused while shadowing a live primary, which the load balancer
     # retries on the primary.
     standby_refused: int = 0
@@ -70,11 +72,11 @@ class Router:
             key = name + "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}"
             self.series.setdefault(key, ["_"] * SLOTS)[slot] = str(value)
 
-        rejected = attempts = expired = 0
+        rejected = attempts = expired = overloaded = 0
         for phase in self.phases:
             if phase.restart is not None:
                 self.offered, self.served = phase.restart
-                rejected = attempts = expired = 0
+                rejected = attempts = expired = overloaded = 0
             for slot in range(phase.start // STEP, min(phase.end, LENGTH) // STEP):
                 put("up", self.labels, slot, 0 if phase.role == "down" else 1)
                 if phase.role == "down":
@@ -87,7 +89,8 @@ class Router:
                         ):
                             cells[slot] = "stale"
                     continue
-                self.offered += phase.served + phase.refused + phase.expired
+                self.offered += phase.served + phase.refused + phase.expired + phase.overloaded
+                overloaded += phase.overloaded
                 expired += phase.expired
                 self.served += phase.served
                 rejected += phase.refused
@@ -97,6 +100,8 @@ class Router:
                 not_ready = {**self.labels, "reason": "not_ready"}
                 put("narwhal_rejected_total", not_ready, slot, rejected)
                 put("narwhal_standby_refusals_total", not_ready, slot, attempts)
+                inflight = {**self.labels, "reason": "inflight_limit"}
+                put("narwhal_rejected_total", inflight, slot, overloaded)
                 # The other outcomes stay at 0, as a router exports them from start.
                 put("narwhal_refused_total", {**self.labels, "cause": "queue"}, slot, 0)
                 put("narwhal_failed_total", {**self.labels, "reason": "engine_error"}, slot, 0)
@@ -153,6 +158,20 @@ def takeover(
     else:
         b += [Phase(605, LENGTH, "standby")]
     return [Router(A, a), Router(B, b)]
+
+
+def wave_hold() -> list[Router]:
+    """A whole-wave hold on the active router from 300 s to 400 s, then in-flight limit refusals.
+
+    During the hold the active router refuses 2 requests a second as not ready. From 400 s it
+    serves again and rejects 0.4 requests a second at its in-flight limit.
+    """
+    a = [
+        Phase(0, 300, "active", ready=1, epoch=7, served=10, restart=(HISTORY, HISTORY)),
+        Phase(300, 400, "active", epoch=7, refused=10),
+        Phase(400, LENGTH, "active", ready=1, epoch=7, served=8, overloaded=2),
+    ]
+    return [Router(A, a), Router(B, [Phase(0, LENGTH, "standby", pool=3, generation=0)])]
 
 
 class PromtoolCase(unittest.TestCase):
@@ -353,6 +372,19 @@ class DashboardTakeoverTests(PromtoolCase):
         for at in range(630, 700, 5):
             tests += expr_test(rate, at, 0)
         self.check(tests)
+
+    def test_request_outcomes_draw_not_ready_rejections_apart_from_capacity(self):
+        capacity = panel_query("panel-11", "E")
+        not_ready = panel_query("panel-11", "I")
+        tests = []
+        for at in range(365, 400, 5):
+            # The hold's refusals leave the capacity series at zero.
+            tests += expr_test(capacity, at, 0)
+            tests += expr_test(within(not_ready, 1.9, 2.1), at, 1)
+        for at in range(465, 600, 30):
+            tests += expr_test(within(capacity, 0.35, 0.45), at, 1)
+            tests += expr_test(not_ready, at, 0)
+        self.run_promtool(wave_hold(), ["    promql_expr_test:", *tests])
 
     def test_gauge_panels_and_the_router_stat_read_the_active_router(self):
         pool = panel_query("panel-10", "A")
