@@ -254,12 +254,25 @@ def attested_launch(payload: Any) -> dict[str, Any]:
     return launch if isinstance(launch, dict) else {}
 
 
-# The attested launch fields that identify the model files an engine loaded.
+# The attested launch fields that readmission and joins require to match across the fleet:
+# the SHA-256 of the checkpoint's config.json and the model revision the launch names.
 MODEL_IDENTITY_FIELDS = ("model_config_sha256", "model_revision")
 
 
 def model_identity(launch: Mapping[str, Any]) -> dict[str, Any]:
     return {name: launch.get(name) for name in MODEL_IDENTITY_FIELDS}
+
+
+def model_disagreement(models: Mapping[str, Mapping[str, Any]]) -> str:
+    """Name the first model identity field that differs across `models`, by engine, or ""."""
+    for name in MODEL_IDENTITY_FIELDS:
+        values: dict[Any, list[str]] = {}
+        for iid, model in sorted(models.items()):
+            values.setdefault(model.get(name), []).append(iid)
+        if len(values) > 1:
+            listed = "; ".join(f"{value!r} from {', '.join(ids)}" for value, ids in values.items())
+            return f"launch.{name} differs: {listed}"
+    return ""
 
 
 def attested_option(payload: Any, name: str) -> str | None:

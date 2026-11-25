@@ -283,12 +283,28 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.serve_model("e0", "c" * 64)
         self.router.engines.prefill.reset_mock()
         outcome = await self.validate()
-        changed, member = "c" * 64, "a" * 64
         self.assertEqual(
             outcome.failures["e0"],
-            [f"model identity: launch.model_config_sha256 is '{changed}', e3 attests '{member}'"],
+            [
+                f"model identity: launch.model_config_sha256 differs: '{'c' * 64}' from e0; "
+                f"'{'a' * 64}' from e3"
+            ],
         )
         self.assertNotIn("e3", outcome.failures)
+        self.router.engines.prefill.assert_not_awaited()
+
+    async def test_automatic_recovery_holds_an_engine_with_other_model_files(self):
+        self.manager.records.clear()
+        self.router.scheduler.finish_drain("e0")
+        self.router.scheduler.eject("e0", "liveness")
+        self.serve_model("e3", "a" * 64)
+        self.serve_model("e0", "c" * 64)
+        with patch.object(readmission, "fetch_spec_identity", self.identities):
+            self.assertEqual(await readmit(self.router, 0), [])
+        record = self.manager.records["e0"]
+        self.assertEqual(record.state, "blocked")
+        self.assertIn("model identity: launch.model_config_sha256 differs", record.error)
+        self.assertIn("e0", self.router.scheduler.ejected)
         self.router.engines.prefill.assert_not_awaited()
 
     async def test_a_wave_returns_only_when_its_members_load_the_same_model_files(self):
@@ -306,8 +322,27 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("model identity", outcome.checks["e3"])
         self.serve_model("e3", "c" * 64)
         outcome = await self.validate(wave=True, engines=["e0", "e3"])
-        self.assertEqual(set(outcome.failures), {"e0", "e3"})
-        self.assertIn("e0 attests", outcome.failures["e3"][0])
+        # Each member gets the same failure, naming every value and the engines that attest it.
+        self.assertEqual(outcome.failures["e0"], outcome.failures["e3"])
+        self.assertEqual(
+            outcome.failures["e0"],
+            [
+                f"model identity: launch.model_config_sha256 differs: '{'a' * 64}' from e0; "
+                f"'{'c' * 64}' from e3"
+            ],
+        )
+
+    async def test_a_single_engine_fleet_skips_the_model_identity_check(self):
+        self.router.apply_membership(self.router.membership.left("e3"))
+        self.manager.wave_id = "single-wave"
+        self.manager.records["e0"] = DrainRecord(
+            "e0", "validating", 1, 2, wave_id="single-wave", old_process_start=100
+        )
+        self.serve_model("e0", "c" * 64)
+        outcome = await self.validate(wave=True, engines=["e0"])
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.assertIn("fabric not applicable: single-engine fleet", outcome.checks["e0"])
+        self.assertNotIn("model identity", outcome.checks["e0"])
 
     async def test_readmission_counts_its_generation_check_and_fabric_pairs(self):
         monitor = self.router.monitor

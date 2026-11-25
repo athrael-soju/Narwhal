@@ -9,6 +9,7 @@ from ...engines.attestation import (
     EngineIdentity,
     attested_launch,
     fetch_spec_identity,
+    model_disagreement,
     model_identity,
     verify_attestation,
 )
@@ -41,17 +42,6 @@ def _single_pairs(target: EngineSpec, peers: list[EngineSpec]) -> list[tuple[str
 
 class _Changed(ValueError):
     """A participant's process or attestation changed during validation."""
-
-
-def _model_problem(model: dict[str, Any], references: dict[str, dict[str, Any]]) -> str:
-    """Return how `model` differs from the first reference engine that attests other files."""
-    for iid, expected in sorted(references.items()):
-        for name, value in model.items():
-            if value != expected[name]:
-                return (
-                    f"model identity: launch.{name} is {value!r}, {iid} attests {expected[name]!r}"
-                )
-    return ""
 
 
 async def validate_readmission(
@@ -203,8 +193,8 @@ async def validate_readmission(
                 else:
                     outcome.ok(spec.iid, "model")
 
-        # Each named engine must load the model files of the members in placement, or, when
-        # every member is named, those of the other named engines.
+        # Each named engine must attest the model identity of every member that is not ejected
+        # or draining, or, when every member is named, the one the other named engines attest.
         scheduler = router.scheduler
         references = {
             iid: model_identity(router.launches[iid])
@@ -214,14 +204,14 @@ async def validate_readmission(
             and iid not in scheduler.ejected
             and iid not in scheduler.draining
         }
-        for iid, model in loaded.items():
-            others = references or {other: m for other, m in loaded.items() if other != iid}
-            if not others:
-                continue
-            if problem := _model_problem(model, others):
-                outcome.fail(iid, problem)
-            else:
-                outcome.ok(iid, "model identity")
+        # A single-engine fleet has no other engine to compare with.
+        if references or len(loaded) > 1:
+            for iid, model in loaded.items():
+                compared = {**references, iid: model} if references else loaded
+                if disagreement := model_disagreement(compared):
+                    outcome.fail(iid, f"model identity: {disagreement}")
+                else:
+                    outcome.ok(iid, "model identity")
 
         for spec in targets:
             target_identity = identities.get(spec.iid)

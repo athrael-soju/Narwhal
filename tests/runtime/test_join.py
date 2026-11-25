@@ -12,10 +12,15 @@ import httpx
 
 from narwhal.config import EngineSpec
 from narwhal.config.model import SharedDeviceAllocation
-from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from narwhal.engines.attestation import (
+    MODEL_IDENTITY_FIELDS,
+    AttestationDocument,
+    EngineIdentity,
+    make_attestation,
+)
 from narwhal.engines.stream import parse_event
 from narwhal.profiling import generation
-from narwhal.runtime.lifecycle import readmission
+from narwhal.runtime.lifecycle import identity, readmission
 from narwhal.runtime.lifecycle.join import join_engine
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.role_switch import RoleSwitcher
@@ -149,7 +154,7 @@ class JoinTests(JoinHarness):
 
     def launch_model(self, iid, **fields):
         """Serve `iid` an attestation whose launch names `fields`, with its profile bound to it."""
-        launch = {"model_config_sha256": "a" * 64, "model_revision": "b" * 40, **fields}
+        launch = {**dict.fromkeys(MODEL_IDENTITY_FIELDS, "a" * 64), **fields}
         document = replace(self.document, launch=launch)
         payload = self.attestation(iid, document)
         self.responses[(iid, "attestation")] = payload
@@ -164,25 +169,51 @@ class JoinTests(JoinHarness):
         self.assertIn("model identity", outcome.checks)
 
     async def test_an_engine_with_other_model_files_is_refused(self):
-        for field, value in (("model_config_sha256", "c" * 64), ("model_revision", "d" * 40)):
+        for field in MODEL_IDENTITY_FIELDS:
             with self.subTest(field=field):
                 for iid in ("e0", "e3"):
                     self.launch_model(iid)
-                self.launch_model("e6", **{field: value})
+                self.launch_model("e6", **{field: "c" * 64})
                 outcome = await self.join()
-                self.assert_refused(outcome, f"model identity: launch.{field} is '{value}'")
+                self.assert_refused(
+                    outcome,
+                    f"model identity: launch.{field} differs: '{'a' * 64}' from e0; "
+                    f"'{'c' * 64}' from e6",
+                )
+                self.assertEqual(len(outcome.failures), 1)
                 self.assertNotIn("model identity", outcome.checks)
                 self.router.engines.prefill.assert_not_awaited()
 
-    async def test_the_model_files_of_every_member_in_placement_must_match(self):
+    async def assert_held_member_sets_no_model_identity(self, hold):
         for iid in self.starts:
             self.launch_model(iid)
-        self.router.launches["e3"] = {"model_config_sha256": "c" * 64, "model_revision": "b" * 40}
+        self.router.launches["e3"] = {"model_config_sha256": "c" * 64}
         outcome = await self.join()
-        self.assert_refused(outcome, "e3 attests 'c")
-        self.router.scheduler.eject("e3", "process_identity")
+        self.assert_refused(outcome, f"'{'c' * 64}' from e3")
+        hold("e3")
         outcome = await self.join()
         self.assertTrue(outcome.joined, outcome.error)
+
+    async def test_an_ejected_member_sets_no_model_identity(self):
+        await self.assert_held_member_sets_no_model_identity(
+            lambda iid: self.router.scheduler.eject(iid, "process_identity")
+        )
+
+    async def test_a_draining_member_sets_no_model_identity(self):
+        await self.assert_held_member_sets_no_model_identity(self.router.scheduler.drain)
+
+    async def test_a_takeover_identity_sweep_records_the_members_model_identity(self):
+        for iid in self.starts:
+            self.launch_model(iid)
+        self.launch_model("e6", model_config_sha256="c" * 64)
+        self.assertEqual(self.router.launches, {})
+        # Startup, a resumed start and a takeover run this sweep before the router serves.
+        with patch.object(identity, "fetch_spec_identity", AsyncMock(side_effect=self.identity)):
+            self.assertEqual(await identity.check_process_identities(self.router), [])
+        self.assertEqual(set(self.router.launches), {"e0", "e3"})
+        outcome = await self.join()
+        # e3 takes no part in the join's checks, so its value comes from the sweep.
+        self.assert_refused(outcome, f"'{'a' * 64}' from e0, e3; '{'c' * 64}' from e6")
 
     async def test_an_unreadable_identity_is_not_called_a_contract_mismatch(self):
         async def blank(cfg, spec, **kwargs):

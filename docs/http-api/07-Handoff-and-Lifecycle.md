@@ -187,7 +187,7 @@ Readmission checks:
 2. `attestation <fingerprint>`: process-bound attestation matches the engine contract.
 3. `profile generation`: every loaded profile variant's generation matches the verified live process generation.
 4. `model`: the engine serves the configured model.
-5. `model identity`: the engine's attestation carries the same `launch.model_config_sha256`, the SHA-256 of the checkpoint's `config.json`, and `launch.model_revision` as the router last verified for each member in placement. In a whole-wave readmission, every wave member carries the same values.
+5. `model identity`: the engine attests the same `launch.model_config_sha256`, the SHA-256 of the checkpoint's `config.json`, and `launch.model_revision` as the router last verified for every other member that is not ejected or draining. In a whole-wave readmission, the wave members attest the same values. A single-engine fleet skips this check.
 6. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
 7. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 8 tests generation.
 8. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
