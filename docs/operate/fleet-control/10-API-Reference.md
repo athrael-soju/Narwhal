@@ -67,14 +67,15 @@ When the state read fails, the record holds the reason in `error` and the action
 
 `available` lists the baseline engines outside the router's membership, read from the session's baseline or from the `fleet` file outside a session. It is `null` when the router has no `GET /narwhal/engines` route. Otherwise it holds:
 
-| Field                 | Meaning                                                                                                   |
-| --------------------- | --------------------------------------------------------------------------------------------------------- |
-| `engines`             | One entry per engine, in baseline order, with `iid`, `backend`, `engine`, `sidecar`, `available` and `error` |
-| `engines[].engine`    | `true` when the engine's health route answers HTTP 200 within 2 seconds                                   |
-| `engines[].sidecar`   | `true` when the engine's `attestation_url` answers HTTP 200 within 2 seconds                              |
-| `engines[].available` | `true` when `engine` and `sidecar` are both `true`                                                        |
-| `engines[].error`     | Why the service cannot probe the engine, such as a `${VARIABLE}` endpoint that does not resolve, or `null` |
-| `error`               | Why the router's membership could not be read, with `engines` empty, or `null`                            |
+| Field                 | Meaning                                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engines`             | One entry per engine, in baseline order, with `iid`, `backend`, `engine`, `sidecar`, `available`, `starting` and `error`                                                                                                        |
+| `engines[].engine`    | `true` when the engine's health route answers HTTP 200 within 2 seconds                                                                                                                                                         |
+| `engines[].sidecar`   | `true` when the engine's `attestation_url` answers HTTP 200 within 2 seconds                                                                                                                                                    |
+| `engines[].available` | `true` when `engine` and `sidecar` are both `true`                                                                                                                                                                              |
+| `engines[].starting`  | `true` when `available` is `false` and the service ran the engine's `engine_start` hook, from **Start** or **Restore baseline**, less than `router.timeout_s` ago, and the engine and its sidecar have not both responded since |
+| `engines[].error`     | Why the service cannot probe the engine, such as a `${VARIABLE}` endpoint that does not resolve, or `null`                                                                                                                      |
+| `error`               | Why the router's membership could not be read, with `engines` empty, or `null`                                                                                                                                                  |
 
 The service probes the engines at most once every 10 seconds, and again after each engine action.
 
@@ -175,13 +176,14 @@ The service queries `ALERTS{alertname=~"Narwhal.+",alertstate="firing",severity!
 
 `GET /metrics` returns the metrics behind the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) and the dashboard's [Available engines](../../observability/05-Dashboard.md#available-engines) table in the Prometheus text format:
 
-| Metric                              | Labels                                                   | Value                                   |
-| ----------------------------------- | -------------------------------------------------------- | --------------------------------------- |
-| `narwhal_control_session_active`    | none                                                     | `1` during a session, otherwise `0`     |
-| `narwhal_control_action_started_ms` | `session`, `seq`, `action`, `target`, `outcome`, `title` | Action start time, in Unix milliseconds |
-| `narwhal_control_load_job_running`  | `job`, `workload`                                        | `1` while the job runs                  |
+| Metric                              | Labels                                                   | Value                                                                  |
+| ----------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `narwhal_control_session_active`    | none                                                     | `1` during a session, otherwise `0`                                    |
+| `narwhal_control_action_started_ms` | `session`, `seq`, `action`, `target`, `outcome`, `title` | Action start time, in Unix milliseconds                                |
+| `narwhal_control_load_job_running`  | `job`, `workload`                                        | `1` while the job runs                                                 |
 | `narwhal_control_engine_available`  | `iid`, `backend`                                         | `1` when the engine and its attestation sidecar respond, otherwise `0` |
+| `narwhal_control_engine_starting`   | `iid`, `backend`                                         | `1` while `starting` is `true`, otherwise `0`                          |
 
 `narwhal_control_action_started_ms` has one series for each engine action, overlay, cold restart and restore that ran in the active session, failed ones included. `title` holds the chart label, such as `drain n7`. The engine actions a restore runs as its steps have no series of their own: the restore's `title` lists them, such as `restore: start n3, join n3, leave n4`. The restore's series appears when the restore finishes.
 
-`narwhal_control_engine_available` has one series for each engine in `available.engines` of [`GET /api/engines`](#engines), and none while the router's membership cannot be read. `backend` is the baseline's `engine.backend`, `vllm` when the baseline leaves it unset.
+`narwhal_control_engine_available` and `narwhal_control_engine_starting` each have one series for each engine in `available.engines` of [`GET /api/engines`](#engines), and none while the router's membership cannot be read. `backend` is the baseline's `engine.backend`, `vllm` when the baseline leaves it unset.

@@ -285,6 +285,48 @@ class RouterInstanceQueryTests(unittest.TestCase):
             ],
         )
 
+    def test_available_engines_reads_starting_respond_and_no_response(self):
+        times = scrapes(0)
+
+        def series(name: str, iid: str, value: str) -> dict[str, Samples]:
+            labels = f'job="fleet-control",instance="control:8000",iid="{iid}",backend="vllm"'
+            return {f"narwhal_control_engine_{name}{{{labels}}}": dict.fromkeys(times, value)}
+
+        exported = {
+            **series("available", "n1", "0"),
+            **series("starting", "n1", "1"),
+            **series("available", "n2", "1"),
+            **series("starting", "n2", "0"),
+            **series("available", "n3", "0"),
+            **series("starting", "n3", "0"),
+        }
+        older = {**series("available", "n1", "1"), **series("available", "n2", "0")}
+        self.check(
+            exported,
+            [
+                (
+                    panel_query("panel-61", "A"),
+                    60,
+                    {
+                        '{backend="vllm",iid="n1"}': 2,
+                        '{backend="vllm",iid="n2"}': 1,
+                        '{backend="vllm",iid="n3"}': 0,
+                    },
+                )
+            ],
+        )
+        # A fleet control that exports no starting series still lists its engines.
+        self.check(
+            older,
+            [
+                (
+                    panel_query("panel-61", "A"),
+                    60,
+                    {'{backend="vllm",iid="n1"}': 1, '{backend="vllm",iid="n2"}': 0},
+                )
+            ],
+        )
+
 
 def state_codes(panel: str) -> dict[str, int]:
     """Map each state name to its code in the panel's value mappings."""

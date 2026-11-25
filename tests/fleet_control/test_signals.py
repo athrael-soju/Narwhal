@@ -258,7 +258,7 @@ class MetricsTests(SignalCase):
         )
         await self.service.stop_job()
         self.assertNotIn("narwhal_control_load_job_running{", await self.scrape())
-        self.assertEqual(metrics(self.service).count("# TYPE"), 4)
+        self.assertEqual(metrics(self.service).count("# TYPE"), 5)
 
     async def test_a_new_session_does_not_report_the_previous_sessions_job(self) -> None:
         await self.service.start_session()

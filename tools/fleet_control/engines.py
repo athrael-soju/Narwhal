@@ -76,6 +76,9 @@ class AvailableEngine:
     sidecar: bool
     # Why the engine cannot be probed, such as an endpoint that does not resolve.
     error: str = ""
+    # Fleet control started the engine less than `router.timeout_s` ago, and the engine or its
+    # sidecar does not respond yet.
+    starting: bool = False
 
     @property
     def available(self) -> bool:
@@ -89,6 +92,7 @@ class AvailableEngine:
             "engine": self.engine,
             "sidecar": self.sidecar,
             "available": self.available,
+            "starting": self.starting,
             "error": self.error or None,
         }
 
@@ -134,6 +138,9 @@ class EngineActions:
         # The latest availability reading and its monotonic time.
         self._availability: tuple[float, Availability | None] | None = None
         self._availability_lock = asyncio.Lock()
+        # The monotonic time of each engine start hook that succeeded and whose engine has not
+        # responded since.
+        self._started: dict[str, float] = {}
 
     async def available(self, current: Mapping[str, Any] | None = None) -> Availability | None:
         """Return the baseline engines outside the router's membership and whether each answers.
@@ -198,7 +205,19 @@ class EngineActions:
             _responds(client, url + health if url else ""), _responds(client, attestation)
         )
         error = "" if attestation else "attestation_url is not configured"
-        return AvailableEngine(iid, backend, engine, sidecar, error)
+        return AvailableEngine(
+            iid, backend, engine, sidecar, error, self._starting(iid, engine and sidecar)
+        )
+
+    def _starting(self, iid: str, responds: bool) -> bool:
+        """Return whether `iid` started within `router.timeout_s` and does not respond yet."""
+        started = self._started.get(iid)
+        if started is None:
+            return False
+        if responds or time.monotonic() - started >= self.service.config.router.timeout_s:
+            del self._started[iid]
+            return False
+        return True
 
     async def join_baseline(self, iid: str) -> Action:
         """Join baseline engine `iid` with its baseline entry, references resolved, as an
@@ -275,6 +294,8 @@ class EngineActions:
                 try:
                     if hook is not None:
                         effect = await self._run_hook(hook, session, engine, action)
+                        if action == "start":
+                            self._started[iid] = time.monotonic()
                         # An engine outside the membership returns through a join.
                         if action in RETURNING_ACTIONS and known is None:
                             effect["service"] = await self._await_service(

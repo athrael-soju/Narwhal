@@ -1830,6 +1830,7 @@ function availableGate(engine, routerError, gate) {
   if (gate) return gate;
   if (routerError) return "The router cannot be read: " + routerError;
   if (engine.error) return engine.error;
+  if (engine.starting) return "The engine is starting.";
   if (!engine.engine && !engine.sidecar) return "The engine and its attestation sidecar do not respond.";
   if (!engine.engine) return "The engine does not respond.";
   if (!engine.sidecar) return "The attestation sidecar does not respond.";
@@ -1842,7 +1843,8 @@ function renderAvailable() {
   if (!listed) return;
   const routerError = state.enginesError || listed.error || "";
   const gate = sessionGate();
-  const responds = (value) => (value ? toned("ok", "responds") : toned("muted", "no response"));
+  const responds = (value, starting) => (value ? toned("ok", "responds")
+    : toned("muted", starting ? "starting" : "no response"));
   update("available", $("available-engines"), () => {
     const reasons = listed.engines.map((engine) => availableGate(engine, routerError, gate));
     const children = listed.engines.map((engine, index) => {
@@ -1852,8 +1854,8 @@ function renderAvailable() {
       button.setAttribute("aria-label", "Join " + engine.iid + (reason ? " (unavailable: " + reason + ")" : ""));
       button.setAttribute("aria-busy", String(state.pending.has("join")));
       button.addEventListener("click", () => joinAvailable(engine.iid));
-      return el("tr", {}, el("td", { class: "mono" }, engine.iid), el("td", {}, responds(engine.engine)),
-        el("td", {}, responds(engine.sidecar)), el("td", { class: "end" }, button));
+      return el("tr", {}, el("td", { class: "mono" }, engine.iid), el("td", {}, responds(engine.engine, engine.starting)),
+        el("td", {}, responds(engine.sidecar, engine.starting)), el("td", { class: "end" }, button));
     });
     if (!children.length) {
       const message = routerError ? "The router cannot be read." : "Every baseline engine is a member.";

@@ -132,9 +132,18 @@ def metrics(service: ControlService, available: Availability | None = None) -> s
         "router's membership and its attestation sidecar respond.",
         "# TYPE narwhal_control_engine_available gauge",
     ]
-    for engine in () if available is None else available.engines:
+    engines = () if available is None else available.engines
+    for engine in engines:
         labels = {"iid": engine.iid, "backend": engine.backend}
         lines.append(_sample("narwhal_control_engine_available", labels, int(engine.available)))
+    lines += [
+        "# HELP narwhal_control_engine_starting Whether fleet control started a baseline engine "
+        "outside the router's membership that does not respond yet.",
+        "# TYPE narwhal_control_engine_starting gauge",
+    ]
+    for engine in engines:
+        labels = {"iid": engine.iid, "backend": engine.backend}
+        lines.append(_sample("narwhal_control_engine_starting", labels, int(engine.starting)))
     return "\n".join(lines) + "\n"
 
 

@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
@@ -19,10 +20,11 @@ from tests.fleet_control.test_membership_actions import MemberRouter
 from tools.fleet_control import engines as engines_module
 from tools.fleet_control.app import create_app
 from tools.fleet_control.engines import EngineActions
-from tools.fleet_control.signals import FleetSignals, signal_routes
+from tools.fleet_control.signals import FleetSignals, metrics, signal_routes
 from tools.observability.artifacts import render_dashboard
 
 GAUGE = "narwhal_control_engine_available"
+STARTING = "narwhal_control_engine_starting"
 
 
 class AvailableRouter(MemberRouter):
@@ -51,13 +53,21 @@ class AvailableRouter(MemberRouter):
         raise httpx.ConnectError("connection refused", request=request)
 
 
-def engine(iid: str, *, up: bool = True, sidecar: bool = True, error: str | None = None) -> dict:
+def engine(
+    iid: str,
+    *,
+    up: bool = True,
+    sidecar: bool = True,
+    error: str | None = None,
+    starting: bool = False,
+) -> dict:
     return {
         "iid": iid,
         "backend": "vllm",
         "engine": up,
         "sidecar": sidecar,
         "available": up and sidecar,
+        "starting": starting,
         "error": error,
     }
 
@@ -159,6 +169,53 @@ class AvailabilityTests(AvailableCase):
             await asyncio.gather(self.available(), self.gauge(), self.available())
             # The control app and the metrics app each hold one reading.
             self.assertEqual(self.router.probes.count("e1 /health"), 2)
+
+
+class StartingTests(AvailableCase):
+    """An engine fleet control started reads Starting until it responds or the router timeout."""
+
+    async def start_without_response(self) -> None:
+        """Leave and stop e1, then restore: the start hook runs and the router refuses the join."""
+        await self.start_session()
+        await self.leave("e1")
+        self.router.running.discard("e1")
+        self.router.refuse_join.add("e1")
+        response = await self.client.post("/api/config/restore")
+        self.assertEqual(response.status_code, 409, response.text)
+        restore = next(
+            entry for entry in self.record()["actions"] if entry["action"] == "config.restore"
+        )
+        self.assertEqual([step["action"] for step in restore["result"]["steps"]], ["start"])
+
+    async def starting_gauge(self) -> list[str]:
+        text = metrics(self.service, await self.actions.available())
+        return [line for line in text.splitlines() if line.startswith(STARTING + "{")]
+
+    async def test_a_started_engine_reads_starting_until_it_responds(self) -> None:
+        await self.start_without_response()
+        self.assertEqual(
+            (await self.available())["engines"], [engine("e1", up=False, starting=True)]
+        )
+        self.assertEqual(await self.starting_gauge(), [f'{STARTING}{{iid="e1",backend="vllm"}} 1'])
+        self.router.running.add("e1")
+        self.assertEqual((await self.available())["engines"], [engine("e1")])
+        self.assertEqual(await self.starting_gauge(), [f'{STARTING}{{iid="e1",backend="vllm"}} 0'])
+        # Once it has responded, an engine that stops again is unavailable.
+        self.router.running.discard("e1")
+        self.assertEqual((await self.available())["engines"], [engine("e1", up=False)])
+
+    async def test_a_started_engine_is_unavailable_after_the_router_timeout(self) -> None:
+        await self.start_without_response()
+        timeout = self.service.config.router.timeout_s
+        self.actions._started["e1"] = time.monotonic() - timeout
+        self.assertEqual((await self.available())["engines"], [engine("e1", up=False)])
+
+    async def test_an_engine_fleet_control_did_not_start_is_unavailable(self) -> None:
+        await self.start_session()
+        await self.leave("e1")
+        self.router.running.discard("e1")
+        self.assertEqual((await self.available())["engines"], [engine("e1", up=False)])
+        self.assertEqual(await self.starting_gauge(), [f'{STARTING}{{iid="e1",backend="vllm"}} 0'])
 
 
 class NoMembershipRouteTests(EngineCase):
@@ -274,6 +331,7 @@ class JoinGateTests(unittest.TestCase):
             (engine("e1", sidecar=False), "", ""),
             (engine("e1", up=False, sidecar=False), "", ""),
             (unresolved, "", ""),
+            (engine("e1", up=False, starting=True), "", ""),
             (up, failed, ""),
             (up, "", "engine.leave is in progress."),
             (engine("e1", up=False), failed, "Start a session first."),
@@ -286,6 +344,7 @@ class JoinGateTests(unittest.TestCase):
                 "The attestation sidecar does not respond.",
                 "The engine and its attestation sidecar do not respond.",
                 "url does not resolve",
+                "The engine is starting.",
                 f"The router cannot be read: {failed}",
                 "engine.leave is in progress.",
                 "Start a session first.",
@@ -340,7 +399,11 @@ class AvailableEnginesPanelTests(unittest.TestCase):
         panel = spec["elements"]["panel-61"]["spec"]
         self.assertEqual(panel["title"], "Available engines")
         [query] = [q["spec"]["query"]["spec"] for q in panel["data"]["spec"]["queries"]]
-        self.assertEqual(query["expr"], f'max by(iid, backend) ({GAUGE}{{job="fleet-control"}})')
+        available = f'max by(iid, backend) ({GAUGE}{{job="fleet-control"}})'
+        starting = f'max by(iid, backend) ({STARTING}{{job="fleet-control"}})'
+        self.assertEqual(
+            query["expr"], f"{available} + on(iid, backend) (2 * {starting} or 0 * {available})"
+        )
         self.assertTrue(query["instant"])
         overrides = {
             override["matcher"]["options"]: override["properties"]
@@ -354,6 +417,7 @@ class AvailableEnginesPanelTests(unittest.TestCase):
             {
                 "0": {"text": "No response", "color": "#8E9196"},
                 "1": {"text": "Respond", "color": "#8E9196"},
+                "2": {"text": "Starting", "color": "#8E9196"},
             },
         )
         self.assertEqual(
