@@ -138,6 +138,8 @@ class EngineActions:
         # The latest availability reading and its monotonic time.
         self._availability: tuple[float, Availability | None] | None = None
         self._availability_lock = asyncio.Lock()
+        # Counts engine actions that ended, so a reading that started before one is not kept.
+        self._actions_ended = 0
         # The monotonic time of each engine start hook that succeeded and whose engine has not
         # responded since.
         self._started: dict[str, float] = {}
@@ -153,8 +155,10 @@ class EngineActions:
             cached = self._availability
             if cached is not None and time.monotonic() - cached[0] < AVAILABILITY_TTL_S:
                 return cached[1]
+            ended = self._actions_ended
             reading = await self._read_availability(current)
-            self._availability = (time.monotonic(), reading)
+            if ended == self._actions_ended:
+                self._availability = (time.monotonic(), reading)
             return reading
 
     async def _read_availability(self, current: Mapping[str, Any] | None) -> Availability | None:
@@ -273,6 +277,7 @@ class EngineActions:
             try:
                 return await operation(session)
             finally:
+                self._actions_ended += 1
                 self._availability = None
 
         return operate

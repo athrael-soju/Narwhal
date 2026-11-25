@@ -163,6 +163,29 @@ class AvailabilityTests(AvailableCase):
             await self.available()
             self.assertEqual(self.router.probes.count("e1 /health"), 2)
 
+    async def test_a_reading_that_an_engine_action_overtakes_is_not_kept(self) -> None:
+        with mock.patch.object(engines_module, "AVAILABILITY_TTL_S", 60.0):
+            await self.start_session()
+            await self.leave("e1")
+            probing, release = asyncio.Event(), asyncio.Event()
+            read = self.actions._read_availability
+
+            async def slow(current: Any) -> Any:
+                reading = await read(current)
+                probing.set()
+                await release.wait()
+                return reading
+
+            with mock.patch.object(self.actions, "_read_availability", side_effect=slow):
+                stale = asyncio.create_task(self.actions.available())
+                await probing.wait()
+                # The join ends while the probe that listed e1 is still out.
+                response = await self.client.post("/api/engines/e1/join")
+                self.assertEqual(response.status_code, 200, response.text)
+                release.set()
+                self.assertEqual([e["iid"] for e in (await stale).document()["engines"]], ["e1"])
+            self.assertEqual((await self.available())["engines"], [])
+
     async def test_concurrent_readers_share_one_probe(self) -> None:
         with mock.patch.object(engines_module, "AVAILABILITY_TTL_S", 60.0):
             self.router._remove("e1")
