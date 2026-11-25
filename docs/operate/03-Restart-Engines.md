@@ -82,18 +82,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   > "$RUN_DIR/individual-readmitted.json"
 ```
 
-Readmission runs these checks in order, each named by its `checks` entry:
-
-1. The engine and each required peer pass four checks:
-    - `health`: `/health` returns HTTP 200.
-    - `attestation <fingerprint>`: attestation matches the live process and the `engine_contract`.
-    - `profile generation`: every loaded profile variant is bound to the engine's live process generation.
-    - `model`: `/v1/models` lists the configured model.
-2. The replacement engine passes `model identity`: it attests the same model file digests as every other member that is not ejected or draining. A single-engine fleet skips this check.
-3. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM and TensorRT-LLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 4 tests generation.
-4. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router pairs the replacement engine with the first live engine in the other role. With the `mooncake` connector, the router switches the replacement engine to its router role before the handoff.
-5. The replacement engine passes `final health`: its `/health` returns HTTP 200.
-6. The identities, attestation, and profile bindings of all participants match step 1.
+Readmission runs the [readmission checks](../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit), and `checks` lists each check that passed.
 
 When every check passes, readmission returns HTTP 200 with `accepts_new: true`, and the engine `state` becomes `active`. A failed check returns HTTP 409, and fenced router control during validation returns HTTP 503. Both leave the engine `blocked`.
 

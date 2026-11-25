@@ -8,7 +8,7 @@ Restart the router after changing a fleet setting. Defaults and bounds are in [S
 
 ## Admission mode
 
-[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) is `predictive` (the default) or `open`. In `predictive` mode the router answers HTTP 429 when a request fails the TTFT check or the decode admission check. In `open` mode it makes no predictive refusals, and the [request journal](../telemetry/01-Journal.md#admission-price) still records the price of each prefill placement.
+[`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) is `predictive` (the default) or `open`. In `open` mode the router skips the predictive checks, and the [request journal](../telemetry/01-Journal.md#admission-price) still records the price of each prefill placement.
 
 - Keep `predictive` when clients should receive a refusal instead of a first token after the TTFT target.
 - Use `open` for an in-flight sweep or any measurement that predictive refusals would distort.
@@ -19,7 +19,7 @@ Restart the router after changing a fleet setting. Defaults and bounds are in [S
 
 With `serving.queue_capacity` at `0`, the default, the router answers HTTP 429 as soon as requests reach the in-flight limit. A positive value lets that many more requests wait, in arrival order, for an admission seat and then for a prefill seat.
 
-Turn the queue on for short bursts when clients should wait for a seat. Set `serving.queue_timeout_s` (default `0.0`, and positive whenever the capacity is positive) to the longest acceptable wait before prefill. The admission-seat and prefill-seat waits share that budget. When it runs out, the router answers HTTP 504 with error type `queue_expired` during the admission-seat wait and `expired` during a prefill-seat wait. A wait for a decode seat ends at the KV handoff bound instead, as described below.
+Turn the queue on for short bursts when clients should wait for a seat. Set `serving.queue_timeout_s` (default `0.0`, and positive whenever the capacity is positive) to the longest acceptable wait before prefill. The admission-seat and prefill-seat waits share that budget. A wait for a decode seat ends at the KV handoff bound instead, as described below.
 
 Under `predictive` admission, the router prices a request that waits for an admission seat with a cold prefill curve, before it sizes the prompt and without prefix-cache evidence. A long, mostly cached prompt can leave the queue with a `queue` or `prompt` refusal that its sized price would have passed. Review journal refusals for such prompts before you enable the queue. [Queue waits](../configuration/02-Serving-and-Role-Control.md#queue-waits) lists every wait, bound and response.
 
@@ -27,7 +27,7 @@ Under `predictive` admission, the router prices a request that waits for an admi
 
 To change decode seats, relaunch the engine with a different `runtime.max_sequences` and attest again, or remeasure the profile. To change prefill seats, remeasure the profile or change `slo.ttft_s`. [Engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) defines how the router derives both, and `/narwhal/state` reports the result under `seats`.
 
-For vLLM and TensorRT-LLM engines, the router's [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) is the lease minus `lease // 6` seconds. [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease, at least 6 seconds. The default is 30 seconds on vLLM, a 25-second bound, and 60 seconds on TensorRT-LLM, a 50-second bound. A longer lease lets a decode-seat wait run longer and keeps abandoned handoff blocks longer. After you change it, relaunch and attest the engines.
+For vLLM and TensorRT-LLM engines, the router derives its [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) from the KV lease. [`runtime.kv_lease_s`](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease, at least 6 seconds. The default is 30 seconds on vLLM, a 25-second bound, and 60 seconds on TensorRT-LLM, a 50-second bound. A longer lease lets a decode-seat wait run longer and keeps abandoned handoff blocks longer. After you change it, relaunch and attest the engines.
 
 ## Retries and quarantine
 

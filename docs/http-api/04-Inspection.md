@@ -36,7 +36,7 @@ The earliest matching row sets `status`:
 | `status`      | Meaning                                                                                                |
 | ------------- | ------------------------------------------------------------------------------------------------------ |
 | `ok`          | Router admits new client requests                                                                      |
-| `fenced`      | Failover block set by a failed lease renewal, a blocked takeover, an invalid active-router lease, or shutdown of the lease holder |
+| `fenced`      | Failover block set by a failed lease claim at startup, a failed lease renewal, a blocked takeover, an invalid active-router lease, or shutdown of the lease holder |
 | `maintenance` | Whole-wave drain, recovery, or restart hold                                                            |
 | `standby`     | Standby router                                                                                         |
 | `degraded`    | Degraded engine monitoring, pending engine identity validation, or zero engines eligible for placement |
@@ -99,7 +99,7 @@ Returns the [Narwhal metrics](../telemetry/03-Metrics-and-Control.md#prometheus-
 
 ## `GET /narwhal/targets`
 
-Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prometheus/latest/http_sd/) target group per engine in the [membership snapshot](08-Engine-Membership.md), so the list changes when an engine joins or leaves. The target is the host and port of the engine's `url`. The labels carry the engine's `iid`, the fleet's `engine.backend`, the scheme of the `url`, and its path followed by `/metrics`:
+Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prometheus/latest/http_sd/) target group per engine in the [membership snapshot](08-Engine-Membership.md), so the list changes when an engine joins or leaves. The target is the host and port of the engine's `url`. The labels carry the engine's `iid`, the fleet's `engine.backend`, the scheme of the `url`, and its path followed by the backend's metrics route, `/prometheus/metrics` on TensorRT-LLM and `/metrics` otherwise:
 
 ```json
 [
@@ -114,8 +114,6 @@ Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prome
   }
 ]
 ```
-
-The `engines` job of the [monitoring stack](../observability/01-Start-and-Verify.md) reads this route every 15 seconds.
 
 A router that does not control the fleet returns the [fleet-state refusal](#fleet-state-reads-on-a-router-without-the-lease). A standby holds the fleet file's membership until it takes over, so its list would drop engines that joined and keep engines that left. When a refresh fails, Prometheus keeps using the targets of its last successful read and counts the failure in `prometheus_sd_refresh_failures_total`. A standby in the discovery path therefore leaves in place the engine targets Prometheus already holds, and the targets follow the fleet again on the next read that reaches the active router. A Prometheus whose first read reaches a standby holds no engine targets until a read succeeds.
 

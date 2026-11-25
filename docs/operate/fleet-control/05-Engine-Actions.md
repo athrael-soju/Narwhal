@@ -48,7 +48,7 @@ Click an engine ID to open its details beside the list: its state, role, residen
 | **Readmit** | Calls the router's [`POST /narwhal/lifecycle/readmit`](../../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) for a drained engine                                                                           |
 | **Leave**   | Calls the router's [`DELETE /narwhal/engines/{iid}`](../../http-api/08-Engine-Membership.md#delete-narwhalenginesiid), then waits until the router removes the engine. The engine process keeps running                      |
 
-Each action first reads the engine's entry from the router's `GET /narwhal/engines`, so it fails while the router does not answer. With a router that has no such route, the action reads the entry from the baseline fleet configuration.
+Each action first reads the engine's entry from the router's `GET /narwhal/engines`, so it fails while the router does not answer. With a router that lacks this route, **Leave** fails, and the console reads the entry for the other actions from the baseline fleet configuration.
 
 Each row has a main button for the engine's current state and a **…** menu with the other actions:
 
@@ -71,7 +71,7 @@ Before a join, prepare the engine's profiles and calibration as in [Joining and 
 
 Below the engine list, **Available engines** lists each engine of the baseline fleet configuration that is not a member of the router's fleet, such as an engine that left and still runs. **Engine API** and **Sidecar** show whether the engine's health route and its attestation sidecar respond. Both read **starting** when the service ran the engine's `engine_start` hook, from **Start** or **Restore baseline**, less than `router.timeout_s` ago, and the engine or its sidecar has not responded since. The service probes them at most once every 10 seconds, and again after each engine action. To return an engine, select its **Join** and confirm. The service sends the engine's baseline entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines), with its `${VARIABLE}` references resolved from the service's environment as **Restore baseline** does.
 
-For an engine outside the baseline, **Join engine** takes one engine entry as the fleet file holds it, with literal `url` and `attestation_url` values. The router refuses a `${VARIABLE}` reference in an entry sent over HTTP. Fill in the entry, select **Join engine** and confirm. The service sends the entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines).
+For an engine outside the baseline, **Join engine** takes one engine entry as the fleet file holds it, with literal `url` and `attestation_url` values. Fill in the entry, select **Join engine** and confirm. The service sends the entry to the router's [`POST /narwhal/engines`](../../http-api/08-Engine-Membership.md#post-narwhalengines).
 
 The feedback line under **Join engine** shows the result of either join.
 
@@ -97,6 +97,6 @@ A disabled action shows the reason in its tooltip or under the menu item.
 
 ## Paused and stopped engines
 
-The console tracks paused and stopped engines within the session, and a cold restart clears those states. Engines that joined or left are the differences between the router's membership and the baseline. **Restore baseline** returns both to the baseline.
+The console tracks paused and stopped engines within the session, and a cold restart clears those states. The console works out which engines joined or left by comparing the router's membership with the baseline. **Restore baseline** returns both to the baseline.
 
 The **Last action** line under the table shows the latest engine action and the change in the engine's state and resident requests. The run record holds the engine's full router state before and after each action.

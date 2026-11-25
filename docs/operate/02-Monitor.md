@@ -30,7 +30,7 @@ Until whole-wave readmission succeeds, the active router's `/health` reports `st
 
 ### Router control and replacement
 
-Load balancers route traffic by the HTTP status of `/ready`. `control_ready: true` means the router holds a valid lease and its engine monitoring is healthy. A standby copies the primary's state handoff even while the primary's `/ready` returns HTTP 503.
+Load balancers route traffic by the HTTP status of [`/ready`](../http-api/04-Inspection.md#get-ready). A standby copies the primary's state handoff even while the primary's `/ready` returns HTTP 503.
 
 ## Monitoring placement and control
 
