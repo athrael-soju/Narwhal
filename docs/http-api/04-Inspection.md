@@ -144,6 +144,6 @@ A router that does not control the fleet returns the [fleet-state refusal](#flee
 
 A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
 
-A request with the header `X-Narwhal-Diagnostic: true` receives the router's own document from each of these routes, whether or not it controls the fleet. [Diagnostic bundles](../Diagnostic-Bundles.md) send it to keep a standby's or a fenced router's state.
+A request to `GET /narwhal/state` or `GET /narwhal/lifecycle` with the header `X-Narwhal-Diagnostic: true` receives the router's own document, whether or not it controls the fleet. [Diagnostic bundles](../Diagnostic-Bundles.md) send it to keep a standby's or a fenced router's state. `GET /narwhal/engines`, `GET /narwhal/handoff` and `GET /narwhal/targets` return the refusal with or without the header.
 
 The [shipped HAProxy configuration](../operate/01-Start-Routers.md#configuring-the-client-path) retries an HTTP `503` while both routers are in rotation, so a read through it reaches the active router or returns this refusal.

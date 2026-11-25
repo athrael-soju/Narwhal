@@ -20,6 +20,8 @@ FLEET_READS = {
     "/narwhal/handoff": "narwhal.handoff",
     "/narwhal/targets": None,
 }
+# The reads that answer a diagnostic request on a router that does not control the fleet.
+DIAGNOSTIC_READS = ("/narwhal/state", "/narwhal/lifecycle")
 WRITES = (
     ("post", "/narwhal/engines", {"json": {"iid": "e6", "url": "http://engine-6.invalid:8000"}}),
     ("delete", "/narwhal/engines/e1", {}),
@@ -74,17 +76,20 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path):
                 self.assert_refused(await self.client.get(path), "shadowing")
 
-    async def test_a_diagnostic_read_returns_the_standbys_own_documents(self):
+    async def test_a_diagnostic_read_returns_the_standbys_state_and_lifecycle(self):
         self.router.standby = True
         self.router.failover_blocked = "no fresh handoff"
-        for path, schema in FLEET_READS.items():
+        for path in DIAGNOSTIC_READS:
             with self.subTest(path=path):
                 response = await self.client.get(path, headers={"x-narwhal-diagnostic": "true"})
                 self.assertEqual(response.status_code, 200, response.text)
-                if schema is not None:
-                    self.assertEqual(response.json()["schema"], schema)
+                self.assertEqual(response.json()["schema"], FLEET_READS[path])
                 refused = await self.client.get(path, headers={"x-narwhal-diagnostic": "false"})
                 self.assert_refused(refused, "no fresh handoff")
+        for path in set(FLEET_READS) - set(DIAGNOSTIC_READS):
+            with self.subTest(path=path):
+                response = await self.client.get(path, headers={"x-narwhal-diagnostic": "true"})
+                self.assert_refused(response, "no fresh handoff")
         state = await self.client.get("/narwhal/state", headers={"x-narwhal-diagnostic": "1"})
         self.assertEqual(
             (state.json()["ha"]["standby"], state.json()["ha"]["blocked"]),
@@ -157,6 +162,13 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
         for path in FLEET_READS:
             with self.subTest(path=path):
                 self.assertIn("503", paths[path]["get"]["responses"])
+                headers = {
+                    parameter["name"]
+                    for parameter in paths[path]["get"].get("parameters", [])
+                    if parameter["in"] == "header"
+                }
+                expected = {"x-narwhal-diagnostic"} if path in DIAGNOSTIC_READS else set()
+                self.assertEqual(headers, expected)
 
 
 if __name__ == "__main__":

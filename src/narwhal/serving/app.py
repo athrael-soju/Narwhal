@@ -52,6 +52,7 @@ from .records import (
     not_controlling_response,
     not_ready_response,
     require_control,
+    require_control_or_diagnostic,
 )
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
@@ -283,6 +284,11 @@ def create_app(
         "dependencies": [Depends(require_control)],
         "responses": CONTROLLED_READ,
     }
+    # Diagnostic bundles keep a standby's state and lifecycle documents as evidence.
+    diagnosable: dict[str, Any] = {
+        "dependencies": [Depends(require_control_or_diagnostic)],
+        "responses": CONTROLLED_READ,
+    }
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
     async def models() -> dict[str, Any]:
@@ -366,14 +372,14 @@ def create_app(
         "/narwhal/state",
         response_model=StateOut,
         summary="The live scheduler picture",
-        **controlled,
+        **diagnosable,
     )
     async def state() -> dict[str, Any]:
         return router.state()
 
     add_engine_routes(app, router, controlled)
 
-    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **controlled)
+    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **diagnosable)
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
 

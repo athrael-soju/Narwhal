@@ -113,7 +113,17 @@ class FleetNotControlled(Exception):
     """A fleet-state read reached a router that does not hold the active lease."""
 
 
-async def require_control(
+async def require_control(request: HTTPRequest) -> None:
+    """Refuse a fleet-state read unless this router controls the fleet.
+
+    A standby or fenced router holds the fleet file's state, or state from before it lost the
+    lease, so its answer would misdescribe the fleet.
+    """
+    if not controls_fleet(request.app.state.router):
+        raise FleetNotControlled
+
+
+async def require_control_or_diagnostic(
     request: HTTPRequest,
     x_narwhal_diagnostic: bool = Header(
         False,
@@ -123,12 +133,10 @@ async def require_control(
 ) -> None:
     """Refuse a fleet-state read unless this router controls the fleet or the read is diagnostic.
 
-    A standby or fenced router holds the fleet file's state, or state from before it lost the
-    lease, so its answer would misdescribe the fleet. A diagnostic read keeps that state as
-    failure evidence.
+    A diagnostic read keeps a standby's or a fenced router's state as failure evidence.
     """
-    if not x_narwhal_diagnostic and not controls_fleet(request.app.state.router):
-        raise FleetNotControlled
+    if not x_narwhal_diagnostic:
+        await require_control(request)
 
 
 def control_lost_reason(router: NarwhalRouter) -> str:
