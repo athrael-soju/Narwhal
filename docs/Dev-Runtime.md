@@ -206,10 +206,9 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
 
     Replace `0` with the index of the GPU the engines use.
 
-3. Inside the container, install `iproute2`, whose `ip` command `init` uses to read the interface address, and install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
+3. Inside the container, install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
 
     ```bash
-    apt-get update && apt-get install -y iproute2
     python3 -m venv --system-site-packages .venv-trtllm
     source .venv-trtllm/bin/activate
     python -m pip install .
@@ -246,7 +245,7 @@ The run directory that `status` prints holds:
 | Probe and fit outcomes | `profile-*.log` |
 | Runtime, profile, and transfer checks | `verify-*/preflight.log` |
 
-Stop the instance:
+Stop the instance. For an instance in another directory, such as `runs/dev-sglang` or `runs/dev-trtllm`, pass its `--instance` to both commands:
 
 ```bash
 narwhal dev down
