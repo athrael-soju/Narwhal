@@ -127,7 +127,7 @@ If you leave a field unset and the table gives no default, the engine uses its o
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
-Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `shared_device.gpu_memory_utilization` times the GPU's memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
+Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `--free_gpu_memory_fraction` times the GPU's total memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
 
 ### vLLM runtime fields
 
@@ -174,7 +174,7 @@ With `NARWHAL_ENGINE_BACKEND=trtllm`, [discovery](../deploy/01-Discover.md#confi
 
 A TensorRT-LLM record adds three optional fields:
 
-- `bound_kv_cache`, `false` by default, applies the bound of a shared GPU to an engine on a GPU of its own when `true`. The Narwhal dev TensorRT-LLM runtime sets it.
+- `bound_kv_cache`, `false` by default, applies the bound of a shared GPU to an engine on a GPU of its own when `true`. It requires `--free_gpu_memory_fraction` once in `extra_args`, above 0 and at most 1. The Narwhal dev TensorRT-LLM runtime sets both.
 - `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
 - `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 

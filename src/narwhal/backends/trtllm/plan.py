@@ -87,8 +87,21 @@ def validate_runtime(runtime: dict) -> None:
     reserve = runtime.get("memory_reserve_mib", MEMORY_RESERVE_MIB)
     if type(reserve) is not int or reserve < 1:
         raise ValueError("runtime.memory_reserve_mib must be a positive integer")
-    if type(runtime.get("bound_kv_cache", False)) is not bool:
+    bound = runtime.get("bound_kv_cache", False)
+    if type(bound) is not bool:
         raise ValueError("runtime.bound_kv_cache must be true or false")
+    if bound:
+        # The wrapper sizes the bounded KV cache from this share of the GPU's total memory.
+        share = memory_fraction(runtime.get("extra_args", []))
+        try:
+            valid = share is not None and 0 < float(share) <= 1
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError(
+                "runtime.bound_kv_cache requires --free_gpu_memory_fraction once in "
+                "runtime.extra_args, above 0 and at most 1"
+            )
     check_settings(runtime, SETTINGS)
     check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     if runtime.get("kv_events") is True:
