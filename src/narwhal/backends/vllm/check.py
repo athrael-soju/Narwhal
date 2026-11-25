@@ -10,6 +10,7 @@ from ...deployment.launch_engine.plan import (
     releases_peers,
     requires_remote_code,
 )
+from .dev import gguf_plugin_digests
 from .runtime import engine_arguments
 
 
@@ -22,11 +23,18 @@ def probe(context: CheckContext) -> list[str]:
     script = (
         "from pathlib import Path\n"
         + inspect.getsource(requires_remote_code)
+        + inspect.getsource(gguf_plugin_digests)
         + """import importlib.metadata as m, json
 expected = json.loads(__import__('sys').argv[1])
 observed = {name: m.version(name) for name in expected}
 print(json.dumps(observed))
 assert observed == expected, 'image package versions differ'
+pins = json.loads(__import__('sys').argv[7])
+if pins:
+    plugin = Path(str(m.distribution('vllm-gguf-plugin').locate_file('vllm_gguf_plugin')))
+    digests = gguf_plugin_digests(plugin)
+    print('NARWHAL_GGUF_PLUGIN=' + json.dumps(digests))
+    assert digests == pins, 'GGUF plugin files differ from the pinned digests'
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_transfer.kv_connector.factory import KVConnectorFactory
 from vllm.version import __version__ as api_version
@@ -93,6 +101,7 @@ print('NARWHAL_IMAGE_RUNTIME=' + json.dumps({
         json.dumps(ds_required),
         context.tokenizer,
         json.dumps(engine_arguments(plan)),
+        json.dumps(plan.get("runtime_pins", {})),
     ]
 
 
@@ -106,6 +115,15 @@ def result(context: CheckContext, output: str) -> ProbeResult:
         raise context.failure("runtime check requires one runtime version record")
     if output.splitlines().count("NARWHAL_TOKENIZER_READY=1") != 1:
         raise context.failure("runtime check requires one tokenizer confirmation")
+    if plan.get("runtime_pins"):
+        prefix = "NARWHAL_GGUF_PLUGIN="
+        plugin = [
+            json.loads(line[len(prefix) :])
+            for line in output.splitlines()
+            if line.startswith(prefix)
+        ]
+        if plugin != [plan["runtime_pins"]]:
+            raise context.failure("GGUF plugin files differ from the pinned digests")
     ucx = records[0].get("ucx_version")
     if ucx is not None and not isinstance(ucx, str):
         raise context.failure("runtime check returned an invalid UCX version")

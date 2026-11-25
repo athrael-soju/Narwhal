@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from ...deployment.launch_engine.plan import (
     SECRET_WORDS,
@@ -57,6 +58,9 @@ ENV_PREFIXES = (
     "PYTORCH_",
     "SAFETENSORS_",
 )
+# Runtime fields that pin the GGUF plugin's Python sources and CUDA extension; the runtime check
+# compares them with the plugin in the serving namespace.
+GGUF_PLUGIN_PINS = ("gguf_plugin_python_sha256", "gguf_plugin_extension_sha256")
 KV_EVENTS_OFF = ("--kv-events-config", json.dumps({"enable_kv_cache_events": False}))
 SETTINGS = LaunchSettings(
     entrypoint=("-m", "vllm.entrypoints.openai.api_server"),
@@ -88,6 +92,15 @@ def validate_runtime(runtime: dict) -> None:
     lease = runtime.get("kv_lease_s", KV_LEASE_S)
     if type(lease) is not int or lease < MIN_KV_LEASE_S:
         raise ValueError(f"runtime.kv_lease_s must be an integer of at least {MIN_KV_LEASE_S}")
+    pins = [name for name in GGUF_PLUGIN_PINS if name in runtime]
+    if pins and (
+        len(pins) != len(GGUF_PLUGIN_PINS)
+        or any(not re.fullmatch(r"[0-9a-f]{64}", str(runtime[name])) for name in pins)
+    ):
+        raise ValueError(
+            "runtime.gguf_plugin_python_sha256 and runtime.gguf_plugin_extension_sha256 "
+            "must both be SHA-256 digests"
+        )
     check_settings(runtime, SETTINGS)
     check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     check_environment(
@@ -96,6 +109,10 @@ def validate_runtime(runtime: dict) -> None:
         ENV_PREFIXES,
         forbidden=(*SECRET_WORDS, "SKIP_COMPAT"),
     )
+
+
+def runtime_pins(runtime: dict) -> dict:
+    return {name: runtime[name] for name in GGUF_PLUGIN_PINS if name in runtime}
 
 
 def serve_args(

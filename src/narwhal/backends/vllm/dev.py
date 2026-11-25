@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from importlib import metadata
 from pathlib import Path
 
@@ -44,16 +43,31 @@ def check_imports() -> None:
     run_import_check(IMPORT_CHECK, "vLLM/NIXL connector", traceback_fails=True)
 
 
+def gguf_plugin_digests(package: Path) -> dict[str, str]:
+    """Digest the GGUF plugin's Python sources and CUDA extension.
+
+    The runtime check runs this function's source in the engine image, so it stays
+    self-contained.
+    """
+    import hashlib
+
+    sources = hashlib.sha256()
+    for source in sorted(package.rglob("*.py")):
+        sources.update(source.relative_to(package).as_posix().encode() + b"\0")
+        sources.update(source.read_bytes() + b"\0")
+    extension = hashlib.sha256((package / "_C_gguf.abi3.so").read_bytes()).hexdigest()
+    return {
+        "gguf_plugin_python_sha256": sources.hexdigest(),
+        "gguf_plugin_extension_sha256": extension,
+    }
+
+
 def check_plugin(runtime: dict) -> None:
     if "gguf_plugin_python_sha256" not in runtime:
         return
     package = Path(str(metadata.distribution("vllm-gguf-plugin").locate_file("vllm_gguf_plugin")))
-    digest = hashlib.sha256()
-    for source in sorted(package.rglob("*.py")):
-        digest.update(source.relative_to(package).as_posix().encode() + b"\0")
-        digest.update(source.read_bytes() + b"\0")
-    if digest.hexdigest() != runtime["gguf_plugin_python_sha256"]:
+    digests = gguf_plugin_digests(package)
+    if digests["gguf_plugin_python_sha256"] != runtime["gguf_plugin_python_sha256"]:
         raise ValueError("GGUF plugin Python sources differ from the qualified revision")
-    extension = hashlib.sha256((package / "_C_gguf.abi3.so").read_bytes()).hexdigest()
-    if extension != runtime["gguf_plugin_extension_sha256"]:
+    if digests["gguf_plugin_extension_sha256"] != runtime["gguf_plugin_extension_sha256"]:
         raise ValueError("GGUF plugin CUDA extension differs from the qualified wheel")

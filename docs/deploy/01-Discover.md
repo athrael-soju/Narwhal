@@ -62,7 +62,7 @@ Discovery compares the path, size, and SHA-256 of every regular file in the mode
 
 ### Staging a GGUF model on vLLM
 
-A vLLM fleet can serve a GGUF file. The engine image must include `vllm-gguf-plugin`. Stage the GGUF file in `NARWHAL_MODEL_DIR` beside the `config.json` and tokenizer files of the model it was converted from:
+A vLLM fleet can serve a GGUF file from an engine image that includes `vllm-gguf-plugin`, such as the one in [Building a GGUF engine image](#building-a-gguf-engine-image). Stage the GGUF file in `NARWHAL_MODEL_DIR` beside the `config.json` and tokenizer files of the model it was converted from:
 
 1. Set `BASE_REPO_ID` and `BASE_REVISION` to the repository and full commit SHA of the model the file was converted from.
 2. Set `GGUF_REPO_ID`, `GGUF_REVISION` and `GGUF_FILE` to the GGUF repository, its full commit SHA and the file name.
@@ -80,16 +80,58 @@ A vLLM fleet can serve a GGUF file. The engine image must include `vllm-gguf-plu
 4. Set `NARWHAL_MODEL_PATH` in `.env` to the absolute path of the GGUF file, `$NARWHAL_MODEL_DIR/<file>.gguf`.
 5. Record both repository IDs and commit SHAs in the private record.
 
+When an engine host keeps the model in another directory, set `NARWHAL_NODE_<n>_MODEL_DIR` and `NARWHAL_NODE_<n>_MODEL_PATH` for that engine `<n>`. Every engine's directory must hold the same files.
+
 Discovery hashes the GGUF file with the rest of the directory and writes its SHA-256 to `NARWHAL_NODE_<n>_MODEL_SHA256` in `config/deployment.env`. To have discovery check the file against a known SHA-256, set `NARWHAL_MODEL_SHA256` in `.env`.
 
-In each launch record, discovery pins the image's `vllm-gguf-plugin` version in `runtime.expected_packages`. It adds `--load-format gguf` and `--hf-config-path /model` to `runtime.extra_args` when `NARWHAL_ENGINE_ARGS` does not set them, and sets `runtime.tokenizer` to `/model` when `NARWHAL_TOKENIZER` is unset. The container mounts `NARWHAL_MODEL_DIR` at `/model`.
+In each launch record, discovery pins the image's `vllm-gguf-plugin` version in `runtime.expected_packages`, and records `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` and `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` as `runtime.gguf_plugin_python_sha256` and `runtime.gguf_plugin_extension_sha256`. It adds `--load-format gguf` and `--hf-config-path /model` to `runtime.extra_args` when `NARWHAL_ENGINE_ARGS` does not set them, and sets `runtime.tokenizer` to `/model` when `NARWHAL_TOKENIZER` is unset. The container mounts `NARWHAL_MODEL_DIR` at `/model`.
+
+When `config.json` has a `vision_config` or an `audio_config`, discovery also adds `--language-model-only`. vLLM then sets every multimodal input limit to 0, and the engine serves text prompts only.
 
 Discovery fails when:
 
 - the image has no `vllm-gguf-plugin`
+- `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` or `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` is unset or is not a SHA-256 digest
 - `NARWHAL_MODEL_PATH` names no file in `NARWHAL_MODEL_DIR`, or a file without the `.gguf` extension
 - the engines' GGUF files differ in SHA-256
 - `NARWHAL_ENGINE_BACKEND` selects SGLang or TensorRT-LLM
+
+#### Building a GGUF engine image
+
+[`deploy/vllm-gguf/Dockerfile`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/vllm-gguf/Dockerfile) builds a CUDA engine image from `vllm/vllm-openai:v0.30.0`, pinned by digest. It installs `vllm-gguf-plugin` 0.0.5 and `gguf` 0.19.0 and replaces the plugin's Python files with those at plugin revision `d4c1f0d082fc7cd4350da56689109a01c1f29d6c`, as the [dev CUDA runtime](../dev/CUDA-Runtime.md) does. The build fails unless the image holds the package versions and plugin digests of the vLLM dev templates.
+
+Build the image once, then copy it to the engine hosts:
+
+1. On a Linux x86-64 host with Docker, network access and a Narwhal checkout, build the image from the checkout root:
+
+    ```bash
+    docker build --progress=plain -t narwhal-vllm-gguf:0.30.0 deploy/vllm-gguf
+    ```
+
+    The build prints the plugin digests:
+
+    ```text
+    gguf_plugin_python_sha256=b08b2ffdf18e4314ed7e4a8cfd49de3520edd5d9bc9be4564d8a71b2265771e0
+    gguf_plugin_extension_sha256=64521127698503e4b72053cd06adc9aa0448debb07715b2663b1250a816b2c1e
+    ```
+
+2. Copy the image to each engine host that did not build it, replacing `<engine-host>` with its SSH destination:
+
+    ```bash
+    docker save narwhal-vllm-gguf:0.30.0 | ssh <engine-host> docker load
+    ```
+
+3. On every engine host, print the image ID:
+
+    ```bash
+    docker image inspect --format '{{.Id}}' narwhal-vllm-gguf:0.30.0
+    ```
+
+    Every host must print the same ID.
+
+4. In `.env`, set `NARWHAL_ENGINE_IMAGE` to that ID, `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` to the `gguf_plugin_python_sha256` digest, and `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` to the `gguf_plugin_extension_sha256` digest.
+
+`narwhal-engine check` hashes the plugin in the image and fails when either digest differs from the launch record. An image with the plugin wheel's own Python files fails this check.
 
 ## Running discovery and access checks
 

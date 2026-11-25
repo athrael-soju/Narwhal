@@ -95,6 +95,9 @@ class VllmLauncher(
             evict_peers=evict_peers,
         )
 
+    def runtime_pins(self, runtime: dict) -> dict:
+        return policy.runtime_pins(runtime)
+
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)
 

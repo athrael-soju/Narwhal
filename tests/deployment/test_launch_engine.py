@@ -13,6 +13,7 @@ from types import ModuleType
 from unittest.mock import Mock, patch
 
 from narwhal.backends.vllm.captures import handshake_policy
+from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.deployment.launch_engine import docker as launch_docker
@@ -131,11 +132,14 @@ class EngineLauncherTests(unittest.TestCase):
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
 
-    def gguf_inputs(self, root: Path) -> tuple[dict, dict[str, str], Path]:
+    def gguf_inputs(
+        self, root: Path, pins: dict[str, str] | None = None
+    ) -> tuple[dict, dict[str, str], Path]:
         record, env = launcher_inputs(root)
         model = root / "model" / "weights.gguf"
         model.write_bytes(b"gguf")
         record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+        record["runtime"].update(pins or {})
         Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
         env.update(
             NARWHAL_MODEL_PATH=str(model),
@@ -157,6 +161,94 @@ class EngineLauncherTests(unittest.TestCase):
             )
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["model_sha256"], env["NARWHAL_MODEL_SHA256"])
+
+    def test_runtime_check_compares_the_image_plugin_with_the_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            plugin = root / "site-packages" / "vllm_gguf_plugin"
+            (plugin / "ops").mkdir(parents=True)
+            (plugin / "__init__.py").write_text("qualified = True\n")
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            (plugin / "_C_gguf.abi3.so").write_bytes(b"extension")
+            pins = gguf_plugin_digests(plugin)
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["runtime_pins"], pins)
+            modules = {
+                "vllm.config": ModuleType("vllm.config"),
+                "vllm.distributed.kv_transfer.kv_connector.factory": ModuleType("factory"),
+                "vllm.version": ModuleType("vllm.version"),
+                "transformers": ModuleType("transformers"),
+                **engine_config_modules(),
+            }
+            modules["vllm.config"].KVTransferConfig = Mock()
+            connector = type("NixlConnector", (), {"__module__": "nixl"})
+            factory = Mock(**{"get_connector_class.return_value": connector})
+            modules[
+                "vllm.distributed.kv_transfer.kv_connector.factory"
+            ].KVConnectorFactory = factory
+            modules["vllm.version"].__version__ = "0.29.0"
+            modules["transformers"].AutoTokenizer = Mock()
+            distribution = Mock(**{"locate_file.return_value": plugin})
+
+            def execute_check(command, directory, log):
+                if command[0] == "image":
+                    return json.dumps([{"Id": plan["image"]}])
+                index = command.index("-c")
+                with (
+                    patch.dict(sys.modules, modules),
+                    patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
+                    patch("importlib.metadata.version", plan["expected_packages"].__getitem__),
+                    patch("importlib.metadata.distribution", return_value=distribution),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                ):
+                    exec(command[index + 1], {})
+                return output.getvalue()
+
+            # Wheel sources in place of the qualified revision fail the check.
+            (plugin / "ops" / "kernels.py").write_text("wheel = True\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                self.assertRaisesRegex(AssertionError, "GGUF plugin files differ"),
+            ):
+                check(run, plan)
+            self.assertFalse((run / "checked.json").exists())
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            self.assertTrue((run / "checked.json").exists())
+
+    def test_runtime_check_requires_the_plugin_record_for_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pins = {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "6" * 64}
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            for plugin in (None, {**pins, "gguf_plugin_python_sha256": "7" * 64}):
+                with (
+                    self.subTest(plugin=plugin),
+                    patched_docker(side_effect=[image, vllm_check_output(plan, plugin=plugin)]),
+                    self.assertRaisesRegex(ValueError, "GGUF plugin files differ"),
+                ):
+                    check(run, plan)
+
+    def test_gguf_plugin_digests_come_in_pairs(self):
+        for pins in (
+            {"gguf_plugin_python_sha256": "5" * 64},
+            {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "short"},
+        ):
+            with self.subTest(pins=pins), self.assertRaisesRegex(ValueError, "must both be"):
+                validate_runtime({**runtime(), **pins})
 
     def test_container_checkpoint_launch_names_no_model_file(self):
         with tempfile.TemporaryDirectory() as folder:

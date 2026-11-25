@@ -153,6 +153,7 @@ print(
             "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
             "requires_trust_remote_code": requires_trust_remote_code,
             "conv_state_layers": conv_state_layers(model),
+            "multimodal": any(key in model for key in ("vision_config", "audio_config")),
             "model_dtype": text_model.get(
                 "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
             ),

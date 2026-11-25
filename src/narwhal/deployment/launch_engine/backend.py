@@ -70,6 +70,10 @@ class EngineLauncher(ABC):
         """
         return {}, []
 
+    def runtime_pins(self, runtime: dict) -> dict:
+        """Runtime fields the plan records for the runtime check to verify; none by default."""
+        return {}
+
     @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...
 

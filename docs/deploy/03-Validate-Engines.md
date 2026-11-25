@@ -218,6 +218,7 @@ For vLLM, the check also confirms:
 - the connector
 - the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
+- the GGUF plugin's Python source and CUDA extension digests, when the launch record pins them
 
 For SGLang, the check also parses the serving arguments and confirms that the image's SGLang has each part that the launch wrapper replaces to [keep Mooncake registrations across role switches](../configuration/05-Engine-Launch.md#sglang-runtime-fields). For TensorRT-LLM, it also checks for `trtllm-serve` and reads block reuse from the `--config` file.
 

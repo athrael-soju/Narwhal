@@ -464,6 +464,7 @@ def build(
         "connector": connector,
         "kv_events": kv_events,
         "expected_packages": runtime["expected_packages"],
+        **({"runtime_pins": pins} if (pins := engine.runtime_pins(runtime)) else {}),
         "endpoint": endpoint.geturl(),
         "attestation_port": attest_port,
         "side_channel_port": side_port,

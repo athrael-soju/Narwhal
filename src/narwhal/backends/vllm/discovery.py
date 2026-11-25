@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from ...deployment.launch_engine.plan import (
@@ -7,6 +8,7 @@ from ...deployment.launch_engine.plan import (
     discovered_launch_settings,
     discovered_settings,
 )
+from .plan import GGUF_PLUGIN_PINS
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
 # vLLM loads a GGUF model file through this plugin.
@@ -14,6 +16,8 @@ GGUF_PLUGIN = "vllm-gguf-plugin"
 DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
 # A GGUF file reads its Hugging Face configuration and tokenizer from the model directory.
 GGUF_ARGS = (("--load-format", "gguf"), ("--hf-config-path", MODEL_MOUNT))
+# A GGUF file holds the language model; this flag leaves out a multimodal model's encoders.
+LANGUAGE_MODEL_ONLY = "--language-model-only"
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
@@ -38,7 +42,17 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         for flag, value in GGUF_ARGS:
             if flag not in args:
                 args.extend((flag, value))
+        if observed.get("multimodal") and LANGUAGE_MODEL_ONLY not in args:
+            args.append(LANGUAGE_MODEL_ONLY)
         launch.setdefault("tokenizer", MODEL_MOUNT)
+        for name in GGUF_PLUGIN_PINS:
+            pinned = setting(name.upper(), "")
+            if not re.fullmatch(r"[0-9a-f]{64}", pinned):
+                raise ValueError(
+                    "set GGUF_PLUGIN_PYTHON_SHA256 and GGUF_PLUGIN_EXTENSION_SHA256 in .env "
+                    "to the SHA-256 digests of the qualified GGUF plugin"
+                )
+            launch[name] = pinned
     return {
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
