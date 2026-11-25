@@ -77,10 +77,14 @@ def _milliseconds(stamp: str) -> int:
     return round(datetime.fromisoformat(stamp).timestamp() * 1000)
 
 
-def metrics(service: ControlService, available: Availability | None = None) -> str:
+def metrics(
+    service: ControlService, available: Availability | None = None, *, probed: bool = False
+) -> str:
     """Return the service's metrics in the Prometheus text format.
 
-    `available` lists the baseline engines outside the router's membership.
+    `available` lists the baseline engines outside the router's membership. With `probed`,
+    `available` is the latest availability reading, None when the router has no membership
+    route.
     """
     session = service.session
     lines = [
@@ -147,6 +151,14 @@ def metrics(service: ControlService, available: Availability | None = None) -> s
     for engine in engines:
         labels = {"iid": engine.iid, "backend": engine.backend}
         lines.append(_sample("narwhal_control_engine_starting", labels, int(engine.starting)))
+    lines += [
+        "# HELP narwhal_control_membership_readable Whether the latest availability reading read "
+        "the router's membership and the baseline fleet configuration.",
+        "# TYPE narwhal_control_membership_readable gauge",
+    ]
+    if probed:
+        readable = available is not None and not available.error
+        lines.append(_sample("narwhal_control_membership_readable", {}, int(readable)))
     return "\n".join(lines) + "\n"
 
 
@@ -216,6 +228,7 @@ def signal_routes(signals: FleetSignals) -> APIRouter:
     @routes.get(METRICS_PATH, include_in_schema=False)
     async def service_metrics() -> PlainTextResponse:
         available = None if signals.engines is None else await signals.engines.available()
-        return PlainTextResponse(metrics(signals.service, available), media_type=METRICS_TYPE)
+        text = metrics(signals.service, available, probed=signals.engines is not None)
+        return PlainTextResponse(text, media_type=METRICS_TYPE)
 
     return routes

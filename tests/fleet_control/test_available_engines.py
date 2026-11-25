@@ -25,6 +25,7 @@ from tools.observability.artifacts import render_dashboard
 
 GAUGE = "narwhal_control_engine_available"
 STARTING = "narwhal_control_engine_starting"
+READABLE = "narwhal_control_membership_readable"
 
 
 class AvailableRouter(MemberRouter):
@@ -102,6 +103,11 @@ class AvailableCase(EngineCase):
         self.assertIn(f"# TYPE {GAUGE} gauge", text)
         return [line for line in text.splitlines() if line.startswith(GAUGE + "{")]
 
+    async def readable(self) -> list[str]:
+        text = (await self.metrics_client.get("/metrics")).text
+        self.assertIn(f"# TYPE {READABLE} gauge", text)
+        return [line for line in text.splitlines() if line.startswith(READABLE)]
+
     async def leave(self, iid: str) -> None:
         response = await self.client.post(f"/api/engines/{iid}/leave")
         self.assertEqual(response.status_code, 200, response.text)
@@ -111,6 +117,7 @@ class AvailabilityTests(AvailableCase):
     async def test_members_are_not_listed(self) -> None:
         self.assertEqual(await self.available(), {"engines": [], "error": None})
         self.assertEqual(await self.gauge(), [])
+        self.assertEqual(await self.readable(), [f"{READABLE} 1"])
 
     async def test_a_departed_engine_that_still_runs_is_available(self) -> None:
         await self.start_session()
@@ -150,6 +157,14 @@ class AvailabilityTests(AvailableCase):
         self.assertEqual(available["engines"], [])
         self.assertIn("/narwhal/engines", available["error"])
         self.assertEqual(await self.gauge(), [])
+        self.assertEqual(await self.readable(), [f"{READABLE} 0"])
+
+    async def test_an_unreadable_baseline_reads_unreadable(self) -> None:
+        await self.start_session()
+        assert self.service.session is not None
+        del self.service.session.baseline["engines"]
+        self.assertIn("unreadable", (await self.available())["error"])
+        self.assertEqual(await self.readable(), [f"{READABLE} 0"])
 
     async def test_a_reading_serves_until_an_engine_action(self) -> None:
         with mock.patch.object(engines_module, "AVAILABILITY_TTL_S", 60.0):
@@ -450,7 +465,7 @@ class AvailableEnginesPanelTests(unittest.TestCase):
         starting = f'max by(iid, backend) ({STARTING}{{job="fleet-control"}})'
         engines = f"{available} + on(iid, backend) (2 * {starting} or 0 * {available})"
         # Without an engine to list, one row names the reason.
-        self.assertTrue(query["expr"].startswith(f"({engines}) or on() (vector(-1)"))
+        self.assertTrue(query["expr"].startswith(f"({engines}) or on() (vector(-4)"))
         self.assertTrue(query["instant"])
         overrides = {
             override["matcher"]["options"]: override["properties"]
@@ -466,8 +481,12 @@ class AvailableEnginesPanelTests(unittest.TestCase):
                 "1": {"text": "Respond", "color": "#8E9196"},
                 "2": {"text": "Starting", "color": "#8E9196"},
                 "-1": {"text": "Every baseline engine is a member.", "color": "transparent"},
-                "-2": {"text": "The router cannot be read.", "color": "transparent"},
+                "-2": {"text": "Prometheus cannot scrape the router.", "color": "transparent"},
                 "-3": {"text": "Fleet control is not scraped.", "color": "transparent"},
+                "-4": {
+                    "text": "Fleet control cannot read the router's membership.",
+                    "color": "transparent",
+                },
             },
         )
         self.assertEqual(

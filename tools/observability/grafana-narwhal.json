@@ -3855,7 +3855,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}) + on(iid, backend) (2 * max by(iid, backend) (narwhal_control_engine_starting{job=\"fleet-control\"}) or 0 * max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}))) or on() (vector(-1) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1) and on() count(last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() (vector(-2) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1)) or on() vector(-3)",
+                        "expr": "(max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}) + on(iid, backend) (2 * max by(iid, backend) (narwhal_control_engine_starting{job=\"fleet-control\"}) or 0 * max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}))) or on() (vector(-4) and on() (max(last_over_time(narwhal_control_membership_readable{job=\"fleet-control\"}[15s])) == 0)) or on() (vector(-1) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1) and on() count(last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() (vector(-2) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1)) or on() vector(-3)",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -3989,11 +3989,15 @@
                                 "color": "transparent"
                               },
                               "-2": {
-                                "text": "The router cannot be read.",
+                                "text": "Prometheus cannot scrape the router.",
                                 "color": "transparent"
                               },
                               "-3": {
                                 "text": "Fleet control is not scraped.",
+                                "color": "transparent"
+                              },
+                              "-4": {
+                                "text": "Fleet control cannot read the router's membership.",
                                 "color": "transparent"
                               }
                             }

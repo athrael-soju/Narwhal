@@ -176,14 +176,17 @@ The service queries `ALERTS{alertname=~"Narwhal.+",alertstate="firing",severity!
 
 `GET /metrics` returns the metrics behind the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) and the dashboard's [Available engines](../../observability/05-Dashboard.md#available-engines) table in the Prometheus text format:
 
-| Metric                              | Labels                                                   | Value                                                                  |
-| ----------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `narwhal_control_session_active`    | none                                                     | `1` during a session, otherwise `0`                                    |
-| `narwhal_control_action_started_ms` | `session`, `seq`, `action`, `target`, `outcome`, `title` | Action start time, in Unix milliseconds                                |
-| `narwhal_control_load_job_running`  | `job`, `workload`                                        | `1` while the job runs                                                 |
-| `narwhal_control_engine_available`  | `iid`, `backend`                                         | `1` when the engine and its attestation sidecar respond, otherwise `0` |
-| `narwhal_control_engine_starting`   | `iid`, `backend`                                         | `1` while `starting` is `true`, otherwise `0`                          |
+| Metric                                | Labels                                                   | Value                                                                     |
+| ------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `narwhal_control_session_active`      | none                                                     | `1` during a session, otherwise `0`                                       |
+| `narwhal_control_action_started_ms`   | `session`, `seq`, `action`, `target`, `outcome`, `title` | Action start time, in Unix milliseconds                                   |
+| `narwhal_control_load_job_running`    | `job`, `workload`                                        | `1` while the job runs                                                    |
+| `narwhal_control_engine_available`    | `iid`, `backend`                                         | `1` when the engine and its attestation sidecar respond, otherwise `0`    |
+| `narwhal_control_engine_starting`     | `iid`, `backend`                                         | `1` while `starting` is `true`, otherwise `0`                             |
+| `narwhal_control_membership_readable` | none                                                     | `1` when `available` lists the engines with `error` `null`, otherwise `0` |
 
 `narwhal_control_action_started_ms` has one series for each engine action, overlay, cold restart and restore that ran in the active session, failed ones included. `title` holds the chart label, such as `drain n7`. The engine actions a restore runs as its steps have no series of their own: the restore's `title` lists them, such as `restore: start n3, join n3, leave n4`, and marks a step that failed or was refused with its outcome, such as `restore: start n3, join n3 (failed)`. The restore's `outcome` is `failed` when a step failed. The restore's series appears when the restore finishes.
 
 `narwhal_control_engine_available` and `narwhal_control_engine_starting` each have one series for each engine in `available.engines` of [`GET /api/engines`](#engines), and none while the router's membership cannot be read. `backend` is the baseline's `engine.backend`, `vllm` when the baseline leaves it unset.
+
+`narwhal_control_membership_readable` reads `0` while the service cannot read the router's membership or the baseline fleet configuration, and while the router has no `GET /narwhal/engines` route.
