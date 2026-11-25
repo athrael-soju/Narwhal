@@ -111,7 +111,7 @@ async def profile_instance(
                 chars_per_token,
                 observation_timeout_s,
             )
-        print(f"    warm-up: {s.warmup_requests} discarded requests in each role")
+        print(f"    warm-up: {2 * s.warmup_requests} discarded requests")
     hits_before = await prefix_cache_hits(client, url, metrics, observation_timeout_s or 30.0)
     block_tokens = await cache_block_tokens(client, url, metrics, observation_timeout_s or 30.0)
     await serve_as(Role.PREFILL)

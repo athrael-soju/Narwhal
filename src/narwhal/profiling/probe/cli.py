@@ -146,7 +146,8 @@ def _main(argv: list[str]) -> int:
         "--warmup-requests",
         type=int,
         default=0,
-        help="discarded requests each engine serves in each role before its sweep, at least 0 "
+        help="discarded requests each engine serves before each of its two sweep phases, "
+        "at least 0 "
         "(default: %(default)s)",
     )
     ap.add_argument(

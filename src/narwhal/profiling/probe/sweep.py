@@ -34,7 +34,7 @@ class Sweep:
     cached_prefix_lens: tuple[int, ...] = CACHED_PREFIX_LENS
     cached_suffix_lens: tuple[int, ...] = CACHED_SUFFIX_LENS
     cached_repeats: int = CACHED_REPEATS
-    # Discarded requests each engine serves in each role before its sweep.
+    # Discarded requests each engine serves before each of its two sweep phases.
     warmup_requests: int = 0
 
 
