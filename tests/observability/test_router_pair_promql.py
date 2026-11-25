@@ -551,6 +551,18 @@ class RouterAlertTests(PromtoolCase):
         tests += alert_test(690, "NarwhalEngineEjected", [ejected], "1")
         self.run_promtool(routers, tests)
 
+    def test_share_alerts_divide_the_pair_s_outcomes_by_the_pair_s_requests(self):
+        """Router b's own share is 100%; the pair's is 0.5%, below the 1% threshold."""
+        routers = [
+            Router(A, [Phase(0, LENGTH, "active", ready=1, epoch=7, served=200)]),
+            Router(B, [Phase(0, LENGTH, "fenced", refused=1, expired=1)]),
+        ]
+        tests = ["    alert_rule_test:"]
+        for at in (400, 900):
+            for name in ("NarwhalRejectedRising", "NarwhalExpiredRising"):
+                tests += alert_test(at, name, [])
+        self.run_promtool(routers, tests)
+
     def test_a_standby_waiting_for_a_killed_primary_s_lease_counts_rejected_requests(self):
         """With no live primary, the standby's 503s reach the client and count as rejected."""
         routers = [
