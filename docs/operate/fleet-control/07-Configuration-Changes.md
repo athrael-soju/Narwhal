@@ -56,7 +56,7 @@ Restore baseline does not update the profile store. After step 5 removes an engi
 
 After step 1, the service reads the router's `GET /narwhal/engines` and compares it with the baseline to find the engines of steps 4 and 5. With a router that has no such route, it uses the joins and leaves the session recorded.
 
-The run record holds each step as it completes. When a step fails, the restore fails with that step's status. Select **Restore baseline** again to continue from the fleet's current state.
+The run record holds each step as it completes. When a step fails, the run record holds that step too, and the restore fails with its status. Select **Restore baseline** again to continue from the fleet's current state.
 
 ## Router readiness
 

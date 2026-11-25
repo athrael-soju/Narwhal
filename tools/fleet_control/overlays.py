@@ -250,6 +250,7 @@ class Overlays:
         try:
             done = await self.engines.within(iid, action)
         except ActionError as exc:
+            _record_failed_step(effect, iid, exc)
             raise ActionError(
                 f"{action} {iid} failed: {exc}", status=exc.status, result=effect
             ) from exc
@@ -278,6 +279,7 @@ class Overlays:
                 steps.append({"engine": iid, "action": "start", "seq": started.seq})
             done = await engines.join_within(spec)
         except ActionError as exc:
+            _record_failed_step(effect, iid, exc)
             raise ActionError(
                 f"return of {iid} failed: {exc}", status=exc.status, result=effect
             ) from exc
@@ -292,6 +294,7 @@ class Overlays:
         try:
             done = await engines.leave_within(iid)
         except ActionError as exc:
+            _record_failed_step(effect, iid, exc)
             raise ActionError(
                 f"leave {iid} failed: {exc}", status=exc.status, result=effect
             ) from exc
@@ -417,3 +420,12 @@ def overlay_routes(overlays: Overlays) -> APIRouter:
         return action_reply(await overlays.restore())
 
     return routes
+
+
+def _record_failed_step(effect: Mapping[str, Any], iid: str, exc: ActionError) -> None:
+    """Add the step that `exc` ended, when it was recorded, to the restore's steps."""
+    if exc.action is None:
+        return
+    effect["steps"].append(
+        {"engine": iid, "action": exc.action.name.removeprefix("engine."), "seq": exc.action.seq}
+    )

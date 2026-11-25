@@ -96,6 +96,7 @@ def metrics(service: ControlService, available: Availability | None = None) -> s
     nested = {step["seq"] for action in actions for step in steps(action)}
     status = service.status()
     running = status["in_progress"] in _COMPOSITE and status["in_progress_since"]
+    outcomes = {action.seq: action.outcome for action in actions}
     for action in actions:
         if action.outcome == "refused" or action.name in _UNMARKED or action.seq in nested:
             continue
@@ -106,7 +107,9 @@ def metrics(service: ControlService, available: Availability | None = None) -> s
         title = f"{short_name(action)} {target}".strip()
         if parts := steps(action):
             title += ": " + ", ".join(
-                f"{step.get('action')} {step.get('engine')}" for step in parts
+                f"{step.get('action')} {step.get('engine')}"
+                + ("" if outcomes.get(step["seq"], "ok") == "ok" else f" ({outcomes[step['seq']]})")
+                for step in parts
             )
         labels = {
             "session": session.id if session is not None else "",

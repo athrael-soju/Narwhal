@@ -22,7 +22,7 @@ The console opens in a new tab. After you connect, the session strip shows **Con
 
 The **Narwhal Orchestrator** dashboard marks fleet control activity on its charts with two annotation layers:
 
-- **Fleet control actions** draws a dashed purple line at the start of each engine action, overlay, cold restart and restore, labelled with the action and target, such as `drain n7`. A restore draws one line for itself and the engine actions it runs, labelled with those steps, such as `restore: start n3, join n3, leave n4`.
+- **Fleet control actions** draws a dashed purple line at the start of each engine action, overlay, cold restart and restore, labelled with the action and target, such as `drain n7`. A restore draws one line for itself and the engine actions it runs, labelled with those steps, such as `restore: start n3, join n3, leave n4`. A step that failed carries its outcome, such as `restore: start n3, join n3 (failed)`.
 - **Load jobs** shades each load job's interval and labels it with the job ID.
 
 <div class="narwhal-panel-row" markdown>

@@ -208,7 +208,7 @@ class StartingTests(AvailableCase):
         restore = next(
             entry for entry in self.record()["actions"] if entry["action"] == "config.restore"
         )
-        self.assertEqual([step["action"] for step in restore["result"]["steps"]], ["start"])
+        self.assertEqual([step["action"] for step in restore["result"]["steps"]], ["start", "join"])
 
     async def starting_gauge(self) -> list[str]:
         text = metrics(self.service, await self.actions.available())
@@ -226,6 +226,30 @@ class StartingTests(AvailableCase):
         # Once it has responded, an engine that stops again is unavailable.
         self.router.running.discard("e1")
         self.assertEqual((await self.available())["engines"], [engine("e1", up=False)])
+
+    async def test_a_restore_whose_join_fails_is_one_failed_marker_listing_every_step(
+        self,
+    ) -> None:
+        await self.start_without_response()
+        restore = next(
+            entry for entry in self.record()["actions"] if entry["action"] == "config.restore"
+        )
+        self.assertEqual(
+            [(step["action"], step["engine"]) for step in restore["result"]["steps"]],
+            [("start", "e1"), ("join", "e1")],
+        )
+        markers = [
+            line
+            for line in metrics(self.service).splitlines()
+            if line.startswith("narwhal_control_action_started_ms{")
+        ]
+        self.assertEqual(len(markers), 2, markers)
+        self.assertIn('action="engine.leave",target="e1",outcome="ok",title="leave e1"', markers[0])
+        self.assertIn(
+            'action="config.restore",target="",outcome="failed",'
+            'title="restore: start e1, join e1 (failed)"',
+            markers[1],
+        )
 
     async def test_a_started_engine_is_unavailable_after_the_router_timeout(self) -> None:
         await self.start_without_response()
