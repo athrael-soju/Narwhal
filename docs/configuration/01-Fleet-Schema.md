@@ -25,7 +25,7 @@ Loading reports the unknown keys and type errors of every section in one message
 fleet.json: unknown controller.reactive key 'windows_s' (a typo falls back to the default silently); controller.monitor_interval_s must be a number; serving.max_connections must be an integer; engine.tokenize must be a boolean
 ```
 
-Loading also rejects `NaN` and `Infinity`, an empty `engines` list, and two engines with the same `iid`.
+Loading also rejects `NaN` and `Infinity`.
 
 ### Paths
 
@@ -117,7 +117,7 @@ Every production fleet needs a complete `engine_contract`.
 
 An `engine_contract` needs `engine_version` and `connector`. It is complete when every other [contract field](#contract-fields) that the fleet's `engine.backend` attests holds a nonempty string, a positive integer or a boolean. `image_digest` is optional. On vLLM, `enforce_handshake_compat` defaults to `true`, the only value it accepts. On SGLang, leave `connector_version`, `cross_layers_blocks`, `hybrid_kv_cache_manager`, `kv_role`, `transfer_mode` and `enforce_handshake_compat` unset. Loading fails when one of them is `true`, a nonempty string or a positive integer.
 
-With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`, and readmission fails with `readmission requires a complete engine_contract`. A fleet with `recovery.engine_restart_policy` set to `whole_wave` fails to load.
+With an incomplete `engine_contract`, a lifecycle drain fails with `lifecycle drain requires a complete engine_contract`, and readmission fails with `readmission requires a complete engine_contract`.
 
 ### Hardware block
 
@@ -169,16 +169,7 @@ Check the resolved `head_size` dimensions against the live engine. On vLLM, also
 
 The [attestation generator](../deploy/05-Attest.md) writes `engine-attestation.json` into the engine's launch directory.
 
-To fill in the fleet contract:
-
-1. Start the sidecars.
-2. Run `finalize-fleet` in the router shell:
-
-    ```bash
-    .venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
-    ```
-
-`finalize-fleet` checks each sidecar's response against its live engine. When the contracts are complete and identical and every engine attests the same model files, it writes the `engine_contract` into the `--fleet` file and saves the previous file as `runs/fleet.before-attestation-<id>.json`. When the file already holds that contract, it leaves the file unchanged. When a contract is incomplete, the contracts or the model files differ, or the file holds another contract, it exits with status 1.
+To fill in the fleet contract, start the sidecars and run [`finalize-fleet`](../deploy/05-Attest.md#finalizing-the-fleet-contract) in the router shell.
 
 Each [attestation document](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares this identity:
 
@@ -214,7 +205,7 @@ An attestation document with launch evidence adds two fields to each sidecar res
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence
 
-An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`. Preparing a launch from changed model files gives it a new `model_tree_sha256` and `launch_digest`.
+An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. Changing the code of Narwhal's engine launcher also gives a new `launch_digest`, and so does changing Narwhal's cache capture hook on vLLM and TensorRT-LLM. Edits to their comments, docstrings or formatting keep the `launch_digest`. Preparing a launch from changed model files gives it a new `model_tree_sha256` and `launch_digest`.
 
 The process generation is the identity that saved profiles and first-token calibrations bind to:
 

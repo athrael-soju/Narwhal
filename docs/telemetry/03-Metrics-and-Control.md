@@ -63,10 +63,10 @@ These series split request outcomes and failed attempts by their [journal reason
 | Metric | Type | Labels | Value |
 | --- | --- | --- | --- |
 | `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
-| `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
+| `narwhal_refused_total` | counter | `cause` | Predictive refusals. |
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
 | `narwhal_standby_refusals_total` | counter | `reason` | Requests a standby refused while its last probe found its primary controlling the fleet, with the `narwhal_rejected_total` reasons. |
-| `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
+| `narwhal_expired_total` | counter | `reason` | Expiries. |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 
 The four outcome counters and `narwhal_standby_refusals_total` export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the process's total. `/narwhal/state` reports that total plus the count adopted from a handoff.
@@ -146,7 +146,7 @@ Role changes:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `narwhal_flips_total` | counter | `to`, `by` | Role changes by target pool and caller. The `decode_floor` to `decode`, `floor_recovery` to `prefill`, `reactive` to `decode` and `reactive` to `prefill` series start at `0`. |
+| `narwhal_flips_total` | counter | `to`, `by` | Role changes by target pool and caller. The series for these `by` and `to` pairs start at `0`: `decode_floor` and `decode`, `floor_recovery` and `prefill`, `reactive` and `decode`, and `reactive` and `prefill`. |
 | `narwhal_flip_reversals_total` | counter | | Moves whose target role differs from the same engine's previous recorded move, counted from that engine's second move. |
 | `narwhal_flips_refused_total` | counter | | Role changes blocked by timing, availability, role pins, role floors, the resident guard, shared-device profile coverage, or advisory mode. |
 | `narwhal_flip_inflight_total` | counter | `phase` | Requests resident on an engine at the moment it changed role. |

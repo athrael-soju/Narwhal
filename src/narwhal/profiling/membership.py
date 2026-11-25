@@ -18,8 +18,9 @@ def engine_set_problem(
 ) -> str | None:
     """Return why the store does not hold a profile for exactly `engines`, or None.
 
-    `noun` names the engine set in the message, such as "configured". With `exact` false, a
-    profile for an engine outside the set is allowed.
+    `noun` names the engine set in the message, such as "configured". With `exact` false, the
+    store must hold a profile for every engine in `engines`, and a profile for an engine outside
+    the set is allowed.
     """
     missing, extra = store.engine_set_diff(engines)
     if not exact:
@@ -34,9 +35,10 @@ def engine_set_problem(
         detail.append(f"no profile for {', '.join(missing)}")
     if extra:
         detail.append(f"stale profiles for {outside}: {', '.join(extra)}")
+    required = f"exactly the {noun} engine set" if exact else f"every engine in the {noun} set"
     return (
         "; ".join(detail) + f": run `narwhal-profile` against {fleet} first. Placement requires "
-        f"a profile for exactly the {noun} engine set."
+        f"a profile for {required}."
     )
 
 
@@ -90,10 +92,11 @@ async def check_engine_set(
 ) -> EngineSetEvidence:
     """Re-read `profiles.path` and the calibration file and apply the startup rules to `engines`.
 
-    The store must hold a profile for exactly `engines`. Each engine in `live`, every engine by
-    default, must run the profile's generation. When `engine.first_token_calibration_path` is
-    set, the calibration must cover every directed pair of `engines` and match the process
-    generation of each live engine.
+    The store must hold a profile for every engine in `engines`. A row for an engine outside
+    `engines`, such as an engine that left the membership, is not checked. Each engine in `live`,
+    every engine by default, must run the profile's generation. When
+    `engine.first_token_calibration_path` is set, the calibration must cover every directed pair
+    of `engines` and match the process generation of each live engine.
     """
     ids = [spec.iid for spec in engines]
     try:
@@ -105,7 +108,8 @@ async def check_engine_set(
             (f"profile store {cfg.profiles_path} is unreadable: {exc}",),
         )
     problems: list[str] = []
-    if problem := engine_set_problem(store, ids, "proposed"):
+    # A leave keeps the departed engine's rows, as a resumed engine set does.
+    if problem := engine_set_problem(store, ids, "proposed", exact=False):
         problems.append(problem)
     checked = [spec for spec in engines if live is None or spec.iid in live]
     problems.extend(await generation_problems(cfg, store, checked, transport=transport))

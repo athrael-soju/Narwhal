@@ -38,7 +38,7 @@ The generated fleet references the derived variables:
 }
 ```
 
-Discovery needs at least two engines with the same accelerator product, GPU count and tensor parallel (TP) size. It adds one fleet record per engine. The first engine starts in the prefill role and every other engine in decode.
+Discovery adds one fleet record per engine.
 
 A fleet you write by hand can hold a single engine, with both [role floors](02-Serving-and-Role-Control.md#role-floors) at `1`.
 
@@ -83,7 +83,7 @@ Each launch record holds these allocation and transport fields:
 
 On a host with several CUDA engines, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other dedicated-GPU engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. Under the container backend, an engine that can see another engine's GPUs and every `shared_device` engine run in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
 
-On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`. When that value is `n`, `no` or `0`, the launcher sets the NIXL `engine_ttl` to 60 seconds for that engine.
+On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`.
 
 When preparation reports an error in an `.env` input or a remote prerequisite:
 
@@ -127,7 +127,7 @@ If you leave a field unset and the table gives no default, the engine uses its o
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
-Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `--free_gpu_memory_fraction` times the GPU's total memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
+Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, the KV cache gets `--free_gpu_memory_fraction` of the GPU memory left after the model loads, `0.9` by default. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `--free_gpu_memory_fraction` times the GPU's total memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
 
 ### vLLM runtime fields
 
@@ -221,7 +221,7 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 | `python_executable` | The launch plan's Python interpreter, for the native backend                                                  |
 | `expected_packages` | The launch plan's pinned package versions, for the native backend                                             |
 
-`peer_release` is `true` for an engine without CUDA IPC peers. For an engine with CUDA IPC peers, it is `true` only when UCX is 1.22 or later and `UCX_CUDA_IPC_CACHE` is off. When it is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
+When `peer_release` is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 
 On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` and `start-native` compare the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
 

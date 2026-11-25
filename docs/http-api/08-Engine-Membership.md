@@ -4,7 +4,7 @@ description: List, join and remove the engines a Narwhal router serves through t
 
 # Engine membership
 
-The router serves the engines in its membership snapshot. Generation `0` holds the fleet file's `engines`. Each join or removal replaces the snapshot with the next generation. [Joining and removing engines](../operate/08-Joining-and-Removing-Engines.md) gives the operator procedure.
+The router serves the engines in its [membership snapshot](../concepts/01-Request-and-Topology.md#engine-membership). [Joining and removing engines](../operate/08-Joining-and-Removing-Engines.md) gives the operator procedure.
 
 ## Membership document
 
@@ -97,7 +97,7 @@ The router refuses a valid entry before it contacts any engine when:
 Otherwise the router runs these checks with the engine out of placement:
 
 1. It reads the new engine's attestation and checks it against `engine_contract`.
-2. It reads `profiles.path` again. The store must hold a profile for exactly the members and the new engine, and each profile must match the process generation of its live engine.
+2. It reads `profiles.path` again. The store must hold a profile for each member and the new engine, and each of these profiles must match the process generation of its live engine. Rows for other engines, such as an engine that left, are not checked.
 3. When `engine.first_token_calibration_path` is set, it reads that artifact again. The artifact must cover every directed pair of the members and the new engine, and match the process generation of each live engine.
 4. It runs the [readmission checks](07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) on the new engine in its requested role, with `process identity` in place of `new process identity`. The `model identity` check requires the new engine to attest the model file digests of every member that is not ejected or draining.
 
@@ -116,15 +116,15 @@ When every check passes, the router loads the store and the calibration it read,
 
 Drains the engine and removes it from the fleet. The query parameter `deadline_s` sets the drain deadline in seconds. It defaults to `300` and must be positive and finite.
 
-The drain holds the engine out of placement and records its process identity, as [`POST /narwhal/lifecycle/drain`](07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain) does. On each monitoring pass, the router removes a drained engine that has no resident requests and from which no decode leg, placed or waiting for a seat, still reads KV. At the deadline, the engine's lifecycle `state` becomes `deadline_exceeded`, and the removal still waits for its resident requests to finish. The router does not stop the engine process.
+The drain holds the engine out of placement and records its process identity, as [`POST /narwhal/lifecycle/drain`](07-Handoff-and-Lifecycle.md#post-narwhallifecycledrain) does. On each monitoring pass, the router removes a drained engine after its requests finish and every decode leg reading KV from it is done, including legs still queued for a decode seat. At the deadline, the engine's lifecycle `state` becomes `deadline_exceeded`, and the removal still waits for its resident requests to finish. The router does not stop the engine process.
 
 The router refuses the removal when:
 
 - `recovery.engine_restart_policy` is `whole_wave`
 - the fleet's `engine_contract` is incomplete
 - the engine sets `shared_device`
-- a lifecycle action holds any engine, except when it holds only this engine, outside a wave, in `drained`, `blocked` or `deadline_exceeded`
-- no other engine is eligible for placement
+- another engine is in a lifecycle action
+- this engine is in a lifecycle action, unless it is `drained`, `blocked` or `deadline_exceeded` and outside a wave- no other engine is eligible for placement
 - fewer engines than `controller.min_prefill` plus `controller.min_decode` would remain
 
 |  HTTP | Meaning                                                                                       |

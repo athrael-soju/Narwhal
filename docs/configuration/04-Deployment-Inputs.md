@@ -204,6 +204,6 @@ Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 
 `<run-id>` is a random 32-hex ID that `prepare` records in the manifest.
 
-A repeated `install` on a host reuses each file with the manifest SHA-256 and a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
+A repeated `install` on a host reuses files that match their manifest SHA-256. It also reuses a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
 
 The run's private `logs/` directory holds one log per host with executed scripts, exit status, and host output.

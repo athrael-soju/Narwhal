@@ -168,7 +168,7 @@ The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts
 
 ### Discovery output
 
-Discovery reads the checkpoint's `config.json` and `tokenizer_config.json` and sets the custom-code and convolutional-state launch settings. You can find more details in [Engine endpoints and launch records](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
+Discovery reads the checkpoint's `config.json` and `tokenizer_config.json` and sets the [custom-code and convolutional-state launch settings](../configuration/05-Engine-Launch.md#runtime-launch-records-and-image-verification).
 
 Discovery writes the generated configuration at mode 0600:
 
@@ -245,9 +245,9 @@ Override the policy in `.env` before discovery:
 
 Per-engine overrides use `NARWHAL_NODE_<n>_<field>`, such as `NARWHAL_NODE_2_GPU_IDS`.
 
-With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and requires the `sglang`, `torch` and `mooncake-transfer-engine` versions installed in the image, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only. For SGLang, `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`, from 1 to 256. Without it, the launcher uses 256.
+With `NARWHAL_ENGINE_BACKEND=sglang`, discovery writes the [SGLang runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) and requires the `sglang`, `torch` and `mooncake-transfer-engine` versions installed in the image, including CUDA builds such as `mooncake-transfer-engine-cuda13`. The cache block, execution, maximum sequence and GPU memory defaults apply to vLLM only. For SGLang, `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes [`runtime.max_sequences`](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) only when you set `NARWHAL_MAX_SEQUENCES`, from 1 to 256.
 
-With `NARWHAL_ENGINE_BACKEND=trtllm`, discovery writes the [TensorRT-LLM runtime fields](../configuration/05-Engine-Launch.md#tensorrt-llm-runtime-fields) and requires the `tensorrt_llm` and `torch` versions installed in the image. `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes `runtime.max_sequences` only when you set `NARWHAL_MAX_SEQUENCES`. Without it, the launcher uses 64.
+With `NARWHAL_ENGINE_BACKEND=trtllm`, discovery writes the [TensorRT-LLM runtime fields](../configuration/05-Engine-Launch.md#tensorrt-llm-runtime-fields) and requires the `tensorrt_llm` and `torch` versions installed in the image. `NARWHAL_ENGINE_ARGS` defaults to an empty list, and discovery writes [`runtime.max_sequences`](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) only when you set `NARWHAL_MAX_SEQUENCES`.
 
 Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_ENGINE_ARGS` to `runtime.extra_args`. It fails when `NARWHAL_ENGINE_ARGS` sets a flag that one of the [launch settings for every backend](../configuration/05-Engine-Launch.md#launch-settings-for-every-backend) controls.
 

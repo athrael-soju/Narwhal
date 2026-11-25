@@ -17,7 +17,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-trtllm-v1.json` | TensorRT-LLM 1.4.0rc3 with UCX over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The three small templates start one prefill and one decode engine on an NVIDIA GPU and need free VRAM of about 7,680 MiB (vLLM), 10,240 MiB (SGLang) and 13,824 MiB (TensorRT-LLM). The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The three small templates start one prefill and one decode engine on an NVIDIA GPU. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -54,7 +54,7 @@ The three small templates state the memory in MiB. In the vLLM and SGLang templa
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
-A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first. A TensorRT-LLM engine receives it as `--free_gpu_memory_fraction`, and the launcher bounds its KV cache to that fraction of total VRAM, less the model weights and `runtime.memory_reserve_mib`, which is `3072` in the template.
+A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first. A TensorRT-LLM engine receives it as `--free_gpu_memory_fraction`, and the launcher bounds its KV cache as [Launch settings for every backend](configuration/05-Engine-Launch.md#launch-settings-for-every-backend) describes. The template sets `runtime.memory_reserve_mib` to `3072`.
 
 Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
 
@@ -94,22 +94,7 @@ narwhal dev verify
 narwhal dev status
 ```
 
-`init` runs these steps:
-
-1. Checks the model and tokenizer checksums.
-2. Selects a CUDA GPU by UUID, or one GPU per engine with `--gpus`, and checks free VRAM.
-3. Checks the runtime package versions, imports the engine runtime, and checks the GGUF plugin hashes that a vLLM template pins.
-4. Checks the network interface and ports.
-5. Writes the private instance.
-
-`up` runs these steps:
-
-1. Checks the model and tokenizer hashes, and the GGUF plugin hashes that a vLLM template pins.
-2. Checks that the ports are free.
-3. Checks and starts the engines.
-4. Captures attestations and starts the attestation sidecars.
-5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split.
-6. Starts the router.
+[`narwhal dev`](cli/Dev.md#lifecycle) lists what `init` and `up` check, start and profile.
 
 `verify` runs these steps:
 
@@ -367,7 +352,7 @@ NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 
 A stage budget covers the stage's work, helper imports, and subprocess startup. Each profiled role split gets a fresh stage budget.
 
-Native shared startup waits up to `runtime.ready_seconds` for each engine to answer `/health`: 180 seconds by default and 900 in the TensorRT-LLM template. Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
+Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
 
 `narwhal dev` stops the stage's supervised processes when:
 
