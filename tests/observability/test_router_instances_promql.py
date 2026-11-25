@@ -198,6 +198,25 @@ class RouterInstanceQueryTests(unittest.TestCase):
             ],
         )
 
+    def test_without_a_ready_router_the_views_follow_the_newest_lease(self):
+        # During a whole-wave drain both routers answer not ready, and their roles disagree.
+        pair = {
+            **router("r1:8000", 0, LENGTH, {"n1": "prefill", "n2": "decode"}, ready="0"),
+            **router("r2:8000", 0, LENGTH, {"n1": "decode", "n2": "decode"}, ready="0"),
+            **engines("n1", "n2"),
+        }
+        for instance, epoch in (("r1", "5"), ("r2", "4")):
+            labels = f'job="narwhal-router",instance="{instance}:8000"'
+            pair[f"narwhal_router_lease_epoch{{{labels}}}"] = dict.fromkeys(scrapes(0), epoch)
+        roles = {'{iid="n1"}': PREFILL, '{iid="n2"}': DECODE}
+        self.check(
+            pair,
+            [
+                (panel_query("panel-7", "A"), 60, roles),
+                (at_step(panel_query("panel-8", "A"), 60), END, roles),
+            ],
+        )
+
     def test_role_history_follows_the_active_router_at_each_step(self):
         members = {'{iid="n1"}': PREFILL, '{iid="n2"}': DECODE}
         history = panel_query("panel-8", "A")

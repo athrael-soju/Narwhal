@@ -112,7 +112,7 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine the active router lists, with its backend, current role, state and load, 8 engines per page. The active router is the selected router that Prometheus scraped in the last 15 seconds and that reports ready. When no such router reports ready, the panels follow every selected router scraped in the last 15 seconds, and when none was scraped, the table lists the engines Prometheus scrapes.
+The engine table shows each engine the active router lists, with its backend, current role, state and load, 8 engines per page. The active router is the selected router that Prometheus scraped in the last 15 seconds and that reports ready. When no such router reports ready, as during a whole-wave drain, the panels follow the scraped router with the highest `narwhal_router_lease_epoch`, which is the router that holds or last held the lease. Routers that tie, such as routers without fencing, are all followed. When no router was scraped, the table lists the engines Prometheus scrapes.
 
 **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the selected time range, following the router active at each moment. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other. Engines that left during the selected time range follow the current engines, each labelled with its ID and `(left)`, and each lane ends at the engine's last sample.
 
