@@ -184,7 +184,7 @@ Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-ro
 
 1. Through the load balancer, start a streaming completion that runs for at least 10 seconds.
 2. After its first chunk, save the active router's `/narwhal/state`, then stop that router with `SIGTERM` through the supervisor.
-3. Confirm that the stopped router's `/ready` returns HTTP 503 with reason `shutting down`, that its `/health` reports `fenced`, and that its `/narwhal/state` returns HTTP 503 with reason `shutting down`.
+3. Confirm that the stopped router's log reports `released the lease at epoch <n> for shutdown`, and that a new connection to its port is refused, with `curl` exiting with code 7, while the stream from step 1 continues.
 4. Confirm that the stream completes with its final usage frame.
 5. While the stopped router drains, confirm that the standby's `/ready` returns HTTP 200 with a higher `epoch` and that the load balancer marks it up.
 6. Confirm that the new primary is the only backend returning HTTP 200 from `/ready`.
