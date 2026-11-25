@@ -36,6 +36,18 @@ A router rejects a handoff whose `schema_version` differs from its own, whether 
 4. Confirm that the primary holds the lease and is the only backend returning HTTP 200 from `/ready`.
 5. Restore ingress.
 
+## Upgrading to model file digests
+
+Each engine's attested `launch` evidence carries `model_tree_sha256`, the digest of every model file it reads. An engine prepared by an earlier release attests none. The router refuses a joining or readmitted engine whose model files differ from those of the members, and it counts a member that attests no `model_tree_sha256` as different, so a re-prepared engine cannot rejoin a fleet whose other members run the earlier release. Upgrade the router hosts and every engine in one maintenance window:
+
+1. Stop ingress.
+2. Archive the generated `config/` files and [run discovery](../deploy/01-Discover.md#running-discovery-and-access-checks) into a new output directory with the new release. Engine export requires the `NARWHAL_NODE_<n>_MODEL_TREE_SHA256` values that discovery derives.
+3. Stop every engine and its attestation sidecar, and [build and install the release](../deploy/02-Install.md#building-an-immutable-deployment-package) on every host. The new release refuses a launch directory prepared by the earlier release.
+4. [Prepare, check and start](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) every engine from a fresh launch directory, then [attest it](../deploy/05-Attest.md) and run `finalize-fleet`.
+5. [Profile every engine](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) and [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) again, because each engine has a new `launch_digest`.
+6. Stop both routers and install the new deployment set on both router hosts. Set `recovery.resume: false`, start the intended primary without `--resume` and then its standby, and run preflight.
+7. Restore ingress.
+
 ## Rolling back
 
 1. Remove the router you are rolling back from the load balancer, then stop the new router gracefully.

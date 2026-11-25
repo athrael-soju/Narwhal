@@ -51,6 +51,8 @@ SOURCE_DIGESTS = {
     "cache_capture_code_sha256",
     "plan_sha256",
     "model_sha256",
+    # File status holds inode numbers and change times.
+    "model_status_sha256",
 }
 
 

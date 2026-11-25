@@ -9,7 +9,13 @@ import httpx
 
 from ...backends import load as load_backend
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import fetch_spec_identity, verify_attestation
+from ...engines.attestation import (
+    attested_launch,
+    fetch_spec_identity,
+    model_disagreement,
+    model_identity,
+    verify_attestation,
+)
 from ...engines.client import EngineClient, EngineError
 from ...engines.validation import can_consume, can_produce
 from ...profiling.calibration import verify_calibration
@@ -128,6 +134,7 @@ async def gate_contract(
 
     observed: dict[str, str] = {}
     unsafe: set[str] = set()
+    models: dict[str, dict] = {}
     async with httpx.AsyncClient(timeout=cfg.health_timeout_s, transport=transport) as client:
         for spec in cfg.engines:
             if spec.iid not in live:
@@ -181,12 +188,16 @@ async def gate_contract(
                     f"{spec.iid} contract {declared.fingerprint()} attested for process "
                     f"{identity.process_start_time_seconds:.6f}"
                 )
+                models[spec.iid] = model_identity(attested_launch(payload))
 
     versions = set(observed.values())
     if len(versions) > 1:
         version_detail = ", ".join(f"{iid}={version}" for iid, version in sorted(observed.items()))
         rep.fail(f"mixed {label} versions before KV transfer: {version_detail}")
         unsafe.update(observed)
+    if disagreement := model_disagreement(models):
+        rep.fail(f"engines attest different model files before KV transfer: {disagreement}")
+        unsafe.update(models)
     return unsafe
 
 

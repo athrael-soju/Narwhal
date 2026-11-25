@@ -15,6 +15,7 @@ from narwhal.backends import load as load_backend
 from narwhal.diagnostics.check import preflight
 from narwhal.diagnostics.check.engines import gate_contract
 from narwhal.diagnostics.check.report import Report
+from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
 from narwhal.engines.client import EngineClient, InferenceProbe, ProbeLeg
 from narwhal.observability.metrics.render import render
 from narwhal.profiling.generation import binding_digest
@@ -22,7 +23,7 @@ from narwhal.profiling.store import ProfileStore
 from narwhal.runtime.release import PeerRelease, release_peers
 from tests.backends.fixtures.vllm import launch, nixl_config
 from tests.characterization.golden import assert_golden
-from tests.characterization.vllm_fake import ENGINES, FakeVllm, untimed
+from tests.characterization.vllm_fake import ENGINES, PROCESS_START, VERSION, FakeVllm, untimed
 from tests.fixtures import ROOT, contract_free_router, fleet, profile
 from tests.wire import EngineWire, engine_clients, routed, vllm_engine
 from tools.observability.artifacts import render_dashboard
@@ -105,6 +106,37 @@ class PreflightCharacterizationTests(unittest.IsolatedAsyncioTestCase):
                 "output": output.getvalue().splitlines(),
                 "requests": self.engine.requests,
             },
+        )
+
+    async def test_engines_attesting_different_model_files_fail_before_transfer(self):
+        trees = {"e0": "a" * 64, "e3": "b" * 64}
+
+        def respond(request):
+            response = self.engine(request)
+            if request.url.path == "/v1/attestation":
+                contract = self.cfg.engine_contract
+                document = AttestationDocument(
+                    contract,
+                    dict.fromkeys(contract.fields(), "fixture"),
+                    launch={"model_tree_sha256": trees[self.engine.iid(request)]},
+                )
+                return httpx.Response(
+                    200, json=make_attestation(document, EngineIdentity(VERSION, PROCESS_START))
+                )
+            return response
+
+        report = Report()
+        with redirect_stdout(io.StringIO()):
+            unsafe = await gate_contract(
+                self.cfg, {"e0", "e3"}, report, transport=httpx.MockTransport(respond)
+            )
+        self.assertEqual(unsafe, {"e0", "e3"})
+        self.assertEqual(
+            report.failed,
+            [
+                "engines attest different model files before KV transfer: "
+                f"launch.model_tree_sha256 differs: '{'a' * 64}' from e0; '{'b' * 64}' from e3"
+            ],
         )
 
 

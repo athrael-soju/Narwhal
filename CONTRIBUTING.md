@@ -241,6 +241,7 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
+| `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |

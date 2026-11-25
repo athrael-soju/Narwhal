@@ -58,7 +58,7 @@ For an empty directory with a Hugging Face source:
 
 4. Record the repository ID and commit SHA in the private record.
 
-Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. A replica mismatch stops discovery with an error that names the first differing file.
+Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. Discovery refuses a symbolic link that resolves outside the model directory, names an absolute path, or has a relative target that climbs above the directory, because the container mounts only that directory. A directory of links into a Hugging Face cache, such as a `snapshots/<revision>` directory, fails this check; stage the checkpoint with `hf download --local-dir` as above. A replica mismatch stops discovery with an error that names the first differing file.
 
 ### Staging a GGUF model on vLLM
 
@@ -253,7 +253,7 @@ Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_EN
 
 ## Access failure handling
 
-A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. Record the first failing host and gate in the private record.
+A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. When discovery cannot hash a model directory, the message names the reason after the operation, as in `<host-id>: blocked at hash checkpoint files: checkpoint entry resolves outside the model directory: <file>; inspect its private command log`. Record the first failing host and gate in the private record.
 
 If an access variable is missing, set the named `.env` field.
 

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ...config import EngineSpec, FleetConfig
-from ...engines.attestation import EngineIdentity, fetch_spec_identity, verify_attestation
+from ...engines.attestation import (
+    EngineIdentity,
+    attested_launch,
+    fetch_spec_identity,
+    model_disagreement,
+    model_identity,
+    verify_attestation,
+)
 from ...engines.client import EngineError
 from ...engines.stream import sse_token_count
 from ...engines.validation import recovery_pairs, validation_pairs
@@ -114,6 +121,7 @@ async def validate_readmission(
 
     timeout = cfg.health_timeout_s
     identities: dict[str, EngineIdentity] = {}
+    loaded: dict[str, dict[str, Any]] = {}
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         for spec in participants:
             if not await router.engines.healthy(spec.url):
@@ -151,6 +159,8 @@ async def validate_readmission(
                 outcome.fail(spec.iid, "attestation: " + "; ".join(failures))
             else:
                 outcome.ok(spec.iid, f"attestation {contract.fingerprint()}")
+                if spec.iid in engines:
+                    loaded[spec.iid] = model_identity(attested_launch(payload))
                 router.attested(spec.iid, payload, candidate=spec is candidate)
                 # A replacement process starts in its launch role; the fabric check runs in the
                 # router's role for it. A joining engine runs in its spec's role.
@@ -182,6 +192,26 @@ async def validate_readmission(
                     outcome.fail(spec.iid, f"serves {names}, expected {cfg.model}")
                 else:
                     outcome.ok(spec.iid, "model")
+
+        # Each named engine must attest the model identity of every member that is not ejected
+        # or draining, or, when every member is named, the one the other named engines attest.
+        scheduler = router.scheduler
+        references = {
+            iid: model_identity(router.launches[iid])
+            for iid in router.membership.ids
+            if iid not in engines
+            and iid in router.launches
+            and iid not in scheduler.ejected
+            and iid not in scheduler.draining
+        }
+        # A single-engine fleet has no other engine to compare with.
+        if references or len(loaded) > 1:
+            for iid, model in loaded.items():
+                compared = {**references, iid: model} if references else loaded
+                if disagreement := model_disagreement(compared):
+                    outcome.fail(iid, f"model identity: {disagreement}")
+                else:
+                    outcome.ok(iid, "model identity")
 
         for spec in targets:
             target_identity = identities.get(spec.iid)

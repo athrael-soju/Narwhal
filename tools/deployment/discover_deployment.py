@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from narwhal.deployment.engine_launch import load_launches
+from narwhal.deployment.launch_engine import checkpoint as checkpoint_manifest
 from narwhal.deployment.launch_engine.backend import ModelFormats, engine_backend
 from narwhal.deployment.launch_engine.plan import conv_state_layers
 from narwhal.types import RoleModel
@@ -365,6 +366,7 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 ("ENGINE_IMAGE", observed["image_id"]),
                 ("MODEL_CONFIG_SHA256", observed["model_sha256"]),
                 ("MODEL_SHA256", file_digest),
+                ("MODEL_TREE_SHA256", observed["model_tree_sha256"]),
             ):
                 if content:
                     derived[f"NARWHAL_NODE_{node}_{field}"] = content
@@ -518,7 +520,7 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 checkpoint_jobs[key] = (host, payload, [])
             checkpoint_jobs[key][2].append(role)
             print(f"{role}: GPU devices, image packages and model inspected", flush=True)
-    checkpoint_script = Path(__file__).with_name("checkpoint_manifest.py").read_text()
+    checkpoint_script = Path(checkpoint_manifest.__file__).read_text()
 
     def inspect_checkpoint(job):
         host, payload, _ = job
@@ -528,6 +530,7 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 "hash checkpoint files",
                 "python3 -c " + shlex.quote(checkpoint_script),
                 payload=payload,
+                reason=checkpoint_manifest.FAILURE,
             )
         )
 

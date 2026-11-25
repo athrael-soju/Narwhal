@@ -98,8 +98,12 @@ class SSH:
         payload: Path | None = None,
         interactive: bool = False,
         forwards: list[str] | None = None,
+        reason: str | None = None,
     ) -> str:
-        """Use the host's authentication for each operation, retaining private command logs."""
+        """Use the host's authentication for each operation, retaining private command logs.
+
+        With `reason`, a failure quotes the last error output line that starts with it.
+        """
         args = ["ssh", *self.options]
         if forwards:
             args += [
@@ -144,5 +148,10 @@ class SSH:
                 if output:
                     log.write(output.decode(errors="replace"))
         if result.returncode:
-            raise ValueError(f"{host.id}: blocked at {gate}; inspect its private command log")
+            lines = (result.stderr or b"").decode(errors="replace").splitlines()
+            causes = [line[len(reason) :] for line in lines if reason and line.startswith(reason)]
+            cause = f": {causes[-1]}" if causes else ""
+            raise ValueError(
+                f"{host.id}: blocked at {gate}{cause}; inspect its private command log"
+            )
         return (result.stdout or b"").decode(errors="replace").strip()

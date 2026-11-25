@@ -187,12 +187,15 @@ Readmission checks:
 2. `attestation <fingerprint>`: process-bound attestation matches the engine contract.
 3. `profile generation`: every loaded profile variant's generation matches the verified live process generation.
 4. `model`: the engine serves the configured model.
-5. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
-6. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 7 tests generation.
-7. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
-8. `final health`: the engine health endpoint answers after KV transfer validation.
+5. `model identity`: the engine attests the same model files as the router last verified for every other member that is not ejected or draining. The check compares `launch.model_config_sha256`, the SHA-256 of the checkpoint's `config.json`, `launch.model_tree_sha256`, the digest of every model file the launch reads, and `launch.model_sha256` when the launch names a model file. `launch.model_revision` is a label outside the comparison, so engines that load the same files under a commit and a `sha256:` revision match. In a whole-wave readmission, the wave members attest the same values. A single-engine fleet skips this check.
+6. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
+7. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 8 tests generation.
+8. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
+9. `final health`: the engine health endpoint answers after KV transfer validation.
 
 Checks 1 to 4 cover the candidate and its role-permitted peers.
+
+`checks` lists the checks that passed, in this order. The failed checks appear in the engine's `error`, or in `join.failures` for a [join](08-Engine-Membership.md#post-narwhalengines). A `model identity` failure does not stop checks 6 and 7, so a refused engine can list `process identity` or `new process identity`, and `generation`, in `checks`. Checks 8 and 9 run only after checks 1 to 7 pass for every engine.
 
 Missing profiles, missing generation evidence, or a digest mismatch fail readmission with an error naming the engine to reprofile. For an engine the breaker ejected transiently, readmission accepts its current process.
 
