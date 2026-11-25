@@ -272,7 +272,7 @@ class YieldControlTests(FleetCase):
 
 
 class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_server_yields_control_before_it_stops_accepting(self):
+    async def test_the_server_stops_accepting_before_it_yields_control(self):
         import uvicorn
 
         from narwhal.cli import YieldingServer
@@ -292,7 +292,17 @@ class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
             def close(self):
                 order.append("close")
 
+        class Connection:
+            def shutdown(self):
+                order.append("shutdown")
+
         server.servers = [Listener()]
-        server.lifespan = type("Lifespan", (), {"shutdown": AsyncMock()})()
-        await server.shutdown()
-        self.assertEqual(order[:2], ["yield", "close"])
+        server.server_state.connections.add(Connection())
+        lifespan = AsyncMock(side_effect=lambda: order.append("lifespan"))
+        server.lifespan = type("Lifespan", (), {"shutdown": lifespan})()
+        with self.assertLogs("uvicorn.error", "INFO") as logs:
+            await server.shutdown()
+        # Requests that reach the router before the yield are admitted under the lease, and
+        # each shutdown step runs once.
+        self.assertEqual(order, ["close", "shutdown", "yield", "lifespan"])
+        self.assertEqual(logs.output[0], "INFO:uvicorn.error:Shutting down")

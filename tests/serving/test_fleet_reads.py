@@ -130,6 +130,35 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(path=path):
                     self.assert_refused(await client.get(path), "shutting down")
 
+    async def in_rotation(self) -> bool:
+        """Apply the shipped HAProxy health check: control of the fleet, identities validated."""
+        if (await self.client.get("/narwhal/targets")).status_code != 200:
+            return False
+        return "engine identity validation pending" not in (await self.client.get("/ready")).text
+
+    async def test_a_lease_holder_that_is_not_ready_stays_in_rotation(self):
+        self.router.lifecycle.identities_ready = True
+        self.assertTrue(await self.in_rotation())
+        scheduler = self.router.scheduler
+        not_ready = {
+            "whole-wave hold": ("_lifecycle_blocked", self.router, "whole-wave drain w1"),
+            "degraded monitoring": ("degraded", self.router.monitoring, "ConnectError:metrics"),
+            "no live engines": ("live_instances", scheduler, Mock(return_value=[])),
+        }
+        for state, (name, owner, value) in not_ready.items():
+            with self.subTest(state=state), patch.object(owner, name, value):
+                self.assertEqual((await self.client.get("/ready")).status_code, 503)
+                self.assertTrue(await self.in_rotation())
+
+    async def test_a_router_validating_identities_or_without_the_lease_leaves_rotation(self):
+        self.router.lifecycle.identities_ready = True
+        self.assertTrue(await self.in_rotation())
+        self.router.lifecycle.identities_ready = False
+        self.assertFalse(await self.in_rotation())
+        self.router.lifecycle.identities_ready = True
+        self.router.standby = True
+        self.assertFalse(await self.in_rotation())
+
     async def test_health_ready_and_metrics_answer_on_a_standby(self):
         self.router.standby = True
         health = await self.client.get("/health")

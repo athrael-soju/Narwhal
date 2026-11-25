@@ -124,10 +124,10 @@ def takeover(
 ) -> list[Router]:
     """A SIGTERM takeover at 600 s: router a drains, stops and restarts as a standby.
 
-    For 10 s after the restart, the load balancer still sends attempts to the restarted
-    standby, which refuses them, and retries each on router b, which serves it. With
-    `count_attempts`, the standby counts its refusals as offered and rejected requests, as
-    routers did before they counted them apart.
+    The shipped HAProxy configuration sends a standby no requests. As a safety net for a load
+    balancer that does, the restarted standby refuses 5 attempts in its first 10 s, and router b
+    serves each retry. With `count_attempts`, the standby counts its refusals as offered and
+    rejected requests, as routers did before they counted them apart.
     """
     a = [
         Phase(0, 600, "active", ready=1, epoch=7, served=10, restart=(HISTORY, HISTORY)),

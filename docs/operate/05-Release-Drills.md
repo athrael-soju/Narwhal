@@ -180,7 +180,7 @@ If the router has ejected the stopped engine at the drain request, the drain suc
 
 ### Router failover drill
 
-Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-router-pair).
+Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-router-pair), with the same standby options on both routers, so that the standby takes over after the `SIGTERM`. A restarted router that reaches its failed-poll count first claims the lease instead, as [Lease behavior](01-Start-Routers.md#lease-behavior) describes.
 
 1. Through the load balancer, start a streaming completion that runs for at least 10 seconds.
 2. After its first chunk, save the active router's `/narwhal/state`, then stop that router with `SIGTERM` through the supervisor.
