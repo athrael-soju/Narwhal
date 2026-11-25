@@ -37,6 +37,7 @@ from .template import (
     _port_layout,
     _sha256,
     check_instance_ports,
+    instance_gpus,
     model_files,
     starts_directly,
 )
@@ -165,7 +166,7 @@ def _run(root: Path, module: str, args: list[str], log: str, default_timeout: fl
         log=root / f"{log}.log",
         cwd=root,
         default_timeout=default_timeout,
-        retain_descendants=log == "native-start-shared",
+        retain_descendants=log in ("native-start-shared", "native-start"),
     )
     if result.returncode:
         path = root / f"{log}.log"
@@ -239,17 +240,20 @@ def _wait(url: str, identity: dict, seconds: int = 30) -> None:
 
 
 @contextlib.contextmanager
-def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
+def memory_samples(run: Path, gpus: list[str], name: str) -> Iterator[None]:
+    """Sample each GPU's memory every half second; with several GPUs each row names its GPU."""
     stopped = threading.Event()
 
     def sample() -> None:
         with (run / f"{name}-memory.jsonl").open("a") as output:
             while not stopped.is_set():
-                try:
-                    row: dict[str, object] = {"time": time.time(), **gpu_memory(gpu)}
-                except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                    row = {"time": time.time(), "error": str(exc)}
-                output.write(json.dumps(row) + "\n")
+                for gpu in gpus:
+                    named = {"gpu_uuid": gpu} if len(gpus) > 1 else {}
+                    try:
+                        row: dict[str, object] = {"time": time.time(), **named, **gpu_memory(gpu)}
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        row = {"time": time.time(), **named, "error": str(exc)}
+                    output.write(json.dumps(row) + "\n")
                 output.flush()
                 stopped.wait(0.5)
 
@@ -265,7 +269,9 @@ def memory_samples(run: Path, gpu: str, name: str) -> Iterator[None]:
 def _profiles(run: Path, fleet: dict, spec: dict) -> None:
     count = len(fleet["engines"])
     # Neighbour load follows the split's roles; without it, one split's profiles cover every split.
-    colocated = "neighbour_prefill_rps" in spec["profile"]
+    # Engines on their own GPUs have no neighbours.
+    shared = any("shared_device" in engine for engine in fleet["engines"])
+    colocated = shared and "neighbour_prefill_rps" in spec["profile"]
     opening = sum(engine["role"] == "prefill" for engine in fleet["engines"])
     sources = []
     for prefill in range(1, count) if colocated else (opening,):
@@ -280,6 +286,8 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         if colocated:
             args.append("--colocated")
         for key, value in spec["profile"].items():
+            if key.startswith("neighbour_") and not colocated:
+                continue
             rendered = ",".join(map(str, value)) if isinstance(value, list) else str(value)
             args.extend(["--" + key.replace("_", "-"), rendered])
         print(
@@ -439,7 +447,7 @@ def up(root: Path, alongside: bool = False) -> dict:
         state: dict = {"schema_version": 1, "phase": "starting", "run": str(run), "processes": []}
         write(root / "lifecycle.json", state)
         try:
-            with memory_samples(run, config["gpu_uuid"], "up"):
+            with memory_samples(run, instance_gpus(config), "up"):
                 _launch(root, run, config, spec, state)
         except BaseException as error:
             state["failure"] = {
@@ -511,18 +519,23 @@ def _launch(root: Path, run: Path, config: dict, spec: dict, state: dict) -> Non
         runs.append(engine_run)
     # An engine that compiles kernels on its first start needs a longer window.
     ready = spec["runtime"].get("ready_seconds", READY_SECONDS)
+    # Engines on one GPU start as its shared group; engines on their own GPUs start one each.
+    start, stage = (
+        ("start-native", "native-start")
+        if "gpu_uuids" in config
+        else ("start-shared", "native-start-shared")
+    )
     _run(
         run,
         "narwhal.deployment.launch_engine.cli",
         [
-            "start-shared",
-            "--backend",
-            "native",
+            start,
+            *(["--backend", "native"] if start == "start-shared" else []),
             "--ready-seconds",
             str(ready),
             *[arg for path in runs for arg in ("--run", str(path))],
         ],
-        "native-start-shared",
+        stage,
         default_timeout=ready * len(runs),
     )
     for index, engine_run in enumerate(runs):
@@ -584,7 +597,7 @@ def verify(root: Path) -> dict:
         evidence = run / f"verify-{uuid.uuid4().hex[:12]}"
         evidence.mkdir(mode=0o700)
         try:
-            with memory_samples(run, config["gpu_uuid"], "verify"):
+            with memory_samples(run, instance_gpus(config), "verify"):
                 _run(
                     evidence,
                     "narwhal.diagnostics.check.cli",

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import socket
@@ -9,14 +11,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from narwhal.deployment.attestation_contract.evidence import read_native_start
+from narwhal.deployment.launch_engine import cli as engine_cli
+from narwhal.deployment.launch_engine.runtime import digest
 from narwhal.deployment.native_engine import (
     _environment,
     _group_members,
     _ports_free,
     _terminate,
     process_identity,
+    start_each,
     start_shared,
     stop,
+    validate_native_runs,
 )
 from tests.runtime.test_listeners import listener
 
@@ -332,6 +339,149 @@ class NativeEngineOwnershipTests(unittest.TestCase):
             failed = json.loads((selected[1][0] / "shared-start.json").read_text())
             self.assertEqual(failed["aggregate_delta_mib"], 11000)
             self.assertEqual(failed["gpu_after_cleanup"]["used_mib"], 6500)
+
+
+def own_gpu_run(folder: Path, number: int, gpu: str, **changes) -> Path:
+    """A checked-looking native launch directory whose engine runs on `gpu` alone."""
+    run = folder / f"engine-{number}"
+    run.mkdir()
+    (run / "engine.env").write_text(f"CUDA_VISIBLE_DEVICES={gpu}\nVLLM_API_KEY=\n")
+    plan = {
+        "role": f"engine-{number}",
+        "backend": "native",
+        "endpoint": f"http://127.0.0.1:{8000 + number}",
+        "attestation_port": 8100 + number,
+        "side_channel_port": 8200 + number,
+        "python_executable": sys.executable,
+        "args": ["-m", "vllm.entrypoints.openai.api_server", "--gpu-memory-utilization", "0.2"],
+        "expected_packages": {"vllm": "0.29.0", "nixl": "1.0.0"},
+        "model_revision": "pinned-model-commit",
+        "model_config_sha256": "a" * 64,
+        "env_sha256": digest(run / "engine.env"),
+        **changes,
+    }
+    (run / "launch.json").write_text(json.dumps(plan))
+    return run
+
+
+class OwnGpuStartTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.folder = Path(temporary.name)
+
+    def test_plans_need_one_gpu_each_named_by_uuid(self):
+        runs = [own_gpu_run(self.folder, n, f"GPU-{n}") for n in (1, 2)]
+        self.assertEqual(
+            [plan["role"] for _, plan in validate_native_runs(runs)],
+            [
+                "engine-1",
+                "engine-2",
+            ],
+        )
+        for name, changes, gpu, message in (
+            ("same", {}, "GPU-1", "GPU GPU-1 is also the GPU of engine-1"),
+            ("ordinal", {}, "0", "must name one GPU by its UUID"),
+            ("pair", {}, "GPU-3,GPU-4", "must name one GPU by its UUID"),
+            (
+                "shared",
+                {"shared_device": {"gpu_uuid": "GPU-3"}},
+                "GPU-3",
+                "shares its GPU; start it with start-shared",
+            ),
+            ("memory", {"args": ["-m", "vllm"]}, "GPU-3", "one memory fraction argument"),
+            ("port", {"attestation_port": 8101}, "GPU-3", "attestation port 8101 collides"),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as other:
+                folder = Path(other)
+                first = own_gpu_run(folder, 1, "GPU-1")
+                second = own_gpu_run(folder, 2, gpu, **changes)
+                with self.assertRaisesRegex(ValueError, message):
+                    validate_native_runs([first, second])
+        (runs[1] / "native-start.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "engine-2: launch directory already has"):
+            validate_native_runs(runs)
+        with self.assertRaisesRegex(ValueError, "one to eight distinct"):
+            validate_native_runs([runs[0], runs[0]])
+
+    def start(self, runs, readings):
+        live = SimpleNamespace(version="0.29.0", process_start_time_seconds=1234.5)
+        with (
+            patch("narwhal.deployment.native_engine._ports_free"),
+            patch(
+                "narwhal.deployment.native_engine._checked_plan",
+                return_value={"engine_version": "0.29.0"},
+            ),
+            patch("narwhal.deployment.native_engine.gpu_memory") as memory,
+            patch("narwhal.deployment.native_engine.subprocess.Popen") as popen,
+            patch("narwhal.deployment.native_engine.process_identity") as identity,
+            patch("narwhal.deployment.native_engine._wait_ready"),
+            patch(
+                "narwhal.deployment.native_engine.fetch_engine_identity",
+                new_callable=AsyncMock,
+                return_value=live,
+            ),
+        ):
+            memory.side_effect = lambda gpu: {
+                "used_mib": readings[gpu].pop(0),
+                "total_mib": 30000,
+            }
+            popen.side_effect = [Mock(pid=100 + n) for n in range(len(runs))]
+            identity.side_effect = [
+                {"pid": 100 + n, "boot_id": "boot", "start_ticks": n} for n in range(len(runs))
+            ]
+            start_each(runs, ready_seconds=30)
+            return memory, popen
+
+    def test_each_engine_reads_and_records_its_own_gpu(self):
+        runs = [own_gpu_run(self.folder, n, f"GPU-{n}") for n in (1, 2)]
+        # The second engine grows its GPU past its fraction; no allowance bounds it.
+        memory, popen = self.start(runs, {"GPU-1": [1000, 7000], "GPU-2": [0, 20000]})
+        self.assertEqual(
+            [call.args[0] for call in memory.call_args_list], ["GPU-1", "GPU-1", "GPU-2", "GPU-2"]
+        )
+        self.assertEqual(popen.call_args.kwargs["env"]["CUDA_VISIBLE_DEVICES"], "GPU-2")
+        for run, gpu, delta in ((runs[0], "GPU-1", 6000), (runs[1], "GPU-2", 20000)):
+            record = json.loads((run / "native-start.json").read_text())
+            self.assertEqual(record["status"], "running")
+            self.assertEqual(record["gpu_uuid"], gpu)
+            self.assertEqual(record["budget_mib"], 6000)
+            self.assertEqual(record["observed_delta_mib"], delta)
+            self.assertNotIn("device_allowance_mib", record)
+            self.assertFalse((run / "shared-start.json").exists())
+            self.assertEqual(read_native_start(run), record)
+
+    def test_an_engine_starts_only_when_its_gpu_has_room_for_its_fraction(self):
+        runs = [own_gpu_run(self.folder, n, f"GPU-{n}") for n in (1, 2)]
+        with (
+            patch("narwhal.deployment.native_engine.stop") as stop_first,
+            self.assertRaisesRegex(
+                ValueError, "engine-2: native launch failed with 25000 MiB used before start"
+            ),
+        ):
+            self.start(runs, {"GPU-1": [0, 6000], "GPU-2": [25000, 25000]})
+        stop_first.assert_called_once_with(runs[0])
+        failed = json.loads((runs[1] / "native-start.json").read_text())
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("free GPU memory is below the 6000.0 MiB allocation", failed["error"])
+
+    def test_the_cli_starts_each_run_on_its_own_gpu(self):
+        runs = [own_gpu_run(self.folder, n, f"GPU-{n}") for n in (1, 2)]
+        argv = ["start-native", "--ready-seconds", "60"]
+        for run in runs:
+            argv.extend(["--run", str(run)])
+        with (
+            patch.object(engine_cli.native_engine, "start_each") as start,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(engine_cli.main(argv), 0)
+        start.assert_called_once_with([run.resolve() for run in runs], 60)
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as exit,
+        ):
+            engine_cli.main(["start-native", "--run", str(runs[0]), "--ready-seconds", "0"])
+        self.assertEqual(exit.exception.code, 2)
 
 
 if __name__ == "__main__":

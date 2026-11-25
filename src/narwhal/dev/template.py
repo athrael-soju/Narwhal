@@ -195,6 +195,40 @@ def _check_budgets(allocation: dict, count: int) -> None:
         raise ValueError("engine budgets exceed the shared GPU allowance")
 
 
+def instance_gpus(value: dict) -> list[str]:
+    """The GPU UUIDs of an instance's engines: one shared GPU, or one GPU per engine."""
+    return list(value["gpu_uuids"]) if "gpu_uuids" in value else [value["gpu_uuid"]]
+
+
+def _select_gpus(
+    rows: list[dict[str, str]], gpu_uuid: str | None, gpu_uuids: list[str] | None, count: int
+) -> list[dict[str, str]]:
+    """The discovered GPU of a shared instance, or the GPU of each engine in engine order."""
+    if gpu_uuids is None:
+        selected = [row for row in rows if gpu_uuid is None or row["uuid"] == gpu_uuid]
+        if len(selected) != 1:
+            raise ValueError("select exactly one physical GPU with gpu_uuid")
+        return selected
+    found = {row["uuid"]: row for row in rows}
+    missing = [uuid for uuid in gpu_uuids[:count] if uuid not in found]
+    if missing:
+        raise ValueError(f"nvidia-smi lists no GPU {', '.join(missing)}")
+    selected = [found[uuid] for uuid in gpu_uuids[:count]]
+    if len({row["name"] for row in selected}) != 1:
+        raise ValueError("the engines' GPUs must be one product")
+    return selected
+
+
+def _check_gpu_list(gpu_uuids: list[str], count: int) -> None:
+    repeated = sorted({uuid for uuid in gpu_uuids if gpu_uuids.count(uuid) > 1})
+    if repeated:
+        raise ValueError(f"--gpus names {', '.join(repeated)} more than once")
+    if not all(uuid.startswith("GPU-") for uuid in gpu_uuids):
+        raise ValueError("--gpus takes physical GPU UUIDs that start with GPU-")
+    if count > len(gpu_uuids):
+        raise ValueError(f"{count} engines need {count} GPUs; --gpus names {len(gpu_uuids)}")
+
+
 def starts_directly(value: dict) -> bool:
     """Whether a template or instance starts its engines as plain processes."""
     return value.get("start") == "direct"
@@ -230,6 +264,7 @@ def materialize(
     model_path: Path | None = None,
     fabric_interface: str | None = None,
     gpu_uuid: str | None = None,
+    gpu_uuids: list[str] | None = None,
     template: dict | None = None,
     engine_count: int | None = None,
     port_base: int | None = None,
@@ -253,6 +288,8 @@ def materialize(
         if not starts_directly(existing):
             check_instance_ports(existing, output)
         saved = json.loads((output / "template.json").read_text())
+    if gpu_uuid is not None and gpu_uuids is not None:
+        raise ValueError("select one shared GPU with --gpu or a GPU per engine with --gpus")
     source = template if template is not None else saved
     spec = copy.deepcopy(source if source is not None else default_template())
     if spec.get("schema") != "narwhal.dev-template" or spec.get("schema_version") != 1:
@@ -270,6 +307,7 @@ def materialize(
             for flag, value in (
                 ("--model-dir", model_dir),
                 ("--gpu", gpu_uuid),
+                ("--gpus", gpu_uuids),
                 ("--interface", fabric_interface),
                 ("--gpu-memory-utilization", gpu_memory_utilization),
                 ("--device-allowance", device_allowance),
@@ -346,8 +384,13 @@ def materialize(
             ("--gpu", "gpu_uuid", gpu_uuid),
             ("--engine-count", "engine_count", engine_count),
         ):
-            if value is not None and value != existing[field]:
+            if value is not None and value != existing.get(field):
                 conflicts.append(flag)
+        # The engines run on the first GPUs of the list, one each.
+        if gpu_uuids is not None and gpu_uuids[: existing["engine_count"]] != existing.get(
+            "gpu_uuids"
+        ):
+            conflicts.append("--gpus")
         conflicts.extend(
             "--" + field.replace("_", "-")
             for field in (*_FRACTIONS, *_MIB)
@@ -410,52 +453,60 @@ def materialize(
             raise ValueError(f"tokenizer file {name} differs from the pinned revision")
     count = spec["allocation"]["engine_count"]
     ports, used_ports = _port_layout(spec, count)
+    if gpu_uuids is not None:
+        _check_gpu_list(gpu_uuids, count)
+    # Engines on a shared GPU split its allowance; an engine on its own GPU has the allowance
+    # of that GPU.
+    per_gpu = count if gpu_uuids is None else 1
     sized = _sized_in_mib(spec)
     if not sized:
-        _check_budgets(spec["allocation"], count)
-    rows = _gpu_rows()
-    selected = [row for row in rows if gpu_uuid is None or row["uuid"] == gpu_uuid]
-    if len(selected) != 1:
-        raise ValueError("select exactly one physical GPU with gpu_uuid")
-    gpu = selected[0]
+        _check_budgets(spec["allocation"], per_gpu)
+    gpus = _select_gpus(_gpu_rows(), gpu_uuid, gpu_uuids, count)
     product = spec["gpu"].get("product")
-    if product and gpu["name"] != product:
-        raise ValueError(f"template requires {product}; found {gpu['name']}")
-    memory = gpu_memory(gpu["uuid"])
-    if memory["total_mib"] < spec["gpu"].get("minimum_total_mib", 0):
+    if product and gpus[0]["name"] != product:
+        raise ValueError(f"template requires {product}; found {gpus[0]['name']}")
+    memories = {gpu["uuid"]: gpu_memory(gpu["uuid"]) for gpu in gpus}
+    # The smallest GPU sets the fractions, so that every GPU holds the stated MiB.
+    total_mib = min(memory["total_mib"] for memory in memories.values())
+    if total_mib < spec["gpu"].get("minimum_total_mib", 0):
         raise ValueError("GPU VRAM is below the qualified template minimum")
     if sized:
         needs = spec["allocation"]
         for name in _MIB:
             if type(needs[name]) is not int or needs[name] < 1:
                 raise ValueError(f"allocation.{name} must be a positive integer")
-        if needs["engine_memory_mib"] * count > needs["device_memory_mib"]:
+        if needs["engine_memory_mib"] * per_gpu > needs["device_memory_mib"]:
             raise ValueError(
                 f"{count} engines of {needs['engine_memory_mib']} MiB exceed the "
                 f"{needs['device_memory_mib']} MiB the engines are allowed"
+                if gpu_uuids is None
+                else f"an engine of {needs['engine_memory_mib']} MiB exceeds the "
+                f"{needs['device_memory_mib']} MiB each GPU allows"
             )
-        if needs["device_memory_mib"] > memory["total_mib"]:
+        if needs["device_memory_mib"] > total_mib:
             raise ValueError(
-                f"GPU VRAM of {memory['total_mib']} MiB is below the "
+                f"GPU VRAM of {total_mib} MiB is below the "
                 f"{needs['device_memory_mib']} MiB the engines are allowed"
             )
         # The launch records carry each budget as a fraction of this GPU's memory. Each
         # fraction rounds up, so the allowance also covers the engines' rounded fractions.
-        share = _fraction(needs["engine_memory_mib"], memory["total_mib"])
-        covering = float((Decimal(str(share)) * count).quantize(Decimal("0.0001")))
+        share = _fraction(needs["engine_memory_mib"], total_mib)
+        covering = float((Decimal(str(share)) * per_gpu).quantize(Decimal("0.0001")))
         needs.update(
             gpu_memory_utilization=share,
-            device_allowance=max(
-                _fraction(needs["device_memory_mib"], memory["total_mib"]), covering
-            ),
+            device_allowance=max(_fraction(needs["device_memory_mib"], total_mib), covering),
         )
-        _check_budgets(needs, count)
+        _check_budgets(needs, per_gpu)
     fraction = spec["allocation"]["gpu_memory_utilization"]
     allowance = spec["allocation"]["device_allowance"]
-    available = memory["total_mib"] - memory["used_mib"]
-    required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
-    if available < required:
-        raise ValueError(f"GPU VRAM reserve failed: {available} MiB free, {required} MiB required")
+    for uuid, memory in memories.items():
+        available = memory["total_mib"] - memory["used_mib"]
+        required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
+        if available < required:
+            raise ValueError(
+                ("GPU VRAM" if gpu_uuids is None else f"GPU {uuid} VRAM")
+                + f" reserve failed: {available} MiB free, {required} MiB required"
+            )
     ready = spec["runtime"].get("ready_seconds", 1)
     if type(ready) is not int or ready < 1:
         raise ValueError("runtime.ready_seconds must be a positive integer")
@@ -465,14 +516,17 @@ def materialize(
     engine.check_dev_files(spec["runtime"])
     address = _address(fabric_interface)
     _check_free_ports(used_ports, "127.0.0.1")
-    hostname = socket.gethostname()
-    group = f"{hostname}:{gpu['uuid']}"
-    shared = {
-        "group": group,
-        "gpu_uuid": gpu["uuid"],
-        "device_allowance": allowance,
-        "gpu_memory_utilization": fraction,
-    }
+    # Engines on one GPU form its shared_device group; engines on their own GPUs form none.
+    shared = (
+        {
+            "group": f"{socket.gethostname()}:{gpus[0]['uuid']}",
+            "gpu_uuid": gpus[0]["uuid"],
+            "device_allowance": allowance,
+            "gpu_memory_utilization": fraction,
+        }
+        if gpu_uuids is None
+        else None
+    )
     runtime = engine.dev_runtime(spec["runtime"], model_dir, fraction)
     engine.validate_runtime(runtime)
     launch: dict[str, Any] = {
@@ -485,7 +539,7 @@ def materialize(
         "schema_version": 2,
         "model": spec["model"]["served_name"],
         "hardware": {
-            "accelerator": gpu["name"],
+            "accelerator": gpus[0]["name"],
             "accelerators_per_engine": 1,
             "tensor_parallel": 1,
         },
@@ -517,6 +571,7 @@ def materialize(
         name = f"engine-{number}"
         engine_port = ports["engine_first"] + index
         attest_port = ports["attestation_first"] + index
+        gpu = gpus[0] if shared is not None else gpus[index]
         launch["engines"][name] = {
             "accelerator": gpu["name"],
             "gpu_ids": [gpu["uuid"]],
@@ -530,7 +585,7 @@ def materialize(
                 "devices": [],
                 "gpu_tls": "cuda_copy",
             },
-            "shared_device": shared,
+            **({"shared_device": shared} if shared is not None else {}),
             "sources": {
                 "allocation": "live NVIDIA GPU UUID and VRAM discovery",
                 "devices": "native CUDA runtime",
@@ -544,7 +599,7 @@ def materialize(
                 "url": f"http://127.0.0.1:{engine_port}",
                 "attestation_url": f"http://127.0.0.1:{attest_port}/v1/attestation",
                 "role": "prefill" if index < count // 2 else "decode",
-                "shared_device": shared,
+                **({"shared_device": shared} if shared is not None else {}),
             }
         )
         selected_launch(launch, name, {})
@@ -570,7 +625,11 @@ def materialize(
                     "model_path": str(model_path),
                     "model_revision": spec["model"]["revision"],
                     "model_config_sha256": _sha256(config_path),
-                    "gpu_uuid": gpu["uuid"],
+                    **(
+                        {"gpu_uuid": gpus[0]["uuid"]}
+                        if shared is not None
+                        else {"gpu_uuids": [gpu["uuid"] for gpu in gpus]}
+                    ),
                     "fabric_interface": fabric_interface,
                     "fabric_address": address,
                     "router_url": router_url,

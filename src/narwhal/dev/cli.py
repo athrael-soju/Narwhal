@@ -28,10 +28,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+def _gpu_list(value: str) -> list[str]:
+    uuids = [item.strip() for item in value.split(",")]
+    if not all(uuids):
+        raise argparse.ArgumentTypeError("name each GPU by its UUID, separated by commas")
+    return uuids
+
+
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="narwhal",
-        description="Manage a local shared-GPU development fleet",
+        description="Manage a local development fleet",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Installed commands:\n"
@@ -53,7 +60,7 @@ def _main(argv: list[str]) -> int:
     bundle.add_commands(commands)
     dev = commands.add_parser(
         "dev",
-        help="Run independent engines on one local NVIDIA GPU",
+        help="Run independent engines on one local NVIDIA GPU, or one GPU per engine",
         description="Use the native Linux/WSL2 runtime: init writes checked instance inputs, "
         "up reports launched after engine profiling and router startup, and verify reports "
         "ready after directed KV checks and a routed request.",
@@ -179,7 +186,19 @@ def _main(argv: list[str]) -> int:
                 type=Path,
                 help="pinned tokenizer and model config directory (default: pinned HF cache)",
             )
-            action.add_argument("--gpu", help="physical GPU UUID (default: single discovered GPU)")
+            gpus = action.add_mutually_exclusive_group()
+            gpus.add_argument(
+                "--gpu",
+                help="physical GPU UUID that every engine shares (default: single discovered GPU)",
+            )
+            gpus.add_argument(
+                "--gpus",
+                type=_gpu_list,
+                metavar="UUID,UUID,...",
+                help="physical GPU UUIDs, one GPU per engine: engine n runs on the nth GPU; "
+                "the engines form no shared_device group, so they can leave and rejoin the "
+                "router at runtime",
+            )
             action.add_argument(
                 "--engine-count",
                 type=int,
@@ -282,6 +301,7 @@ def _main(argv: list[str]) -> int:
                 model_path=args.model,
                 fabric_interface=args.interface,
                 gpu_uuid=args.gpu,
+                gpu_uuids=args.gpus,
                 template=lifecycle.read(args.template) if args.template else None,
                 engine_count=args.engine_count,
                 port_base=args.port_base,
