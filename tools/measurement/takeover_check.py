@@ -259,10 +259,15 @@ async def takeovers(
             await wait_exit(old, 60.0)
             record["exited_s"] = round(time.time() - signalled, 3)
             routers.start(active, standby_of=standby)
-        # Until it exits, the stopped process can still answer as the holder.
-        restarted = args.restart_after is None
-        holder = await wait_holder(http, routers, [standby, active] if restarted else [standby])
+        # A SIGTERM process answers as the holder until it starts shutting down, so only a
+        # killed or restarted router is a candidate.
+        candidates = [standby]
+        if args.restart_after is None or args.signal == "KILL":
+            candidates.append(active)
+        holder = await wait_holder(http, routers, candidates)
         record["holder"] = holder
+        if args.restart_after is not None and holder != standby:
+            raise RuntimeError(f"{holder} took over, not the standby {standby}")
         record["holder_ready_s"] = round(time.time() - signalled, 3)
         if args.restart_after is not None:
             await wait_exit(old, 60.0)
@@ -376,6 +381,9 @@ async def run(args: argparse.Namespace) -> int:
                 process.wait(timeout=35)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait()
+            if process.stdout is not None:
+                process.stdout.close()
     errors = []
     statuses: Counter[str] = Counter()
     for row in rows:

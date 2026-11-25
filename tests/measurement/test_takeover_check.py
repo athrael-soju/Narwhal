@@ -45,6 +45,20 @@ class ShippedConfigTests(unittest.TestCase):
         self.assertEqual(options["rise"], "1")
         self.assertEqual(self.setting(r"^\s*timeout check\s+(\S+)$"), "1s")
 
+    def test_a_router_is_in_rotation_while_it_controls_the_fleet_after_taking_over(self):
+        checks = re.findall(r"^\s*http-check (.+)$", SHIPPED, re.MULTILINE)
+        self.assertEqual(
+            checks,
+            [
+                "connect",
+                "send meth GET uri /narwhal/targets",
+                "expect status 200",
+                "connect",
+                "send meth GET uri /ready",
+                'expect ! string "engine identity validation pending"',
+            ],
+        )
+
     def test_requests_wait_on_a_refusing_backup_while_no_router_is_in_rotation(self):
         hold = self.setting(r"^\s*server hold (.+)$").split()
         self.assertEqual(hold[0], "127.0.0.1:1")
@@ -71,29 +85,29 @@ class ShippedConfigTests(unittest.TestCase):
 
 @unittest.skipUnless(_image_present(), f"needs Docker with {check.DEFAULT_IMAGE} pulled")
 class ImmediateRestartTakeoverTests(unittest.TestCase):
+    def run_check(self, *options: str) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "run"
+            argv = ["--out", str(out), "--takeovers", "1", "--rate", "4", "--warmup", "2"]
+            with redirect_stdout(io.StringIO()):
+                check.main([*argv, *options])
+            return json.loads((out / "report.json").read_text())
+
     def test_a_sigterm_takeover_with_an_immediate_restart_returns_no_client_503(self):
         # 12 failed probes hold the new holder's readiness to about 3 s after the SIGTERM, so
         # the restarted router answers /ready with 503 for about 2 s before the holder is ready.
-        with tempfile.TemporaryDirectory() as directory:
-            out = Path(directory) / "run"
-            argv = [
-                "--out",
-                str(out),
-                "--takeovers",
-                "1",
-                "--takeover-after",
-                "12",
-                "--rate",
-                "4",
-                "--warmup",
-                "2",
-                "--interval",
-                "4",
-            ]
-            with redirect_stdout(io.StringIO()):
-                check.main(argv)
-            report = json.loads((out / "report.json").read_text())
+        report = self.run_check("--takeover-after", "12", "--interval", "4")
         (takeover,) = report["takeovers"]
         self.assertGreater(takeover["holder_ready_s"], takeover["restarted_answered_s"])
         self.assertGreater(takeover["holder_ready_s"], 2.0)
+        self.assertEqual(report["statuses"].get("503", 0), 0, report["errors"])
+
+    def test_a_sigkill_takeover_by_the_standby_returns_no_client_503(self):
+        # The killed router restarts only after the standby holds the lease, at its expiry.
+        report = self.run_check(
+            "--signal", "KILL", "--restart-after", "1", "--lease-ttl", "3", "--interval", "6"
+        )
+        (takeover,) = report["takeovers"]
+        self.assertEqual((takeover["stopped"], takeover["holder"]), ("router-a", "router-b"))
+        self.assertGreater(takeover["holder_ready_s"], 1.0)
         self.assertEqual(report["statuses"].get("503", 0), 0, report["errors"])
