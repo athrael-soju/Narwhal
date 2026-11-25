@@ -1063,6 +1063,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_haproxy_health_route_remains_available(self):
         config = (ROOT / "deploy/ha/haproxy.cfg").read_text()
-        path = re.search(r"http-check send meth GET uri (\S+)", config)[1]
-        response = await self.client.get(path)
-        self.assertEqual(response.status_code, 200, response.text)
+        paths = re.findall(r"http-check send meth GET uri (\S+)", config)
+        self.assertEqual(paths, ["/narwhal/targets", "/ready"])
+        for path in paths:
+            response = await self.client.get(path)
+            self.assertEqual(response.status_code, 200, response.text)
