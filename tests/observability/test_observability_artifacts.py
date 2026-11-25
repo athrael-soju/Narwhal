@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -180,6 +181,27 @@ class OrchestratorDashboardTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, artifacts.TOOL_METRICS_URL_ENV),
             ):
                 artifacts.tool_target({artifacts.TOOL_METRICS_URL_ENV: url})
+
+    def test_a_pair_discovers_engines_from_one_source_that_reaches_the_active_router(self):
+        """Prometheus keeps a failed discovery source's last list, one list per source.
+
+        A router without the lease answers /narwhal/targets with HTTP 503, so a discovery
+        source per router would keep the former active router's final list: an engine that
+        leaves after a takeover would stay a target. The pair reads one source, the load
+        balancer, and Prometheus scrapes each router's /metrics directly.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "mounts"
+            pair = ("router-a:8000", "router-b:8000")
+            artifacts.stage_artifacts(TargetContract(pair, "balancer:8000"), root=root)
+            prometheus = (root / "prometheus/prometheus.yml").read_text()
+            routers = json.loads((root / "prometheus/targets/router.json").read_text())
+        engines = prometheus.split("  - job_name: engines\n")[1].split("  - job_name:")[0]
+        self.assertEqual(
+            re.findall(r"- url: (\S+)", prometheus), ["http://balancer:8000/narwhal/targets"]
+        )
+        self.assertEqual(engines.count("http_sd_configs:"), 1)
+        self.assertEqual(routers, [{"targets": list(pair)}])
 
     def test_staging_writes_the_tool_target_for_the_tool_job(self):
         with tempfile.TemporaryDirectory() as temporary:
