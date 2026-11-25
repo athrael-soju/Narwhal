@@ -301,7 +301,7 @@ Run once from the router shell after every sidecar passes:
 
 - Each sidecar's attestation matches its engine's live identity.
 - Every engine carries the same complete contract.
-- For a GGUF model, every engine attests the same `model_sha256`.
+- Every engine attests the same model files: the same `model_config_sha256`, `model_tree_sha256` and `model_sha256` in its `launch` evidence.
 
 `finalize-fleet` writes:
 
@@ -310,7 +310,7 @@ Run once from the router shell after every sidecar passes:
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, compare `launch.model_sha256` in each engine's `engine-attestation.json`.
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
 
 Recovery:
 

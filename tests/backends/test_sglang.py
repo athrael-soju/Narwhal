@@ -36,6 +36,7 @@ from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Phase, Request, Role
 from tests.backends.fixtures.sglang import batch, page_stored
 from tests.backends.test_sglang_registrations import fake_sglang
+from tests.deployment.fixtures import model_file_fields
 from tests.fixtures import fleet
 
 BACKEND = load("sglang")
@@ -586,6 +587,7 @@ class EngineDocumentTests(unittest.TestCase):
                 "expected_packages": PINS,
             }
             identity = {"process": PROCESS}
+        launch.update(model_file_fields(launch))
         (run / "launch.json").write_text(json.dumps(launch))
         plan_hash = digest(run / "launch.json")
         (run / "checked.json").write_text(json.dumps({"plan_sha256": plan_hash, **checked}))
@@ -660,6 +662,9 @@ class EngineDocumentTests(unittest.TestCase):
                 "image_id": "",
                 "expected_packages": PINS,
                 "model_config_sha256": model_config,
+                "model_tree_sha256": json.loads((run / "launch.json").read_text())[
+                    "model_tree_sha256"
+                ],
                 "model_revision": "2" * 40,
                 "launch_sha256": "3" * 64,
                 "launcher_code_sha256": "5" * 64,

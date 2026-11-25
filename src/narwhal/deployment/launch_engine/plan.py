@@ -19,6 +19,7 @@ from .backend import (
     launcher,
     plan_launcher,
 )
+from .checkpoint import checkpoint_status, file_status, inspect_checkpoint, json_digest
 from .runtime import code_digest, digest, regular_file_digest, write_private
 from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
@@ -531,6 +532,12 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
     model_sha256 = model_file_digest(plan, env, backend)
+    # Later stages compare file status instead of reading the model files again.
+    tree, status = model_files(plan)
+    pinned = env.get("NARWHAL_MODEL_TREE_SHA256")
+    if pinned and tree != pinned:
+        raise ValueError("model files differ from NARWHAL_MODEL_TREE_SHA256")
+    plan.update(model_tree_sha256=tree, model_status_sha256=status)
     engine = plan_launcher(plan)
     capture = cache_capture(engine) is not None
     if capture:
@@ -572,6 +579,80 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
     (output / "hook").chmod(0o755)
     check_name = "image" if backend == "container" else "native runtime"
     print(f"Prepared {record['role']}; review launch.json and run the {check_name} check.")
+
+
+def _outside_model_dir(plan: dict) -> Path | None:
+    """Return a native launch's model file or directory when it lies outside `model_dir`."""
+    if plan.get("backend") != "native" or not plan.get("model_path"):
+        return None
+    path = Path(os.path.abspath(plan["model_path"]))
+    # A Hugging Face snapshot entry is a symbolic link out of the snapshot directory.
+    roots = {Path(plan["model_dir"]), Path(plan["model_dir"]).resolve()}
+    inside = any(
+        candidate.is_relative_to(root) for candidate in (path, path.resolve()) for root in roots
+    )
+    return None if inside else path
+
+
+def _hashed_file(path: Path) -> tuple[str, str]:
+    before = path.stat()
+    content = digest(path)
+    status = file_status(path.name, path.stat())
+    if status != file_status(path.name, before):
+        raise ValueError(f"model file changed during inspection: {path}")
+    return content, json_digest(status)
+
+
+def _combined(model_dir: str, outside: str | None) -> str:
+    return model_dir if outside is None else json_digest([model_dir, outside])
+
+
+def model_files(plan: dict) -> tuple[str, str]:
+    """Hash the launch's model files, returning their tree digest and status fingerprint.
+
+    The files are those under `model_dir`, plus a native launch's model file or directory
+    outside it.
+    """
+    manifest = inspect_checkpoint(Path(plan["model_dir"]))
+    outside = _outside_model_dir(plan)
+    if outside is None:
+        return manifest["model_tree_sha256"], manifest["status_sha256"]
+    if outside.is_dir():
+        extra = inspect_checkpoint(outside)
+        content, status = extra["model_tree_sha256"], extra["status_sha256"]
+    else:
+        content, status = _hashed_file(outside)
+    return (
+        _combined(manifest["model_tree_sha256"], content),
+        _combined(manifest["status_sha256"], status),
+    )
+
+
+def _model_status(plan: dict) -> str:
+    status = checkpoint_status(Path(plan["model_dir"]))
+    outside = _outside_model_dir(plan)
+    if outside is None:
+        return status
+    if outside.is_dir():
+        return _combined(status, checkpoint_status(outside))
+    return _combined(status, json_digest(file_status(outside.name, outside.stat())))
+
+
+def check_model_files(plan: dict) -> None:
+    """Refuse a launch whose model files changed since `prepare` hashed them.
+
+    The check compares file status, so it reads no model file.
+    """
+    if "model_status_sha256" not in plan:
+        raise ValueError("launch plan predates model file digests; prepare a fresh launch plan")
+    try:
+        status = _model_status(plan)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"model files unreadable: {exc}; prepare a fresh launch plan") from exc
+    if status != plan["model_status_sha256"]:
+        raise ValueError(
+            "model files changed after launch preparation; prepare a fresh launch plan"
+        )
 
 
 def config_files_changed(run: Path, plan: dict) -> str | None:

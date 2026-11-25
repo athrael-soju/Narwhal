@@ -177,7 +177,7 @@ To fill in the fleet contract:
     .venv/bin/python -m narwhal.deployment.attestation_contract.cli finalize-fleet --fleet runs/deployment/fleet.json
     ```
 
-`finalize-fleet` checks each sidecar's response against its live engine. When the contracts are complete and identical, it writes the `engine_contract` into the `--fleet` file and saves the previous file as `runs/fleet.before-attestation-<id>.json`. When the file already holds that contract, it leaves the file unchanged. When a contract is incomplete, the contracts differ, the engines attest different model files in `launch.model_sha256`, or the file holds another contract, it exits with status 1.
+`finalize-fleet` checks each sidecar's response against its live engine. When the contracts are complete and identical and every engine attests the same model files, it writes the `engine_contract` into the `--fleet` file and saves the previous file as `runs/fleet.before-attestation-<id>.json`. When the file already holds that contract, it leaves the file unchanged. When a contract is incomplete, the contracts or the model files differ, or the file holds another contract, it exits with status 1.
 
 Each [attestation document](https://github.com/athrael-soju/Narwhal/blob/main/config/engine-attestation.example.json) declares this identity:
 
@@ -213,7 +213,7 @@ An attestation document with launch evidence adds two fields to each sidecar res
 - `launch`, the launch evidence
 - `launch_digest`, a digest over the contract and the launch evidence
 
-An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook, and on a launch from a model file, such as a GGUF file, a change to that file's SHA-256. Edits to their comments, docstrings or formatting keep the `launch_digest`.
+An engine restarted from an identical launch keeps its `launch_digest`. Each change to the engine's launch record, including `runtime.environment`, gives the engine a new `launch_digest`. So does a change to the code of Narwhal's engine launcher, or on vLLM and TensorRT-LLM of its cache capture hook. Edits to their comments, docstrings or formatting keep the `launch_digest`. A change to any model file changes `launch.model_tree_sha256`, and with it the `launch_digest`.
 
 The process generation is the identity that saved profiles and first-token calibrations bind to:
 

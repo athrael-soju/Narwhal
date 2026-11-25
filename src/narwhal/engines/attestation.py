@@ -254,9 +254,11 @@ def attested_launch(payload: Any) -> dict[str, Any]:
     return launch if isinstance(launch, dict) else {}
 
 
-# The attested launch fields that readmission and joins require to match across the fleet:
-# the SHA-256 of the checkpoint's config.json and the model revision the launch names.
-MODEL_IDENTITY_FIELDS = ("model_config_sha256", "model_revision")
+# The attested launch fields that must match across the fleet: the SHA-256 of the checkpoint's
+# config.json, the digest of every model file the launch reads, and the SHA-256 of a model
+# file the launch names. A launch that names no model file attests no model_sha256, and the
+# absent field compares as None. model_revision is a label, so it stays out of the comparison.
+MODEL_IDENTITY_FIELDS = ("model_config_sha256", "model_tree_sha256", "model_sha256")
 
 
 def model_identity(launch: Mapping[str, Any]) -> dict[str, Any]:

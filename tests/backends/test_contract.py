@@ -45,6 +45,7 @@ from tests.backends.contract import (
 )
 from tests.characterization.golden import assert_golden
 from tests.characterization.test_launch import env_lines, placeholders, redacted
+from tests.deployment.fixtures import model_file_fields
 from tests.wire import engine_transports, serving_app
 from tools.measurement import simulated_engine as sim
 
@@ -497,6 +498,8 @@ class BackendFlows(Launched, unittest.TestCase):
                 )
                 run, plan, _ = self.prepared(fixture=fixture)
                 (Path(plan["model_dir"]) / "tokenizer_config.json").write_text(CUSTOM_CODE)
+                # The new file is part of the model, as if prepare had hashed it.
+                plan.update(model_file_fields(plan))
                 stages = Stages(plan, fixture.check_output(plan))
                 if runtime:
                     # A separate tokenizer leaves the model directory's tokenizer files unused.

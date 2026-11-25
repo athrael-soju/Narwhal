@@ -35,6 +35,7 @@ def observation(runtime="rocm", address="10.0.0.1"):
         "hostname": "synthetic-host",
         "image_id": "sha256:" + "a" * 64,
         "model_sha256": "b" * 64,
+        "model_tree_sha256": "c" * 64,
         "model_dtype": "bfloat16",
         "max_model_len": 32768,
         "packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0", "torch": "2.12.0"},
@@ -408,6 +409,8 @@ class DiscoveryTests(unittest.TestCase):
             for node in (1, 2):
                 role = f"engine-{node}"
                 role_env = select_values("engine", node, fleet, env)
+                # prepare checks the checkpoint against the digest discovery recorded.
+                self.assertEqual(role_env["NARWHAL_MODEL_TREE_SHA256"], "c" * 64)
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
                 )

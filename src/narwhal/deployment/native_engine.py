@@ -22,6 +22,7 @@ from . import stages
 from .launch_engine.backend import cache_capture, engine_backend, plan_launcher
 from .launch_engine.check import read_checked
 from .launch_engine.plan import (
+    check_model_files,
     config_files_changed,
     kv_events_directory,
     launch_headers,
@@ -128,6 +129,7 @@ def _checked_plan(run: Path, plan: dict) -> dict:
         raise ValueError("model config changed after launch preparation")
     if not Path(plan["model_path"]).exists() or model_file_changed(plan):
         raise ValueError("model file changed after launch preparation")
+    check_model_files(plan)
     if cache_capture(plan_launcher(plan)) is not None and (
         digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]
     ):

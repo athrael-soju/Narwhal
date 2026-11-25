@@ -20,6 +20,7 @@ from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
 from narwhal.deployment.launch_engine import start as launch_start
 from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspect_checkpoint
 from narwhal.deployment.launch_engine.plan import (
     build,
     load,
@@ -109,6 +110,63 @@ class EngineLauncherTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "model file changed"):
                     check(run, load(run))
                 invoke.assert_not_called()
+
+    def test_prepare_records_the_model_tree_and_checks_its_pin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/model.safetensors").write_bytes(b"weights")
+            tree = inspect_checkpoint(root / "model")["model_tree_sha256"]
+            with self.assertRaisesRegex(ValueError, "differ from NARWHAL_MODEL_TREE_SHA256"):
+                prepare(root / "refused", {**env, "NARWHAL_MODEL_TREE_SHA256": "0" * 64})
+            self.assertFalse((root / "refused").exists())
+            prepare(root / "launch", {**env, "NARWHAL_MODEL_TREE_SHA256": tree})
+            plan = load(root / "launch")
+            self.assertEqual(plan["model_tree_sha256"], tree)
+            self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_check_refuses_model_files_replaced_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            run = root / "launch"
+            prepare(run, env)
+            plan = load(run)
+            # Other weights of the same size, under the same name.
+            replacement = root / "replacement"
+            replacement.write_bytes(b"WEIGHTS")
+            replacement.replace(weights)
+            with (
+                patched_docker() as docker,
+                self.assertRaisesRegex(ValueError, "^model files changed after launch preparation"),
+            ):
+                check(run, plan)
+            docker.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "predates model file digests"):
+                check(run, {k: v for k, v in plan.items() if k != "model_status_sha256"})
+
+    def test_a_native_model_file_outside_the_model_dir_joins_the_tree(self):
+        trees = []
+        for content in (b"first", b"second"):
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                snapshot = root / "snapshot"
+                snapshot.mkdir()
+                (snapshot / "weights.gguf").write_bytes(content)
+                env.pop("NARWHAL_ENGINE_IMAGE")
+                env["NARWHAL_MODEL_PATH"] = str(snapshot / "weights.gguf")
+                env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+                record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+                Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+                prepare(root / "launch", env, backend="native")
+                trees.append(load(root / "launch")["model_tree_sha256"])
+                directory = inspect_checkpoint(root / "model")["model_tree_sha256"]
+        self.assertNotEqual(trees[0], trees[1])
+        self.assertNotIn(directory, trees)
 
     def test_native_gguf_keeps_snapshot_path_for_sidecar_files(self):
         with tempfile.TemporaryDirectory() as folder:

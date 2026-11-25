@@ -18,6 +18,7 @@ from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import check as launch_check
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import start as launch_start
+from narwhal.deployment.launch_engine.plan import model_files
 from narwhal.deployment.launch_engine.runtime import digest
 
 VLLM_HOOK = load_backend("vllm").launcher().cache_hook
@@ -150,6 +151,12 @@ def process_group_with_worker():
                 while True:
                     os.waitpid(-leader.pid, 0)
         libc.prctl(36, previous.value, 0, 0, 0)
+
+
+def model_file_fields(plan):
+    """Return the model file digests that `prepare` records for `plan`."""
+    tree, status = model_files(plan)
+    return {"model_tree_sha256": tree, "model_status_sha256": status}
 
 
 def launch_document():

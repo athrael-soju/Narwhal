@@ -16,6 +16,7 @@ from .backend import cache_capture, plan_launcher
 from .check import read_checked, require_checked
 from .docker import docker, run_runtime_script
 from .plan import (
+    check_model_files,
     config_files_changed,
     container_options,
     env_file_name,
@@ -51,6 +52,7 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError(f"engine configuration {changed} changed; prepare a fresh launch plan")
     if model_file_changed(plan):
         raise ValueError("model file changed; prepare a fresh launch plan")
+    check_model_files(plan)
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
     cid = docker(

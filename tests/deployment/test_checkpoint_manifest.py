@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deployment.checkpoint_manifest import inspect_checkpoint
+from narwhal.deployment.launch_engine import checkpoint
+from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspect_checkpoint
 
 
 class CheckpointManifestTests(unittest.TestCase):
@@ -14,7 +15,7 @@ class CheckpointManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / "config.json").write_text("{}")
-            script = Path(__file__).resolve().parents[2] / "tools/deployment/checkpoint_manifest.py"
+            script = Path(checkpoint.__file__)
             result = subprocess.run(
                 ["python3", "-c", script.read_text()],
                 input=json.dumps({"model_dir": str(root)}),
@@ -70,6 +71,30 @@ class CheckpointManifestTests(unittest.TestCase):
             self.assertNotEqual(
                 first["model_tree_sha256"], inspect_checkpoint(root)["model_tree_sha256"]
             )
+
+    def test_file_status_matches_the_hashed_files_until_one_is_replaced(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text("{}")
+            weights = root / "model.safetensors"
+            weights.write_bytes(b"weights")
+            (root / "README.md").write_text("card")
+            manifest = inspect_checkpoint(root)
+            self.assertEqual(checkpoint_status(root), manifest["status_sha256"])
+            # Excluded files stay out of the status as they stay out of the digest.
+            (root / "README.md").write_text("revised card")
+            self.assertEqual(checkpoint_status(root), manifest["status_sha256"])
+            # Same name, size and bytes from another inode, as a copy and rename leaves it.
+            replacement = root / "replacement"
+            replacement.write_bytes(b"weights")
+            replacement.replace(weights)
+            self.assertEqual(
+                inspect_checkpoint(root)["model_tree_sha256"], manifest["model_tree_sha256"]
+            )
+            self.assertNotEqual(checkpoint_status(root), manifest["status_sha256"])
+            before = checkpoint_status(root)
+            (root / "extra.safetensors").write_bytes(b"more")
+            self.assertNotEqual(checkpoint_status(root), before)
 
     def test_missing_config_blocks_inspection(self):
         with (
