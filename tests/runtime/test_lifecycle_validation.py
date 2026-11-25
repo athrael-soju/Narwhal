@@ -262,6 +262,53 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.records["e0"].state, "active")
         self.assertNotIn("e0", self.router.scheduler.draining)
 
+    def serve_model(self, iid, config_sha256):
+        """Serve `iid` an attestation that names `config_sha256`, with its profile bound to it."""
+        launch = {**(self.launch or {}), "model_config_sha256": config_sha256}
+        payload = make_attestation(
+            replace(self.document, launch=launch),
+            EngineIdentity(self.cfg.engine_contract.engine_version, self.starts[iid]),
+        )
+        self.responses[(iid, "attestation")] = payload
+        self.router.profiles.put(
+            replace(self.router.profiles.get(iid), generation_digest=payload["launch_digest"])
+        )
+
+    async def test_readmission_requires_the_model_files_of_the_members_in_placement(self):
+        self.serve_model("e3", "a" * 64)
+        self.serve_model("e0", "a" * 64)
+        outcome = await self.validate()
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.assertIn("model identity", outcome.checks["e0"])
+        self.serve_model("e0", "c" * 64)
+        self.router.engines.prefill.reset_mock()
+        outcome = await self.validate()
+        changed, member = "c" * 64, "a" * 64
+        self.assertEqual(
+            outcome.failures["e0"],
+            [f"model identity: launch.model_config_sha256 is '{changed}', e3 attests '{member}'"],
+        )
+        self.assertNotIn("e3", outcome.failures)
+        self.router.engines.prefill.assert_not_awaited()
+
+    async def test_a_wave_returns_only_when_its_members_load_the_same_model_files(self):
+        self.cfg.engine_restart_policy = "whole_wave"
+        self.manager.wave_id = "model-wave"
+        for iid in self.starts:
+            self.router.scheduler.drain(iid)
+            self.manager.records[iid] = DrainRecord(
+                iid, "validating", 1, 2, wave_id="model-wave", old_process_start=99
+            )
+        self.serve_model("e0", "a" * 64)
+        self.serve_model("e3", "a" * 64)
+        outcome = await self.validate(wave=True, engines=["e0", "e3"])
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.assertIn("model identity", outcome.checks["e3"])
+        self.serve_model("e3", "c" * 64)
+        outcome = await self.validate(wave=True, engines=["e0", "e3"])
+        self.assertEqual(set(outcome.failures), {"e0", "e3"})
+        self.assertIn("e0 attests", outcome.failures["e3"][0])
+
     async def test_readmission_counts_its_generation_check_and_fabric_pairs(self):
         monitor = self.router.monitor
         with patch.object(monitor, "sent", wraps=monitor.sent) as sent:

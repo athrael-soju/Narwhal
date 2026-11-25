@@ -147,6 +147,43 @@ class JoinTests(JoinHarness):
         self.assertIn("engine_version", outcome.error)
         self.router.engines.prefill.assert_not_awaited()
 
+    def launch_model(self, iid, **fields):
+        """Serve `iid` an attestation whose launch names `fields`, with its profile bound to it."""
+        launch = {"model_config_sha256": "a" * 64, "model_revision": "b" * 40, **fields}
+        document = replace(self.document, launch=launch)
+        payload = self.attestation(iid, document)
+        self.responses[(iid, "attestation")] = payload
+        self.router.profiles.put(profile(iid, generation_digest=payload["launch_digest"]))
+        return launch
+
+    async def test_an_engine_with_the_members_model_files_joins(self):
+        for iid in self.starts:
+            self.launch_model(iid)
+        outcome = await self.join()
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertIn("model identity", outcome.checks)
+
+    async def test_an_engine_with_other_model_files_is_refused(self):
+        for field, value in (("model_config_sha256", "c" * 64), ("model_revision", "d" * 40)):
+            with self.subTest(field=field):
+                for iid in ("e0", "e3"):
+                    self.launch_model(iid)
+                self.launch_model("e6", **{field: value})
+                outcome = await self.join()
+                self.assert_refused(outcome, f"model identity: launch.{field} is '{value}'")
+                self.assertNotIn("model identity", outcome.checks)
+                self.router.engines.prefill.assert_not_awaited()
+
+    async def test_the_model_files_of_every_member_in_placement_must_match(self):
+        for iid in self.starts:
+            self.launch_model(iid)
+        self.router.launches["e3"] = {"model_config_sha256": "c" * 64, "model_revision": "b" * 40}
+        outcome = await self.join()
+        self.assert_refused(outcome, "e3 attests 'c")
+        self.router.scheduler.eject("e3", "process_identity")
+        outcome = await self.join()
+        self.assertTrue(outcome.joined, outcome.error)
+
     async def test_an_unreadable_identity_is_not_called_a_contract_mismatch(self):
         async def blank(cfg, spec, **kwargs):
             if spec.iid == "e6":

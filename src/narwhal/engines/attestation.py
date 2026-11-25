@@ -254,6 +254,14 @@ def attested_launch(payload: Any) -> dict[str, Any]:
     return launch if isinstance(launch, dict) else {}
 
 
+# The attested launch fields that identify the model files an engine loaded.
+MODEL_IDENTITY_FIELDS = ("model_config_sha256", "model_revision")
+
+
+def model_identity(launch: Mapping[str, Any]) -> dict[str, Any]:
+    return {name: launch.get(name) for name in MODEL_IDENTITY_FIELDS}
+
+
 def attested_option(payload: Any, name: str) -> str | None:
     # The first value of a launch flag, given as `name value` or `name=value`.
     args = attested_launch(payload).get("args")

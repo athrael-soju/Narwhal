@@ -35,7 +35,7 @@ The router reads the profile store when an engine joins, at startup, and when a 
 
 ### Start the engine
 
-1. Start the engine and its attestation sidecar under the fleet's engine contract, as in [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) and [Starting the sidecar](../deploy/05-Attest.md#starting-the-sidecar).
+1. Start the engine and its attestation sidecar from the members' checkpoint, under the fleet's engine contract, as in [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) and [Starting the sidecar](../deploy/05-Attest.md#starting-the-sidecar).
 2. Check that the engine's `/health` returns HTTP 200 and that `/v1/models` lists the configured model.
 
 ### Write the candidate fleet file
