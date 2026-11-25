@@ -143,6 +143,14 @@ def _main(argv: list[str]) -> int:
         help="repetitions per decode input/concurrency point, at least 1 (default: %(default)s)",
     )
     ap.add_argument(
+        "--warmup-requests",
+        type=int,
+        default=0,
+        help="discarded requests each engine serves before each of its two sweep phases, "
+        "at least 0 "
+        "(default: %(default)s)",
+    )
+    ap.add_argument(
         "--prefill-repeats",
         type=int,
         default=PREFILL_REPEATS,
@@ -234,6 +242,7 @@ def _main(argv: list[str]) -> int:
             prefill_repeats=args.prefill_repeats,
             cached_prefix_lens=_int_list(args.cached_prefix_lens),
             cached_suffix_lens=_int_list(args.cached_suffix_lens),
+            warmup_requests=args.warmup_requests,
         )
     except ValueError:
         ap.error(
@@ -249,6 +258,8 @@ def _main(argv: list[str]) -> int:
         ap.error("cached prefix and suffix lengths must be positive")
     if len(set(sweep.prefill_lens)) < 3:
         ap.error("the sweep needs at least three distinct prefill lengths")
+    if sweep.warmup_requests < 0:
+        ap.error("--warmup-requests must be at least 0")
     if len(set(sweep.decode_input_lens)) < 2 or len(set(sweep.decode_concurrency)) < 2:
         ap.error(
             "the decode fit needs two distinct input lengths and two distinct concurrency steps"

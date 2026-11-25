@@ -67,6 +67,7 @@ ACTIONS = (
     "capture-cache",
     "cache-registration",
     "start-shared",
+    "start-native",
     "stop-native",
 )
 
@@ -99,6 +100,9 @@ def _main(argv: list[str]) -> int:
         "start-shared": "Start two to eight checked plans on one declared GPU, verify each "
         "engine's readiness and memory allowance, and record shared-start.json "
         "(container and native).",
+        "start-native": "Start one to eight checked native plans, each on the one GPU its "
+        "CUDA_VISIBLE_DEVICES names, verify each engine's readiness and free memory, and record "
+        "native-start.json (native only).",
         "stop-native": "Stop owned process groups after validating the recorded native "
         "process identities in the run directory (native only).",
     }
@@ -162,11 +166,26 @@ def _main(argv: list[str]) -> int:
         default="container",
         help="backend shared by every selected plan (default: %(default)s)",
     )
+    own = public["start-native"]
+    own.add_argument(
+        "--run",
+        type=Path,
+        action="append",
+        required=True,
+        help="checked native launch directory; repeat for one to eight engines, each on its "
+        "own GPU",
+    )
+    own.add_argument(
+        "--ready-seconds",
+        type=int,
+        default=READY_SECONDS,
+        help="readiness budget in seconds per engine, at least 1 (default: %(default)s)",
+    )
     public["stop-native"].add_argument(
         "--run", type=Path, required=True, help="native launch directory with process records"
     )
     args = parser.parse_args(argv)
-    if args.command == "start-shared" and args.ready_seconds < 1:
+    if args.command in ("start-shared", "start-native") and args.ready_seconds < 1:
         parser.error(f"--ready-seconds must be positive, got {args.ready_seconds}")
     results.set_operation(args.command)
     roots = [args.out] if args.command == "prepare" else args.run
@@ -181,6 +200,7 @@ def _main(argv: list[str]) -> int:
             "container.id",
             "native-process.json",
             "shared-start.json",
+            "native-start.json",
             "cache-layout.json",
             "model-dimensions.json",
             "cache-registration.json",
@@ -205,6 +225,8 @@ def _main(argv: list[str]) -> int:
                 native_engine.start_shared(runs, args.ready_seconds)
             else:
                 start_shared(runs, args.ready_seconds)
+        elif args.command == "start-native":
+            native_engine.start_each([run.resolve() for run in args.run], args.ready_seconds)
         elif args.command == "stop-native":
             native_engine.stop(args.run.resolve())
         else:

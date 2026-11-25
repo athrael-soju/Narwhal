@@ -4,7 +4,7 @@ description: Narwhal dev runs several vLLM, SGLang, TensorRT-LLM or llama.cpp en
 
 # Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, or [each on its own GPU](#running-each-engine-on-its-own-gpu), with engine attestation, measured profiles and KV transfer evidence.
 
 An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
@@ -97,7 +97,7 @@ narwhal dev status
 `init` runs these steps:
 
 1. Checks the model and tokenizer checksums.
-2. Selects a CUDA GPU by UUID and checks its free VRAM.
+2. Selects a CUDA GPU by UUID, or one GPU per engine with `--gpus`, and checks free VRAM.
 3. Checks the runtime package versions, imports the engine runtime, and checks the GGUF plugin hashes that a vLLM template pins.
 4. Checks the network interface and ports.
 5. Writes the private instance.
@@ -204,7 +204,7 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
       -v "$PWD:/work" -w /work nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc3 bash
     ```
 
-    Replace `0` with the index of the GPU the engines use.
+    Replace `0` with the index of the GPU the engines use. For [engines on their own GPUs](#running-each-engine-on-its-own-gpu), list one index per engine, such as `'"device=0,1,2"'`.
 
 3. Inside the container, install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
 
@@ -230,6 +230,84 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
     ```
 
     On its first start, each engine compiles its kernels before it answers `/health`. The template's `runtime.ready_seconds` gives each engine 900 seconds to become healthy, in place of the default 180.
+
+## Running each engine on its own GPU
+
+On a host with several NVIDIA GPUs, `narwhal dev init --gpus` runs each engine on its own GPU, as [One GPU per engine](cli/Dev.md#one-gpu-per-engine) describes. The engines form no `shared_device` group, so an engine can leave the router and rejoin it while the fleet runs.
+
+1. Install the runtime and model for your template, as the sections above describe.
+2. List the GPUs:
+
+    ```bash
+    nvidia-smi --query-gpu=index,name,uuid,memory.total,memory.used --format=csv
+    ```
+
+3. Initialize, start and verify an instance with three engines on the first three GPUs:
+
+    ```bash
+    gpus=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 3 | paste -sd, -)
+    narwhal dev init --gpus "$gpus" --engine-count 3 \
+      --instance runs/dev-gpus --interface "$interface"
+    narwhal dev up --instance runs/dev-gpus
+    narwhal dev verify --instance runs/dev-gpus
+    ```
+
+    For the SGLang or TensorRT-LLM template, also pass the exported template with `--template`.
+
+The router refuses a removal that would leave fewer than `controller.min_prefill` plus `controller.min_decode` engines, 2 in the installed templates, so remove an engine only from a fleet of three or more.
+
+### Removing and rejoining an engine
+
+The engines of an instance are `n1` to `n<count>`, and the router listens at `http://127.0.0.1:18000` with the installed ports.
+
+1. Read the run directory from `status`, and choose the engine:
+
+    ```bash
+    instance=runs/dev-gpus
+    RUN_DIR=$(narwhal dev status --instance "$instance" \
+      | python3 -c 'import json, sys; print(json.load(sys.stdin)["run"])')
+    ROUTER_URL='http://127.0.0.1:18000'
+    IID='n3'
+    ```
+
+2. Save the engine's entry from the run's fleet file:
+
+    ```bash
+    python3 - "$RUN_DIR/fleet.json" "$IID" > "$RUN_DIR/$IID.json" <<'PY'
+    import json
+    import sys
+
+    fleet = json.load(open(sys.argv[1]))
+    print(json.dumps(next(e for e in fleet["engines"] if e["iid"] == sys.argv[2])))
+    PY
+    ```
+
+3. Remove the engine:
+
+    ```bash
+    curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+      -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
+    ```
+
+    HTTP 200 means the engine left at once, and HTTP 202 that it is draining. To wait for a draining engine or read a refusal, follow [Drain and remove the engine](operate/08-Joining-and-Removing-Engines.md#drain-and-remove-the-engine). The engine keeps running, and the router sends it no requests. Keep it running to rejoin it. `narwhal dev down` stops it with the fleet.
+
+4. Rejoin the engine with its saved entry:
+
+    ```bash
+    curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+      -H 'content-type: application/json' -d @"$RUN_DIR/$IID.json" \
+      -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
+    ```
+
+    HTTP 200 means the engine joined. The run's profile store still holds the engine's profile for the same process, so the rejoin needs no profiling, store merge or fleet file change. On HTTP 409, `error` in the response names the refusal or the failed checks, as [Request the join](operate/08-Joining-and-Removing-Engines.md#request-the-join) describes.
+
+5. Check that `GET /narwhal/engines` lists the engine again:
+
+    ```bash
+    curl -fsS "$ROUTER_URL/narwhal/engines"
+    ```
+
+    After one removal and one rejoin, `generation` is `2`.
 
 ## Inspecting and stopping the instance
 
@@ -274,6 +352,7 @@ Stages and default budgets:
 | --- | --- | --- |
 | `engine-<n>` | Runtime check for engine `n` | 300 seconds |
 | `native-start-shared` | Native shared startup | `runtime.ready_seconds` for each engine, 180 seconds by default |
+| `native-start` | Native startup of engines on their own GPUs | `runtime.ready_seconds` for each engine, 180 seconds by default |
 | `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
 | `profile-merge` | Merging the role-split profiles, when `up` profiles more than one split | 300 seconds |

@@ -18,7 +18,7 @@ from ...deployment.attestation_contract.evidence import (
     live_native,
     parse_tagged_capture,
     read_json,
-    read_shared_start,
+    read_native_start,
     require_binding,
     require_prior_dimensions,
     write_private_json,
@@ -241,7 +241,7 @@ def capture_native_http(run: Path) -> None:
         raise ValueError("native HTTP version differs from the checked runtime")
     if (
         parse_process_start(metrics_response.text)
-        != read_shared_start(run)["process_start_time_seconds"]
+        != read_native_start(run)["process_start_time_seconds"]
     ):
         raise ValueError("native HTTP process start differs from the launch record")
     write_private_json(run / "version.json", version)
@@ -328,7 +328,7 @@ def attestation_evidence(context: AttestationContext) -> AttestationEvidence:
         raise ValueError("Handshake policy uses another connector configuration")
     version = read_json(run / "version.json").get("version")
     process_start = parse_process_start((run / "metrics.txt").read_text())
-    if native and process_start != read_shared_start(run)["process_start_time_seconds"]:
+    if native and process_start != read_native_start(run)["process_start_time_seconds"]:
         raise ValueError("HTTP process start differs from the native launch record")
     ranks = cache.get("ranks", [])
     tp = int(option(plan["args"], "--tensor-parallel-size"))

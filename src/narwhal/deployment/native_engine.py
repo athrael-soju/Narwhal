@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -24,12 +25,18 @@ from .launch_engine.plan import (
     config_files_changed,
     kv_events_directory,
     launch_headers,
+    load,
     model_file_changed,
     read_env,
     remove_kv_events_directory,
 )
 from .launch_engine.runtime import digest, write_private
-from .launch_engine.start import READY_SECONDS, gpu_memory, validate_shared_runs
+from .launch_engine.start import (
+    READY_SECONDS,
+    distinct_roles_and_ports,
+    gpu_memory,
+    validate_shared_runs,
+)
 
 
 def process_identity(pid: int) -> dict[str, int | str]:
@@ -244,39 +251,112 @@ def stop(run: Path) -> None:
     )
 
 
+# Files that show a launch directory already started an engine.
+STARTUP_RECORDS = ("shared-start.json", "native-start.json", "container.id", "native-process.json")
+
+
+def own_gpu(run: Path, plan: dict) -> str:
+    """The one GPU UUID that a plan's CUDA_VISIBLE_DEVICES selects."""
+    selected = read_env(run / "engine.env").get("CUDA_VISIBLE_DEVICES", "")
+    if not re.fullmatch(r"GPU-[0-9A-Za-z-]+", selected):
+        raise ValueError(
+            f"{plan['role']}: CUDA_VISIBLE_DEVICES={selected!r} must name one GPU by its UUID"
+        )
+    return selected
+
+
+def _memory_fraction(plan: dict) -> Decimal:
+    value = plan_launcher(plan).memory_fraction(plan["args"])
+    try:
+        fraction = Decimal(str(value)) if value is not None else None
+    except ArithmeticError:
+        fraction = None
+    if fraction is None or not fraction.is_finite() or not 0 < fraction <= 1:
+        raise ValueError(
+            f"{plan['role']}: native start requires one memory fraction argument above 0 "
+            "and at most 1"
+        )
+    return fraction
+
+
+def validate_native_runs(runs: list[Path]) -> list[tuple[Path, dict]]:
+    """Check one to eight native plans that each start an engine on a GPU of its own."""
+    if not 1 <= len(runs) <= 8 or len(set(runs)) != len(runs):
+        raise ValueError("native start requires one to eight distinct launch directories")
+    selected = [(run, load(run)) for run in runs]
+    gpus: dict[str, str] = {}
+    for run, plan in selected:
+        if plan.get("backend") != "native":
+            raise ValueError(f"{plan['role']}: native start requires a native launch plan")
+        if plan.get("shared_device") is not None:
+            raise ValueError(f"{plan['role']}: the plan shares its GPU; start it with start-shared")
+        gpu = own_gpu(run, plan)
+        if gpu in gpus:
+            raise ValueError(f"{plan['role']}: GPU {gpu} is also the GPU of {gpus[gpu]}")
+        gpus[gpu] = plan["role"]
+        _memory_fraction(plan)
+        if any((run / name).exists() for name in STARTUP_RECORDS):
+            raise ValueError(f"{plan['role']}: launch directory already has a startup record")
+    distinct_roles_and_ports(selected)
+    return selected
+
+
 def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
+    """Start two to eight checked plans on the GPU their shared_device names."""
     if ready_seconds < 1:
         raise ValueError("ready_seconds must be positive")
     selected = validate_shared_runs(runs, backend="native")
     _ports_free(selected)
-    gpu_uuid = selected[0][1]["shared_device"]["gpu_uuid"]
+    _start(selected, ready_seconds, shared=True)
+
+
+def start_each(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
+    """Start one to eight checked plans, each on the GPU its CUDA_VISIBLE_DEVICES names."""
+    if ready_seconds < 1:
+        raise ValueError("ready_seconds must be positive")
+    selected = validate_native_runs(runs)
+    _ports_free(selected)
+    _start(selected, ready_seconds, shared=False)
+
+
+def _start(selected: list[tuple[Path, dict]], ready_seconds: int, *, shared: bool) -> None:
+    # A shared start bounds its GPU's growth from the first reading. An engine on its own GPU
+    # needs free memory for its fraction only.
+    record_name = "shared-start.json" if shared else "native-start.json"
     started: list[Path] = []
     baseline_used: int | None = None
     try:
         for run, plan in selected:
             _checked_plan(run, plan)
+            if shared:
+                gpu_uuid = plan["shared_device"]["gpu_uuid"]
+                fraction = Decimal(str(plan["shared_device"]["gpu_memory_utilization"]))
+            else:
+                gpu_uuid = own_gpu(run, plan)
+                fraction = _memory_fraction(plan)
             before = gpu_memory(gpu_uuid)
-            if baseline_used is None:
-                baseline_used = before["used_mib"]
-            budget = (
-                Decimal(str(plan["shared_device"]["gpu_memory_utilization"])) * before["total_mib"]
-            )
-            allowance = (
-                Decimal(str(plan["shared_device"]["device_allowance"])) * before["total_mib"]
-            )
-            record = {
+            budget = fraction * before["total_mib"]
+            record: dict = {
                 "role": plan["role"],
                 "backend": "native",
-                "shared_device": plan["shared_device"],
+                **({"shared_device": plan["shared_device"]} if shared else {"gpu_uuid": gpu_uuid}),
                 "plan_sha256": digest(run / "launch.json"),
                 "gpu_before": before,
-                "gpu_baseline_used_mib": baseline_used,
                 "budget_mib": float(budget),
-                "device_allowance_mib": float(allowance),
                 "engine_args": plan["args"],
                 "expected_packages": plan["expected_packages"],
                 "model_sha256": plan.get("model_sha256", plan["model_config_sha256"]),
             }
+            allowance = Decimal(0)
+            if shared:
+                if baseline_used is None:
+                    baseline_used = before["used_mib"]
+                allowance = (
+                    Decimal(str(plan["shared_device"]["device_allowance"])) * before["total_mib"]
+                )
+                record.update(
+                    gpu_baseline_used_mib=baseline_used, device_allowance_mib=float(allowance)
+                )
             identity = None
             process = None
             try:
@@ -301,7 +381,6 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 if live.version != _checked_plan(run, plan)["engine_version"]:
                     raise ValueError("live engine version differs from the checked native runtime")
                 after = gpu_memory(gpu_uuid)
-                aggregate_delta = after["used_mib"] - baseline_used
                 record.update(
                     status="running",
                     process=identity,
@@ -310,13 +389,15 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                     model_revision=plan["model_revision"],
                     gpu_after=after,
                     observed_delta_mib=after["used_mib"] - before["used_mib"],
-                    aggregate_delta_mib=aggregate_delta,
                 )
-                if Decimal(aggregate_delta) > allowance:
-                    raise ValueError(
-                        f"observed shared GPU use {aggregate_delta} MiB exceeds "
-                        f"the {allowance} MiB device allowance"
-                    )
+                if baseline_used is not None:
+                    aggregate_delta = after["used_mib"] - baseline_used
+                    record["aggregate_delta_mib"] = aggregate_delta
+                    if Decimal(aggregate_delta) > allowance:
+                        raise ValueError(
+                            f"observed shared GPU use {aggregate_delta} MiB exceeds "
+                            f"the {allowance} MiB device allowance"
+                        )
                 started.append(run)
             except (
                 OSError,
@@ -344,7 +425,7 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                     record["gpu_after_cleanup"] = gpu_memory(gpu_uuid)
                 except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
                     record["gpu_after_error"] = str(inspection_error)
-                write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+                write_private(run / record_name, json.dumps(record, indent=2) + "\n")
                 if isinstance(error, (stages.StageTimeout, stages.StageCancelled)):
                     raise
                 message = (
@@ -358,7 +439,7 @@ def start_shared(runs: list[Path], ready_seconds: int = READY_SECONDS) -> None:
                 if record.get("cleanup_error"):
                     message += f"; cleanup failed: {record['cleanup_error']}"
                 raise ValueError(message) from error
-            write_private(run / "shared-start.json", json.dumps(record, indent=2) + "\n")
+            write_private(run / record_name, json.dumps(record, indent=2) + "\n")
     except (
         OSError,
         ValueError,

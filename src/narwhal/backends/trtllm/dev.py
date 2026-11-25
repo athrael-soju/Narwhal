@@ -23,6 +23,8 @@ def runtime(template: dict, model_dir: Path, memory_fraction: float) -> dict:
             else {}
         ),
         "tokenizer": str(model_dir),
+        # A dev engine holds its share of total memory on a shared GPU or on a GPU of its own.
+        "bound_kv_cache": True,
         "extra_args": [
             "--free_gpu_memory_fraction",
             str(memory_fraction),

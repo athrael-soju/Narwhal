@@ -1709,6 +1709,9 @@ class ProfileProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["engines"]["e0"]["max_num_seqs"], 8)
             self.assertEqual(saved["engines"]["e0"]["limits_path"], str(limits_path.resolve()))
             self.assertEqual(max(saved["engines"]["e0"]["sweep"]["prefill_lens"]), 16300)
+            # A run without warm-up writes the sidecar it wrote before the option existed.
+            self.assertNotIn("warmup_requests", saved["sweep"])
+            self.assertNotIn("warmup_requests", saved["engines"]["e0"]["sweep"])
 
     async def test_run_rejects_decode_fit_outside_policy(self):
         with tempfile.TemporaryDirectory() as folder:

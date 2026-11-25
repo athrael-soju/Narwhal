@@ -4,7 +4,7 @@ description: Options, exit codes and run directories for narwhal dev on one work
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, their attestation sidecars and a router. To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of four installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
+`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, or [each on its own GPU](#one-gpu-per-engine), their attestation sidecars and a router. To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of four installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |
@@ -52,7 +52,7 @@ For vLLM, SGLang or TensorRT-LLM engines, run `narwhal dev init` in place of `na
 | `degraded` | `problems` lists a failed condition, a surviving process, or a failed `verify`. |
 | `stopped` | The last generation stopped and none of its processes survive, or `up` has never run. |
 
-`up` requires an instance that has never started or whose last generation stopped, through `down` or the rollback of a failed `up`. When the template's `profile` sets neighbour traffic, as the vLLM templates do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the SGLang template, `up` profiles only the opening split, where the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
+`up` requires an instance that has never started or whose last generation stopped, through `down` or the rollback of a failed `up`. When the engines share a GPU and the template's `profile` sets neighbour traffic, as the vLLM templates do, `up` profiles every role split from 1 prefill engine to one less than the engine count with [`--colocated`](Profile.md#shared-gpu-neighbour-traffic), and merges the splits when there are several. Otherwise, as with the SGLang template or engines on their own GPUs, `up` profiles only the opening split. On SGLang, the [SGLang pair sweep](Profile.md#sglang-pairs) measures both roles of each engine.
 
 Running `init` on an existing instance changes nothing. When the settings you supply match the saved instance, `init` reports `reused`. When a setting conflicts, `init` exits with code `2` and lists the conflicting options. To change a setting, run `init` with a new `--instance` directory.
 
@@ -83,7 +83,8 @@ With `--format json`, the command prints a [versioned command result](../Command
 | `--template` | `small-cuda-v1.json` | Template file with versioned model, tokenizer, runtime, profiling and memory settings. | |
 | `--model` | The template's pinned file or snapshot in the Hugging Face cache | Model to serve, a GGUF file for a vLLM template or a checkpoint directory for an SGLang template. | Matches the template's checksums, and for a GGUF file its file name |
 | `--model-dir` | The template's pinned tokenizer snapshot in the Hugging Face cache | Directory with the tokenizer files and `config.json`. | Matches the template's checksums |
-| `--gpu` | The only GPU that `nvidia-smi` lists | Physical GPU UUID. | |
+| `--gpu` | The only GPU that `nvidia-smi` lists | Physical GPU UUID that every engine shares. | |
+| `--gpus` | None | Physical GPU UUIDs separated by commas, one GPU per engine, in place of `--gpu`. Engine `n` runs on the `n`th GPU of the list. | Distinct UUIDs that `nvidia-smi` lists, at least `--engine-count` of them |
 | `--alongside` | Off | Starts the fleet while another instance's fleet is up. Each fleet takes its own memory. | Flag |
 | `--remove` | Off | Deletes the instance directory after `down` stops its fleet. | Flag |
 | `--engine-count` | Template value, `2` in the small templates and `4` in the llama.cpp templates | Number of engines. | 2 to 8 |
@@ -113,6 +114,20 @@ With `--format json`, the command prints a [versioned command result](../Command
 | GPU product | The GPU name matches the template's `gpu.product` when the template sets it. |
 | Total memory | Total VRAM is at least the template's `gpu.minimum_total_mib` when the template sets it. |
 
+### One GPU per engine
+
+With `--gpus`, `init` gives engine `n` the `n`th GPU of the list and writes no `shared_device` group to `fleet.json`. It uses the first `--engine-count` GPUs of the list and records them in order as `gpu_uuids` in `instance.json`. Templates that start their engines directly, the llama.cpp templates, refuse `--gpus`.
+
+The memory options then apply to each GPU, which holds one engine:
+
+- `init` converts `--engine-memory-mib` and `--device-memory-mib` to fractions of the smallest of the engines' GPUs.
+- `--device-memory-mib` must be at least `--engine-memory-mib`, and `--device-allowance` at least `--gpu-memory-utilization`.
+- `init` requires each engine's GPU to have free memory for the engine's fraction plus `gpu.reserve_mib`, about 3,380 MiB for the small vLLM and SGLang templates and 6,660 MiB for the small TensorRT-LLM template. It also requires the engines' GPUs to share one product name.
+- `up` starts the engines with [`narwhal-engine start-native`](Engine.md#own-gpu-startup), which starts each engine when its GPU's free memory covers its fraction and records the engine's memory growth on that GPU in `native-start.json`.
+- `up` profiles each engine after it serves warm-up requests, through [`narwhal-profile --warmup-requests 8`](Profile.md#prefill-and-decode-sweeps): 8 in each role on SGLang, and 16 on vLLM and TensorRT-LLM.
+
+An engine of this fleet can [leave the router and rejoin it](../Dev-Runtime.md#removing-and-rejoining-an-engine) while the fleet runs, on vLLM, SGLang and TensorRT-LLM.
+
 To serve another model or runtime, write a [custom template](../Dev-Runtime.md#template-and-gpu-allocation) and select it with `--template`.
 
 ## Role-split replay
@@ -139,7 +154,7 @@ Each `up` writes a `run-*` directory in the instance. It holds:
 - the command line and log of each stage
 - one launch directory per engine
 - the profiles
-- whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`
+- whole-device VRAM samples in `up-memory.jsonl` and `verify-memory.jsonl`, with one row per GPU and its `gpu_uuid` under `--gpus`
 - the request journal
 
 On vLLM, each launch directory also holds the engine's `cache-layout.json`.

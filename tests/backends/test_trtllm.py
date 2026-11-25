@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 import httpx
 
@@ -215,7 +216,7 @@ class SharedGpuTests(unittest.TestCase):
             (Path(folder) / "training_args.bin").write_bytes(b"\0" * MIB)
             self.assertEqual(weight_bytes(folder), 2 * MIB)
 
-    def test_only_a_shared_launch_carries_the_reserve(self):
+    def test_a_shared_or_bounded_launch_carries_the_reserve(self):
         from narwhal.backends.trtllm.plan import serve_args
         from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
 
@@ -228,6 +229,35 @@ class SharedGpuTests(unittest.TestCase):
         self.assertNotIn(SHARED_GPU_FLAG, args())
         shared = args(shared_device={"gpu_memory_utilization": 0.4})
         self.assertEqual(shared[shared.index(SHARED_GPU_FLAG) + 1], "4096")
+        # An engine on a GPU of its own takes the same bound with runtime.bound_kv_cache.
+        bounded = args(runtime={**runtime, "bound_kv_cache": True})
+        self.assertEqual(bounded[bounded.index(SHARED_GPU_FLAG) + 1], "4096")
+        self.assertNotIn(SHARED_GPU_FLAG, args(runtime={**runtime, "bound_kv_cache": False}))
+
+    def test_a_bounded_launch_requires_its_memory_fraction(self):
+        from narwhal.backends.trtllm import dev
+        from narwhal.backends.trtllm.plan import validate_runtime
+        from narwhal.dev.template import _read_template
+
+        template = _read_template("small-cuda-trtllm-v1.json")["runtime"]
+        runtime = dev.runtime(template, Path("/model"), 0.2)
+        validate_runtime(runtime)
+        for extra in (
+            [],
+            ["--free_gpu_memory_fraction", "0"],
+            ["--free_gpu_memory_fraction", "1.5"],
+            ["--free_gpu_memory_fraction", "nan"],
+            ["--free_gpu_memory_fraction", "0.2", "--free_gpu_memory_fraction", "0.3"],
+        ):
+            with (
+                self.subTest(extra=extra),
+                self.assertRaisesRegex(ValueError, "requires --free_gpu_memory_fraction once"),
+            ):
+                validate_runtime({**runtime, "extra_args": extra})
+        # Without the bound, the server's own default applies.
+        validate_runtime({**runtime, "bound_kv_cache": False, "extra_args": []})
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            validate_runtime({**runtime, "bound_kv_cache": "yes"})
 
 
 class TrtllmMetricsTests(unittest.TestCase):

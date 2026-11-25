@@ -22,7 +22,7 @@ Each action refuses to overwrite an output it has already written. To start an e
 
 A vLLM container engine can load a GGUF file in `NARWHAL_MODEL_DIR`. Set `NARWHAL_MODEL_PATH` to the `.gguf` file and `NARWHAL_MODEL_SHA256` to its SHA-256. The file must be a regular file, not a symbolic link. The engine loads the file from its path under `/model`. `prepare` refuses a file that differs from `NARWHAL_MODEL_SHA256` and records its SHA-256 as `model_sha256` in `launch.json`. `check`, `start` and `start-shared` refuse the file if it changes, becomes a symbolic link, or leaves `NARWHAL_MODEL_DIR`.
 
-For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. `prepare` records the file's SHA-256, checks it against `NARWHAL_MODEL_SHA256` when you set it, and `start-shared` refuses the file if it changes. `prepare` refuses `NARWHAL_MODEL_SHA256` for a model directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
+For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. `prepare` records the file's SHA-256, checks it against `NARWHAL_MODEL_SHA256` when you set it, and `start-shared` and `start-native` refuse the file if it changes. `prepare` refuses `NARWHAL_MODEL_SHA256` for a model directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
 
 ## Engine environment
 
@@ -53,6 +53,7 @@ A TensorRT-LLM engine gets `NARWHAL_TRTLLM_TRANSFER_HOST`, set to `NARWHAL_NODE_
 | `capture-cache` | container on vLLM; container and native on TensorRT-LLM | Running container of a checked plan, or the launch directory of a started native TensorRT-LLM engine | `cache-layout.json` with the live cache pages |
 | `cache-registration` | container, native, vLLM | Checked plan and one of `--startup-log` or `--runtime-layout` | `cache-registration.json` with the resolved block grouping |
 | `start-shared` | container, native | Two to eight checked plans on one GPU | Running engines and one `shared-start.json` per engine |
+| `start-native` | native | One to eight checked plans, each on its own GPU | Running engines and one `native-start.json` per engine |
 | `stop-native` | native | Native launch directory with `native-process.json` | `native-stop.json` |
 
 SGLang plans reject `measure-cache`, `handshake-policy`, `capture-cache` and `cache-registration`. TensorRT-LLM plans reject all of them except `capture-cache`.
@@ -64,6 +65,7 @@ These actions check their inputs:
 | `prepare` | Model configuration hash and, on vLLM and TensorRT-LLM, cache-capture hook hash. For a shared GPU, one CUDA GPU, tensor parallel size 1, and a memory argument equal to `gpu_memory_utilization`. |
 | `check` | For `container`, image identity. For `native`, the model path and model file hash. For both, package versions against `runtime.expected_packages`, `--trust-remote-code` when the model or tokenizer has custom code, and the cache-event socket paths in the serving arguments. On vLLM, also the KV connector class, the tokenizer, and `VLLM_SSM_CONV_STATE_LAYOUT=DS` for a model with convolutional SSM state. On SGLang, also that SGLang's server argument parser accepts the serving arguments. On TensorRT-LLM, also that `trtllm-serve` is on the engine's `PATH` and the `--config` file is readable. |
 | `start-shared` | Free memory, readiness, identity, and the device allowance for each engine. |
+| `start-native` | One GPU for each plan, free memory, readiness and identity for each engine. |
 | `stop-native` | Boot ID, process group and start tick of the recorded process, before it sends SIGTERM to the group and SIGKILL to members still running after 10 seconds. |
 
 With text output, `prepare` exits 2 when it fails and 1 when its `--out` directory exists. The other actions exit 1 when they fail, except that an action given one `--run` directory exits 2 when it cannot load that directory. With `--format json`, the exit status follows the [command result](../Command-Results.md) status.
@@ -76,8 +78,8 @@ With text output, `prepare` exits 2 when it fails and 1 when its `--out` directo
 | `--format` | `text` | `text` or `json` for [versioned command results](../Command-Results.md). |
 | `--backend` | `container` | Launch backend for `prepare` and `start-shared`, either `container` or `native`. |
 | `--out` | required | New launch directory for `prepare`. |
-| `--run` | required | Launch directory for every action except `prepare`, given two to eight times for `start-shared`. |
-| `--ready-seconds` | 180 | Positive integer seconds each engine has to answer `/health` during `start-shared`. |
+| `--run` | required | Launch directory for every action except `prepare`, given two to eight times for `start-shared` and one to eight times for `start-native`. |
+| `--ready-seconds` | 180 | Positive integer seconds each engine has to answer `/health` during `start-shared` or `start-native`. |
 | `--startup-log` | optional | Serving log with one resolved KV layout, read by `cache-registration`. |
 | `--runtime-layout` | optional | Captured runtime cache-layout JSON, read by `cache-registration`. |
 
@@ -109,9 +111,21 @@ When a container start fails, `start-shared` removes every container it created,
 
 When a native start fails, `start-shared` stops the failing engine's process group and then stops each engine already running, which writes their `native-stop.json`. The failing engine's `shared-start.json` holds the cause, any `cleanup_error`, and `gpu_after_cleanup`. The running engines' `shared-start.json` files keep `status` `running`.
 
-### Native ports and attestation
+## Own-GPU startup
 
-Before a native start, `start-shared` checks that each engine's ports are free to bind: the engine address from `launch.json`, the KV side channel from `engine.env`, and the sidecar address from `NARWHAL_NODE_<n>_ATTESTATION_URL`. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. `start-shared` reads `NARWHAL_NODE_<n>_ATTESTATION_URL` from its own environment and falls back to the value `prepare` recorded.
+`start-native` starts one to eight native engines, one after another, each on a GPU of its own:
+
+```bash
+narwhal-engine start-native --run runs/engine-1 --run runs/engine-2
+```
+
+Each plan must be a checked native plan without `shared_device`, and must not have started an engine. Its `CUDA_VISIBLE_DEVICES` must name one GPU by its UUID, and no two plans may name the same GPU. Each plan needs its own role and its own engine, attestation and KV side-channel ports. Its serving arguments must set the engine's memory fraction once: `--gpu-memory-utilization` on vLLM, `--mem-fraction-static` on SGLang or `--free_gpu_memory_fraction` on TensorRT-LLM.
+
+Before each engine starts, `start-native` requires its GPU's free memory to cover that fraction of the GPU's total memory. Each engine's `native-start.json` records `gpu_uuid`, the readings `gpu_before`, `gpu_after`, `budget_mib` and `observed_delta_mib` in MiB, and the native engine identity that `shared-start.json` records. When a start fails, `start-native` stops the engines as a native `start-shared` does, and the failing engine's `native-start.json` holds the cause.
+
+## Native ports and attestation
+
+Before a native start, `start-shared` and `start-native` check that each engine's ports are free to bind: the engine address from `launch.json`, the KV side channel from `engine.env`, and the sidecar address from `NARWHAL_NODE_<n>_ATTESTATION_URL`. The KV side channel is the NIXL side channel on vLLM and the bootstrap server on SGLang. Both actions read `NARWHAL_NODE_<n>_ATTESTATION_URL` from their own environment and fall back to the value `prepare` recorded.
 
 To serve the attestation that `native-capture` writes, set `NARWHAL_NODE_<n>_ATTESTATION_URL` in your shell and run:
 
