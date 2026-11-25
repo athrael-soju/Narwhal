@@ -14,7 +14,13 @@ from .engines import (
 )
 from .exposition import Histogram, render_histograms
 from .runtime import render_membership, render_runtime
-from .traffic import render_admission, render_outcomes, render_refusals, render_slo
+from .traffic import (
+    AdoptedCounts,
+    render_admission,
+    render_outcomes,
+    render_refusals,
+    render_slo,
+)
 
 
 def render(
@@ -24,8 +30,14 @@ def render(
     seat: Histogram | None = None,
     queue_wait: Mapping[str, Histogram] | None = None,
     requests: Mapping[str, int] | None = None,
+    adopted: AdoptedCounts | None = None,
 ) -> str:
-    """Render a `/narwhal/state` snapshot plus the latency histograms and request counts."""
+    """Render a `/narwhal/state` snapshot plus the latency histograms and request counts.
+
+    With `adopted`, the request counters leave out the totals a state handoff added.
+    """
+    if adopted is not None:
+        state = adopted.local(state)
     out: list[str] = []
     out += render_admission(state)
     out += render_runtime(state)

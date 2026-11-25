@@ -19,6 +19,7 @@ from ...engines.client import EngineClient, client_options
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
+from ...observability.metrics.traffic import AdoptedCounts
 from ...profiling.calibration import CalibrationCheck
 from ...profiling.store import ProfileStore
 from ...runtime.lifecycle.manager import LifecycleManager
@@ -26,6 +27,7 @@ from ...runtime.monitoring import MonitoringLedger
 from ...runtime.release import PeerRelease
 from ...runtime.residency import ResidencySubscriptions
 from ...runtime.role_switch import ROLE_SWITCH_TIMEOUT_S
+from ...runtime.standby import lease_role
 from ...runtime.standby import ready as router_ready
 from ...runtime.transfer_refresh import TransferRefresh
 from ...scheduling.controller import ReactiveController
@@ -88,6 +90,8 @@ class NarwhalRouter:
             )
         # Standby takeover clears this flag after applying the primary's handoff.
         self.standby = False
+        # Whether the standby's last probe found its primary controlling the fleet.
+        self.primary_seen = False
         self.takeover_gap_s: float | None = None
         self.lease: FileLease | None = None
         self.lease_epoch = 0
@@ -223,6 +227,10 @@ class NarwhalRouter:
         self.outcome_reasons: dict[str, Counter[str]] = {
             terminal: Counter() for terminal in OUTCOME_REASONS
         }
+        # The share of these totals that state handoffs carried in, which /metrics leaves out.
+        self.adopted = AdoptedCounts(exported=OUTCOME_REASONS)
+        # Requests refused as a standby while its primary controlled the fleet, by reason.
+        self.standby_refusals: Counter[str] = Counter()
         # Attempt failures by request phase and failure reason.
         self.attempt_failures: Counter[tuple[str, str]] = Counter()
         self.served_after_retry = 0
@@ -640,6 +648,7 @@ class NarwhalRouter:
             "monitoring": self.monitoring.snapshot(),
             "ha": {
                 "ready": router_ready(self),
+                "role": lease_role(self),
                 "standby": self.standby,
                 "epoch": self.lease_epoch,
                 "holder": self.lease_holder,
@@ -666,6 +675,10 @@ class NarwhalRouter:
                 "saturation_threshold_s": saturation_threshold(self),
                 "rejected": self.rejected,
                 "refused": self.refused,
+                "standby_refusals": {
+                    reason: self.standby_refusals[reason]
+                    for reason in (*OUTCOME_REASONS["rejected"], *sorted(self.standby_refusals))
+                },
                 "engine_auth": self.cfg.engine_auth_mode(),
                 **self._admission_mode(),
             },

@@ -39,7 +39,8 @@ Set these variables in the process environment, or in the workstation `.env` tha
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | `NARWHAL_FLEET`                     | Fleet file for `create_app()` and CLI commands through `--fleet "$NARWHAL_FLEET"`                                               |                                  |
 | `NARWHAL_ENGINE_KEY`                | Example Bearer credential variable, named in `engine.engine_api_key_env`                                                        |                                  |
-| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes                                                                                       |                                  |
+| `NARWHAL_ROUTER_URL`                | Router origin that `make observe` scrapes, or the origins of a router pair separated by a comma                                |                                  |
+| `NARWHAL_TARGETS_URL`               | Load balancer origin that Prometheus reads the engine targets from, required for a router pair                                 | The router origin                |
 | `NARWHAL_GRAFANA_BIND_ADDRESS`      | Grafana listener host, on port 3000                                                                                             | `127.0.0.1`                      |
 | `NARWHAL_PROMETHEUS_LISTEN_ADDRESS` | Prometheus listener host and port                                                                                               | `127.0.0.1:9090`                 |
 | `NARWHAL_CONTROL_CONSOLE_URL`       | Fleet control console address, opened by the dashboard's **Fleet control** link                                                 | `http://127.0.0.1:18020/console` |

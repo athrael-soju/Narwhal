@@ -53,6 +53,15 @@ class HostEnvironmentTests(unittest.TestCase):
         self.assertNotIn("NARWHAL_NODE_2_URL", engine)
         self.assertEqual(engine["NARWHAL_NODE_2_IP"], "192.0.2.2")
 
+    def test_router_export_carries_the_monitored_router_pair(self):
+        pair = {
+            "NARWHAL_ROUTER_URL": "http://router-a:8000,http://router-b:8000",
+            "NARWHAL_TARGETS_URL": "http://balancer:8000",
+        }
+        router = select_values("router", None, self.fleet, {**self.env, **pair})
+        self.assertEqual({name: router[name] for name in pair}, pair)
+        self.assertNotIn("NARWHAL_TARGETS_URL", select_values("router", None, self.fleet, self.env))
+
     def test_engine_export_carries_a_model_file_with_its_pinned_hash(self):
         engine = select_values("engine", 1, self.fleet, self.env)
         self.assertNotIn("NARWHAL_MODEL_PATH", engine)

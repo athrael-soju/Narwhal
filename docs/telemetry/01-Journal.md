@@ -69,6 +69,7 @@ Each original completion request and its retries share one terminal row.
 | `status`                       | HTTP status of the router's response.                                                                              |
 | `error_type`, `error_code`     | `type` and `code` of the client error body or terminal stream event.                                               |
 | `readiness_reason`             | On a `not_ready` rejection, the reason `/ready` reports.                                                           |
+| `standby_refusal`              | `true` on a `rejected` row that a standby counted in `narwhal_standby_refusals_total`. Written only on those rows. |
 | `attempts`, `decode_attempts`  | Prefill and decode dispatch counts for the original request.                                                       |
 | `attempt_failures`             | One [entry](#attempt-failures) per failed attempt, retried or final.                                               |
 | `queue_waits`                  | Seconds waited at each stage: `admission`, `prefill` seat, and `decode` seat.                                      |

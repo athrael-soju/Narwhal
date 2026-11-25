@@ -15,7 +15,7 @@ description: Fail over to the standby Narwhal router and roll back a router rele
 5. Check the active router against the last persisted state handoff:
     - Its lease epoch is higher than the failed primary's last epoch.
     - Its roles match the handoff.
-    - Its cumulative counters match the handoff.
+    - Its `/narwhal/state` counters match the handoff.
 6. Add `--standby-of <active-router>` (the active router's URL) to the old primary's launch command.
 7. Restart the old primary.
 

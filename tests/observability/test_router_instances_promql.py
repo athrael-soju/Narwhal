@@ -158,28 +158,29 @@ class RouterInstanceQueryTests(unittest.TestCase):
             ],
         )
 
-    def test_the_router_stat_shows_the_routers_scraped_now(self):
+    def test_the_router_stat_shows_the_active_router_scraped_now(self):
         down = {'up{job="narwhal-router",instance="r2:8000"}': dict.fromkeys(scrapes(0), "0")}
         admission = panel_query("panel-1", "A")
+        # Every router reads Offline only while none answers its scrape.
+        gone = {'up{job="narwhal-router",instance="r1:8000"}': dict.fromkeys(scrapes(0), "0")}
         self.check(
             {**MOVED, **down},
+            [
+                (admission, 60, {READY.format("r1"): 1}),
+                (admission, 30, {READY.format("r0"): 1}),
+            ],
+        )
+        self.check(
+            {**down, **gone},
             [
                 (
                     admission,
                     60,
                     {
-                        READY.format("r1"): 1,
+                        '{instance="r1:8000",job="narwhal-router"}': -1,
                         '{instance="r2:8000",job="narwhal-router"}': -1,
                     },
-                ),
-                (
-                    admission,
-                    30,
-                    {
-                        READY.format("r0"): 1,
-                        '{instance="r2:8000",job="narwhal-router"}': -1,
-                    },
-                ),
+                )
             ],
         )
 
@@ -418,7 +419,7 @@ class RouterInstanceQueryTests(unittest.TestCase):
         # The takeover changes the standby's generation from 0 to 3 at 60 s; only the ready
         # condition at the previous step, which holds for the former holder alone, keeps it
         # unmarked.
-        change, ready = marker_query("Membership changes", 15).split(" and on(job, instance) ")
+        change, ready, _ = marker_query("Membership changes", 15).split(" and on(job, instance) ")
         held = '{__name__="narwhal_router_ready",instance="r1:8000",job="narwhal-router"}'
         self.check(fleet, [(change, 60, {mark: 3}), (ready, 60, {held: 1})])
 

@@ -21,7 +21,7 @@ description: Reference for the OpenAI-compatible completion routes and the healt
 
 A completion's refusals and status codes are in [Admission and responses](http-api/02-Admission-and-Responses.md), and its engine legs, timeouts and retries in [Backend execution and failures](http-api/03-Backend-and-Failures.md). [SLO attainment and demand accounting](http-api/06-SLO-and-Demand.md) covers the SLO and demand fields of `/narwhal/state`.
 
-The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="2"} 1`.
+The `/metrics` response includes `narwhal_contract_info{contract="metrics",version="3"} 1`.
 
 !!! warning
     Keep `/narwhal/state`, `/narwhal/targets`, `/narwhal/handoff`, `/narwhal/lifecycle`, `/narwhal/engines`, and the lifecycle action routes on your trusted control network.

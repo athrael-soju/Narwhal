@@ -20,7 +20,11 @@ from .stack import Runner, Stack
 
 
 def listener_available(listener: Listener) -> bool:
-    """Return whether every resolved endpoint can accept the configured listener."""
+    """Return whether every resolved endpoint can accept the configured listener.
+
+    The probe binds as Prometheus and Grafana do, with `SO_REUSEADDR`, so only a socket that
+    listens on the address, not a closed connection in TIME-WAIT, occupies it.
+    """
     try:
         addresses = socket.getaddrinfo(
             listener.host,
@@ -41,6 +45,7 @@ def listener_available(listener: Listener) -> bool:
         seen.add(key)
         probe = socket.socket(family, socktype, proto)
         try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(address)
         except OSError as exc:
             if exc.errno == errno.EADDRINUSE:
@@ -137,9 +142,13 @@ def _listener_hosts(listener: Listener) -> set[str]:
 
 
 def _ss_line_matches_listener(line: str, listener: Listener) -> bool:
-    """Match an ss row to the configured address as well as its port."""
+    """Match an ss row in LISTEN state to the configured address as well as its port."""
     fields = line.split()
-    return len(fields) >= 4 and _address_matches_listener(fields[3], listener)
+    return (
+        len(fields) >= 4
+        and fields[0] == "LISTEN"
+        and _address_matches_listener(fields[3], listener)
+    )
 
 
 def _address_matches_listener(value: str, listener: Listener) -> bool:
