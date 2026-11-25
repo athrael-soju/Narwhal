@@ -265,17 +265,20 @@ class RouterAlertTests(PromtoolCase):
     def test_a_takeover_with_an_immediate_standby_restart_raises_no_router_alert(self):
         self.check_alerts(takeover(), {at: {} for at in (615, 660, 750, 900, 1195)})
 
-    def test_the_active_router_stopping_without_a_takeover_pages(self):
+    def test_the_active_router_stopping_without_a_takeover_pages_once(self):
         down = {**A, "alertname": "NarwhalRouterDown", "severity": "page"}
-        none_ready = {"alertname": "NarwhalNoRouterReady", "severity": "page"}
         self.check_alerts(
             takeover(old_returns=False, standby_takes_over=False),
-            {
-                645: {},
-                675: {"NarwhalNoRouterReady": [none_ready]},
-                780: {"NarwhalRouterDown": [down], "NarwhalNoRouterReady": [none_ready]},
-            },
+            {645: {}, 690: {}, 720: {}, 780: {"NarwhalRouterDown": [down]}},
         )
+
+    def test_a_pair_whose_routers_answer_but_neither_is_ready_pages(self):
+        routers = [
+            Router(A, [Phase(0, 300, "active", ready=1, epoch=7), Phase(300, LENGTH, "fenced")]),
+            Router(B, [Phase(0, LENGTH, "standby")]),
+        ]
+        none_ready = {"alertname": "NarwhalNoRouterReady", "severity": "page"}
+        self.check_alerts(routers, {345: {}, 375: {"NarwhalNoRouterReady": [none_ready]}})
 
     def test_a_stopped_router_after_a_takeover_warns_that_the_pair_has_no_standby(self):
         standby = {**A, "alertname": "NarwhalStandbyRouterDown", "severity": "warn"}
@@ -298,20 +301,24 @@ class RouterAlertTests(PromtoolCase):
         both = {"alertname": "NarwhalMultipleRoutersReady", "severity": "page"}
         self.check_alerts(routers, {315: {}, 360: {"NarwhalMultipleRoutersReady": [both]}})
 
-    def test_a_single_router_that_stops_pages(self):
+    def test_a_single_router_that_stops_pages_once(self):
         routers = [
             Router(A, [Phase(0, 300, "active", ready=1), Phase(300, LENGTH, "down")]),
         ]
         down = {**A, "alertname": "NarwhalRouterDown", "severity": "page"}
-        none_ready = {"alertname": "NarwhalNoRouterReady", "severity": "page"}
-        self.check_alerts(
-            routers,
-            {
-                345: {},
-                375: {"NarwhalNoRouterReady": [none_ready]},
-                450: {"NarwhalRouterDown": [down], "NarwhalNoRouterReady": [none_ready]},
-            },
-        )
+        self.check_alerts(routers, {375: {}, 450: {"NarwhalRouterDown": [down]}})
+
+    def test_a_single_router_that_is_not_ready_raises_no_router_alert(self):
+        routers = [Router(A, [Phase(0, 300, "active", ready=1), Phase(300, LENGTH, "active")])]
+        self.check_alerts(routers, {450: {}, 900: {}})
+
+    def test_the_last_samples_of_a_router_no_longer_scraped_count_for_nothing(self):
+        """A recreated Prometheus answers the previous origin's samples for 5 minutes."""
+        old = {"job": "narwhal-router", "instance": "old:8000"}
+        previous = Router(old, [Phase(0, 300, "active", ready=1, epoch=7)])
+        routers = [previous, Router(A, [Phase(300, LENGTH, "active", ready=1, epoch=8)])]
+        # Without a failed scrape, no staleness marker ends the previous origin's series.
+        self.check_alerts(routers, {330: {}, 390: {}, 450: {}})
 
     def test_gauge_alerts_read_the_lease_holder(self):
         """A standby's own breaker view raises no alert until it holds the lease."""

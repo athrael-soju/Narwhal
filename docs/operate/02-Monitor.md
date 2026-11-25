@@ -54,7 +54,7 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | --- | --- | :---: | --- |
 | `NarwhalRouterDown` | A router scrape fails while no router is [active](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges) | 2m | `page` |
 | `NarwhalStandbyRouterDown` | A router scrape fails while another router is active | 2m | `warn` |
-| `NarwhalNoRouterReady` | No router reports `narwhal_router_ready` `1` | 1m | `page` |
+| `NarwhalNoRouterReady` | Prometheus scrapes more than one router, none reports `narwhal_router_ready` `1`, and `NarwhalRouterDown` does not cover it | 1m | `page` |
 | `NarwhalMultipleRoutersReady` | More than one router reports `narwhal_router_ready` `1` | 30s | `page` |
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
@@ -68,6 +68,8 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
 `NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The request rate rules also sum over the routers of a pair, since each router counts the requests it answered.
+
+A stopped single router raises `NarwhalRouterDown` only, and a single router that is not ready raises no router alert. The router rules count only samples scraped in the last 30 seconds.
 
 `NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch`: the lease holder, or the router that held the lease last.
 

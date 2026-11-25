@@ -2,7 +2,9 @@
 # Load with `rule_files: [prometheus-alerts.yml]` in prometheus.yml.
 # Each router of a pair counts the requests it answered, so the rate rules sum over routers.
 # The rules on router gauges read the router with the highest lease epoch: the lease holder,
-# or the last router to hold the lease.
+# or the last router to hold the lease. Prometheus answers a target's last sample for 5 minutes,
+# including one from a target a previous configuration named, so the router rules count only
+# samples scraped in the last 30 seconds.
 groups:
   - name: narwhal
     rules:
@@ -25,7 +27,7 @@ groups:
           description: "narwhal_ejected{iid=...} identifies the engines. Inspect /narwhal/lifecycle and breaker evidence. Contracted fleets require inference and identity validation; whole_wave fleets require an operator-managed restart wave."
 
       - alert: NarwhalRouterDown
-        expr: up{job="narwhal-router"} == 0 unless on () (narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        expr: up{job="narwhal-router"} == 0 unless on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
         for: 2m
         labels:
           severity: page
@@ -34,7 +36,7 @@ groups:
           description: "No router controls the fleet. Check the router process, its metrics endpoint and the lease. For a router pair, read the standby's /ready reason to see why it did not take over."
 
       - alert: NarwhalStandbyRouterDown
-        expr: up{job="narwhal-router"} == 0 and on () (narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        expr: up{job="narwhal-router"} == 0 and on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
         for: 2m
         labels:
           severity: warn
@@ -43,16 +45,17 @@ groups:
           description: "The active router serves, and the pair has no standby to take over. Restart the stopped router with --standby-of set to the active router."
 
       - alert: NarwhalNoRouterReady
-        expr: (max(narwhal_router_ready{job="narwhal-router"}) or vector(0)) < 1
+        # Only for a router pair; NarwhalRouterDown pages for a stopped router with none active.
+        expr: (max(narwhal_router_ready{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30)) or vector(0)) < 1 and on () count(timestamp(up{job="narwhal-router"}) > time() - 30) > 1 unless on () (up{job="narwhal-router"} == 0 unless on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1))
         for: 1m
         labels:
           severity: page
         annotations:
-          summary: "No router admits traffic"
-          description: "Every router answers /ready with HTTP 503, or none answers its scrape. Read the reason in each router's /ready."
+          summary: "No router of the pair admits traffic"
+          description: "Both routers answer their scrape, or the one that stopped left another active, and every router answers /ready with HTTP 503. Read the reason in each router's /ready."
 
       - alert: NarwhalMultipleRoutersReady
-        expr: count(narwhal_router_ready{job="narwhal-router"} == 1) > 1
+        expr: count(timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30 and narwhal_router_ready{job="narwhal-router"} == 1) > 1
         for: 30s
         labels:
           severity: page
