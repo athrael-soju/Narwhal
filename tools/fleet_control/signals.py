@@ -31,6 +31,21 @@ _SHORT_NAMES = {
 }
 
 
+# Actions that record other actions as their steps.
+_COMPOSITE = frozenset({"config.restore"})
+
+
+def steps(action: Action) -> list[Mapping[str, Any]]:
+    """Return the recorded actions an action ran as its steps, in order."""
+    result = action.result if isinstance(action.result, Mapping) else {}
+    found = result.get("steps")
+    return [
+        step
+        for step in (found if isinstance(found, list) else [])
+        if isinstance(step, Mapping) and step.get("seq") is not None
+    ]
+
+
 def short_name(action: Action) -> str:
     """Return the action's name as the console and the dashboard annotations show it."""
     if action.name.startswith("engine."):
@@ -76,17 +91,30 @@ def metrics(service: ControlService, available: Availability | None = None) -> s
         "restart and restore that ran in the active session, in Unix milliseconds.",
         "# TYPE narwhal_control_action_started_ms gauge",
     ]
-    for action in [] if session is None else session.actions:
-        if action.outcome == "refused" or action.name in _UNMARKED:
+    actions = [] if session is None else session.actions
+    # A composite action is one marker; its steps get none.
+    nested = {step["seq"] for action in actions for step in steps(action)}
+    status = service.status()
+    running = status["in_progress"] in _COMPOSITE and status["in_progress_since"]
+    for action in actions:
+        if action.outcome == "refused" or action.name in _UNMARKED or action.seq in nested:
+            continue
+        if running and _milliseconds(action.started_at) >= _milliseconds(running):
+            # A step of the composite action still running.
             continue
         target = action_target(action)
+        title = f"{short_name(action)} {target}".strip()
+        if parts := steps(action):
+            title += ": " + ", ".join(
+                f"{step.get('action')} {step.get('engine')}" for step in parts
+            )
         labels = {
             "session": session.id if session is not None else "",
             "seq": action.seq,
             "action": action.name,
             "target": target,
             "outcome": action.outcome,
-            "title": f"{short_name(action)} {target}".strip(),
+            "title": title,
         }
         lines.append(
             _sample("narwhal_control_action_started_ms", labels, _milliseconds(action.started_at))

@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "907473d5857dbdb098a31d9b75ac3ce5a3b75ec22b12380449d19fc8009b206f"
+RENDERED_SHA256 = "ec3b295918431ffaf0f607fc7165453f1f254598680600e6a08b37eda95c9d0a"
 
 
 def charted() -> set[str]:
@@ -51,7 +51,7 @@ class BackendDashboardTests(unittest.TestCase):
         [running] = [
             q["spec"]["query"]["spec"]["expr"]
             for q in SHIPPED["spec"]["elements"]["panel-7"]["spec"]["data"]["spec"]["queries"]
-            if q["spec"]["query"]["spec"]["expr"].startswith("<<running{")
+            if q["spec"]["query"]["spec"]["expr"].startswith("(<<running{")
         ]
         rendered = artifacts.render_dashboard(SHIPPED)["spec"]["elements"]["panel-7"]
         selector = 'job="engines",iid=~"$iid"'
@@ -89,7 +89,8 @@ class BackendDashboardTests(unittest.TestCase):
                     q["spec"]["query"]["spec"]["expr"]
                     for q in table["spec"]["data"]["spec"]["queries"]
                 ]
-                self.assertIn('max by(iid, backend) (up{job="engines",iid=~"$iid"})', exprs)
+                backends = '(max by(iid, backend) (up{job="engines",iid=~"$iid"})) and on(iid) '
+                self.assertTrue(any(expr.startswith(backends) for expr in exprs))
 
     def test_a_panel_no_backend_can_fill_is_left_out(self):
         metrics = load_backend("vllm").metrics

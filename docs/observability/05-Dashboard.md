@@ -83,7 +83,7 @@ The charts and the headline row colour request outcomes, alerts, status values a
 
 ## Headline row
 
-The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether the router admits traffic and how many Narwhal alerts are firing now.
+The **Requests** and **Latency** tables summarise the displayed interval. **Router** shows whether each selected router that Prometheus scraped in the last 15 seconds admits traffic, named by its instance, and how many Narwhal alerts are firing now.
 
 | Requests column                    | Shows                                                                          |
 | ---------------------------------- | ------------------------------------------------------------------------------ |
@@ -111,7 +111,9 @@ Status colours:
 
 ## Engines and engine role history
 
-The engine table shows each engine's backend, current role, state and load, 8 engines per page. **Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the selected time range. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other.
+The engine table shows each engine the active router lists, with its backend, current role, state and load, 8 engines per page. The active router is the selected router that Prometheus scraped in the last 15 seconds and that reports ready. When no such router reports ready, the panels follow every selected router scraped in the last 15 seconds, and when none was scraped, the table lists the engines Prometheus scrapes.
+
+**Engine role history** beside it lists the same engines in the same order and shows how their roles changed over the selected time range, following the router active at each moment. Each panel has its own page controls, and page *n* of one lists the same engines as page *n* of the other. Engines that left during the selected time range follow the current engines, each labelled with its ID and `(left)`, and each lane ends at the engine's last sample.
 
 **Role** and **State** tell you what the engine does and whether it takes placements. The **Resident** and **Engine running** bars scale to the busiest engine.
 
@@ -137,18 +139,18 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 **Request outcomes** plots client requests per second by outcome. In a healthy fleet, **completed** follows **offered** and the other series stay near zero. When a gap opens between those two lines, the series that rises inside it shows where the missing requests went.
 
-| Series               | Requests per second                                                           |
-| -------------------- | ----------------------------------------------------------------------------- |
-| offered              | Original completion requests received, including early refusals               |
-| completed            | Requests completed successfully                                               |
-| failed               | Requests that ended in an error                                               |
-| refused (predictive) | Requests predictive admission refused for a projected TTFT or decode SLO miss |
-| rejected (capacity)  | Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness  |
-| expired              | Requests terminated by their admission or total deadline                      |
-| cancelled            | Requests their client abandoned before completion                             |
-| invalid              | Requests rejected with HTTP 400 as invalid                                    |
+| Series               | Requests per second                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| offered              | Original completion requests received, including early refusals                                                                    |
+| completed            | Requests completed successfully                                                                                                    |
+| failed               | Requests that ended in an error                                                                                                    |
+| refused (predictive) | Requests the predictive admission checks refused with HTTP 429, for any [refusal cause](../telemetry/01-Journal.md#refusal-causes) |
+| rejected (capacity)  | Requests refused with HTTP 429 at the router in-flight limit or under router saturation, or with HTTP 503 for router readiness     |
+| expired              | Requests terminated by their admission or total deadline                                                                           |
+| cancelled            | Requests their client abandoned before completion                                                                                  |
+| invalid              | Requests rejected with HTTP 400 as invalid                                                                                         |
 
-Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose.
+Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose. When no alert fired in the displayed interval, **Fleet events** shows one empty row labelled **No alerts in this window**.
 
 A cyan marker on every chart marks a membership change. It appears up to 15 seconds after the router's [membership generation](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) changes. A join, a removal, and a router restart that returns to the fleet file's engines each change it. Hover over a marker for the router instance.
 

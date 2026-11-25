@@ -374,7 +374,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         exported = set()
         # The fleet control service exports the dashboard's narwhal_control_* series.
         control = control_metrics(
-            SimpleNamespace(session=None, jobs=None),
+            SimpleNamespace(session=None, jobs=None, status=lambda: {"in_progress": None}),
             Availability((AvailableEngine("e1", "vllm", True, True),)),
         )
         exposition = response.text + ToolActivity("preflight").render() + control

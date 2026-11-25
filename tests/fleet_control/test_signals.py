@@ -198,6 +198,57 @@ class MetricsTests(SignalCase):
             ],
         )
 
+    async def test_a_restore_is_one_sample_that_lists_its_steps(self) -> None:
+        await self.start_session_with_steps()
+        session = self.service.session
+        assert session is not None
+        lines = (await self.scrape()).splitlines()
+        actions = [line for line in lines if line.startswith("narwhal_control_action_started_ms")]
+        self.assertEqual(
+            actions,
+            [
+                f'narwhal_control_action_started_ms{{session="{session.id}",seq="2",'
+                f'action="engine.join",target="e4",outcome="ok",title="join e4"}} {STAMP_MS}',
+                f'narwhal_control_action_started_ms{{session="{session.id}",seq="6",'
+                f'action="config.restore",target="",outcome="ok",'
+                f'title="restore: start e3, join e3, leave e4"}} {STAMP_MS}',
+            ],
+        )
+
+    async def test_the_steps_of_a_running_restore_get_no_sample(self) -> None:
+        await self.service.start_session()
+        session = self.service.session
+        assert session is not None
+        record = self.service.store.record
+        record(session, "engine.leave", {"engine": "e3"}, STAMP, STAMP, "ok")
+        self.service._exclusive, self.service._exclusive_since = "config.restore", STAMP
+        record(session, "engine.start", {"engine": "e3"}, STAMP, STAMP, "ok")
+        try:
+            lines = (await self.scrape()).splitlines()
+        finally:
+            self.service._exclusive = self.service._exclusive_since = None
+        actions = [line for line in lines if line.startswith("narwhal_control_action_started_ms")]
+        self.assertEqual(actions, [])
+        self.assertIn('title="start e3"', await self.scrape())
+
+    async def start_session_with_steps(self) -> None:
+        """Record a join, then a restore whose steps start and join e3 and remove e4."""
+        await self.service.start_session()
+        session = self.service.session
+        assert session is not None
+        record = self.service.store.record
+        record(session, "engine.join", {"engine": "e4", "spec": {"iid": "e4"}}, STAMP, STAMP, "ok")
+        record(session, "engine.start", {"engine": "e3"}, STAMP, STAMP, "ok")
+        record(session, "engine.join", {"engine": "e3", "spec": {}}, STAMP, STAMP, "ok")
+        record(session, "engine.leave", {"engine": "e4"}, STAMP, STAMP, "ok")
+        steps = [
+            {"engine": "e1", "action": "readmit", "seq": None},
+            {"engine": "e3", "action": "start", "seq": 3},
+            {"engine": "e3", "action": "join", "seq": 4},
+            {"engine": "e4", "action": "leave", "seq": 5},
+        ]
+        record(session, "config.restore", {}, STAMP, STAMP, "ok", result={"steps": steps})
+
     async def test_a_running_load_job_is_a_region_sample(self) -> None:
         await self.service.start_session()
         await self.service.start_job({"workload": "short", "duration_s": 60})
