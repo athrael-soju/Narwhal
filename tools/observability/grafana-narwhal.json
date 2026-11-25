@@ -38,7 +38,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset $__interval)",
               "step": "15s",
               "titleFormat": "{{alertname}}",
               "textFormat": "{{severity}} {{iid}}",
@@ -56,7 +56,7 @@
             ]
           },
           "legacyOptions": {
-            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset $__interval)",
             "step": "15s",
             "titleFormat": "{{alertname}}",
             "textFormat": "{{severity}} {{iid}}",
@@ -74,7 +74,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset $__interval)",
               "step": "15s",
               "titleFormat": "{{alertname}}",
               "textFormat": "{{severity}} {{iid}}",
@@ -92,7 +92,7 @@
             ]
           },
           "legacyOptions": {
-            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset $__interval)",
             "step": "15s",
             "titleFormat": "{{alertname}}",
             "textFormat": "{{severity}} {{iid}}",
@@ -110,7 +110,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset 15s)",
+              "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1)",
               "step": "15s",
               "titleFormat": "Membership change",
               "textFormat": "{{instance}}",
@@ -122,7 +122,7 @@
           "iconColor": "#00BCD4",
           "name": "Membership changes",
           "legacyOptions": {
-            "expr": "narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset 15s)",
+            "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1)",
             "step": "15s",
             "titleFormat": "Membership change",
             "textFormat": "{{instance}}",

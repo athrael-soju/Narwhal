@@ -327,6 +327,65 @@ class RouterInstanceQueryTests(unittest.TestCase):
             ],
         )
 
+    def marks(self, layer: str, inputs: dict[str, Samples], step: int, expected: dict):
+        """Evaluate `layer` at each `step`, expecting {second: {labels: value}} and no other."""
+        query = marker_query(layer, step)
+        self.check(
+            inputs,
+            [(query, at, expected.get(at, {})) for at in range(step, LENGTH, step)],
+        )
+
+    def test_a_membership_change_is_marked_once_at_any_step(self):
+        labels = 'job="narwhal-router",instance="r1:8000"'
+        generation = {
+            t: "0" if t < 40 else "1" if t < 85 else "2" if t < 100 else "0" for t in scrapes(0)
+        }
+        fleet = {
+            **router("r1:8000", 0, LENGTH, {}),
+            f"narwhal_membership_generation{{{labels}}}": generation,
+        }
+        mark = '{__name__="narwhal_membership_generation",instance="r1:8000",job="narwhal-router"}'
+        self.marks("Membership changes", fleet, 15, {45: {mark: 1}, 90: {mark: 2}, 105: {mark: 0}})
+        # At 60 s steps each step compares with the one before, so no change is skipped.
+        self.marks("Membership changes", fleet, 60, {60: {mark: 1}, 120: {mark: 0}})
+        self.marks("Membership changes", fleet, 30, {60: {mark: 1}, 90: {mark: 2}, 120: {mark: 0}})
+
+    def test_a_takeover_is_not_marked_and_a_later_join_is(self):
+        old = 'job="narwhal-router",instance="r1:8000"'
+        new = 'job="narwhal-router",instance="r2:8000"'
+        times = scrapes(0)
+        fleet = {
+            **router("r1:8000", 0, 55, {}),
+            f"narwhal_membership_generation{{{old}}}": dict.fromkeys(scrapes(0, 55), "3"),
+            f"up{{{new}}}": dict.fromkeys(times, "1"),
+            # The standby is not ready until it takes over at 60 s and adopts generation 3.
+            f"narwhal_router_ready{{{new}}}": {t: "0" if t < 60 else "1" for t in times},
+            f"narwhal_membership_generation{{{new}}}": {
+                t: "0" if t < 60 else "3" if t < 90 else "4" for t in times
+            },
+        }
+        mark = '{__name__="narwhal_membership_generation",instance="r2:8000",job="narwhal-router"}'
+        self.marks("Membership changes", fleet, 15, {90: {mark: 4}})
+        self.marks("Membership changes", fleet, 60, {120: {mark: 4}})
+
+    def test_an_alert_that_starts_between_long_steps_is_marked(self):
+        alert = 'ALERTS{alertname="NarwhalEngineDown",alertstate="firing",severity="page",iid="n1"}'
+        fleet = {alert: {float(t): "1" for t in range(70, LENGTH)}}
+        mark = (
+            '{__name__="ALERTS",alertname="NarwhalEngineDown",alertstate="firing",'
+            'iid="n1",severity="page"}'
+        )
+        self.marks("Narwhal pages", fleet, 15, {75: {mark: 1}})
+        self.marks("Narwhal pages", fleet, 60, {120: {mark: 1}})
+
+
+def marker_query(layer: str, step: int) -> str:
+    """Return the annotation layer's query as Grafana runs it at `step` seconds."""
+    annotations = artifacts.render_dashboard(SHIPPED)["spec"]["annotations"]
+    spec = next(item["spec"] for item in annotations if item["spec"]["name"] == layer)
+    expr = spec["query"]["spec"]["expr"]
+    return expr.replace("$router", ".*").replace("$__interval", f"{step}s")
+
 
 def state_codes(panel: str) -> dict[str, int]:
     """Map each state name to its code in the panel's value mappings."""

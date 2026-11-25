@@ -301,7 +301,12 @@ class MembershipTelemetryContractTests(unittest.TestCase):
         )
         series = 'narwhal_membership_generation{job="narwhal-router",instance=~"$router"}'
         query = layer["query"]["spec"]
-        self.assertEqual(query["expr"], f"{series} != ({series} offset 15s)")
+        ready = 'narwhal_router_ready{job="narwhal-router",instance=~"$router"}'
+        self.assertEqual(
+            query["expr"],
+            f"({series} != ({series} offset $__interval)) and on(job, instance) "
+            f"(({ready} offset $__interval) == 1)",
+        )
         self.assertEqual((query["step"], query["useValueForTime"]), ("15s", False))
         self.assertEqual(layer["legacyOptions"], query)
         self.assertEqual(layer["iconColor"], "#00BCD4")
