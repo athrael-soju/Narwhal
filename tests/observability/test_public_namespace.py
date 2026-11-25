@@ -498,20 +498,31 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             for rule in alert_rules().values()
             for selector in re.findall(r"\bup(\{[^}]*\})?", rule["expr"])
         ]
-        self.assertEqual(sorted(selectors), ['{job="engines"}', '{job="narwhal-router"}'])
+        self.assertEqual(sorted(set(selectors)), ['{job="engines"}', '{job="narwhal-router"}'])
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()
+        # Each router of a pair counts its own requests, so the shares sum over routers.
+        offered = "sum without (instance) (rate(narwhal_offered_total[5m]))"
         for name, numerator in (
-            ("NarwhalRejectedRising", "sum without (reason) (rate(narwhal_rejected_total[5m]))"),
-            ("NarwhalExpiredRising", "sum without (reason) (rate(narwhal_expired_total[5m]))"),
-            ("NarwhalRetryDeniedRising", "rate(narwhal_retry_denied_total[5m])"),
+            (
+                "NarwhalRejectedRising",
+                "sum without (instance, reason) (rate(narwhal_rejected_total[5m]))",
+            ),
+            (
+                "NarwhalExpiredRising",
+                "sum without (instance, reason) (rate(narwhal_expired_total[5m]))",
+            ),
+            (
+                "NarwhalRetryDeniedRising",
+                "sum without (instance) (rate(narwhal_retry_denied_total[5m]))",
+            ),
         ):
             with self.subTest(alert=name):
                 self.assertEqual(
                     rules[name],
                     {
-                        "expr": f"{numerator} / rate(narwhal_offered_total[5m]) > 0.01",
+                        "expr": f"{numerator} / {offered} > 0.01",
                         "for": "5m",
                         "severity": "warn",
                     },
@@ -520,7 +531,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for name, rule in rules.items():
             for metric in re.findall(r"narwhal_(?:failed|rejected|expired)_total", rule["expr"]):
                 with self.subTest(alert=name):
-                    self.assertIn(f"sum without (reason) (rate({metric}[", rule["expr"])
+                    self.assertIn(f"sum without (instance, reason) (rate({metric}[", rule["expr"])
         # The monitoring guide lists every shipped alert.
         guide = (ROOT / "docs/operate/02-Monitor.md").read_text()
         for name in rules:

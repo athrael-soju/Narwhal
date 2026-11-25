@@ -52,7 +52,10 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 
 | Alert | Condition | Duration | Severity |
 | --- | --- | :---: | --- |
-| `NarwhalRouterDown` | Router scrape fails | 2m | `page` |
+| `NarwhalRouterDown` | A router scrape fails while no router is [active](../telemetry/03-Metrics-and-Control.md#reading-router-lease-gauges) | 2m | `page` |
+| `NarwhalStandbyRouterDown` | A router scrape fails while another router is active | 2m | `warn` |
+| `NarwhalNoRouterReady` | No router reports `narwhal_router_ready` `1` | 1m | `page` |
+| `NarwhalMultipleRoutersReady` | More than one router reports `narwhal_router_ready` `1` | 30s | `page` |
 | `NarwhalEngineDown` | Engine scrape fails | 30s | `page` |
 | `NarwhalEngineEjected` | At least one ejected engine | 1m | `page` |
 | `NarwhalErrorBurst` | Failed requests above 0.5/s over 5m | 5m | `warn` |
@@ -64,7 +67,9 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 | `NarwhalPrefillBelowFloor` | Live prefill capacity below `min_prefill` | 1m | `warn` |
 | `NarwhalDecodeBelowFloor` | Live decode capacity below `min_decode` | 1m | `warn` |
 
-`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome.
+`NarwhalErrorBurst`, `NarwhalRejectedRising` and `NarwhalExpiredRising` sum their counter over its `reason` label, so each threshold applies to the whole outcome. The request rate rules also sum over the routers of a pair, since each router counts the requests it answered.
+
+`NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch`: the lease holder, or the router that held the lease last.
 
 `NarwhalRejectedRising`, `NarwhalExpiredRising` and `NarwhalRetryDeniedRising` divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
 
