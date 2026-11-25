@@ -6,6 +6,7 @@ import inspect
 import ipaddress
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -17,7 +18,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from narwhal.deployment.engine_launch import load_launches
-from narwhal.deployment.launch_engine.backend import engine_backend
+from narwhal.deployment.launch_engine.backend import ModelFormats, engine_backend
 from narwhal.deployment.launch_engine.plan import conv_state_layers
 from narwhal.types import RoleModel
 from tools.deployment.host_access import SSH, Host, load_hosts, write_private
@@ -152,6 +153,7 @@ print(
             "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
             "requires_trust_remote_code": requires_trust_remote_code,
             "conv_state_layers": conv_state_layers(model),
+            "multimodal": any(key in model for key in ("vision_config", "audio_config")),
             "model_dtype": text_model.get(
                 "dtype", text_model.get("torch_dtype", model.get("torch_dtype"))
             ),
@@ -240,6 +242,19 @@ def service_url(env: dict[str, str], node: int, field: str) -> str:
     return f"http://{host}:{port_value}{suffix}"
 
 
+def model_file(env: dict[str, str], node: int, model_dir: str) -> str | None:
+    """Return the path of NARWHAL_MODEL_PATH relative to NARWHAL_MODEL_DIR, when it is set."""
+    path = value(env, node, "MODEL_PATH")
+    if not path:
+        return None
+    relative = posixpath.relpath(posixpath.normpath(path), posixpath.normpath(model_dir))
+    if not posixpath.isabs(path) or relative == "." or relative.split("/")[0] == "..":
+        raise ValueError(
+            f"engine-{node}: set NARWHAL_MODEL_PATH to an absolute file path in NARWHAL_MODEL_DIR"
+        )
+    return relative
+
+
 def derive_hosts(env: dict[str, str]) -> list[Host]:
     nodes = sorted(
         int(match[1])
@@ -274,11 +289,16 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
 
 def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
     launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
+    model_files = set()
     backend = engine_backend(env.get("NARWHAL_ENGINE_BACKEND"))
     connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
     backend.connector(connector)
     engine = backend.engine_launcher()
     pin = backend.role_switcher(connector).model is RoleModel.FIXED
+    for key in env:
+        match = re.fullmatch(r"NARWHAL_NODE_[0-9]+_(.+)", key)
+        if match and match[1] in engine.fleet_settings:
+            raise ValueError(f"set NARWHAL_{match[1]} once for the fleet, not {key}")
     for host in hosts:
         roles = [r for r in host.roles if r.startswith("engine-")]
         allocated: set[str] = set()
@@ -289,6 +309,11 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             digest = value(env, node, "MODEL_CONFIG_SHA256")
             if digest and digest != observed["model_sha256"]:
                 raise ValueError(f"{role}: model-config hash differs from the environment pin")
+            file_digest = observed.get("model_file_sha256")
+            pinned = value(env, node, "MODEL_SHA256")
+            if pinned and pinned != file_digest:
+                raise ValueError(f"{role}: model-file hash differs from the environment pin")
+            model_files.add(file_digest)
             gpu_ids = value(env, node, "GPU_IDS")
             if len(roles) > 1 and not gpu_ids:
                 raise ValueError(f"Set NARWHAL_NODE_{node}_GPU_IDS for colocated engine roles")
@@ -339,8 +364,10 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
             for field, content in (
                 ("ENGINE_IMAGE", observed["image_id"]),
                 ("MODEL_CONFIG_SHA256", observed["model_sha256"]),
+                ("MODEL_SHA256", file_digest),
             ):
-                derived[f"NARWHAL_NODE_{node}_{field}"] = content
+                if content:
+                    derived[f"NARWHAL_NODE_{node}_{field}"] = content
             for field in ("URL", "ATTESTATION_URL"):
                 derived[f"NARWHAL_NODE_{node}_{field}"] = service_url(
                     {**env, **derived}, node, field
@@ -354,6 +381,8 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                     **({"pin": True} if pin else {}),
                 }
             )
+    if len(model_files) > 1:
+        raise ValueError("Every engine must serve the same model file")
     if len(shapes) != 1 or len(engines) < 2:
         raise ValueError(
             "This fleet requires at least two replicas with matching GPU and TP shapes"
@@ -437,6 +466,7 @@ def discover(env: dict[str, str], out: Path) -> Path:
     ssh = SSH(env, out / "logs", enroll_hosts=True)
     observations = {}
     checkpoint_jobs = {}
+    model_files = {}
     for host in hosts:
         ssh.run(host, "enroll management host", "hostname")
         print(f"{host.id}: authenticated; SSH host key recorded", flush=True)
@@ -457,10 +487,20 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 )
             if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", inputs["image"]):
                 raise ValueError(f"{role}: pin ENGINE_IMAGE to an image ID or registry digest")
+            packages = engine.image_packages
+            model_files[role] = model_file(env, node, inputs["model_dir"])
+            if model_files[role] is not None:
+                if not isinstance(engine, ModelFormats):
+                    label = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).label
+                    raise ValueError(
+                        f"{role}: {label} serves a model directory; unset NARWHAL_MODEL_PATH"
+                    )
+                if engine.model_file_packages:
+                    packages += "|" + engine.model_file_packages
             inputs.update(
                 environment_prefixes=engine.environment_prefixes,
                 managed_environment=sorted(engine.managed_environment),
-                packages=engine.image_packages,
+                packages=packages,
             )
             payload = out / f"{role}-inputs.json"
             write_private(payload, json.dumps(inputs).encode())
@@ -500,6 +540,14 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 observed = observations[role]
                 observed["model_tree_sha256"] = checkpoint["model_tree_sha256"]
                 observed["model_file_count"] = checkpoint["file_count"]
+                relative = model_files[role]
+                if relative is not None:
+                    files = {row["path"]: row["sha256"] for row in checkpoint["files"]}
+                    if relative not in files:
+                        raise ValueError(
+                            f"{role}: NARWHAL_MODEL_PATH names no file in NARWHAL_MODEL_DIR"
+                        )
+                    observed.update(model_file=relative, model_file_sha256=files[relative])
                 write_private(out / f"{role}.json", json.dumps(observed, indent=2).encode())
                 write_private(
                     out / f"{role}-checkpoint.json", json.dumps(checkpoint, indent=2).encode()

@@ -1,0 +1,6 @@
+# The GGUF plugin wheel and gguf, its one requirement that the base image lacks. The image build
+# installs them with --require-hashes and --no-deps, so the base image's packages stay as they are.
+vllm-gguf-plugin @ https://github.com/vllm-project/vllm-gguf-plugin/releases/download/v0.0.5/vllm_gguf_plugin-0.0.5-cp310-abi3-manylinux_2_28_x86_64.whl \
+    --hash=sha256:e795779830ad8907cb0e51bf661dd7784ebaf244b0b324af07a8d3925b6a9739
+gguf==0.19.0 \
+    --hash=sha256:70bcd10edfe697fb2dad6e40af2234b9d8ece9a41a99761405121ebda1c3c1cd

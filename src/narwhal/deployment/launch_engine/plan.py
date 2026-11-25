@@ -19,11 +19,13 @@ from .backend import (
     launcher,
     plan_launcher,
 )
-from .runtime import code_digest, digest, write_private
+from .runtime import code_digest, digest, regular_file_digest, write_private
 from .settings import KV_SIDE_CHANNEL_PORT_ENV, switch
 
 # Short root for per-plan event sockets; launch directories can exceed the socket path limit.
 KV_EVENTS_ROOT = Path("/tmp")
+# A container engine reads NARWHAL_MODEL_DIR at this path.
+MODEL_MOUNT = "/model"
 KV_EVENTS_MOUNT = "/narwhal-kv-events"
 KV_EVENTS_SOCKETS = {"endpoint": "events.sock", "replay_endpoint": "replay.sock"}
 # sockaddr_un holds 108 bytes, including the terminating NUL.
@@ -247,6 +249,36 @@ def check_shared_memory(engine: EngineLauncher, role: str, args: list[str], budg
         raise ValueError(f"{role}: engine memory setting differs from shared GPU budget")
 
 
+def container_model_file(model_dir: str, path: str) -> str:
+    """Return the container path of a model file that lies in the mounted model directory."""
+    model = Path(path)
+    try:
+        relative = model.parent.resolve().relative_to(model_dir) / model.name
+    except ValueError:
+        raise ValueError("NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR") from None
+    return f"{MODEL_MOUNT}/{relative.as_posix()}"
+
+
+def model_file_changed(plan: dict) -> bool:
+    """Whether the model file that `prepare` hashed is missing or differs from its hash.
+
+    A container plan's file must also remain a regular file in the mounted model directory at
+    the path the engine loads.
+    """
+    if not plan.get("model_sha256"):
+        return False
+    path = Path(plan["model_path"])
+    if plan.get("backend") == "native":
+        return not path.is_file() or digest(path) != plan["model_sha256"]
+    model_flag = plan_launcher(plan).launch_settings.model_flag
+    try:
+        if container_model_file(plan["model_dir"], str(path)) != option(plan["args"], model_flag):
+            return True
+        return regular_file_digest(path) != plan["model_sha256"]
+    except (OSError, ValueError):
+        return True
+
+
 def append_private(path: Path, data: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as stream:
@@ -331,17 +363,18 @@ def build(
         ":" + values["PYTHONPATH"] if values.get("PYTHONPATH") else ""
     )
     model_dir = str(Path(env["NARWHAL_MODEL_DIR"]).resolve())
-    model_ref = (
-        os.path.abspath(env.get("NARWHAL_MODEL_PATH", model_dir))
-        if backend == "native"
-        else "/model"
-    )
-    if backend == "native":
+    model_file = env.get("NARWHAL_MODEL_PATH")
+    model_path = os.path.abspath(model_file or model_dir)
+    if backend == "native" or model_file:
         if isinstance(engine, ModelFormats):
-            engine.check_model(runtime, model_ref)
-        elif Path(model_ref).is_file():
+            engine.check_model(runtime, model_path)
+        elif backend == "container" or Path(model_path).is_file():
             label = engine_backend(runtime.get("backend")).label
             raise ValueError(f"{label} launches take a model directory, not a model file")
+    if backend == "native":
+        model_ref = model_path
+    else:
+        model_ref = container_model_file(model_dir, model_path) if model_file else MODEL_MOUNT
     if backend == "container" and ("," in model_dir or "," in str(output)):
         raise ValueError("container bind-mount paths must use comma-free names")
     name = f"narwhal-{role}-{uuid.uuid4().hex[:12]}"
@@ -362,7 +395,7 @@ def build(
         "--env-file",
         str(output / "container.env"),
         "--mount",
-        f"type=bind,src={model_dir},dst=/model,readonly",
+        f"type=bind,src={model_dir},dst={MODEL_MOUNT},readonly",
         "--mount",
         f"type=bind,src={output / 'cache'},dst=/root/.cache",
         "--mount",
@@ -431,6 +464,7 @@ def build(
         "connector": connector,
         "kv_events": kv_events,
         "expected_packages": runtime["expected_packages"],
+        **({"runtime_pins": pins} if (pins := engine.runtime_pins(runtime)) else {}),
         "endpoint": endpoint.geturl(),
         "attestation_port": attest_port,
         "side_channel_port": side_port,
@@ -439,6 +473,8 @@ def build(
         **({"shared_device": shared} if shared is not None else {}),
         "revision": env["NARWHAL_DEPLOYMENT_REVISION"],
     }
+    if backend == "container" and model_file:
+        plan["model_path"] = model_path
     if backend == "native":
         model_revision = env.get("NARWHAL_MODEL_REVISION", "")
         if not re.fullmatch(r"[0-9a-f]{40}|sha256:[0-9a-f]{64}", model_revision):
@@ -457,12 +493,44 @@ def build(
     return plan, values
 
 
+def model_file_digest(plan: dict, env: dict[str, str], backend: str) -> str | None:
+    """Hash the planned model file and check it against NARWHAL_MODEL_SHA256.
+
+    A container launch requires the pin; a native launch checks it when it is set.
+    """
+    if "model_path" not in plan:
+        return None
+    path = Path(plan["model_path"])
+    container = backend == "container"
+    pinned = env.get("NARWHAL_MODEL_SHA256", "")
+    if not path.is_file():
+        if container:
+            raise ValueError("NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR")
+        if pinned:
+            raise ValueError(
+                "NARWHAL_MODEL_SHA256 pins a model file; set NARWHAL_MODEL_PATH to that file"
+            )
+        return None
+    if container and path.is_symlink():
+        raise ValueError(
+            "NARWHAL_MODEL_PATH must name a regular file, not a symbolic link, because the "
+            "container sees only NARWHAL_MODEL_DIR"
+        )
+    if container and not pinned:
+        raise ValueError("set NARWHAL_MODEL_SHA256 to the SHA-256 of NARWHAL_MODEL_PATH")
+    value = regular_file_digest(path) if container else digest(path)
+    if pinned and value != pinned:
+        raise ValueError("model file differs from its supplied hash")
+    return value
+
+
 def prepare(output: Path, env: dict[str, str], *, backend: str = "container") -> None:
     source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
     record = json.loads(source.read_text())
     plan, values = build(record, env, output.resolve(), backend=backend)
     if digest(Path(env["NARWHAL_MODEL_DIR"]) / "config.json") != env["NARWHAL_MODEL_CONFIG_SHA256"]:
         raise ValueError("model config differs from its supplied hash")
+    model_sha256 = model_file_digest(plan, env, backend)
     engine = plan_launcher(plan)
     capture = cache_capture(engine) is not None
     if capture:
@@ -494,8 +562,8 @@ def prepare(output: Path, env: dict[str, str], *, backend: str = "container") ->
             cache_capture_sha256=hook_sha, cache_capture_code_sha256=code_digest(hook_source)
         )
     plan["model_config_sha256"] = env["NARWHAL_MODEL_CONFIG_SHA256"]
-    if backend == "native" and Path(plan["model_path"]).is_file():
-        plan["model_sha256"] = digest(Path(plan["model_path"]))
+    if model_sha256 is not None:
+        plan["model_sha256"] = model_sha256
     write_private(output / "launch.json", json.dumps(plan, indent=2) + "\n")
     write_private(output / "hook/launch.json", (output / "launch.json").read_text())
     for name in ("sitecustomize.py", "launch_engine.py", "launch.json"):

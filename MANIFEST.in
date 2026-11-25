@@ -11,7 +11,7 @@ recursive-include .github *.yml
 recursive-include docs *.md *.svg *.png *.css
 recursive-include docs/assets *.html *.js
 recursive-include overrides *.html *.py
-recursive-include deploy *.cfg
+recursive-include deploy *.cfg *.py *.txt Dockerfile
 recursive-include tools *.py *.json *.yml *.md
 recursive-include tests *.py
 include tests/data/fleet.json

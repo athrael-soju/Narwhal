@@ -60,6 +60,79 @@ For an empty directory with a Hugging Face source:
 
 Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. A replica mismatch stops discovery with an error that names the first differing file.
 
+### Staging a GGUF model on vLLM
+
+A vLLM fleet can serve a GGUF file from an engine image that includes `vllm-gguf-plugin`, such as the one in [Building a GGUF engine image](#building-a-gguf-engine-image). Stage the GGUF file in `NARWHAL_MODEL_DIR` beside the `config.json` and tokenizer files of the model it was converted from:
+
+1. Set `BASE_REPO_ID` and `BASE_REVISION` to the repository and full commit SHA of the model the file was converted from.
+2. Set `GGUF_REPO_ID`, `GGUF_REVISION` and `GGUF_FILE` to the GGUF repository, its full commit SHA and the file name.
+3. Stage the same files on every engine host:
+
+    ```bash
+    hf download "$BASE_REPO_ID" --revision "$BASE_REVISION" \
+      --include '*.json' --include '*.txt' --include '*.jinja' --local-dir "$NARWHAL_MODEL_DIR"
+    hf download "$GGUF_REPO_ID" "$GGUF_FILE" --revision "$GGUF_REVISION" \
+      --local-dir "$NARWHAL_MODEL_DIR"
+    ```
+
+    For a model with a multimodal projector, add the projector's file name after `"$GGUF_FILE"`. The GGUF plugin reads the projector from the directory of the GGUF file.
+
+4. Set `NARWHAL_MODEL_PATH` in `.env` to the absolute path of the GGUF file, `$NARWHAL_MODEL_DIR/<file>.gguf`.
+5. Record both repository IDs and commit SHAs in the private record.
+
+When an engine host keeps the model in another directory, set `NARWHAL_NODE_<n>_MODEL_DIR` and `NARWHAL_NODE_<n>_MODEL_PATH` for that engine `<n>`. Every engine's directory must hold the same files.
+
+Discovery hashes the GGUF file with the rest of the directory and writes its SHA-256 to `NARWHAL_NODE_<n>_MODEL_SHA256` in `config/deployment.env`. To have discovery check the file against a known SHA-256, set `NARWHAL_MODEL_SHA256` in `.env`.
+
+In each launch record, discovery pins the image's `vllm-gguf-plugin` version in `runtime.expected_packages`, and records `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` and `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` as `runtime.gguf_plugin_python_sha256` and `runtime.gguf_plugin_extension_sha256`. It adds `--load-format gguf` and `--hf-config-path /model` to `runtime.extra_args` when `NARWHAL_ENGINE_ARGS` does not set them, and sets `runtime.tokenizer` to `/model` when `NARWHAL_TOKENIZER` is unset. The container mounts `NARWHAL_MODEL_DIR` at `/model`.
+
+When `config.json` has a `vision_config` or an `audio_config`, discovery also adds `--language-model-only`. vLLM then sets every multimodal input limit to 0, and the engine serves text prompts only. To keep multimodal input on every engine, set `NARWHAL_LANGUAGE_MODEL_ONLY=false` in `.env` and stage the multimodal projector as in step 3.
+
+Discovery fails when:
+
+- the image has no `vllm-gguf-plugin`
+- `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` or `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` is unset or is not a SHA-256 digest
+- `NARWHAL_MODEL_PATH` names no file in `NARWHAL_MODEL_DIR`, or a file without the `.gguf` extension
+- the engines' GGUF files differ in SHA-256
+- `NARWHAL_ENGINE_BACKEND` selects SGLang or TensorRT-LLM
+
+#### Building a GGUF engine image
+
+[`deploy/vllm-gguf/Dockerfile`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/vllm-gguf/Dockerfile) builds a CUDA engine image from `vllm/vllm-openai:v0.30.0`, pinned by digest. It installs `vllm-gguf-plugin` 0.0.5 and `gguf` 0.19.0, each checked against the SHA-256 in `deploy/vllm-gguf/requirements.txt`, and replaces the plugin's Python files with those at plugin revision `d4c1f0d082fc7cd4350da56689109a01c1f29d6c`, as the [dev CUDA runtime](../dev/CUDA-Runtime.md) does. The build fails unless the image holds the package versions and plugin digests of the vLLM dev templates.
+
+Build the image once, then copy it to the engine hosts:
+
+1. On a Linux x86-64 host with Docker, network access and a Narwhal checkout, build the image from the checkout root:
+
+    ```bash
+    docker build --progress=plain -t narwhal-vllm-gguf:0.30.0 deploy/vllm-gguf
+    ```
+
+    The build prints the plugin digests:
+
+    ```text
+    gguf_plugin_python_sha256=b08b2ffdf18e4314ed7e4a8cfd49de3520edd5d9bc9be4564d8a71b2265771e0
+    gguf_plugin_extension_sha256=64521127698503e4b72053cd06adc9aa0448debb07715b2663b1250a816b2c1e
+    ```
+
+2. Copy the image to each engine host that did not build it, replacing `<engine-host>` with its SSH destination:
+
+    ```bash
+    docker save narwhal-vllm-gguf:0.30.0 | ssh <engine-host> docker load
+    ```
+
+3. On every engine host, print the image ID:
+
+    ```bash
+    docker image inspect --format '{{.Id}}' narwhal-vllm-gguf:0.30.0
+    ```
+
+    Every host must print the same ID.
+
+4. In `.env`, set `NARWHAL_ENGINE_IMAGE` to that ID, `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` to the `gguf_plugin_python_sha256` digest, and `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` to the `gguf_plugin_extension_sha256` digest.
+
+`narwhal-engine check` hashes the plugin in the image and fails when either digest differs from the launch record. An image with the plugin wheel's own Python files fails this check.
+
 ## Running discovery and access checks
 
 Each engine host needs:
@@ -112,13 +185,13 @@ Keep the generated `config/` files together.
 
 The discovery output directory, mode 0700:
 
-| File                                                         | Content                                                                                                                                                                                              |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code and convolutional-state flags, fabric interface addresses, image runtime environment |
-| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                      |
-| `logs/`                                                      | SSH command logs                                                                                                                                                                                     |
-| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                               |
-| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                        |
+| File                                                         | Content                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code, convolutional-state and `multimodal` flags, fabric interface addresses, image runtime environment, and for a GGUF model `model_file` and `model_file_sha256` |
+| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                                                                                               |
+| `logs/`                                                      | SSH command logs                                                                                                                                                                                                                                                              |
+| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                                                                                                        |
+| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                                                 |
 
 Reuse an inspected fleet:
 
@@ -163,6 +236,7 @@ Override the policy in `.env` before discovery:
 | `NARWHAL_MODEL_DTYPE`, `NARWHAL_BLOCK_SIZE`                                              | Model dtype (`bfloat16` or `float16`) and requested cache block size                                                          |
 | `NARWHAL_CONTEXT_LENGTH`, `NARWHAL_MAX_SEQUENCES`                                        | `runtime.context_length` and `runtime.max_sequences`                                                                          |
 | `NARWHAL_PREFIX_CACHING`, `NARWHAL_KV_EVENTS`, `NARWHAL_TOKENIZER`                       | `runtime.prefix_caching` and `runtime.kv_events`, each `true` or `false`, and `runtime.tokenizer`                             |
+| `NARWHAL_LANGUAGE_MODEL_ONLY`                                                            | `true` or `false` for the fleet; `false` keeps multimodal GGUF input on vLLM. Discovery refuses a per-engine override         |
 | `NARWHAL_ENGINE_ARGS`                                                                    | JSON array that replaces the default `runtime.extra_args`                                                                     |
 | `NARWHAL_ENGINE_ENV`                                                                     | JSON object of launcher-supported environment fields that overrides the image environment                                     |
 | `NARWHAL_TRANSFER_TRANSPORT`, `NARWHAL_TRANSFER_NET_DEVICES`, `NARWHAL_TRANSFER_DEVICES` | Transport (`ucx_tcp` or `ucx_rdma`), UCX network devices (`HCA:port` entries for RDMA), and a JSON array of RDMA device paths |

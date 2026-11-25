@@ -120,6 +120,12 @@ class LaunchCapabilityTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "^SGLang launches take a model directory"),
         ):
             self.prepared("sglang", native=True, NARWHAL_MODEL_PATH=model.name)
+        for name, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
+            with (
+                self.subTest(name),
+                self.assertRaisesRegex(ValueError, f"^{label} launches take a model directory"),
+            ):
+                self.prepared(name, NARWHAL_MODEL_PATH="/models/weights.gguf")
 
     def test_model_dimensions_come_from_the_model_configuration_without_live_dimensions(self):
         run, plan, _ = self.prepared("sglang")

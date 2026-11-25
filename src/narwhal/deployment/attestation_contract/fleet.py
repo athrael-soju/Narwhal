@@ -9,7 +9,7 @@ import httpx
 
 from ...backends import load as load_backend
 from ...config import EngineContract, FleetConfig
-from ...engines.attestation import fetch_spec_identity, verify_attestation
+from ...engines.attestation import attested_launch, fetch_spec_identity, verify_attestation
 from .evidence import read_json, write_private_json
 
 
@@ -18,6 +18,8 @@ def finalize_fleet(path: Path) -> EngineContract:
         raise ValueError("Fleet configuration must be a regular private file")
     fleet = FleetConfig.load(path)
     contracts = []
+    # The SHA-256 of the model file each engine attests, or None for a model directory.
+    model_files = set()
     headers = fleet.engine_headers()
     reader = load_backend(fleet.backend).identity
     with httpx.Client(timeout=fleet.health_timeout_s) as client:
@@ -36,10 +38,13 @@ def finalize_fleet(path: Path) -> EngineContract:
             if missing := contract.missing(reader.contract_fields):
                 raise ValueError(f"{engine.iid}: incomplete contract: " + ", ".join(missing))
             contracts.append(contract)
+            model_files.add(attested_launch(payload).get("model_sha256"))
     if not contracts or any(
         contract.fields() != contracts[0].fields() for contract in contracts[1:]
     ):
         raise ValueError("Engine sidecars report different contracts")
+    if len(model_files) > 1:
+        raise ValueError("Engine sidecars attest different model files")
     raw_fleet = read_json(path)
     if "engine_contract" in raw_fleet:
         if raw_fleet["engine_contract"] != contracts[0].fields():

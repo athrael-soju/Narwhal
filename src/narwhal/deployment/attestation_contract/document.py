@@ -15,6 +15,7 @@ from ..launch_engine.backend import (
     engine_backend,
     plan_launcher,
 )
+from ..launch_engine.plan import model_file_changed
 from ..launch_engine.runtime import digest
 from .evidence import (
     checked_plan,
@@ -93,6 +94,8 @@ def bound_dimensions(
         require_prior_dimensions(run, plan, plan_hash, dimensions.get("contract"))
     if digest(Path(plan["model_dir"]) / "config.json") != plan["model_config_sha256"]:
         raise ValueError("Model configuration changed after launch preparation")
+    if model_file_changed(plan):
+        raise ValueError("Model file changed after launch preparation")
     architecture = dimensions.get("model_architecture")
     if not isinstance(architecture, str) or not architecture.strip():
         raise ValueError(
@@ -152,6 +155,7 @@ def engine_document(run: Path, startup_log: Path) -> dict:
         "image_id": "" if native else checked["image_id"],
         "expected_packages": plan["expected_packages"],
         "model_config_sha256": plan["model_config_sha256"],
+        **({"model_sha256": plan["model_sha256"]} if "model_sha256" in plan else {}),
         "model_revision": plan.get("model_revision", ""),
         "launch_sha256": plan.get("launch_sha256", ""),
         "launcher_code_sha256": plan["launcher_code_sha256"],

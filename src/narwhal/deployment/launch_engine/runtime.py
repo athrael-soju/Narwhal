@@ -3,11 +3,24 @@ from __future__ import annotations
 import ast
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 
 def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Streams the file, so a multi-gigabyte model file stays out of memory.
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def regular_file_digest(path: Path) -> str:
+    """Hash a regular file without following a symbolic link in its last path component."""
+    # O_NONBLOCK keeps a FIFO from blocking the open; regular files ignore it.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f"{path} is not a regular file")
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def code_digest(path: Path) -> str:

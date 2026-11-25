@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
-from ...deployment.launch_engine.plan import discovered_launch_settings, discovered_settings
+from ...deployment.launch_engine.plan import (
+    MODEL_MOUNT,
+    discovered_launch_settings,
+    discovered_settings,
+)
+from .plan import GGUF_PLUGIN_PINS
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
+# vLLM loads a GGUF model file through this plugin.
+GGUF_PLUGIN = "vllm-gguf-plugin"
 DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
+# A GGUF file reads its Hugging Face configuration and tokenizer from the model directory.
+GGUF_ARGS = (("--load-format", "gguf"), ("--hf-config-path", MODEL_MOUNT))
+# A GGUF file holds the language model; this flag leaves out a multimodal model's encoders.
+LANGUAGE_MODEL_ONLY = "--language-model-only"
+# Every engine must accept the same request inputs, so this choice applies to the whole fleet.
+FLEET_SETTINGS = frozenset({"LANGUAGE_MODEL_ONLY"})
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
@@ -21,6 +35,29 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         ):
             raise ValueError("convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
         environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
+    launch = discovered_launch_settings(setting)
+    text_only = setting("LANGUAGE_MODEL_ONLY", "")
+    if text_only not in ("", "true", "false"):
+        raise ValueError("set LANGUAGE_MODEL_ONLY to true or false in .env")
+    if observed.get("model_file"):
+        if not observed["model_file"].endswith(".gguf"):
+            raise ValueError("set NARWHAL_MODEL_PATH to a .gguf file")
+        if not observed["packages"].get(GGUF_PLUGIN):
+            raise ValueError(f"a GGUF model requires {GGUF_PLUGIN} in the engine image")
+        for flag, value in GGUF_ARGS:
+            if flag not in args:
+                args.extend((flag, value))
+        if observed.get("multimodal") and text_only != "false" and LANGUAGE_MODEL_ONLY not in args:
+            args.append(LANGUAGE_MODEL_ONLY)
+        launch.setdefault("tokenizer", MODEL_MOUNT)
+        for name in GGUF_PLUGIN_PINS:
+            pinned = setting(name.upper(), "")
+            if not re.fullmatch(r"[0-9a-f]{64}", pinned):
+                raise ValueError(
+                    "set GGUF_PLUGIN_PYTHON_SHA256 and GGUF_PLUGIN_EXTENSION_SHA256 in .env "
+                    "to the SHA-256 digests of the qualified GGUF plugin"
+                )
+            launch[name] = pinned
     return {
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
@@ -28,7 +65,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         "block_size": int(setting("BLOCK_SIZE", "128")),
         "context_length": context_length,
         "max_sequences": int(setting("MAX_SEQUENCES", "8")),
-        **discovered_launch_settings(setting),
+        **launch,
         "environment": environment,
         "extra_args": args,
     }

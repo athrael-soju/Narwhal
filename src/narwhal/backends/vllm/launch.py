@@ -32,12 +32,14 @@ class VllmLauncher(
     side_channel = "NIXL"
     api_key_env = "VLLM_API_KEY"
     image_packages = discovery.IMAGE_PACKAGES
+    model_file_packages = discovery.GGUF_PLUGIN
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
     launch_settings = policy.SETTINGS
     check_summary = "Runtime identity, package pins, connector import and tokenizer passed."
     prefix_cache_name = "Prefix caching"
     launch_varying_flags = attestation.LAUNCH_VARYING_FLAGS
+    fleet_settings = discovery.FLEET_SETTINGS
     version_label = "API"
 
     def validate_runtime(self, runtime: dict) -> None:
@@ -65,8 +67,13 @@ class VllmLauncher(
         return env["VLLM_NIXL_SIDE_CHANNEL_HOST"], int(env["VLLM_NIXL_SIDE_CHANNEL_PORT"])
 
     def check_model(self, runtime: dict, model: str) -> None:
-        if model.endswith(".gguf") and not runtime["expected_packages"].get("vllm-gguf-plugin"):
-            raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
+        if not model.endswith(".gguf"):
+            if not Path(model).is_dir():
+                raise ValueError("vLLM launches take a model directory or a .gguf model file")
+            return
+        plugin = discovery.GGUF_PLUGIN
+        if not runtime["expected_packages"].get(plugin):
+            raise ValueError(f"GGUF launch requires a pinned {plugin} package")
 
     def serve(
         self,
@@ -88,6 +95,9 @@ class VllmLauncher(
             kv_events=kv_events,
             evict_peers=evict_peers,
         )
+
+    def runtime_pins(self, runtime: dict) -> dict:
+        return policy.runtime_pins(runtime)
 
     def memory_fraction(self, args: list[str]) -> str | None:
         return policy.memory_fraction(args)

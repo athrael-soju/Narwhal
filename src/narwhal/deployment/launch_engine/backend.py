@@ -31,6 +31,9 @@ class EngineLauncher(ABC):
     version_label: ClassVar[str]
     # Flags whose values change per launch; the attested launch arguments omit their values.
     launch_varying_flags: ClassVar[frozenset[str]]
+    # Discovery settings that take one value for the fleet; a NARWHAL_NODE_<n>_ override is
+    # refused.
+    fleet_settings: ClassVar[frozenset[str]] = frozenset()
 
     @abstractmethod
     def validate_runtime(self, runtime: dict) -> None: ...
@@ -69,6 +72,10 @@ class EngineLauncher(ABC):
         pass them to the engine from `directory`.
         """
         return {}, []
+
+    def runtime_pins(self, runtime: dict) -> dict:
+        """Runtime fields the plan records for the runtime check to verify; none by default."""
+        return {}
 
     @abstractmethod
     def memory_fraction(self, args: list[str]) -> str | None: ...
@@ -146,7 +153,11 @@ class LiveModelDimensions(ABC):
 
 
 class ModelFormats(ABC):
-    """Optional capability: a native launch may name a model file, not only a directory."""
+    """Optional capability: a launch may name a model file, not only a directory."""
+
+    # Discovery also pins the image distributions whose names fully match this pattern when
+    # the deployment names a model file; None pins no further distribution.
+    model_file_packages: ClassVar[str | None] = None
 
     @abstractmethod
     def check_model(self, runtime: dict, model: str) -> None: ...

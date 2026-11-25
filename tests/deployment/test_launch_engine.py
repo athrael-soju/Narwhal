@@ -13,10 +13,12 @@ from types import ModuleType
 from unittest.mock import Mock, patch
 
 from narwhal.backends.vllm.captures import handshake_policy
+from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
+from narwhal.deployment.launch_engine import start as launch_start
 from narwhal.deployment.launch_engine.check import check
 from narwhal.deployment.launch_engine.plan import (
     build,
@@ -25,7 +27,7 @@ from narwhal.deployment.launch_engine.plan import (
     releases_peers,
     validate_runtime,
 )
-from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.runtime import digest, regular_file_digest
 from narwhal.deployment.launch_engine.start import (
     start_shared,
     validate_shared_gpu,
@@ -129,6 +131,263 @@ class EngineLauncherTests(unittest.TestCase):
             plan, _ = build(record, env, root / "launch", backend="native")
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
+
+    def gguf_inputs(
+        self, root: Path, pins: dict[str, str] | None = None
+    ) -> tuple[dict, dict[str, str], Path]:
+        record, env = launcher_inputs(root)
+        model = root / "model" / "weights.gguf"
+        model.write_bytes(b"gguf")
+        record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+        record["runtime"].update(pins or {})
+        Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+        env.update(
+            NARWHAL_MODEL_PATH=str(model),
+            NARWHAL_MODEL_SHA256=hashlib.sha256(b"gguf").hexdigest(),
+        )
+        return record, env, model
+
+    def test_container_gguf_launch_serves_the_pinned_file_from_the_model_mount(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model/weights.gguf")
+            self.assertIn(
+                f"type=bind,src={(root / 'model').resolve()},dst=/model,readonly", plan["common"]
+            )
+            self.assertEqual(plan["model_path"], str(model))
+            self.assertEqual(plan["model_sha256"], env["NARWHAL_MODEL_SHA256"])
+
+    def test_runtime_check_compares_the_image_plugin_with_the_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            plugin = root / "site-packages" / "vllm_gguf_plugin"
+            (plugin / "ops").mkdir(parents=True)
+            (plugin / "__init__.py").write_text("qualified = True\n")
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            (plugin / "_C_gguf.abi3.so").write_bytes(b"extension")
+            pins = gguf_plugin_digests(plugin)
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["runtime_pins"], pins)
+            modules = {
+                "vllm.config": ModuleType("vllm.config"),
+                "vllm.distributed.kv_transfer.kv_connector.factory": ModuleType("factory"),
+                "vllm.version": ModuleType("vllm.version"),
+                "transformers": ModuleType("transformers"),
+                **engine_config_modules(),
+            }
+            modules["vllm.config"].KVTransferConfig = Mock()
+            connector = type("NixlConnector", (), {"__module__": "nixl"})
+            factory = Mock(**{"get_connector_class.return_value": connector})
+            modules[
+                "vllm.distributed.kv_transfer.kv_connector.factory"
+            ].KVConnectorFactory = factory
+            modules["vllm.version"].__version__ = "0.29.0"
+            modules["transformers"].AutoTokenizer = Mock()
+            distribution = Mock(**{"locate_file.return_value": plugin})
+
+            def execute_check(command, directory, log):
+                if command[0] == "image":
+                    return json.dumps([{"Id": plan["image"]}])
+                index = command.index("-c")
+                with (
+                    patch.dict(sys.modules, modules),
+                    patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
+                    patch("importlib.metadata.version", plan["expected_packages"].__getitem__),
+                    patch("importlib.metadata.distribution", return_value=distribution),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                ):
+                    exec(command[index + 1], {})
+                return output.getvalue()
+
+            # Wheel sources in place of the qualified revision fail the check.
+            (plugin / "ops" / "kernels.py").write_text("wheel = True\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                self.assertRaisesRegex(AssertionError, "GGUF plugin files differ"),
+            ):
+                check(run, plan)
+            self.assertFalse((run / "checked.json").exists())
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            self.assertTrue((run / "checked.json").exists())
+
+    def test_runtime_check_requires_the_plugin_record_for_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pins = {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "6" * 64}
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            for plugin in (None, {**pins, "gguf_plugin_python_sha256": "7" * 64}):
+                with (
+                    self.subTest(plugin=plugin),
+                    patched_docker(side_effect=[image, vllm_check_output(plan, plugin=plugin)]),
+                    self.assertRaisesRegex(ValueError, "GGUF plugin files differ"),
+                ):
+                    check(run, plan)
+
+    def test_gguf_plugin_digests_come_in_pairs(self):
+        for pins in (
+            {"gguf_plugin_python_sha256": "5" * 64},
+            {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "short"},
+        ):
+            with self.subTest(pins=pins), self.assertRaisesRegex(ValueError, "must both be"):
+                validate_runtime({**runtime(), **pins})
+
+    def test_container_checkpoint_launch_names_no_model_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model")
+            self.assertNotIn("model_path", plan)
+            self.assertNotIn("model_sha256", plan)
+
+    def test_container_gguf_preparation_requires_a_pinned_file_in_the_model_directory(self):
+        def unpinned(root, env, model):
+            del env["NARWHAL_MODEL_SHA256"]
+
+        def mismatched(root, env, model):
+            env["NARWHAL_MODEL_SHA256"] = "0" * 64
+
+        def outside(root, env, model):
+            other = root / "weights.gguf"
+            other.write_bytes(b"gguf")
+            env["NARWHAL_MODEL_PATH"] = str(other)
+
+        def linked(root, env, model):
+            target = root / "blob"
+            model.rename(target)
+            model.symlink_to(target)
+
+        def missing(root, env, model):
+            model.unlink()
+
+        def parent_segment(root, env, model):
+            other = root / "weights.gguf"
+            other.write_bytes(b"gguf")
+            env["NARWHAL_MODEL_PATH"] = str(root / "model" / ".." / "weights.gguf")
+
+        def not_gguf(root, env, model):
+            other = root / "model" / "weights.bin"
+            model.rename(other)
+            env["NARWHAL_MODEL_PATH"] = str(other)
+
+        def plugin_unpinned(root, env, model):
+            source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
+            record = json.loads(source.read_text())
+            del record["runtime"]["expected_packages"]["vllm-gguf-plugin"]
+            source.write_text(json.dumps(record))
+
+        for change, message in (
+            (unpinned, "set NARWHAL_MODEL_SHA256"),
+            (mismatched, "model file differs from its supplied hash"),
+            (outside, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (linked, "not a symbolic link"),
+            (missing, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (parent_segment, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (not_gguf, "vLLM launches take a model directory or a .gguf model file"),
+            (plugin_unpinned, "requires a pinned vllm-gguf-plugin"),
+        ):
+            with self.subTest(change.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env, model = self.gguf_inputs(root)
+                change(root, env, model)
+                run = root / "launch"
+                with self.assertRaisesRegex(ValueError, message):
+                    prepare(run, env)
+                self.assertFalse(run.exists())
+
+    def test_container_gguf_path_may_pass_through_a_subdirectory_segment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, _ = self.gguf_inputs(root)
+            (root / "model" / "sub").mkdir()
+            env["NARWHAL_MODEL_PATH"] = str(root / "model" / "sub" / ".." / "weights.gguf")
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model/weights.gguf")
+            self.assertEqual(plan["model_path"], str(root / "model" / "weights.gguf"))
+
+    def test_native_model_directory_refuses_a_model_file_pin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env.update(NARWHAL_MODEL_REVISION="a" * 40, NARWHAL_MODEL_SHA256="9" * 64)
+            with self.assertRaisesRegex(ValueError, "NARWHAL_MODEL_SHA256 pins a model file"):
+                prepare(root / "launch", env, backend="native")
+
+    def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            with (
+                patched_docker(side_effect=[image, vllm_check_output(plan)]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            # The identical bytes now live outside the directory the container mounts.
+            outside = root / "outside.gguf"
+            model.rename(outside)
+            model.symlink_to(outside)
+            self.assertEqual(digest(model), plan["model_sha256"])
+            with patched_docker() as docker:
+                with self.assertRaisesRegex(ValueError, "model file changed after launch"):
+                    check(run, plan)
+                with self.assertRaisesRegex(ValueError, "model file changed; prepare a fresh"):
+                    launch_start.start(run, plan)
+                docker.assert_not_called()
+            self.assertFalse((run / "container.id").exists())
+
+    def test_container_check_and_start_refuse_a_model_file_changed_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            with (
+                patched_docker(side_effect=[image, vllm_check_output(plan)]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            model.write_bytes(b"changed")
+            with patched_docker() as docker:
+                with self.assertRaisesRegex(ValueError, "model file changed after launch"):
+                    check(run, plan)
+                with self.assertRaisesRegex(ValueError, "model file changed; prepare a fresh"):
+                    launch_start.start(run, plan)
+                docker.assert_not_called()
+            self.assertFalse((run / "container.id").exists())
 
     def test_linear_convolution_layers_hold_a_conv_state(self):
         from narwhal.deployment.launch_engine.plan import model_conv_state_layers
@@ -1020,3 +1279,18 @@ class SharedEngineStartTests(unittest.TestCase):
                 docker(["logs", "container"], Path(folder), "launch.log", include_stderr=True),
                 "CUDA IPC failed",
             )
+
+
+class RegularFileDigestTests(unittest.TestCase):
+    def test_refuses_a_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "weights.gguf"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                regular_file_digest(fifo)
+
+    def test_hashes_a_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "weights.gguf"
+            path.write_bytes(b"gguf")
+            self.assertEqual(regular_file_digest(path), hashlib.sha256(b"gguf").hexdigest())
