@@ -67,7 +67,7 @@ When the manifests are identical, installed-release documents pass validation on
 
 The schema version of each interface, including the [command result](../Command-Results.md) envelope, changes when a field is renamed, removed, or retyped. A metrics version also changes when an existing series gains a label or changes what it counts.
 
-Metrics version `3` leaves the request totals a router adopts from a state handoff out of its counters, so each counter counts the requests of one router process. It also adds the `narwhal_router_role` gauge. See [Prometheus metrics](03-Metrics-and-Control.md#prometheus-metrics).
+Metrics version `3` leaves the request totals a router adopts from a state handoff out of its counters, so each counter counts the requests of one router process. It also adds the `narwhal_router_role` gauge, and `narwhal_standby_refusals_total`, which counts the requests a router without the lease refuses in place of `narwhal_offered_total` and `narwhal_rejected_total`. See [Prometheus metrics](03-Metrics-and-Control.md#prometheus-metrics).
 
 From version `3`, a single router restarted with `--resume` starts its counters at `0`. Read deployment totals from [`GET /narwhal/state`](../http-api/05-Live-State.md), or from `sum(increase())` of each counter over the routers. During a rolling upgrade from version `2`, a version `2` router that takes over still raises its counters to the adopted totals, and `rate()` and `increase()` across that takeover show a spike.
 

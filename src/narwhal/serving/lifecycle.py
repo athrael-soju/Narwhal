@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from ..runtime.standby import counts_outcomes
 from ..types import Instance, Phase, Request
 from .outcomes import DEADLINE_MESSAGE, RequestExpired, failure_reason
 from .retry import transient
@@ -72,6 +73,8 @@ class RequestLifecycle:
         self.demand_observation: ArrivalObservation | None = None
         self.decode_tokens_observed = 0
         self.upstream_seconds = {"prefill": 0.0, "decode": 0.0}
+        # Whether `offered` counts the request; a router without the lease counts it at finish.
+        self.counted = False
 
     @classmethod
     def offered(
@@ -85,7 +88,9 @@ class RequestLifecycle:
             seen,
             client_rid=headers.get("x-request-id"),
         )
-        router.offered += 1
+        if counts_outcomes(router):
+            state.counted = True
+            router.offered += 1
         router.controller.demand.unsized_pending += 1
         state.demand_pending = True
         return state
@@ -242,7 +247,13 @@ class RequestLifecycle:
         router = self.router
         req = self.request
         self.release_retry_credit()
-        if not self.sized:
+        # A router without the lease counts its refusals apart from client outcomes, because
+        # the load balancer retries them on the lease holder, which counts the request once.
+        attempt = not self.counted and terminal == "rejected" and not counts_outcomes(router)
+        if not self.counted and not attempt:
+            self.counted = True
+            router.offered += 1
+        if not self.sized and not attempt:
             router.unsized_offered += 1
         # Unread bodies other than invalid ones stay visible as unsized demand.
         self.resolve_demand(retain_unsized=terminal != "invalid")
@@ -260,12 +271,16 @@ class RequestLifecycle:
             "cancelled": "cancelled",
             "invalid": "invalid_requests",
         }[terminal]
-        setattr(router, counter, getattr(router, counter) + 1)
-        if terminal in router.outcome_reasons:
+        if attempt:
             reason = reason or "unclassified"
-            router.outcome_reasons[terminal][reason] += 1
+            router.standby_refusals[reason] += 1
         else:
-            reason = None
+            setattr(router, counter, getattr(router, counter) + 1)
+            if terminal in router.outcome_reasons:
+                reason = reason or "unclassified"
+                router.outcome_reasons[terminal][reason] += 1
+            else:
+                reason = None
         if completed := terminal == "completed":
             error_type = error_code = None
             if self.attempts > 1:

@@ -227,6 +227,8 @@ class NarwhalRouter:
         }
         # The share of these totals that state handoffs carried in, which /metrics leaves out.
         self.adopted = AdoptedCounts(exported=OUTCOME_REASONS)
+        # Requests refused while this process did not hold the lease, by reason.
+        self.standby_refusals: Counter[str] = Counter()
         # Attempt failures by request phase and failure reason.
         self.attempt_failures: Counter[tuple[str, str]] = Counter()
         self.served_after_retry = 0
@@ -671,6 +673,10 @@ class NarwhalRouter:
                 "saturation_threshold_s": saturation_threshold(self),
                 "rejected": self.rejected,
                 "refused": self.refused,
+                "standby_refusals": {
+                    reason: self.standby_refusals[reason]
+                    for reason in (*OUTCOME_REASONS["rejected"], *sorted(self.standby_refusals))
+                },
                 "engine_auth": self.cfg.engine_auth_mode(),
                 **self._admission_mode(),
             },

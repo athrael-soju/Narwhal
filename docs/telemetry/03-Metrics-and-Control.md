@@ -12,6 +12,8 @@ A new router process starts every counter and histogram at `0`, and `narwhal_ret
 
 Each counter counts what that router process observed. On resume and standby takeover, the router adopts the request totals behind these counters from the state handoff: `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total` and `narwhal_cancelled_total`, and the risk-event counts behind `narwhal_demand_evidence_risk_events_total`. [`GET /narwhal/state`](../http-api/05-Live-State.md) and the next handoff include the adopted totals, and `/metrics` leaves them out. Each counter therefore rises only with the process's own requests, and returns to `0` only when the process restarts, which Prometheus treats as a counter reset. To count the requests of a router pair, sum each counter over its routers.
 
+A router that does not hold the lease, such as a standby, a fenced router or one releasing its lease at shutdown, counts each request it refuses in `narwhal_standby_refusals_total` only. The load balancer retries those attempts on the lease holder, which counts each request once, so they stay out of `narwhal_offered_total`, `narwhal_unsized_offered_total` and `narwhal_rejected_total`. The journal keeps a row for each refusal. A request that reaches a router without the lease and ends another way, after the router takes over, counts as offered when it ends. A router that holds the lease, or runs without one, counts its own refusals as rejected requests, such as during a whole-wave hold or with no live engines.
+
 Compare a router's counters with the journal rows of its process's `run`.
 
 ### Metric families
@@ -24,7 +26,7 @@ The router exports these series on `/metrics`, grouped by area:
 | Admission mode | `narwhal_admission_info`, `narwhal_admission_margin` |
 | Router lease | `narwhal_router_ready`, `narwhal_router_lease_epoch`, `narwhal_router_role` |
 | Engine monitoring | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`, `narwhal_event_loop_busy_seconds_total` |
-| Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
+| Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_standby_refusals_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
 | Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_attempt_failures_total`, `narwhal_served_after_retry_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_output_tokens_total`, `narwhal_upstream_seconds_total` |
 | Queueing | `narwhal_queued`, `narwhal_queue_capacity`, `narwhal_queue_high_water`, `narwhal_waiting_prefill`, `narwhal_waiting_decode`, `narwhal_queue_wait_seconds` |
 | In-flight limit and saturation | `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_http_retained`, `narwhal_http_retained_limit`, `narwhal_http_retained_high_water`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, `narwhal_saturation_threshold_seconds` |
@@ -63,10 +65,11 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
 | `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
+| `narwhal_standby_refusals_total` | counter | `reason` | Requests refused while the router did not hold the lease, with the `narwhal_rejected_total` reasons. |
 | `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 
-The four outcome counters export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the process's total. `/narwhal/state` reports that total plus the count adopted from a handoff.
+The four outcome counters and `narwhal_standby_refusals_total` export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the process's total. `/narwhal/state` reports that total plus the count adopted from a handoff.
 
 ## Reading admission mode and retries
 

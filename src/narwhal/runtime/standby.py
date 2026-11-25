@@ -54,6 +54,16 @@ def lease_role(router: NarwhalRouter) -> str:
     return "standby" if router.standby else "active"
 
 
+def counts_outcomes(router: NarwhalRouter) -> bool:
+    """Return whether this router counts a request it refuses as a client outcome.
+
+    A router that runs without a lease, or that holds an active lease, answers the client. A
+    standby, a fenced router or one releasing its lease at shutdown refuses an attempt that the
+    load balancer can retry on the lease holder.
+    """
+    return (router.lease is None and not router.standby) or lease_role(router) == "active"
+
+
 def ready(router: NarwhalRouter) -> bool:
     """Return whether this process may admit new traffic."""
     return (

@@ -42,6 +42,8 @@ class Phase:
     # Requests served, and requests refused as not ready, in each scrape interval.
     served: int = 0
     refused: int = 0
+    # Attempts refused without the lease, which the load balancer retries on the lease holder.
+    standby_refused: int = 0
     # A new process starts its counters at these values: 0, or adopted totals before metrics 3.
     restart: tuple[int, int] | None = None
     ejected: int = 0
@@ -65,11 +67,11 @@ class Router:
             key = name + "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}"
             self.series.setdefault(key, ["_"] * SLOTS)[slot] = str(value)
 
-        rejected = 0
+        rejected = attempts = 0
         for phase in self.phases:
             if phase.restart is not None:
                 self.offered, self.served = phase.restart
-                rejected = 0
+                rejected = attempts = 0
             for slot in range(phase.start // STEP, min(phase.end, LENGTH) // STEP):
                 put("up", self.labels, slot, 0 if phase.role == "down" else 1)
                 if phase.role == "down":
@@ -85,10 +87,17 @@ class Router:
                 self.offered += phase.served + phase.refused
                 self.served += phase.served
                 rejected += phase.refused
+                attempts += phase.standby_refused
                 put("narwhal_offered_total", self.labels, slot, self.offered)
                 put("narwhal_served_total", self.labels, slot, self.served)
                 not_ready = {**self.labels, "reason": "not_ready"}
                 put("narwhal_rejected_total", not_ready, slot, rejected)
+                put("narwhal_standby_refusals_total", not_ready, slot, attempts)
+                # The other outcomes stay at 0, as a router exports them from start.
+                put("narwhal_refused_total", {**self.labels, "cause": "queue"}, slot, 0)
+                put("narwhal_failed_total", {**self.labels, "reason": "engine_error"}, slot, 0)
+                put("narwhal_expired_total", {**self.labels, "reason": "deadline"}, slot, 0)
+                put("narwhal_cancelled_total", self.labels, slot, 0)
                 put("narwhal_router_ready", self.labels, slot, phase.ready)
                 put("narwhal_router_lease_epoch", self.labels, slot, phase.epoch)
                 put("narwhal_ejected_instances", self.labels, slot, phase.ejected)
@@ -107,20 +116,27 @@ def takeover(
     standby_takes_over: bool = True,
     adopt: bool = False,
     standby_ejected: int = 0,
+    count_attempts: bool = False,
 ) -> list[Router]:
-    """A SIGTERM takeover at 600 s: router a drains, stops and restarts as a standby."""
+    """A SIGTERM takeover at 600 s: router a drains, stops and restarts as a standby.
+
+    For 10 s after the restart, the load balancer still sends attempts to the restarted
+    standby, which refuses them, and retries each on router b, which serves it. With
+    `count_attempts`, the standby counts its refusals as offered and rejected requests, as
+    routers did before they counted them apart.
+    """
     a = [
         Phase(0, 600, "active", ready=1, epoch=7, served=10, restart=(HISTORY, HISTORY)),
         Phase(600, 610, "fenced", epoch=7, served=1),
         Phase(610, 625, "down"),
     ]
     if old_returns:
-        # The restarted process refuses 3 requests during the load balancer's 8 s grace. Its
-        # pool view and membership generation come from the fleet file until it takes over.
+        # Its pool view and membership generation come from the fleet file until it takes over.
         restarted = {"pool": 3, "generation": 0}
+        refusals = {"refused" if count_attempts else "standby_refused": 5}
         a += [
-            Phase(625, 630, "standby", refused=3, restart=(0, 0), **restarted),
-            Phase(630, LENGTH, "standby", **restarted),
+            Phase(625, 635, "standby", restart=(0, 0), **refusals, **restarted),
+            Phase(635, LENGTH, "standby", **restarted),
         ]
     else:
         a += [Phase(625, LENGTH, "down")]
@@ -285,14 +301,22 @@ class CounterContinuityTests(PromtoolCase):
         tests = ["    promql_expr_test:"]
         for at in range(90, LENGTH, 30):
             tests += expr_test(within(self.OFFERED, 1.0, 3.0), at, 1)
-        # 2 requests a second for 19 minutes, plus the drain and the 3 refusals.
+        # 2 requests a second for 19 minutes, plus the drain.
         tests += expr_test(within(self.TOTAL, 2200, 2400), LENGTH - 5, 1)
-        tests += expr_test(
-            within('sum(increase(narwhal_rejected_total{reason="not_ready"}[5m]))', 2, 5),
-            900,
-            1,
-        )
+        tests += expr_test('sum(increase(narwhal_rejected_total{reason="not_ready"}[5m]))', 900, 0)
+        # The standby counts the 10 attempts it refused apart.
+        attempts = 'sum(increase(narwhal_standby_refusals_total{reason="not_ready"}[5m]))'
+        tests += expr_test(within(attempts, 9, 13), 900, 1)
         self.run_promtool(takeover(), tests)
+
+    def test_attempts_counted_as_requests_would_raise_the_rejected_share(self):
+        """The standby's refusals, counted as rejected requests, read as a dropped share."""
+        share = (
+            'sum(rate(narwhal_rejected_total{job="narwhal-router"}[5m]))'
+            ' / sum(rate(narwhal_offered_total{job="narwhal-router"}[5m]))'
+        )
+        tests = ["    promql_expr_test:", *expr_test(within(share, 0.01, 1), 700, 1)]
+        self.run_promtool(takeover(count_attempts=True), tests)
 
     def test_adopted_totals_in_the_counters_would_spike_the_pair_rate(self):
         """The counter jump a takeover made before metrics version 3, read by the same query."""
@@ -315,6 +339,15 @@ class DashboardTakeoverTests(PromtoolCase):
             tests += expr_test(within(offered, 1.0, 3.0), at, 1)
         headline = panel_query("panel-105", "B", "19m")
         tests += expr_test(within(headline, 2200, 2400), LENGTH - 5, 1)
+        self.check(tests)
+
+    def test_the_standby_refusals_raise_no_rejected_request_or_dropped_share(self):
+        rejected = panel_query("panel-105", "G", "19m")
+        dropped = panel_query("panel-105", "E", "19m")
+        rate = panel_query("panel-11", "E")
+        tests = expr_test(rejected, LENGTH - 5, 0) + expr_test(dropped, LENGTH - 5, 0)
+        for at in range(630, 700, 5):
+            tests += expr_test(rate, at, 0)
         self.check(tests)
 
     def test_gauge_panels_and_the_router_stat_read_the_active_router(self):
@@ -514,10 +547,10 @@ class RouterAlertTests(PromtoolCase):
         tests += alert_test(690, "NarwhalEngineEjected", [ejected], "1")
         self.run_promtool(routers, tests)
 
-    def test_pair_share_alerts_divide_by_the_requests_of_both_routers(self):
-        """The restarted standby's 3 refusals are 100% of its own requests but not of the pair's."""
+    def test_the_standby_refusals_raise_no_rejected_alert(self):
+        """The load balancer retries each refused attempt, so no client request is rejected."""
         tests = ["    alert_rule_test:"]
-        for at in (700, 900):
+        for at in (700, 900, 1000):
             tests += alert_test(at, "NarwhalRejectedRising", [])
         self.run_promtool(takeover(), tests)
 

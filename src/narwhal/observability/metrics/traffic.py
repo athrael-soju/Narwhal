@@ -267,6 +267,15 @@ def render_refusals(state: dict) -> list[str]:
         _by_reason(state, "rejected", "reason"),
     )
     out += metric_lines(
+        "narwhal_standby_refusals_total",
+        "Requests a router without the lease refused, which the load balancer can retry",
+        "counter",
+        [
+            ({"reason": reason}, count)
+            for reason, count in (state.get("admission") or {}).get("standby_refusals", {}).items()
+        ],
+    )
+    out += metric_lines(
         "narwhal_invalid_requests_total",
         "Client requests rejected as malformed or unsupported before dispatch",
         "counter",

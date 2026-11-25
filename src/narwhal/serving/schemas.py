@@ -53,6 +53,8 @@ class AdmissionOut(BaseModel):
     saturation_threshold_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     rejected: int
     refused: int
+    # Requests refused while this router did not hold the lease, by `rejected` reason.
+    standby_refusals: dict[str, int] = Field(default_factory=dict)
     # Engine-authentication mode: boundary or engine-credential.
     engine_auth: str = "boundary"
     # `serving.admission` and `serving.admission_margin`.
