@@ -26,20 +26,22 @@ The selected engines pair up in fleet order, and the pairs run at the same time.
 
 ### Router drain check
 
-A role switch fails the requests an engine holds, and a router keeps sending requests to an engine it has not drained. An SGLang sweep with `--only` therefore requires `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. Without either, the profiler exits with code `2` before it contacts any engine. A sweep of every engine requires neither.
+A role switch fails the requests an engine holds, and a router keeps sending requests to an engine it has not drained. An SGLang sweep with `--only` therefore requires `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. Without either, the profiler exits with code `2` before it contacts any engine. A sweep of every engine requires neither. vLLM and TensorRT-LLM sweeps switch no engine roles and ignore both options.
 
-With `--router-url`, before it contacts any engine, the profiler reads [`GET /narwhal/engines`](../http-api/08-Engine-Membership.md#get-narwhalengines) and [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) from the router. It checks each engine the sweep uses: the selected engines, their peers and, under `--colocated`, their group neighbours. A router member with the same `iid` or the same URL must have one of these lifecycle records:
+With `--router-url`, before it contacts any engine, the profiler reads [`GET /narwhal/engines`](../http-api/08-Engine-Membership.md#get-narwhalengines) and [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) from the router. It checks each engine the sweep uses: the selected engines, their peers and, under `--colocated`, their group neighbours. A router member matches an engine when it has the same `iid`, or a URL with the same port and either the same host name or a host that resolves to a shared address, so `localhost` matches `127.0.0.1`. A matching member must have one of these lifecycle records:
 
 - `state` `drained` and `ready_to_stop` `true`
-- `state` `blocked`, `accepts_new` `false` and no `resident` requests
+- `state` `blocked`, `accepts_new` `false`, no `resident` requests and `pending_handoffs` `0`
 
-An engine outside the router's membership passes. The profiler exits with code `1` when the router is not the active router, when it cannot read either document, or when a member fails the check. The error names each failing engine, as `peer <iid>` when it is not selected, with its lifecycle `state`:
+An ejected engine reads `active` and fails the check, because the router's automatic recovery can return it to placement during the sweep. The profiler exits with code `1` when the router is not the active router, when it cannot read either document, or when a member fails the check. The error names each failing engine, as `peer <iid>` when it is not selected, with its lifecycle `state`:
 
 ```text
-refusing to switch engines that the router at http://router:8000 has not drained: peer e1 is active. Drain each one with POST /narwhal/lifecycle/drain and wait until GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines
+refusing to switch engines that the router at http://router:8000 has not drained: peer e1 is active. Drain each one with POST /narwhal/lifecycle/drain and wait until GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines. To pair a selected engine with an engine outside the router's fleet instead, sweep with a fleet file that lists that engine right after it
 ```
 
-An ejected engine reads `active` and fails the check, because the router's automatic recovery can return it to placement during the sweep.
+The router holds one engine at a time outside a whole-wave drain. When the router holds the selected engine and its peer is a member, pair the selected engine with a spare engine outside the router's fleet, or hold both through a whole-wave drain, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes.
+
+An engine outside the router's membership passes, and the profiler prints `router <url> has no member with the ID or URL of: <iid>` for it.
 
 ## Selection, refitting, and output
 
@@ -58,7 +60,7 @@ These options select engines, choose the mode, and set the output files:
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
 | `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | Serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics` during a live sweep, where `URL` is `http://host:port`. |
-| `--router-url URL` | optional | Active router that must report every engine an SGLang sweep uses as drained or outside its fleet, as [Router drain check](#router-drain-check) describes. `URL` starts with `http://` or `https://`. |
+| `--router-url URL` | optional | Active router that must report every engine an SGLang sweep uses as drained or outside its fleet, as [Router drain check](#router-drain-check) describes. `URL` starts with `http://` or `https://`. vLLM and TensorRT-LLM sweeps ignore it. |
 | `--no-router` | `false` | State that no router serves the fleet's engines, for an SGLang sweep with `--only`. |
 
 The mode options depend on each other:

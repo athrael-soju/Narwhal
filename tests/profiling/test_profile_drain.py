@@ -18,17 +18,19 @@ from narwhal.serving import app as serving_app
 from narwhal.types import Role
 from tests.fixtures import fleet, profile
 from tests.profiling.test_colocated_pairs import WORKLOAD, SglangGroup, sglang_engines, split_fleet
+from tests.wire import routed
 
 ROUTER = "http://router.invalid:8000"
 
 
-def record(state="active", *, ready=False, accepts=True, resident=0):
+def record(state="active", *, ready=False, accepts=True, resident=0, pending=0):
     return {
         "state": state,
         "draining": not accepts,
         "accepts_new": accepts,
         "ready_to_stop": ready,
         "resident": {"prefill": resident, "decode": 0},
+        "pending_handoffs": pending,
     }
 
 
@@ -151,6 +153,12 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
             "drained with a KV read pending": record("drained", accepts=False),
             "blocked with resident requests": record("blocked", accepts=False, resident=1),
             "blocked in placement": record("blocked"),
+            "blocked with a KV read pending": record("blocked", accepts=False, pending=1),
+            "blocked on a router without pending handoffs": {
+                key: value
+                for key, value in record("blocked", accepts=False).items()
+                if key != "pending_handoffs"
+            },
             "validating": record("validating", accepts=False),
             # The breaker's automatic recovery can return an ejected engine to placement.
             "ejected": record("active", accepts=False),
@@ -197,6 +205,32 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
 
             outcome = await self.sweep(cfg=cfg, router=router, router_url=ROUTER + "/")
         self.assert_refused(outcome, RuntimeError, r"peer e1 \(router member n2\) is active")
+
+    async def test_a_held_member_whose_peer_is_a_serving_member(self):
+        """A replacement: the router holds the target, and its peer serves the fleet."""
+        replaced = record("drained", ready=True, accepts=False)
+        members = {"e0": replaced, "e1": record(), "e2": record(), "e3": record()}
+        outcome = await self.sweep(members, router_url=ROUTER)
+        self.assert_refused(outcome, RuntimeError, r"has not drained: peer e1 is active\.")
+        self.assertIn("lists that engine right after it", str(outcome))
+        # A spare engine outside the fleet, listed right after the target, takes the peer leg.
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = self.fleet(Path(folder))
+            e0, *rest = cfg.engines
+            spare = replace(rest[0], iid="spare", url="http://spare.invalid:8000")
+            cfg.engines = [e0, spare, *rest]
+            # The sweep's own output is captured, so the notice is read from the print call.
+            with patch.object(drain_probe, "print", create=True) as printed:
+                outcome = await self.sweep(members, cfg=cfg, router_url=ROUTER)
+        self.assertEqual(outcome, 0)
+        self.assertTrue(self.stored)
+        self.assertIn("spare.invalid", {host for host, _ in self.requests})
+        printed.assert_called_once_with(
+            f"  router {ROUTER} has no member with the ID or URL of: spare"
+        )
+        # In a whole-wave drain every member is held, so the fleet's own peer serves.
+        wave = dict.fromkeys(("e0", "e1", "e2", "e3"), DRAINED)
+        self.assertEqual(await self.sweep(wave, router_url=ROUTER), 0)
 
     async def test_a_serving_target_is_named_without_the_peer_prefix(self):
         outcome = await self.sweep({"e0": record(), "e1": DRAINED}, router_url=ROUTER)
@@ -295,6 +329,39 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(run.await_args.kwargs["drain_checked"], True)
 
 
+class MemberMatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_member_under_another_spelling_of_its_host_is_matched(self):
+        def router(request):
+            if request.url.path == "/narwhal/engines":
+                engine = {"iid": "n2", "url": "http://127.0.0.1:8100", "role": "decode"}
+                body = {"generation": 1, "engines": [engine]}
+                return httpx.Response(200, json=versioned(MEMBERSHIP, body))
+            body = {"router": {"controls_fleet": True}, "engines": {"n2": record()}}
+            return httpx.Response(200, json=versioned(LIFECYCLE, body))
+
+        with tempfile.TemporaryDirectory() as folder:
+            spec = replace(fleet(Path(folder)).engines[0], iid="e1", url="http://localhost:8100")
+        with (
+            patch.object(drain_probe.httpx, "AsyncClient", routed(router)),
+            self.assertRaisesRegex(RuntimeError, r"peer e1 \(router member n2\) is active\."),
+        ):
+            await drain_probe.refuse_undrained(ROUTER, [spec], set(), 5.0)
+        # Another port on the same host is another engine.
+        other = replace(spec, url="http://localhost:8101", iid="e2")
+        with (
+            patch.object(drain_probe.httpx, "AsyncClient", routed(router)),
+            patch.object(drain_probe, "print", create=True) as printed,
+        ):
+            await drain_probe.refuse_undrained(ROUTER, [other], set(), 5.0)
+        printed.assert_called_once_with(
+            f"  router {ROUTER} has no member with the ID or URL of: e2"
+        )
+
+    async def test_an_unresolvable_host_matches_by_name_and_port(self):
+        endpoints = await drain_probe._endpoints("https://engine-1.invalid")
+        self.assertIn(("engine-1.invalid", 443), endpoints)
+
+
 class LiveRouterTests(unittest.IsolatedAsyncioTestCase):
     """The check reads the documents a real router serves."""
 
@@ -331,6 +398,7 @@ class LiveRouterTests(unittest.IsolatedAsyncioTestCase):
                         "/narwhal/lifecycle/drain", json={"engines": [peer.iid]}
                     )
             self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["engines"][peer.iid]["pending_handoffs"], 0)
             await check([joining, peer], {"e9"})
             app.state.router.scheduler.eject(other.iid, "liveness")
             with self.assertRaisesRegex(RuntimeError, rf"peer {other.iid} is active\."):

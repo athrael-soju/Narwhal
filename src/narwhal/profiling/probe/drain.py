@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,7 +11,22 @@ import httpx
 
 from ...config import EngineSpec
 from ...contracts import LIFECYCLE, MEMBERSHIP, validate_document
-from .pairing import origin
+
+
+async def _endpoints(url: str) -> set[tuple[str, int]]:
+    """The addresses and port that `url` reaches, or its host and port when it does not resolve.
+
+    Two spellings of one host, such as `localhost` and `127.0.0.1`, share an address.
+    """
+    parsed = httpx.URL(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        found = await asyncio.get_running_loop().getaddrinfo(
+            parsed.host, port, type=socket.SOCK_STREAM
+        )
+    except (OSError, UnicodeError):
+        return {(parsed.host, port)}
+    return {(str(address[4][0]), port) for address in found} | {(parsed.host, port)}
 
 
 async def _document(client: httpx.AsyncClient, url: str, name: str) -> dict[str, Any]:
@@ -34,8 +51,14 @@ def _held(record: Mapping[str, Any]) -> bool:
     if record.get("state") == "drained":
         # A decode leg that still reads KV from the engine keeps it from being ready to stop.
         return record.get("ready_to_stop") is True
-    # A readmission that failed its checks holds the engine until an operator acts.
-    return record.get("state") == "blocked" and record.get("accepts_new") is False and idle
+    # A readmission that failed its checks holds the engine until an operator acts. A router
+    # that does not report the engine's pending handoffs cannot show that none remain.
+    return (
+        record.get("state") == "blocked"
+        and record.get("accepts_new") is False
+        and idle
+        and record.get("pending_handoffs") == 0
+    )
 
 
 async def refuse_undrained(
@@ -43,7 +66,8 @@ async def refuse_undrained(
 ) -> None:
     """Raise unless every engine in `engines` is drained or outside the router's fleet.
 
-    An engine counts as a member when a member shares its ID or its URL.
+    An engine counts as a member when a member shares its ID, or its URL's port and an address
+    of its host.
     """
     base = router_url.rstrip("/")
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -55,31 +79,49 @@ async def refuse_undrained(
             f"the router at {base} does not control the fleet; pass the active router's URL"
         )
     members = [
-        member
+        (member["iid"], await _endpoints(member["url"]))
         for member in membership.get("engines") or []
-        if isinstance(member, Mapping) and isinstance(member.get("iid"), str)
+        if isinstance(member, Mapping)
+        and isinstance(member.get("iid"), str)
+        and isinstance(member.get("url"), str)
     ]
     records = lifecycle.get("engines")
     records = records if isinstance(records, Mapping) else {}
     serving = []
+    outside = []
+    peers = False
     for spec in engines:
-        for member in members:
-            iid = member["iid"]
-            url = member.get("url")
-            if iid != spec.iid and not (isinstance(url, str) and origin(url) == origin(spec.url)):
+        matched = False
+        reaches = await _endpoints(spec.url)
+        for iid, endpoints in members:
+            if iid != spec.iid and not endpoints & reaches:
                 continue
+            matched = True
             record = records.get(iid)
             record = record if isinstance(record, Mapping) else {}
             if _held(record):
                 continue
             name = spec.iid if spec.iid in targets else f"peer {spec.iid}"
+            peers = peers or spec.iid not in targets
             if iid != spec.iid:
                 name += f" (router member {iid})"
             serving.append(f"{name} is {record.get('state', 'unknown')}")
+        if not matched:
+            outside.append(spec.iid)
     if serving:
+        hint = (
+            " To pair a selected engine with an engine outside the router's fleet instead, "
+            "sweep with a fleet file that lists that engine right after it"
+            if peers
+            else ""
+        )
         raise RuntimeError(
             f"refusing to switch engines that the router at {base} has not drained: "
             + ", ".join(serving)
             + ". Drain each one with POST /narwhal/lifecycle/drain and wait until "
-            "GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines"
+            "GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines."
+            + hint
         )
+    if outside:
+        # A member listed under a URL that reaches no address of the fleet file's URL shows here.
+        print(f"  router {base} has no member with the ID or URL of: {', '.join(outside)}")

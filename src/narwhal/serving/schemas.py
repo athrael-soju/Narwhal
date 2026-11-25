@@ -471,6 +471,7 @@ class LifecycleEngineOut(BaseModel):
     accepts_new: bool
     ready_to_stop: bool
     resident: ResidentOut
+    pending_handoffs: int = 0
     deadline_at: float | None
     restart_required: bool
     leaving: bool = False

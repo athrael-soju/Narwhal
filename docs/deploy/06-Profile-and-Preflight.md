@@ -67,7 +67,7 @@ After a change to the fleet or its engines, run preflight. Re-profile only the e
   --out runs/profiles-merged.json
 ```
 
-On an SGLang fleet, the sweep also switches each selected engine's peer, so add `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. With `--router-url`, the router must have drained every selected engine and peer that it serves, as [Router drain check](../cli/Profile.md#router-drain-check) describes.
+On an SGLang fleet, the sweep also switches each selected engine's peer, so add `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. With `--router-url`, the router must hold every selected engine and peer that it serves, as [Router drain check](../cli/Profile.md#router-drain-check) describes. The router holds one engine at a time outside a whole-wave drain, so when the selected engine and its peer are both members, profile during a whole-wave drain or pair the engine with a spare engine outside the fleet, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes.
 
 The later store replaces the earlier store's row for each engine variant it holds. After you remove an engine from the fleet, merge the current store alone to write a store without that engine's rows.
 
