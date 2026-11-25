@@ -39,7 +39,7 @@ An ejected engine reads `active` and fails the check, because the router's autom
 refusing to switch engines that the router at http://router:8000 has not drained: peer e1 is active. Drain each one with POST /narwhal/lifecycle/drain and wait until GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines. To pair a selected engine with an engine outside the router's fleet instead, sweep with a fleet file that lists that engine right after it
 ```
 
-The router holds one engine at a time outside a whole-wave drain. When the router holds the selected engine and its peer is a member, pair the selected engine with a spare engine outside the router's fleet, or hold both through a whole-wave drain, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes.
+The router holds one engine at a time outside a whole-wave drain. When the router holds the selected engine and its peer is a member, pair the selected engine with a spare engine outside the router's fleet, or hold both through a whole-wave drain, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes. Under `--colocated`, the peers come from the selected engine's `shared_device` group, so only the whole-wave drain applies, and the error leaves out the spare-engine sentence.
 
 An engine outside the router's membership passes, and the profiler prints `router <url> has no member with the ID or URL of: <iid>` for it.
 

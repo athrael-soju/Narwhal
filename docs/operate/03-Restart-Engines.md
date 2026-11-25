@@ -27,7 +27,7 @@ mkdir -p "$RUN_DIR"
 
 ## Restart one engine
 
-This procedure applies when `recovery.engine_restart_policy` is `individual`. On an SGLang fleet, a replacement that changes the engine's [process generation](../Core-Concepts.md#terms) also needs a spare engine outside the fleet for its profiles, as [Refresh profiles](#refresh-profiles) describes. Without one, use [Restart an engine wave](#restart-an-engine-wave).
+This procedure applies when `recovery.engine_restart_policy` is `individual`. On an SGLang fleet, a replacement that changes the engine's [process generation](../Core-Concepts.md#terms) also needs a spare engine outside the fleet for its profiles, as [Refresh profiles](#refresh-profiles) describes. Without one, or when the recorded measurement recipe uses `--colocated`, use [Restart an engine wave](#restart-an-engine-wave).
 
 ### Drain the engine
 
@@ -339,9 +339,9 @@ For a warm standby router:
 
 [Re-profile the replaced engines and merge their rows into the current store](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) with the recorded measurement recipe.
 
-On an SGLang fleet, the sweep also switches a peer of each replaced engine, chosen as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes, and the router must hold both engines or have neither in its fleet, as [Router drain check](../cli/Profile.md#router-drain-check) describes. After [Restart an engine wave](#restart-an-engine-wave), the router holds every engine, so profile with `--router-url "$ROUTER_URL"` and the fleet file. After [Restart one engine](#restart-one-engine), the router holds only the replaced engine and refuses to drain a second one, so pair the replaced engine with a spare engine outside the fleet:
+On an SGLang fleet, the sweep also switches a peer of each replaced engine, chosen as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes, and the router must hold both engines or have neither in its fleet, as [Router drain check](../cli/Profile.md#router-drain-check) describes. After [Restart an engine wave](#restart-an-engine-wave), the router holds every engine, so profile with `--router-url "$ROUTER_URL"` and the fleet file. After [Restart one engine](#restart-one-engine), the router holds only the replaced engine and refuses to drain a second one, so pair the replaced engine with a spare engine outside the fleet. A recipe recorded with `--colocated` takes the peers from the replaced engine's own `shared_device` group, where no spare can stand in, so it needs the whole-wave route. Otherwise:
 
-1. Start a spare engine and its attestation sidecar under the fleet's engine contract, as in [Start the engine](08-Joining-and-Removing-Engines.md#start-the-engine).
+1. Start a spare engine and its attestation sidecar under the fleet's engine contract, as in [Start the engine](08-Joining-and-Removing-Engines.md#start-the-engine). The spare must reach `e0` over the KV fabric, as a member does.
 2. Write the spare's entry, with the spare's URLs:
 
     ```bash
@@ -390,7 +390,7 @@ On an SGLang fleet, the sweep also switches a peer of each replaced engine, chos
 
 5. Merge `$RUN_DIR/profiles-e0.json` into the current store with `runs/deployment/fleet.json`, as [Reusing or repeating profiles](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) describes, and stop the spare engine and its sidecar.
 
-Without a spare engine, replace the engine through [Restart an engine wave](#restart-an-engine-wave) instead. The router refuses a whole-wave drain while it holds one engine, so choose the wave before you drain.
+Without a spare engine, or with a `--colocated` recipe, replace the engine through [Restart an engine wave](#restart-an-engine-wave) instead. The router refuses a whole-wave drain while it holds one engine, so choose the wave before you drain.
 
 ### Prepare the activation configuration
 

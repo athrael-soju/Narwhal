@@ -428,6 +428,7 @@ async def run(
             [spec for spec in cfg.engines if spec.iid in used],
             {spec.iid for spec in targets},
             observation_timeout_s or cfg.health_timeout_s,
+            colocated=colocated_workload is not None,
         )
     activity.use(used)
     if paired and split_lanes and len(lanes) > 1:

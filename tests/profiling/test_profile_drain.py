@@ -1,6 +1,9 @@
+import asyncio
 import contextlib
 import io
+import socket
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -35,12 +38,28 @@ def record(state="active", *, ready=False, accepts=True, resident=0, pending=0):
 
 
 DRAINED = record("drained", ready=True, accepts=False)
+# The test resolver's answers; every other host fails to resolve.
+ADDRESSES = {"localhost": {"127.0.0.1", "::1"}, "127.0.0.1": {"127.0.0.1"}}
+
+
+async def resolve(host, port):
+    if host in ADDRESSES:
+        return ADDRESSES[host]
+    raise socket.gaierror(socket.EAI_NONAME, "not known")
+
+
+def stub_dns(case, resolver=resolve):
+    """Answer the drain check's host lookups from `resolver` for the rest of `case`."""
+    patcher = patch.object(drain_probe, "_resolve", side_effect=resolver)
+    patcher.start()
+    case.addCleanup(patcher.stop)
 
 
 class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
     """An SGLang sweep reads the router's drain state before it switches any engine."""
 
     def setUp(self):
+        stub_dns(self)
         switcher = load_backend("sglang").role_switcher("mooncake")
         for state in (switcher._received, switcher._generations):
             saved = dict(state)
@@ -279,6 +298,11 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
         members = {"e1": DRAINED, "e2": DRAINED, "e3": record()}
         outcome = await self.sweep(members, cfg=cfg, router_url=ROUTER, colocated_workload=WORKLOAD)
         self.assert_refused(outcome, RuntimeError, r"has not drained: peer e3 is active\.")
+        # The target's peers come from its GPU group, so a spare outside the fleet cannot serve.
+        self.assertNotIn("outside the router's fleet", str(outcome))
+        # The same refusal without --colocated offers the spare.
+        outcome = await self.sweep({"e1": record()}, router_url=ROUTER)
+        self.assertIn("lists that engine right after it", str(outcome))
 
     async def test_vllm_and_trtllm_only_sweeps_need_no_router_option(self):
         class Stop(Exception):
@@ -304,7 +328,7 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_lane_splitting_parent_checks_every_engine_before_the_lanes_start(self):
         calls = []
 
-        async def check(router_url, engines, targets, timeout_s):
+        async def check(router_url, engines, targets, timeout_s, **kwargs):
             calls.append(("check", [spec.iid for spec in engines]))
 
         async def lanes(cfg, lanes, *args, **kwargs):
@@ -330,6 +354,9 @@ class RouterDrainTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MemberMatchTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        stub_dns(self)
+
     async def test_a_member_under_another_spelling_of_its_host_is_matched(self):
         def router(request):
             if request.url.path == "/narwhal/engines":
@@ -358,12 +385,54 @@ class MemberMatchTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_an_unresolvable_host_matches_by_name_and_port(self):
-        endpoints = await drain_probe._endpoints("https://engine-1.invalid")
-        self.assertIn(("engine-1.invalid", 443), endpoints)
+        endpoints = await drain_probe._endpoints("https://engine-1.invalid", 5.0)
+        self.assertEqual(endpoints, {("engine-1.invalid", 443)})
+        endpoints = await drain_probe._endpoints("http://localhost:8100", 5.0)
+        self.assertEqual(endpoints, {("localhost", 8100), ("127.0.0.1", 8100), ("::1", 8100)})
+
+    async def test_each_lookup_is_bounded_and_the_lookups_run_together(self):
+        started = []
+
+        async def slow(host, port):
+            started.append(host)
+            await asyncio.sleep(10)
+            return {"192.0.2.1"}
+
+        stub_dns(self, slow)
+
+        def router(request):
+            if request.url.path == "/narwhal/engines":
+                engines = [
+                    {"iid": f"m{index}", "url": f"http://member-{index}.invalid:8000"}
+                    for index in range(4)
+                ]
+                body = {"generation": 1, "engines": engines}
+                return httpx.Response(200, json=versioned(MEMBERSHIP, body))
+            members = {f"m{index}": DRAINED for index in range(4)}
+            body = {"router": {"controls_fleet": True}, "engines": members}
+            return httpx.Response(200, json=versioned(LIFECYCLE, body))
+
+        with tempfile.TemporaryDirectory() as folder:
+            spec = replace(fleet(Path(folder)).engines[0], iid="e9", url="http://new.invalid:8000")
+        begun = time.monotonic()
+        with (
+            patch.object(drain_probe.httpx, "AsyncClient", routed(router)),
+            patch.object(drain_probe, "print", create=True) as printed,
+        ):
+            await drain_probe.refuse_undrained(ROUTER, [spec], {"e9"}, 0.2)
+        # Five lookups that each time out at 0.2 s end together, and fall back to name and port.
+        self.assertLess(time.monotonic() - begun, 0.8)
+        self.assertEqual(len(started), 5)
+        printed.assert_called_once_with(
+            f"  router {ROUTER} has no member with the ID or URL of: e9"
+        )
 
 
 class LiveRouterTests(unittest.IsolatedAsyncioTestCase):
     """The check reads the documents a real router serves."""
+
+    def setUp(self):
+        stub_dns(self)
 
     async def test_a_peer_passes_once_the_router_drains_it(self):
         with tempfile.TemporaryDirectory() as folder:

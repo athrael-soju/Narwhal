@@ -13,20 +13,25 @@ from ...config import EngineSpec
 from ...contracts import LIFECYCLE, MEMBERSHIP, validate_document
 
 
-async def _endpoints(url: str) -> set[tuple[str, int]]:
-    """The addresses and port that `url` reaches, or its host and port when it does not resolve.
+async def _endpoints(url: str, timeout_s: float) -> set[tuple[str, int]]:
+    """The addresses and port that `url` reaches, plus its host and port.
 
-    Two spellings of one host, such as `localhost` and `127.0.0.1`, share an address.
+    Two spellings of one host, such as `localhost` and `127.0.0.1`, share an address. A host
+    that does not resolve within `timeout_s` keeps its name and port only.
     """
     parsed = httpx.URL(url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    named = {(parsed.host, port)}
     try:
-        found = await asyncio.get_running_loop().getaddrinfo(
-            parsed.host, port, type=socket.SOCK_STREAM
-        )
-    except (OSError, UnicodeError):
-        return {(parsed.host, port)}
-    return {(str(address[4][0]), port) for address in found} | {(parsed.host, port)}
+        found = await asyncio.wait_for(_resolve(parsed.host, port), timeout_s)
+    except (OSError, UnicodeError, TimeoutError):
+        return named
+    return {(address, port) for address in found} | named
+
+
+async def _resolve(host: str, port: int) -> set[str]:
+    found = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return {str(address[4][0]) for address in found}
 
 
 async def _document(client: httpx.AsyncClient, url: str, name: str) -> dict[str, Any]:
@@ -62,12 +67,18 @@ def _held(record: Mapping[str, Any]) -> bool:
 
 
 async def refuse_undrained(
-    router_url: str, engines: list[EngineSpec], targets: set[str], timeout_s: float
+    router_url: str,
+    engines: list[EngineSpec],
+    targets: set[str],
+    timeout_s: float,
+    *,
+    colocated: bool = False,
 ) -> None:
     """Raise unless every engine in `engines` is drained or outside the router's fleet.
 
     An engine counts as a member when a member shares its ID, or its URL's port and an address
-    of its host.
+    of its host. A `colocated` sweep takes its peers from the target's GPU group, so no engine
+    outside the fleet can stand in for them.
     """
     base = router_url.rstrip("/")
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -78,13 +89,18 @@ async def refuse_undrained(
         raise RuntimeError(
             f"the router at {base} does not control the fleet; pass the active router's URL"
         )
-    members = [
-        (member["iid"], await _endpoints(member["url"]))
+    listed = [
+        (member["iid"], member["url"])
         for member in membership.get("engines") or []
         if isinstance(member, Mapping)
         and isinstance(member.get("iid"), str)
         and isinstance(member.get("url"), str)
     ]
+    urls = sorted({url for _, url in listed} | {spec.url for spec in engines})
+    resolved = dict(
+        zip(urls, await asyncio.gather(*(_endpoints(url, timeout_s) for url in urls)), strict=True)
+    )
+    members = [(iid, resolved[url]) for iid, url in listed]
     records = lifecycle.get("engines")
     records = records if isinstance(records, Mapping) else {}
     serving = []
@@ -92,7 +108,7 @@ async def refuse_undrained(
     peers = False
     for spec in engines:
         matched = False
-        reaches = await _endpoints(spec.url)
+        reaches = resolved[spec.url]
         for iid, endpoints in members:
             if iid != spec.iid and not endpoints & reaches:
                 continue
@@ -112,7 +128,7 @@ async def refuse_undrained(
         hint = (
             " To pair a selected engine with an engine outside the router's fleet instead, "
             "sweep with a fleet file that lists that engine right after it"
-            if peers
+            if peers and not colocated
             else ""
         )
         raise RuntimeError(
