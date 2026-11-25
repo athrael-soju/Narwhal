@@ -19,13 +19,15 @@ _KV_CAPACITY = _gauge("sglang:max_total_num_tokens")
 _PAGE_SIZE = _gauge("sglang:page_size")
 _CACHED_TOKENS = _gauge("sglang:cached_tokens_total")
 _RUNNING = _gauge("sglang:num_running_reqs")
-# The scheduler's running and waiting requests, and the disaggregation queues that hold a request
-# before and during its KV transfer.
+# The scheduler's running and waiting requests, requests waiting for a grammar, and the
+# disaggregation queues that hold a request before and during its KV transfer. The decode host
+# receive queue is a subset of the decode transfer queue.
 _HELD = [
     re.compile(rf"^{re.escape(name)}(\{{[^}}]*\}})?\s+([0-9.eE+-]+)$", re.MULTILINE)
     for name in (
         "sglang:num_running_reqs",
         "sglang:num_queue_reqs",
+        "sglang:num_grammar_queue_reqs",
         "sglang:num_prefill_bootstrap_queue_reqs",
         "sglang:num_prefill_inflight_queue_reqs",
         "sglang:num_decode_prealloc_queue_reqs",

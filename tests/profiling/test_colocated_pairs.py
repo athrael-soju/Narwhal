@@ -697,11 +697,102 @@ class ServingPeerTests(unittest.IsolatedAsyncioTestCase):
             'sglang:num_running_reqs{model_name="m",priority=""} 2\n'
             'sglang:num_running_reqs{model_name="m",priority="1"} 2\n'
             'sglang:num_decode_transfer_queue_reqs{model_name="m"} 1\n'
+            'sglang:num_decode_host_receive_queue_reqs{model_name="m"} 1\n'
+            'sglang:num_grammar_queue_reqs{model_name="m"} 2\n'
             "sglang:num_requests_created 1.7e9\n"
         )
-        self.assertEqual(load_backend("sglang").metrics.held_requests(text), 3)
+        # The host receive queue holds requests already counted in the transfer queue.
+        self.assertEqual(load_backend("sglang").metrics.held_requests(text), 5)
         self.assertEqual(load_backend("sglang").metrics.finished_requests(text), 0)
         self.assertIsNone(load_backend("vllm").metrics.held_requests(text))
+
+    async def test_a_busy_group_neighbour_is_refused_under_colocated_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            # e0 and e1 prefill, e2 and e3 decode; e0 pairs with e2, and e1 and e3 carry load.
+            cfg = split_fleet(Path(folder), 2)
+            group = SglangGroup(cfg)
+            iids = {httpx.URL(spec.url).host: spec.iid for spec in cfg.engines}
+            paths = set()
+
+            async def handle(request):
+                paths.add(request.url.path)
+                if request.url.path == "/metrics" and iids[request.url.host] == "e3":
+                    return metrics_text("sglang:num_running_reqs 4\n")
+                return await group.handle(request)
+
+            measured = AsyncMock()
+            with (
+                sglang_engines(cfg, SimpleNamespace(handle=handle), measured),
+                self.assertRaisesRegex(RuntimeError, r"requests: peer e3 \(4 held, 0 finished"),
+            ):
+                await fleet_probe.run(cfg, {"e0"}, colocated_workload=WORKLOAD)
+            measured.assert_not_called()
+            self.assertEqual(paths, {"/metrics"})
+            self.assertEqual(group.received, [])
+            self.assertFalse(cfg.profiles_path.exists())
+
+    async def test_vllm_and_trtllm_fleets_read_no_engine_metrics(self):
+        class Stop(Exception):
+            pass
+
+        for backend, connector, checked in (
+            ("vllm", "nixl", False),
+            ("trtllm", "nixl", False),
+            ("trtllm", "ucx", False),
+            ("sglang", "mooncake", True),
+        ):
+            with self.subTest(backend=backend, connector=connector):
+                with tempfile.TemporaryDirectory() as folder:
+                    cfg = fleet(Path(folder), engines=("e0", "e1"))
+                    cfg.backend, cfg.connector = backend, connector
+                    cfg.profiles_path = Path(folder) / "swept.json"
+                    scrape = AsyncMock(return_value=(0, 0.0))
+                    with (
+                        patch.object(fleet_probe, "engine_requests", new=scrape),
+                        patch.object(fleet_probe, "SERVING_WINDOW_S", 0.0),
+                        # The sweep's first engine contact follows the check.
+                        patch.object(fleet_probe, "paired_transport", side_effect=Stop),
+                        redirect_stdout(io.StringIO()),
+                        self.assertRaises(Stop),
+                    ):
+                        await fleet_probe.run(cfg, {"e0"})
+                self.assertEqual(scrape.await_count, 4 if checked else 0)
+
+    async def test_the_lane_splitting_parent_checks_every_engine_before_the_lanes_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder), engines=("e0", "e1", "e2", "e3"))
+            cfg.backend, cfg.connector = "sglang", "mooncake"
+            cfg.profiles_path = Path(folder) / "swept.json"
+            calls = []
+
+            async def check(cfg, metrics, engines, targets, timeout_s):
+                calls.append(("check", [spec.iid for spec in engines]))
+                if busy:
+                    raise RuntimeError("refusing to switch engines that still serve requests")
+
+            async def lanes(cfg, lanes, *args, **kwargs):
+                calls.append(("lanes", [[spec.iid for spec in lane] for lane in lanes]))
+                return 0
+
+            with (
+                patch.object(fleet_probe, "_refuse_serving", side_effect=check),
+                patch.object(fleet_probe, "_run_lanes_apart", side_effect=lanes),
+                redirect_stdout(io.StringIO()),
+            ):
+                busy = False
+                self.assertEqual(await fleet_probe.run(cfg, None), 0)
+                busy = True
+                with self.assertRaisesRegex(RuntimeError, "still serve requests"):
+                    await fleet_probe.run(cfg, None)
+        engines = ["e0", "e1", "e2", "e3"]
+        self.assertEqual(
+            calls,
+            [
+                ("check", engines),
+                ("lanes", [["e0", "e1"], ["e2", "e3"]]),
+                ("check", engines),
+            ],
+        )
 
     def test_lane_workers_skip_the_check_their_parent_ran(self):
         with patch.object(fleet_probe, "run", new=AsyncMock(return_value=0)) as run:
