@@ -7,6 +7,7 @@ import dataclasses
 import json
 import sys
 import tempfile
+import time
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,8 +16,10 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.runtime.lifecycle import leave as leave_module
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.serving import app as serving_app
+from narwhal.types import Request
 from tests.fixtures import fleet
 from tools.fleet_control.app import create_app
 from tools.fleet_control.config import (
@@ -776,15 +779,25 @@ class Balancer(httpx.AsyncBaseTransport):
     routes to a router that was restarted as a standby.
     """
 
-    def __init__(self, standby: Any, active: Any, standby_answers: int) -> None:
+    def __init__(
+        self,
+        standby: Any,
+        active: Any,
+        standby_answers: int,
+        standby_after: tuple[str, str] | None = None,
+    ) -> None:
         self.standby = httpx.ASGITransport(app=standby)
         self.active = httpx.ASGITransport(app=active)
         self.left = standby_answers
+        # Once the active router answers this method and path, the standby answers the rest.
+        self.standby_after = standby_after
         self.calls: list[tuple[str, str, str]] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         name, target = ("standby", self.standby) if self.left > 0 else ("active", self.active)
         self.left -= 1
+        if self.standby_after == (request.method, request.url.path):
+            self.left = 10_000
         self.calls.append((name, request.method, request.url.path))
         return await target.handle_async_request(request)
 
@@ -810,7 +823,12 @@ class StandbyRouterTests(unittest.IsolatedAsyncioTestCase):
         router = self.active.state.router
         router.apply_membership(router.membership.left("e3"))
 
-    async def actions(self, standby_answers: int, timeout_s: float = 5.0) -> EngineActions:
+    async def actions(
+        self,
+        standby_answers: int,
+        timeout_s: float = 5.0,
+        standby_after: tuple[str, str] | None = None,
+    ) -> EngineActions:
         config = ControlConfig(
             FLEET,
             {"restore": hook("restore", "print('restored')")},
@@ -818,7 +836,7 @@ class StandbyRouterTests(unittest.IsolatedAsyncioTestCase):
             router=RouterEndpoint(ROUTER, timeout_s),
         )
         service = ControlService(config, env={"PATH": "/usr/bin:/bin"}, now=lambda: NOW)
-        self.balancer = Balancer(self.standby, self.active, standby_answers)
+        self.balancer = Balancer(self.standby, self.active, standby_answers, standby_after)
         actions = EngineActions(service, self.balancer, read_retry_s=0.01)
         await service.start_session()
         return actions
@@ -860,6 +878,48 @@ class StandbyRouterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(len(self.balancer.calls), 1)
         self.assertEqual(self.standby.state.router.lifecycle.records, {})
+
+    async def test_the_console_engine_list_reads_within_one_deadline(self) -> None:
+        actions = await self.actions(standby_answers=10_000, timeout_s=1.0)
+        app = create_app(actions.service, TOKEN, routers=[engine_routes(actions)])
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://control",
+            headers={"authorization": f"Bearer {TOKEN}"},
+        ) as client:
+            started = time.monotonic()
+            response = await client.get("/api/engines")
+            elapsed = time.monotonic() - started
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("(shadowing)", response.text)
+        # The membership read and the state read share one second, not one second each.
+        self.assertLess(elapsed, 1.5)
+        paths = {path for _, _, path in self.balancer.calls}
+        self.assertEqual(paths, {"/narwhal/engines", "/narwhal/state"})
+
+    async def test_a_removal_wait_ends_within_its_limit_when_a_standby_answers(self) -> None:
+        router = self.active.state.router
+        router.apply_membership(
+            router.membership.joined(self.standby.state.router.membership.spec("e3"))
+        )
+        router.monitor.dispatched("e3", Request("resident", 64))
+        actions = await self.actions(
+            standby_answers=0, timeout_s=1.0, standby_after=("DELETE", "/narwhal/engines/e3")
+        )
+        capture = AsyncMock(
+            side_effect=lambda cfg, engines, **kwargs: (dict.fromkeys(engines, 100.0), {})
+        )
+        with patch.object(leave_module, "capture_process_identities", capture):
+            started = time.monotonic()
+            with self.assertRaises(ActionError) as caught:
+                await actions.leave("e3", {"deadline_s": 0.1})
+            elapsed = time.monotonic() - started
+        self.assertEqual(caught.exception.status, 504)
+        self.assertIn("did not remove e3 within 1.1s", str(caught.exception))
+        # Each poll's reads end with the 1.1 s limit; reads with their own timeout would not.
+        self.assertLess(elapsed, 1.6)
+        after = self.balancer.calls.index(("active", "DELETE", "/narwhal/engines/e3"))
+        self.assertEqual({name for name, _, _ in self.balancer.calls[after + 1 :]}, {"standby"})
 
     async def test_a_state_read_names_the_standby_reason(self) -> None:
         actions = await self.actions(standby_answers=10_000, timeout_s=0.1)

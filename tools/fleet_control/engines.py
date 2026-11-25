@@ -169,7 +169,8 @@ class EngineActions:
         if current is None:
             try:
                 async with self._client() as client:
-                    current = await self.membership(client, timeout_s=AVAILABILITY_TIMEOUT_S)
+                    reads = self.read_deadline(timeout_s=AVAILABILITY_TIMEOUT_S)
+                    current = await self.membership(client, deadline=reads)
             except ActionError as exc:
                 return Availability((), str(exc))
             if current is None:
@@ -298,8 +299,10 @@ class EngineActions:
             _check_params(action, params)
             hook = self._hook(action) if action in HOOK_ACTIONS else None
             async with self._client() as client:
-                engine = known or await self.member(client, session, iid)
-                before = await self.engine_state(client, iid)
+                # The reads before the action share one read deadline.
+                reads = self.read_deadline()
+                engine = known or await self.member(client, session, iid, deadline=reads)
+                before = await self.engine_state(client, iid, deadline=reads)
                 try:
                     if hook is not None:
                         effect = await self._run_hook(hook, session, engine, action)
@@ -398,13 +401,14 @@ class EngineActions:
             _check_params("leave", params)
             deadline = float(params.get("deadline_s", LEAVE_DEADLINE_S))
             async with self._client() as client:
-                current = await self.membership(client)
+                reads = self.read_deadline()
+                current = await self.membership(client, deadline=reads)
                 if current is None:
                     raise ActionError("router membership is unavailable")
                 spec = current["engines"].get(iid)
                 if spec is None:
                     raise refused(f"engine {iid!r} is not in the router's membership", 404)
-                before = await self.engine_state(client, iid)
+                before = await self.engine_state(client, iid, deadline=reads)
                 path = f"{MEMBERSHIP_PATH}/{iid}"
                 try:
                     response = await client.delete(path, params={"deadline_s": deadline})
@@ -435,18 +439,23 @@ class EngineActions:
     async def _await_removal(
         self, client: httpx.AsyncClient, iid: str, deadline_s: float, effect: Mapping[str, Any]
     ) -> dict[str, Any]:
-        """Wait for the drain deadline plus `router.timeout_s` until the router removes `iid`."""
+        """Wait for the drain deadline plus `router.timeout_s` until the router removes `iid`.
+
+        Each poll's reads share one read deadline, which the wait's own end bounds.
+        """
         limit = deadline_s + self.service.config.router.timeout_s
         started = time.monotonic()
         while True:
+            reads = self.read_deadline(until=started + limit)
             try:
-                current = await self.membership(client)
+                current = await self.membership(client, deadline=reads)
             except ActionError:
                 current = None
-            waited = round(time.monotonic() - started, 3)
             if current is not None and iid not in current["engines"]:
+                waited = round(time.monotonic() - started, 3)
                 return {"removed": True, "waited_s": waited, "generation": current["generation"]}
-            state = await self.engine_state(client, iid)
+            state = await self.engine_state(client, iid, deadline=reads)
+            waited = round(time.monotonic() - started, 3)
             if (state.get("lifecycle") or {}).get("state") == "deadline_exceeded":
                 # The router hands the engine to the operator; the leave completes when its
                 # resident work ends.
@@ -464,16 +473,16 @@ class EngineActions:
             await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
 
     async def membership(
-        self, client: httpx.AsyncClient, timeout_s: float = STATE_TIMEOUT_S
+        self, client: httpx.AsyncClient, *, deadline: float | None = None
     ) -> dict[str, Any] | None:
         """Return the router's membership generation and engine entries.
 
         Return None when the router has no membership route. Raise ActionError with HTTP 502
         when the router does not answer or answers with anything else, naming the router's
-        reason when it does not control the fleet.
+        reason when it does not control the fleet. `deadline` bounds the read, as in `_read`.
         """
         try:
-            response = await self._read(client, MEMBERSHIP_PATH, timeout_s)
+            response = await self._read(client, MEMBERSHIP_PATH, deadline)
         except httpx.HTTPError as exc:
             raise ActionError(
                 f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
@@ -496,11 +505,16 @@ class EngineActions:
             ) from exc
 
     async def member(
-        self, client: httpx.AsyncClient, session: Session, iid: str
+        self,
+        client: httpx.AsyncClient,
+        session: Session,
+        iid: str,
+        *,
+        deadline: float | None = None,
     ) -> Mapping[str, Any]:
         """Return engine `iid` from the router's membership, or from the baseline file when
         the router does not answer with one."""
-        current = await self.membership(client)
+        current = await self.membership(client, deadline=deadline)
         if current is None:
             return baseline_engine(session, iid)
         engine = current["engines"].get(iid)
@@ -544,7 +558,8 @@ class EngineActions:
         started = time.monotonic()
         seen = before.get("event")
         while True:
-            state = await self.engine_state(client, iid)
+            reads = self.read_deadline(until=started + limit)
+            state = await self.engine_state(client, iid, deadline=reads)
             waited = round(time.monotonic() - started, 3)
             report = {"in_service": False, "waited_s": waited}
             if "error" not in state:
@@ -582,31 +597,47 @@ class EngineActions:
             )
         return effect
 
-    async def engine_state(self, client: httpx.AsyncClient, iid: str) -> dict[str, Any]:
+    async def engine_state(
+        self, client: httpx.AsyncClient, iid: str, *, deadline: float | None = None
+    ) -> dict[str, Any]:
         """Return the router's view of one engine, or the reason it could not be read."""
         try:
-            return (await self._slices(client, [iid]))[iid]
+            return (await self._slices(client, [iid], deadline))[iid]
         except StateUnavailable as exc:
             return {"error": str(exc)}
 
-    async def fleet_state(self, iids: list[str]) -> dict[str, Any]:
+    async def fleet_state(
+        self, iids: list[str], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         """Return the router's view of each named engine."""
         async with self._client() as client:
             try:
-                return await self._slices(client, iids)
+                return await self._slices(client, iids, deadline)
             except StateUnavailable as exc:
                 raise ActionError(str(exc)) from exc
 
+    def read_deadline(
+        self, until: float | None = None, *, timeout_s: float = STATE_TIMEOUT_S
+    ) -> float:
+        """Return the monotonic deadline of one operation's router reads.
+
+        It is `timeout_s`, at most `router.timeout_s`, from now, or `until` when that comes
+        first.
+        """
+        end = time.monotonic() + min(timeout_s, self.service.config.router.timeout_s)
+        return end if until is None else min(end, until)
+
     async def _read(
-        self, client: httpx.AsyncClient, path: str, timeout_s: float = STATE_TIMEOUT_S
+        self, client: httpx.AsyncClient, path: str, deadline: float | None = None
     ) -> httpx.Response:
-        """GET `path`, repeating an HTTP 503 until `timeout_s` passes.
+        """GET `path`, repeating an HTTP 503 until `deadline` passes.
 
         A router that does not control the fleet, such as a standby the load balancer still
-        routes to during a takeover, answers 503. Return the last response.
+        routes to during a takeover, answers 503. Without `deadline`, the read has the state
+        read timeout. Return the last response.
         """
-        timeout = min(timeout_s, self.service.config.router.timeout_s)
-        deadline = time.monotonic() + timeout
+        if deadline is None:
+            deadline = self.read_deadline()
         while True:
             response = await client.get(path, timeout=max(deadline - time.monotonic(), 0.05))
             remaining = deadline - time.monotonic()
@@ -614,9 +645,11 @@ class EngineActions:
                 return response
             await asyncio.sleep(min(self._read_retry_s, remaining))
 
-    async def _slices(self, client: httpx.AsyncClient, iids: list[str]) -> dict[str, Any]:
+    async def _slices(
+        self, client: httpx.AsyncClient, iids: list[str], deadline: float | None = None
+    ) -> dict[str, Any]:
         try:
-            response = await self._read(client, STATE_PATH)
+            response = await self._read(client, STATE_PATH, deadline)
             if response.status_code == 503:
                 raise StateUnavailable(f"router state unavailable: {_refusal(response)}")
             response.raise_for_status()
@@ -757,9 +790,11 @@ def engine_routes(actions: EngineActions) -> APIRouter:
     @routes.get("")
     async def engines() -> JSONResponse:
         problem = ""
+        # The membership and state reads share one read deadline.
+        reads = actions.read_deadline()
         async with actions._client() as client:
             try:
-                current = await actions.membership(client)
+                current = await actions.membership(client, deadline=reads)
             except ActionError as exc:
                 # Each baseline engine's state then reports the router error.
                 current, problem = None, str(exc)
@@ -773,7 +808,7 @@ def engine_routes(actions: EngineActions) -> APIRouter:
             return JSONResponse(
                 {
                     "generation": current["generation"],
-                    "engines": await actions.fleet_state(iids),
+                    "engines": await actions.fleet_state(iids, deadline=reads),
                     "available": available,
                 }
             )
@@ -786,7 +821,8 @@ def engine_routes(actions: EngineActions) -> APIRouter:
                 log.error("baseline fleet configuration is unreadable: %s", exc)
                 detail = "baseline fleet configuration is unreadable"
                 return JSONResponse({"detail": detail}, status_code=500)
-        return JSONResponse({"engines": await actions.fleet_state(iids), "available": available})
+        engines = await actions.fleet_state(iids, deadline=reads)
+        return JSONResponse({"engines": engines, "available": available})
 
     def add(action: str) -> None:
         async def run(iid: str, request: Request) -> JSONResponse:

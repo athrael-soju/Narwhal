@@ -116,5 +116,5 @@ The `journal` entry in a job document or a `session.end` result has:
 | `lines`        | Rows copied                                                                                                        |
 | `bytes`        | Bytes copied                                                                                                       |
 | `terminal`     | Count of finished requests by outcome, such as `completed` or `refused`                                            |
-| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit |
+| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit. With `router.journals`, each note starts with its journal's path |
 | `journals`     | With `router.journals`, one entry per journal in the listed order: `journal` (its path), `start_offset`, `end_offset`, `lines`, `bytes` and `notes`, or `journal` and `notes` alone when the journal is missing |

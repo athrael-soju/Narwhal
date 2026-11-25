@@ -200,6 +200,7 @@ class JournalConfigTests(unittest.TestCase):
             ({"journals": ["/a/journal.jsonl"]}, listed),
             ({"journals": ["/a/journal.jsonl", "b/journal.jsonl"]}, listed),
             ({"journals": ["/a/journal.jsonl", "/a/journal.jsonl"]}, listed),
+            ({"journals": ["/a/journal.jsonl", "/a/../a//journal.jsonl"]}, listed),
             ({"journals": pair, "journal": pair[0]}, "set router.journal or router.journals"),
         ):
             with self.subTest(router=router), self.assertRaises(ConfigError) as caught:
@@ -241,7 +242,7 @@ class PairExtractTests(unittest.TestCase):
                 "lines": 3,
                 "bytes": old_bytes + new_bytes,
                 "terminal": {"cancelled": 1, "completed": 2},
-                "notes": [],
+                "notes": [f"{second}: {CREATED}"],
                 "journals": [
                     {
                         "journal": str(first),
@@ -274,6 +275,27 @@ class PairExtractTests(unittest.TestCase):
             [entry["notes"] for entry in result["journals"]],
             [[CREATED], [CREATED, f"truncated at {len(line) * 3} bytes"]],
         )
+        first, second = (str(path) for path in self.journals)
+        self.assertEqual(
+            result["notes"],
+            [
+                f"{first}: {CREATED}",
+                f"{second}: {CREATED}",
+                f"{second}: truncated at {len(line) * 3} bytes",
+            ],
+        )
+
+    def test_a_rotated_journal_is_named_in_the_top_level_notes(self) -> None:
+        first, second = self.journals
+        append(first, row("completed"), row("completed"))
+        append(second, row("completed"))
+        starts = marks(self.journals)
+        with open(first, "r+b") as stream:
+            stream.truncate(0)
+        append(first, row("rejected"))
+        result = self.run_extract(starts)
+        self.assertEqual(result["notes"], [f"{first}: {ROTATED}"])
+        self.assertEqual(result["terminal"], {"rejected": 1})
 
     def test_a_missing_journal_is_noted_and_the_other_copied(self) -> None:
         starts = marks(self.journals)
@@ -283,12 +305,15 @@ class PairExtractTests(unittest.TestCase):
         self.assertEqual(
             result["journals"][0], {"journal": str(self.journals[0]), "notes": [MISSING]}
         )
+        self.assertEqual(
+            result["notes"], [f"{self.journals[0]}: {MISSING}", f"{self.journals[1]}: {CREATED}"]
+        )
         self.assertEqual(self.run_extract(None), {"extract": None, "notes": [NOT_CONFIGURED]})
 
     def test_no_journal_present_copies_nothing(self) -> None:
         result = self.run_extract(marks(self.journals))
         self.assertEqual(result["extract"], None)
-        self.assertEqual(result["notes"], [MISSING])
+        self.assertEqual(result["notes"], [f"{path}: {MISSING}" for path in self.journals])
         self.assertFalse((self.session / "journal").exists())
 
 

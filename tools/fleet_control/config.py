@@ -245,7 +245,7 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
         not isinstance(journals, list)
         or len(journals) < 2
         or not all(isinstance(path, str) and Path(path).is_absolute() for path in journals)
-        or len(set(journals)) != len(journals)
+        or len({os.path.normpath(path) for path in journals}) != len(journals)
     ):
         problems.append(
             "router.journals must list the distinct absolute journal paths of two or more routers"
@@ -262,7 +262,7 @@ def _read_router(problems: list[str], raw: object) -> RouterEndpoint:
         float(timeout),
         None if journal is None else Path(journal),
         max_bytes,
-        tuple(Path(path) for path in journals),
+        tuple(Path(os.path.normpath(path)) for path in journals),
     )
 
 

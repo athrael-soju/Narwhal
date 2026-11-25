@@ -102,7 +102,7 @@ The hook exits `2` before it runs Docker when it refuses the request, for exampl
 | `router.journals`          | absent                  | For a router pair, in place of `router.journal`: the absolute journal path of each router, as this host reads it, two or more distinct paths |
 | `router.journal_max_bytes` | `268435456` (256 MiB)   | Largest journal extract copied for one session or load job, a positive number of bytes                                                    |
 
-Engine state and membership reads use the shorter of 10 seconds and `router.timeout_s`. When the router answers a read with HTTP 503, as a standby does while the load balancer still routes to it during a takeover, the service repeats the read every 0.5 seconds within that time.
+Engine state and membership reads use the shorter of 10 seconds and `router.timeout_s`. When the router answers a read with HTTP 503, as a standby does while the load balancer still routes to it during a takeover, the service repeats the read every 0.5 seconds within that time. The reads of one step share that time: the membership and state reads before an engine action, the two reads of `GET /api/engines`, and the reads of each poll while a leave or a start or resume waits, which also stop at the end of that wait.
 
 Set `router.journal` to the path the router writes: the value of `narwhal-serve --journal`, or by default `journal.jsonl` beside `profiles.path`. Sessions and load jobs record a [journal extract](11-Run-Record.md#journal-extracts) only when `router.journal` or `router.journals` is set.
 

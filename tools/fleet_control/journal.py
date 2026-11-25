@@ -120,7 +120,7 @@ def _copy_all(
             sources.append((path, start, source))
         if all(source is None for _, _, source in sources):
             missing = [{"journal": str(path), "notes": [MISSING]} for path in paths]
-            return {"extract": None, "notes": [MISSING], "journals": missing}
+            return {"extract": None, "notes": _prefixed(missing), "journals": missing}
         relative = _output(session_dir, name)
         with open(session_dir / relative, "wb", opener=owner_only) as output:
             budget = max_bytes
@@ -139,9 +139,14 @@ def _copy_all(
         "lines": sum(row.get("lines", 0) for row in rows),
         "bytes": sum(row.get("bytes", 0) for row in rows),
         "terminal": dict(sorted(terminal.items())),
-        "notes": [],
+        "notes": _prefixed(rows),
         "journals": rows,
     }
+
+
+def _prefixed(rows: Sequence[dict[str, Any]]) -> list[str]:
+    """Return every journal's notes, each prefixed with the journal's path."""
+    return [f"{row['journal']}: {note}" for row in rows for note in row["notes"]]
 
 
 def _output(session_dir: Path, name: str) -> str:

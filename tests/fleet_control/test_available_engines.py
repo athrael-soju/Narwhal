@@ -280,6 +280,73 @@ class StartingTests(AvailableCase):
         self.assertEqual(await self.starting_gauge(), [f'{STARTING}{{iid="e1",backend="vllm"}} 0'])
 
 
+REFUSAL = {
+    "error": {
+        "message": "this router does not control the fleet",
+        "type": "standby",
+        "code": "standby",
+        "reason": "shadowing",
+    }
+}
+
+
+class StandbyRouter(AvailableRouter):
+    """Answer the first `standby_reads` membership reads as a standby the balancer reached."""
+
+    def __init__(self, stopped: Path) -> None:
+        super().__init__(stopped)
+        self.standby_reads = 0
+        self.membership_reads = 0
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/narwhal/engines":
+            self.membership_reads += 1
+            if self.standby_reads > 0:
+                self.standby_reads -= 1
+                return httpx.Response(503, json=REFUSAL, headers={"retry-after": "1"})
+        return super().handle(request)
+
+
+class StandbyAvailabilityTests(AvailableCase):
+    """The availability reading repeats a standby's refusal within its own timeout."""
+
+    router_class: ClassVar[type[FakeRouter]] = StandbyRouter
+    router: StandbyRouter
+
+    def standby_actions(self) -> EngineActions:
+        return EngineActions(
+            self.service, httpx.MockTransport(self.router.handle), 0.02, read_retry_s=0.01
+        )
+
+    async def test_a_reading_after_standby_answers_reads_the_active_membership(self) -> None:
+        self.router.standby_reads = 2
+        reading = await self.standby_actions().available()
+        assert reading is not None
+        self.assertEqual(reading.document(), {"engines": [], "error": None})
+        self.assertEqual(self.router.membership_reads, 3)
+        text = metrics(self.service, reading, probed=True)
+        self.assertIn(f"{READABLE} 1", text.splitlines())
+
+    async def test_a_standby_that_keeps_refusing_reads_unreadable_with_its_reason(self) -> None:
+        self.router.standby_reads = 10_000
+        with mock.patch.object(engines_module, "AVAILABILITY_TIMEOUT_S", 0.3):
+            started = time.monotonic()
+            reading = await self.standby_actions().available()
+            elapsed = time.monotonic() - started
+        assert reading is not None
+        self.assertEqual(
+            reading.error,
+            "router /narwhal/engines answered HTTP 503: "
+            "this router does not control the fleet (shadowing)",
+        )
+        self.assertEqual(reading.engines, ())
+        # The reading repeats the refusal within the availability timeout, not the state read's.
+        self.assertGreater(self.router.membership_reads, 1)
+        self.assertLess(elapsed, 1.0)
+        text = metrics(self.service, reading, probed=True)
+        self.assertIn(f"{READABLE} 0", text.splitlines())
+
+
 class NoMembershipRouteTests(EngineCase):
     async def test_a_router_without_the_membership_route_lists_no_available_engines(self) -> None:
         response = await self.client.get("/api/engines")
