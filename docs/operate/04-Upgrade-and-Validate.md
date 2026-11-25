@@ -42,10 +42,10 @@ Each engine's attested `launch` evidence carries `model_tree_sha256`, the digest
 
 1. Stop ingress.
 2. Archive the generated `config/` files and [run discovery](../deploy/01-Discover.md#running-discovery-and-access-checks) into a new output directory with the new release. Engine export requires the `NARWHAL_NODE_<n>_MODEL_TREE_SHA256` values that discovery derives.
-3. Stop every engine and its attestation sidecar, and install the release on every host. The new release's sidecar `serve` refuses a launch directory prepared by the earlier release, so an upgraded engine host cannot serve its engine until you prepare it again.
+3. Stop every engine and its attestation sidecar, and [build and install the release](../deploy/02-Install.md#building-an-immutable-deployment-package) on every host. The new release refuses a launch directory prepared by the earlier release.
 4. [Prepare, check and start](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) every engine from a fresh launch directory, then [attest it](../deploy/05-Attest.md) and run `finalize-fleet`.
 5. [Profile every engine](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) and [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) again, because each engine has a new `launch_digest`.
-6. Install the new deployment set on both router hosts, start the intended primary and then its standby, and run preflight.
+6. Stop both routers, install the new deployment set on both router hosts, start the intended primary and then its standby, and run preflight.
 7. Restore ingress.
 
 ## Rolling back
