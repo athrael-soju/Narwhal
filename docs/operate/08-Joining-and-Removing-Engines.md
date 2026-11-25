@@ -93,7 +93,7 @@ The join requires a store with a profile for exactly the members and the new eng
     PY
     ```
 
-2. On an SGLang fleet, the sweep also switches and loads a peer engine, as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes. With `--only`, the peer is the engine after the new one in the candidate fleet file, or the first engine when the new one is last, as the script above writes it. The peer serves no requests for the whole sweep. To choose another peer, sweep with a copy of the candidate fleet file that moves that engine to the front and keeps the new engine last. The merge and the join do not depend on engine order. [Drain the peer](03-Restart-Engines.md#drain-the-engine) and keep it running until the sweep ends.
+2. On an SGLang fleet, the sweep also switches and loads a peer engine, as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes. With `--only`, the peer is the engine after the new one in the candidate fleet file, or the first engine when the new one is last, as the script above writes it. To choose another peer, sweep with a copy of the candidate fleet file that moves that engine to the front and keeps the new engine last. The merge and the join do not depend on engine order. [Drain the peer](03-Restart-Engines.md#drain-the-engine) until it reports `ready to stop`, and keep it running until the sweep ends. With `--router-url`, the profiler stops before it contacts any engine while the router has not drained the peer, as [Router drain check](../cli/Profile.md#router-drain-check) describes.
 
 3. Profile the new engine alone, with the sweep options of the current profiles:
 
@@ -102,7 +102,7 @@ The join requires a store with a profile for exactly the members and the new eng
       --limits "$RUN_DIR/profiling-limits.json" \
       --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
       --decode-input-lens 512,4096,8192 \
-      --only "$IID" --out "runs/profiles-$IID-$STAMP.json"
+      --only "$IID" --router-url "$ROUTER_URL" --out "runs/profiles-$IID-$STAMP.json"
     ```
 
 4. On an SGLang fleet, restart the peer and request its readmission, as in [Restart one engine](03-Restart-Engines.md#restart-one-engine). Readmission after a drain requires a new engine process, and the join requires the peer's `state` to be `active` again.

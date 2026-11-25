@@ -308,13 +308,14 @@ class LifecycleManager:
             prefill = len(instance.prefill)
             decode = len(instance.decode)
             state = record.state if record is not None else "active"
+            pending = self.router.monitor.pending_handoffs(iid)
             # A decode leg still pulling KV from the engine keeps it running.
             ready_to_stop = bool(
                 record is not None
                 and record.old_process_start is not None
                 and state == "drained"
                 and (not record.wave_id or wave_ready)
-                and not self.router.monitor.pending_handoffs(iid)
+                and not pending
             )
             engines[iid] = {
                 "state": state,
@@ -322,6 +323,7 @@ class LifecycleManager:
                 "accepts_new": iid in eligible,
                 "ready_to_stop": ready_to_stop,
                 "resident": {"prefill": prefill, "decode": decode},
+                "pending_handoffs": pending,
                 "deadline_at": record.deadline_at if record is not None else None,
                 "restart_required": record.restart_required if record is not None else False,
                 "leaving": record.leaving if record is not None else False,

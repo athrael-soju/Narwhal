@@ -87,6 +87,19 @@ def _main(argv: list[str]) -> int:
         help="generated max_num_seqs limits for live decode cohorts "
         "(default: use the requested concurrency points)",
     )
+    router = ap.add_mutually_exclusive_group()
+    router.add_argument(
+        "--router-url",
+        help="active router whose /narwhal/engines and /narwhal/lifecycle must show every engine "
+        "a role-switching sweep uses as drained or outside the fleet; a role-switching sweep "
+        "with --only requires it or --no-router",
+    )
+    router.add_argument(
+        "--no-router",
+        action="store_true",
+        help="state that no router serves the fleet's engines, for a role-switching sweep "
+        "with --only",
+    )
     ap.add_argument(
         "--observation-timeout-s",
         type=float,
@@ -197,6 +210,10 @@ def _main(argv: list[str]) -> int:
         ap.error("--observation-timeout-s must be finite and positive")
     if args.observation_timeout_s is not None and not live:
         ap.error("--observation-timeout-s applies only to live profiling")
+    if (args.router_url is not None or args.no_router) and not live:
+        ap.error("--router-url and --no-router apply only to live profiling")
+    if args.router_url is not None and not args.router_url.startswith(("http://", "https://")):
+        ap.error("--router-url takes an http:// or https:// URL")
     # Only live profiling sends requests to engines, so only it serves metrics.
     if args.metrics_url is not None and not live:
         ap.error("--metrics-url applies only to live profiling")
@@ -315,6 +332,8 @@ def _main(argv: list[str]) -> int:
                     colocated_workload=colocated_workload,
                     observation_timeout_s=args.observation_timeout_s,
                     activity=activity,
+                    router_url=args.router_url,
+                    no_router=args.no_router,
                 )
             )
     except (OSError, ValueError) as exc:

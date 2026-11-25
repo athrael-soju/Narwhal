@@ -513,7 +513,7 @@ class SweepRoleRestoreTests(unittest.IsolatedAsyncioTestCase):
                 contextlib.redirect_stderr(io.StringIO()) as errors,
             ):
                 try:
-                    code = await fleet_probe.run(cfg, {"e0"}, split_lanes=False)
+                    code = await fleet_probe.run(cfg, {"e0"}, split_lanes=False, no_router=True)
                 except RuntimeError as exc:
                     code = exc
         self.errors = errors.getvalue()

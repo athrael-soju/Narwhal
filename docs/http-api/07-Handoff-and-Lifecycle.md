@@ -114,6 +114,7 @@ Engine record fields:
 | `accepts_new`       | `true` when the engine is eligible for placement                                                                         |
 | `ready_to_stop`     | `true` when the engine has drained with its process identity recorded, no decode leg still reads KV from it and, for a wave member, the whole wave has drained |
 | `resident`          | Resident `prefill` and `decode` request counts                                                                           |
+| `pending_handoffs`  | Decode legs on other engines that may still read KV from the engine                                                      |
 | `deadline_at`       | Unix time when the drain deadline expires, `null` until the engine has a lifecycle record                                |
 | `restart_required`  | `true` when lifecycle readmission requires a process start newer than the drain record                                   |
 | `leaving`           | `true` while a [removal](08-Engine-Membership.md#delete-narwhalenginesiid) drains the engine                              |

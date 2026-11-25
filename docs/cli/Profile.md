@@ -24,6 +24,25 @@ On an SGLang fleet, the sweep measures each engine in both roles while a peer en
 
 The selected engines pair up in fleet order, and the pairs run at the same time. With an odd count, the last three engines form a ring in which each engine's peer is the next. A single selected engine pairs with the next engine in the fleet. When any selected engine sets `shared_device`, the engines run one at a time, each paired with the next selected engine, or under `--colocated` with an engine from its [group](#shared-gpu-neighbour-traffic).
 
+### Router drain check
+
+A role switch fails the requests an engine holds, and a router keeps sending requests to an engine it has not drained. An SGLang sweep with `--only` therefore requires `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. Without either, the profiler exits with code `2` before it contacts any engine. A sweep of every engine requires neither. vLLM and TensorRT-LLM sweeps switch no engine roles and ignore both options.
+
+With `--router-url`, before it contacts any engine, the profiler reads [`GET /narwhal/engines`](../http-api/08-Engine-Membership.md#get-narwhalengines) and [`GET /narwhal/lifecycle`](../http-api/07-Handoff-and-Lifecycle.md#get-narwhallifecycle) from the router. It checks each engine the sweep uses: the selected engines, their peers and, under `--colocated`, their group neighbours. A router member matches an engine when it has the same `iid`, or a URL with the same port and either the same host name or a host that resolves to a shared address, so `localhost` matches `127.0.0.1`. A matching member must have one of these lifecycle records:
+
+- `state` `drained` and `ready_to_stop` `true`
+- `state` `blocked`, `accepts_new` `false`, no `resident` requests and `pending_handoffs` `0`
+
+An ejected engine reads `active` and fails the check, because the router's automatic recovery can return it to placement during the sweep. The profiler exits with code `1` when the router is not the active router, when it cannot read either document, or when a member fails the check. The error names each failing engine, as `peer <iid>` when it is not selected, with its lifecycle `state`:
+
+```text
+refusing to switch engines that the router at http://router:8000 has not drained: peer e1 is active. Drain each one with POST /narwhal/lifecycle/drain and wait until GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines. To pair a selected engine with an engine outside the router's fleet instead, sweep with a fleet file that lists that engine right after it
+```
+
+The router holds one engine at a time outside a whole-wave drain. When the router holds the selected engine and its peer is a member, pair the selected engine with a spare engine outside the router's fleet, or hold both through a whole-wave drain, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes. Under `--colocated`, the peers come from the selected engine's `shared_device` group, so only the whole-wave drain applies, and the error leaves out the spare-engine sentence.
+
+An engine outside the router's membership passes, and the profiler prints `router <url> has no member with the ID or URL of: <iid>` for it.
+
 ## Selection, refitting, and output
 
 These options select engines, choose the mode, and set the output files:
@@ -41,6 +60,8 @@ These options select engines, choose the mode, and set the output files:
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
 | `--metrics-url URL` | `$NARWHAL_TOOL_METRICS_URL` | Serve [tool metrics](../telemetry/03-Metrics-and-Control.md#tool-metrics) at `URL/metrics` during a live sweep, where `URL` is `http://host:port`. |
+| `--router-url URL` | optional | Active router that must report every engine an SGLang sweep uses as drained or outside its fleet, as [Router drain check](#router-drain-check) describes. `URL` starts with `http://` or `https://`. vLLM and TensorRT-LLM sweeps ignore it. |
+| `--no-router` | `false` | State that no router serves the fleet's engines, for an SGLang sweep with `--only`. |
 
 The mode options depend on each other:
 
@@ -51,6 +72,8 @@ The mode options depend on each other:
 | `--out` | A store path and sidecar path that do not exist yet | `--overwrite` |
 | `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
 | `--metrics-url` | A live sweep | `--refit-samples`, `--merge` |
+| `--router-url` | A live sweep | `--no-router`, `--refit-samples`, `--merge` |
+| `--no-router` | A live sweep | `--router-url`, `--refit-samples`, `--merge` |
 
 With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 
@@ -132,6 +155,7 @@ A live sweep writes the profile store and sample sidecar after each engine compl
 - the prefill fit exceeds 20% mean error or 50% worst-point error
 - an engine's attestation fails verification, or its process changes during its measurement
 - on SGLang, `POST /pd_role_switch` fails or the engine refuses the switch, or `POST /flush_cache` fails or returns a status other than 200
+- on SGLang with `--router-url`, the router fails the [router drain check](#router-drain-check)
 
 It stops with exit code `2` when:
 
@@ -140,6 +164,7 @@ It stops with exit code `2` when:
 - an output exists without `--overwrite`, or a refit or merge output exists
 - a fleet with `engine_contract` has a profiled engine without an attestation URL
 - an SGLang fleet uses a connector other than `mooncake`, has one engine, or lacks an attestation URL
+- an SGLang sweep with `--only` has neither `--router-url` nor `--no-router`
 - a `--colocated` target has no neighbour in its group
 - on SGLang, a `--colocated` target has no engine of the other configured role in its group
 - an engine's context limit leaves fewer than three prefill lengths, two decode input lengths, or two decode concurrency levels
