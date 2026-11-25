@@ -1,4 +1,4 @@
-"""Router readiness, monitoring and engine lifecycle metrics."""
+"""Router readiness, monitoring, engine lifecycle and membership metrics."""
 
 from __future__ import annotations
 
@@ -107,4 +107,31 @@ def render_runtime(state: dict) -> list[str]:
             for iid, entry in lifecycle_engines.items()
         ],
     )
+    return out
+
+
+def render_membership(state: dict) -> list[str]:
+    """Render the membership generation and the join and leave outcomes since process start."""
+    membership = state.get("membership") or {}
+    out: list[str] = []
+    out += metric_lines(
+        "narwhal_membership_generation",
+        "Generation of the engine membership snapshot this router serves",
+        "gauge",
+        [({}, membership.get("generation", 0))],
+    )
+    # The state lists every outcome from startup; increase() skips a series' first sample.
+    for kind, help_text in (
+        ("joins", "Engine joins since router start, by outcome"),
+        ("leaves", "Engine removals since router start, by outcome"),
+    ):
+        out += metric_lines(
+            f"narwhal_engine_{kind}_total",
+            help_text,
+            "counter",
+            [
+                ({"outcome": outcome}, count)
+                for outcome, count in (membership.get(kind) or {}).items()
+            ],
+        )
     return out

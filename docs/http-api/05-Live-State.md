@@ -33,6 +33,7 @@ The state document carries these top-level fields:
 | `monitoring`              | Timing and failure state of the engine monitoring loop                                                        |
 | `ha`                      | High-availability state: readiness, standby status, lease, and failover block                                 |
 | `lifecycle`               | Drain state, resident work, and lifecycle events                                                              |
+| `membership`              | Membership generation, and join and removal outcomes since process start                                      |
 | `admission`               | Router and phase occupancy, queue state, limits, and admission mode                                           |
 | `outcome_reasons`         | `failed`, `refused`, `rejected`, and `expired` counts by [reason](../telemetry/01-Journal.md#outcome-reasons) |
 | `seats`                   | Each engine's prefill and decode seats and the inputs that set them                                           |
@@ -86,6 +87,18 @@ The `ha` object reports the router's lease and readiness:
 | `epoch`   | Lease epoch                                                                              |
 | `holder`  | Lease-holder token                                                                       |
 | `blocked` | Failover block reason, such as `lease renewal failed`, or an empty string                 |
+
+### `membership`
+
+The `membership` object reports the [membership snapshot](08-Engine-Membership.md) and the changes this router process handled:
+
+| Field        | Meaning                                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| `generation` | Snapshot generation, as `GET /narwhal/engines` reports it                                                   |
+| `joins`      | Join requests by outcome: `joined` and `refused`                                                            |
+| `leaves`     | Removal requests by outcome: `left`, `refused` and `cancelled`                                              |
+
+[Reading membership changes](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) defines each outcome.
 
 ### `monitoring`
 

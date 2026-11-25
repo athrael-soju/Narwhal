@@ -99,6 +99,36 @@
             "useValueForTime": false
           }
         }
+      },
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "query": {
+            "kind": "prometheus",
+            "spec": {
+              "expr": "narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset 15s)",
+              "step": "15s",
+              "titleFormat": "Membership change",
+              "textFormat": "{{instance}}",
+              "useValueForTime": false
+            }
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "#00BCD4",
+          "name": "Membership changes",
+          "legacyOptions": {
+            "expr": "narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset 15s)",
+            "step": "15s",
+            "titleFormat": "Membership change",
+            "textFormat": "{{instance}}",
+            "useValueForTime": false
+          }
+        }
       }
     ],
     "cursorSync": "Crosshair",
@@ -3589,6 +3619,185 @@
             }
           }
         }
+      },
+      "panel-60": {
+        "kind": "Panel",
+        "spec": {
+          "id": 60,
+          "title": "Engine joins and leaves",
+          "description": "Joins and removals in the displayed interval. Completed counts engines that joined or left, Refused counts refused requests, yellow from 1, and Cancelled counts leaves that a readmission or a whole-wave hold ended.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_joins_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"joined\"}[$__range]))), \"change\", \"Join\", \"\", \"\") or label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"left\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_joins_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"refused\"}[$__range]))), \"change\", \"Join\", \"\", \"\") or label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"refused\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"cancelled\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "joinByField",
+                  "spec": {
+                    "id": "joinByField",
+                    "options": {
+                      "byField": "change",
+                      "mode": "outer"
+                    }
+                  }
+                },
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "Time 1": true,
+                        "Time 2": true,
+                        "Time 3": true
+                      },
+                      "indexByName": {
+                        "change": 0,
+                        "Value #A": 1,
+                        "Value #B": 2,
+                        "Value #C": 3
+                      },
+                      "renameByName": {
+                        "change": "Change",
+                        "Value #A": "Completed",
+                        "Value #B": "Refused",
+                        "Value #C": "Cancelled"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Change",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "N/A",
+                  "custom": {
+                    "minWidth": 60
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Refused"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "thresholds"
+                        }
+                      },
+                      {
+                        "id": "thresholds",
+                        "value": {
+                          "mode": "absolute",
+                          "steps": [
+                            {
+                              "color": "transparent",
+                              "value": null
+                            },
+                            {
+                              "color": "#F2CC0C",
+                              "value": 1
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
@@ -3717,7 +3926,7 @@
                         "x": 0,
                         "y": 0,
                         "width": 18,
-                        "height": 8,
+                        "height": 9,
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-11"
@@ -3730,10 +3939,23 @@
                         "x": 18,
                         "y": 0,
                         "width": 6,
-                        "height": 8,
+                        "height": 5,
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-37"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 18,
+                        "y": 5,
+                        "width": 6,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-60"
                         }
                       }
                     }

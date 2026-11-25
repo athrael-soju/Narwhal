@@ -10,7 +10,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from ...contracts import LIFECYCLE, versioned
-from .records import DrainRecord, LifecycleError, ValidationOutcome
+from .records import DrainRecord, LifecycleError, MembershipCounts, ValidationOutcome
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
@@ -28,6 +28,7 @@ class LifecycleManager:
         self._wave_stop_ready_emitted = False
         self.process_starts: dict[str, float] = {}
         self.identities_ready = router.cfg.engine_contract is None
+        self.membership_counts = MembershipCounts()
 
     def begin(self, engines: list[str], *, wave: bool, deadline_s: float) -> bool:
         """Start a drain, retry identity capture, or extend holds to a whole wave."""
@@ -71,6 +72,7 @@ class LifecycleManager:
                 else None
             )
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="draining",
@@ -87,6 +89,13 @@ class LifecycleManager:
             self._emit("wave_started", engines=sorted(ids), wave_id=wave_id)
         self.refresh()
         return True
+
+    def _end_leave(self, iid: str) -> None:
+        """End the engine's leave, if any, without removing it, and count the cancellation."""
+        record = self.records.get(iid)
+        if record is not None and record.leaving:
+            record.leaving = False
+            self.membership_counts.leaves["cancelled"] += 1
 
     def forget(self, iid: str) -> None:
         """Drop the record and process identity of an engine that left the fleet."""
@@ -156,6 +165,7 @@ class LifecycleManager:
         wave_id = f"wave-{uuid.uuid4().hex[:12]}" if wave else ""
         for iid in engines:
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="validating",
@@ -179,6 +189,7 @@ class LifecycleManager:
         self.wave_id = f"wave-{uuid.uuid4().hex[:12]}"
         for iid in self.router.membership.ids:
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="blocked",
@@ -205,7 +216,7 @@ class LifecycleManager:
             record = self.records[iid]
             record.state = "validating"
             # Readmitting a leaving engine cancels its leave.
-            record.leaving = False
+            self._end_leave(iid)
             record.error = ""
             record.checks = []
             self._emit("validation_started", iid=iid, wave_id=record.wave_id)
@@ -234,7 +245,7 @@ class LifecycleManager:
             record = self.records[iid]
             record.state = "active"
             # Readmission returns a leaving engine to service and ends its leave.
-            record.leaving = False
+            self._end_leave(iid)
             record.new_process_start = outcome.starts[iid]
             self.process_starts[iid] = outcome.starts[iid]
             record.checks = list(outcome.checks.get(iid, []))

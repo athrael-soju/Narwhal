@@ -128,6 +128,7 @@ class LeaveTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.records["e1"].leaving)
         self.assertEqual(complete_leaves(self.router), [])
         self.assertIn("e1", self.router.membership)
+        self.assertEqual(self.manager.membership_counts.leaves["cancelled"], 1)
 
     async def test_refusals(self):
         with self.assertRaisesRegex(LifecycleError, "unknown engine: e9"):
@@ -280,6 +281,9 @@ class LeaveTests(unittest.IsolatedAsyncioTestCase):
         self.router.monitor.finished("e1", "r")
         self.assertEqual(complete_leaves(self.router), [])
         self.assertIn("e1", self.router.membership)
+        self.assertEqual(
+            self.manager.membership_counts.leaves, {"left": 0, "refused": 0, "cancelled": 1}
+        )
 
 
 if __name__ == "__main__":

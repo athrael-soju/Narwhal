@@ -9,6 +9,7 @@ import httpx
 
 from narwhal.config import EngineSpec
 from narwhal.config.model import SharedDeviceAllocation
+from narwhal.observability.metrics.render import render
 from narwhal.profiling import calibration
 from narwhal.profiling.generation import GenerationEvidence
 from narwhal.profiling.store import ProfileStore
@@ -35,6 +36,8 @@ class MembershipHandoffTests(FleetCase):
         self.primary.apply_membership(self.primary.membership.joined(JOINED))
         self.primary.apply_membership(self.primary.membership.left("p"))
         self.primary.served = 7
+        self.primary.lifecycle.membership_counts.joins["joined"] = 1
+        self.primary.lifecycle.membership_counts.leaves["left"] = 1
         self.doc = state.snapshot(self.primary)
 
     def assert_restored(self, router):
@@ -45,6 +48,22 @@ class MembershipHandoffTests(FleetCase):
         self.assertEqual(sorted(router.residency.views), ["d", "x"])
         self.assertIsNotNone(router.profiles.get("x"))
         self.assertEqual(router.served, 7)
+        self.assert_membership_metrics(router, 2)
+
+    def assert_membership_metrics(self, router, generation):
+        """The generation follows the snapshot; join and leave counts start at 0 per process."""
+        self.assertEqual(
+            router.state()["membership"],
+            {
+                "generation": generation,
+                "joins": {"joined": 0, "refused": 0},
+                "leaves": {"left": 0, "refused": 0, "cancelled": 0},
+            },
+        )
+        lines = render(router.state(), router.ttft, router.tpot).splitlines()
+        self.assertIn(f"narwhal_membership_generation {generation}", lines)
+        self.assertIn('narwhal_engine_joins_total{outcome="joined"} 0', lines)
+        self.assertIn('narwhal_engine_leaves_total{outcome="left"} 0', lines)
 
     def test_the_handoff_carries_the_snapshot(self):
         self.assertEqual(self.doc["engines"], ["d", "x"])
@@ -248,6 +267,8 @@ class MembershipHandoffTests(FleetCase):
         lease = FileLease(self.root / "lease.json", "standby", 30)
         self.addCleanup(lease.release)
         router.lease = lease
+        # A standby reports its own snapshot until it takes over.
+        self.assert_membership_metrics(router, 0)
         await standby_loop(
             router,
             "http://primary",

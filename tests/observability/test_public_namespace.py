@@ -49,6 +49,7 @@ DASHBOARD_PALETTE = {
     "router occupancy": "#CA95E5",
     "retry": "#B877D9",
     "unsized": "#8AB8FF",
+    "membership": "#00BCD4",
 }
 
 

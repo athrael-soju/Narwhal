@@ -79,6 +79,7 @@ The charts and the headline row colour request outcomes, alerts, status values a
 | Purple       | `#B877D9` | retry attempts and retry credits                                                                             |
 | Dark purple  | `#A352CC` | admission queue and wait, and event-loop lag                                                                 |
 | Light purple | `#CA95E5` | seat time, requests in flight and event-loop busy share                                                      |
+| Cyan         | `#00BCD4` | membership change markers                                                                                    |
 
 ## Headline row
 
@@ -144,6 +145,10 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 | invalid              | Requests rejected with HTTP 400 as invalid                                    |
 
 Alerts appear on both panels. When a Narwhal alert starts firing, a red (page) or yellow (warning) dashed marker appears on **Request outcomes**. Hover over a marker for its severity and, for `NarwhalEngineDown`, the engine. **Fleet events** gives each alert its own row, with one row per engine for `NarwhalEngineDown`, and a red or yellow bar marks the time the alert fires. Compare the two panels to see which alert fired while a series rose.
+
+A cyan marker on every chart marks a membership change. It appears up to 15 seconds after the router's [membership generation](../telemetry/03-Metrics-and-Control.md#reading-membership-changes) changes. A join, a removal, and a router restart that returns to the fleet file's engines each change it. Hover over a marker for the router instance.
+
+**Engine joins and leaves**, below **Fleet events**, counts the joins and removals in the displayed interval, in a **Join** row and a **Leave** row. **Completed** counts engines that joined or left. **Refused** counts refused requests and turns yellow from 1. **Cancelled** counts leaves that a readmission or a whole-wave hold ended before the engine left.
 
 ## Pool assignments
 
