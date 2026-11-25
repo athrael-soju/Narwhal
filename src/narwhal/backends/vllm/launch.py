@@ -32,6 +32,7 @@ class VllmLauncher(
     side_channel = "NIXL"
     api_key_env = "VLLM_API_KEY"
     image_packages = discovery.IMAGE_PACKAGES
+    model_file_packages = discovery.GGUF_PLUGIN
     environment_prefixes = policy.ENV_PREFIXES
     managed_environment = frozenset(policy.MANAGED_ENV)
     launch_settings = policy.SETTINGS
@@ -65,8 +66,13 @@ class VllmLauncher(
         return env["VLLM_NIXL_SIDE_CHANNEL_HOST"], int(env["VLLM_NIXL_SIDE_CHANNEL_PORT"])
 
     def check_model(self, runtime: dict, model: str) -> None:
-        if model.endswith(".gguf") and not runtime["expected_packages"].get("vllm-gguf-plugin"):
-            raise ValueError("GGUF launch requires a pinned vllm-gguf-plugin package")
+        if not model.endswith(".gguf"):
+            if not Path(model).is_dir():
+                raise ValueError("vLLM launches take a model directory or a .gguf model file")
+            return
+        plugin = discovery.GGUF_PLUGIN
+        if not runtime["expected_packages"].get(plugin):
+            raise ValueError(f"GGUF launch requires a pinned {plugin} package")
 
     def serve(
         self,

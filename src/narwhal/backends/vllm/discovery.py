@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ...deployment.launch_engine.plan import discovered_launch_settings, discovered_settings
+from ...deployment.launch_engine.plan import (
+    MODEL_MOUNT,
+    discovered_launch_settings,
+    discovered_settings,
+)
 
 IMAGE_PACKAGES = r"vllm|torch|nixl|nixl-rocm"
+# vLLM loads a GGUF model file through this plugin.
+GGUF_PLUGIN = "vllm-gguf-plugin"
 DEFAULT_ARGS = ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
+# A GGUF file reads its Hugging Face configuration and tokenizer from the model directory.
+GGUF_ARGS = (("--load-format", "gguf"), ("--hf-config-path", MODEL_MOUNT))
 
 
 def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
@@ -21,6 +29,16 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         ):
             raise ValueError("convolutional SSM transfer requires VLLM_SSM_CONV_STATE_LAYOUT=DS")
         environment["VLLM_SSM_CONV_STATE_LAYOUT"] = "DS"
+    launch = discovered_launch_settings(setting)
+    if observed.get("model_file"):
+        if not observed["model_file"].endswith(".gguf"):
+            raise ValueError("set NARWHAL_MODEL_PATH to a .gguf file")
+        if not observed["packages"].get(GGUF_PLUGIN):
+            raise ValueError(f"a GGUF model requires {GGUF_PLUGIN} in the engine image")
+        for flag, value in GGUF_ARGS:
+            if flag not in args:
+                args.extend((flag, value))
+        launch.setdefault("tokenizer", MODEL_MOUNT)
     return {
         "expected_packages": observed["packages"],
         "model_dtype": dtype,
@@ -28,7 +46,7 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         "block_size": int(setting("BLOCK_SIZE", "128")),
         "context_length": context_length,
         "max_sequences": int(setting("MAX_SEQUENCES", "8")),
-        **discovered_launch_settings(setting),
+        **launch,
         "environment": environment,
         "extra_args": args,
     }

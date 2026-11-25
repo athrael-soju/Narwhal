@@ -53,6 +53,20 @@ class HostEnvironmentTests(unittest.TestCase):
         self.assertNotIn("NARWHAL_NODE_2_URL", engine)
         self.assertEqual(engine["NARWHAL_NODE_2_IP"], "192.0.2.2")
 
+    def test_engine_export_carries_a_model_file_with_its_pinned_hash(self):
+        engine = select_values("engine", 1, self.fleet, self.env)
+        self.assertNotIn("NARWHAL_MODEL_PATH", engine)
+        self.assertNotIn("NARWHAL_MODEL_SHA256", engine)
+        self.env.update(
+            NARWHAL_MODEL_PATH="/models/synthetic/weights.gguf",
+            NARWHAL_NODE_1_MODEL_SHA256="9" * 64,
+        )
+        engine = select_values("engine", 1, self.fleet, self.env)
+        self.assertEqual(engine["NARWHAL_MODEL_PATH"], "/models/synthetic/weights.gguf")
+        self.assertEqual(engine["NARWHAL_MODEL_SHA256"], "9" * 64)
+        with self.assertRaisesRegex(ValueError, "set NARWHAL_MODEL_PATH and NARWHAL_MODEL_SHA256"):
+            select_values("engine", 2, self.fleet, self.env)
+
     def test_engine_export_names_the_neutral_side_channel_port(self):
         self.fleet["engine"]["backend"] = "sglang"
         self.env["NARWHAL_NODE_1_KV_SIDE_CHANNEL_PORT"] = "5601"

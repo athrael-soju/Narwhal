@@ -24,6 +24,7 @@ from .launch_engine.plan import (
     config_files_changed,
     kv_events_directory,
     launch_headers,
+    model_file_changed,
     read_env,
     remove_kv_events_directory,
 )
@@ -118,8 +119,7 @@ def _checked_plan(run: Path, plan: dict) -> dict:
         raise ValueError("native runtime check differs from the launch plan")
     if digest(Path(plan["model_config_path"])) != plan["model_config_sha256"]:
         raise ValueError("model config changed after launch preparation")
-    model = Path(plan["model_path"])
-    if not model.exists() or (plan.get("model_sha256") and digest(model) != plan["model_sha256"]):
+    if not Path(plan["model_path"]).exists() or model_file_changed(plan):
         raise ValueError("model file changed after launch preparation")
     if cache_capture(plan_launcher(plan)) is not None and (
         digest(run / "hook/sitecustomize.py") != plan["cache_capture_sha256"]

@@ -20,7 +20,9 @@ Each action refuses to overwrite an output it has already written. To start an e
 
 `prepare` reads the model from `NARWHAL_MODEL_DIR` and checks its `config.json` against `NARWHAL_MODEL_CONFIG_SHA256`. A container engine mounts that directory read-only at `/model`.
 
-For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. `prepare` records the file's SHA-256, and `start-shared` refuses the file if it changes. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
+A vLLM container engine can load a GGUF file in `NARWHAL_MODEL_DIR`. Set `NARWHAL_MODEL_PATH` to the `.gguf` file and `NARWHAL_MODEL_SHA256` to its SHA-256. The file must be a regular file, not a symbolic link. The engine loads the file from its path under `/model`. `prepare` refuses a file that differs from `NARWHAL_MODEL_SHA256` and records its SHA-256 as `model_sha256` in `launch.json`. `check`, `start` and `start-shared` refuse the file if it changes, becomes a symbolic link, or leaves `NARWHAL_MODEL_DIR`.
+
+For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. `prepare` records the file's SHA-256, checks it against `NARWHAL_MODEL_SHA256` when you set it, and `start-shared` refuses the file if it changes. `prepare` refuses `NARWHAL_MODEL_SHA256` for a model directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
 
 ## Engine environment
 

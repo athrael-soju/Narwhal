@@ -146,7 +146,11 @@ class LiveModelDimensions(ABC):
 
 
 class ModelFormats(ABC):
-    """Optional capability: a native launch may name a model file, not only a directory."""
+    """Optional capability: a launch may name a model file, not only a directory."""
+
+    # Discovery also pins the image distributions whose names fully match this pattern when
+    # the deployment names a model file; None pins no further distribution.
+    model_file_packages: ClassVar[str | None] = None
 
     @abstractmethod
     def check_model(self, runtime: dict, model: str) -> None: ...

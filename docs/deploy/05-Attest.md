@@ -197,6 +197,8 @@ When the capture fails:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
+For a GGUF model, the document's `launch` records the file's `model_sha256` from `launch.json`. Generation fails when the file no longer matches it, has become a symbolic link, or has left `NARWHAL_MODEL_DIR`.
+
 ### Confirming the attested process
 
 1. Recheck the engine's `/health` and version: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, `version` in `/server_info` on SGLang, or `/version` on TensorRT-LLM.
@@ -299,6 +301,7 @@ Run once from the router shell after every sidecar passes:
 
 - Each sidecar's attestation matches its engine's live identity.
 - Every engine carries the same complete contract.
+- For a GGUF model, every engine attests the same `model_sha256`.
 
 `finalize-fleet` writes:
 
@@ -307,7 +310,7 @@ Run once from the router shell after every sidecar passes:
 
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`.
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, compare `launch.model_sha256` in each engine's `engine-attestation.json`.
 
 Recovery:
 

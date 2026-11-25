@@ -81,6 +81,8 @@ NARWHAL_KV_SIDE_CHANNEL_PORT
 
 With `engine.engine_api_key_env` set, engine export requires the variable it names.
 
+For a [GGUF model](../deploy/01-Discover.md#staging-a-gguf-model-on-vllm), engine export also carries `NARWHAL_MODEL_PATH` and `NARWHAL_MODEL_SHA256`, and fails when only one of them is set.
+
 Each `.env.engine-<n>` sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json`.
 
 Per-node overrides insert `NODE_<n>_` after `NARWHAL_`. For example, `NARWHAL_NODE_2_ENGINE_PORT` overrides `NARWHAL_ENGINE_PORT` in `.env.engine-2`.

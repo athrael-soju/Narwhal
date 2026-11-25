@@ -60,6 +60,37 @@ For an empty directory with a Hugging Face source:
 
 Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. A replica mismatch stops discovery with an error that names the first differing file.
 
+### Staging a GGUF model on vLLM
+
+A vLLM fleet can serve a GGUF file. The engine image must include `vllm-gguf-plugin`. Stage the GGUF file in `NARWHAL_MODEL_DIR` beside the `config.json` and tokenizer files of the model it was converted from:
+
+1. Set `BASE_REPO_ID` and `BASE_REVISION` to the repository and full commit SHA of the model the file was converted from.
+2. Set `GGUF_REPO_ID`, `GGUF_REVISION` and `GGUF_FILE` to the GGUF repository, its full commit SHA and the file name.
+3. Stage the same files on every engine host:
+
+    ```bash
+    hf download "$BASE_REPO_ID" --revision "$BASE_REVISION" \
+      --include '*.json' --include '*.txt' --include '*.jinja' --local-dir "$NARWHAL_MODEL_DIR"
+    hf download "$GGUF_REPO_ID" "$GGUF_FILE" --revision "$GGUF_REVISION" \
+      --local-dir "$NARWHAL_MODEL_DIR"
+    ```
+
+    For a model with a multimodal projector, add the projector's file name after `"$GGUF_FILE"`. The GGUF plugin reads the projector from the directory of the GGUF file.
+
+4. Set `NARWHAL_MODEL_PATH` in `.env` to the absolute path of the GGUF file, `$NARWHAL_MODEL_DIR/<file>.gguf`.
+5. Record both repository IDs and commit SHAs in the private record.
+
+Discovery hashes the GGUF file with the rest of the directory and writes its SHA-256 to `NARWHAL_NODE_<n>_MODEL_SHA256` in `config/deployment.env`. To have discovery check the file against a known SHA-256, set `NARWHAL_MODEL_SHA256` in `.env`.
+
+In each launch record, discovery pins the image's `vllm-gguf-plugin` version in `runtime.expected_packages`. It adds `--load-format gguf` and `--hf-config-path /model` to `runtime.extra_args` when `NARWHAL_ENGINE_ARGS` does not set them, and sets `runtime.tokenizer` to `/model` when `NARWHAL_TOKENIZER` is unset. The container mounts `NARWHAL_MODEL_DIR` at `/model`.
+
+Discovery fails when:
+
+- the image has no `vllm-gguf-plugin`
+- `NARWHAL_MODEL_PATH` names no file in `NARWHAL_MODEL_DIR`, or a file without the `.gguf` extension
+- the engines' GGUF files differ in SHA-256
+- `NARWHAL_ENGINE_BACKEND` selects SGLang or TensorRT-LLM
+
 ## Running discovery and access checks
 
 Each engine host needs:
@@ -112,13 +143,13 @@ Keep the generated `config/` files together.
 
 The discovery output directory, mode 0700:
 
-| File                                                         | Content                                                                                                                                                                                              |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code and convolutional-state flags, fabric interface addresses, image runtime environment |
-| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                      |
-| `logs/`                                                      | SSH command logs                                                                                                                                                                                     |
-| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                               |
-| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                        |
+| File                                                         | Content                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code and convolutional-state flags, fabric interface addresses, image runtime environment, and for a GGUF model `model_file` and `model_file_sha256` |
+| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                                                                                 |
+| `logs/`                                                      | SSH command logs                                                                                                                                                                                                                                                |
+| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                                                                                          |
+| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                                   |
 
 Reuse an inspected fleet:
 
