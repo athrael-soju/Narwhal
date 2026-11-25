@@ -4,12 +4,14 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from narwhal.deployment.launch_engine import checkpoint
 from tests.deployment.fixtures import cuda_engine, launch_document, runtime
 from tools.deployment.deploy_hosts import (
     forward_ports,
@@ -448,6 +450,47 @@ python3 "$NARWHAL_FABRIC_BUDGET_TOOL" --help
                     "",
                     forwards=["127.0.0.1:18000:127.0.0.1:8000"],
                 )
+
+    def test_a_failed_checkpoint_hash_names_the_reason_the_command_reports(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            known_hosts = root / "known-hosts"
+            known_hosts.touch()
+            self.env["NARWHAL_SSH_KNOWN_HOSTS"] = str(known_hosts)
+            ssh = SSH(self.env, root / "logs")
+            model = root / "model"
+            model.mkdir()
+            (model / "config.json").write_text("{}")
+            (root / "outside.json").write_text("{}")
+            (model / "extra-out.json").symlink_to("../outside.json")
+            payload = root / "payload"
+            payload.write_text(json.dumps({"model_dir": str(model)}))
+            script = "python3 -c " + shlex.quote(Path(checkpoint.__file__).read_text())
+            remote = subprocess.run(
+                ["sh", "-c", script], input=payload.read_bytes(), capture_output=True
+            )
+            self.assertEqual(remote.returncode, 1)
+            host = self.hosts[0]
+            for reason, message in (
+                (
+                    checkpoint.FAILURE,
+                    f"^{host.id}: blocked at hash checkpoint files: checkpoint entry resolves "
+                    r"outside the model directory: extra-out\.json; "
+                    "inspect its private command log$",
+                ),
+                (None, f"^{host.id}: blocked at hash checkpoint files; inspect its private"),
+            ):
+                with (
+                    self.subTest(reason=reason),
+                    patch(
+                        "tools.deployment.deploy_hosts.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            [], remote.returncode, remote.stdout, b"ssh notice\n" + remote.stderr
+                        ),
+                    ),
+                    self.assertRaisesRegex(ValueError, message),
+                ):
+                    ssh.run(host, "hash checkpoint files", script, payload=payload, reason=reason)
 
     def test_tunnel_selects_shared_router_host_and_checks_local_ports(self):
         with (

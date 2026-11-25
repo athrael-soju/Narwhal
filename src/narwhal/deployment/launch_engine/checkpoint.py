@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 
 EXCLUDED_PATHS = ("README.md", ".cache/huggingface/**")
+# The prefix of the error line `main` writes when inspection fails.
+FAILURE = "Checkpoint inspection failed: "
 
 
 def json_digest(value: object) -> str:
@@ -157,7 +159,7 @@ def main() -> int:
         # File status holds host-local inode numbers and times.
         del result["status_sha256"]
     except (OSError, ValueError, KeyError, TypeError) as error:
-        print(f"Checkpoint inspection failed: {error}", file=sys.stderr)
+        print(f"{FAILURE}{error}", file=sys.stderr)
         return 1
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")

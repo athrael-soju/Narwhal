@@ -530,6 +530,7 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 "hash checkpoint files",
                 "python3 -c " + shlex.quote(checkpoint_script),
                 payload=payload,
+                reason=checkpoint_manifest.FAILURE,
             )
         )
 

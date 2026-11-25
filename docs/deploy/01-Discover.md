@@ -253,7 +253,7 @@ Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_EN
 
 ## Access failure handling
 
-A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. Record the first failing host and gate in the private record.
+A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. When discovery cannot hash a model directory, the message names the reason after the operation, as in `<host-id>: blocked at hash checkpoint files: checkpoint entry resolves outside the model directory: <file>; inspect its private command log`. Record the first failing host and gate in the private record.
 
 If an access variable is missing, set the named `.env` field.
 

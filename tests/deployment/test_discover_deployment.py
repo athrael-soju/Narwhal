@@ -110,7 +110,7 @@ class FakeInspectionSSH:
         self.calls = []
         self.trust = Path(env["NARWHAL_SSH_KNOWN_HOSTS"])
 
-    def run(self, host, gate, script, payload=None):
+    def run(self, host, gate, script, payload=None, reason=None):
         self.calls.append((host.id, gate))
         if payload:
             if gate == "hash checkpoint files":
@@ -141,7 +141,7 @@ def gguf_environment(env):
 class GgufInspectionSSH(FakeInspectionSSH):
     """Inspects a model directory with a GGUF file and an image with the GGUF plugin."""
 
-    def run(self, host, gate, script, payload=None):
+    def run(self, host, gate, script, payload=None, reason=None):
         result = super().run(host, gate, script, payload)
         if gate == "hash checkpoint files":
             record = json.loads(result)
@@ -430,7 +430,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_sglang_discovery_feeds_real_preparation_and_launcher(self):
         class SglangInspectionSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None):
+            def run(self, host, gate, script, payload=None, reason=None):
                 result = super().run(host, gate, script, payload)
                 if gate == "inspect GPU and image":
                     return json.dumps(sglang_observation("10.0.0." + host.id.split("-")[-1]))
@@ -589,7 +589,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None):
+            def run(self, host, gate, script, payload=None, reason=None):
                 result = super().run(host, gate, script, payload)
                 if gate == "hash checkpoint files" and host.id == "node-2":
                     record = json.loads(result)
