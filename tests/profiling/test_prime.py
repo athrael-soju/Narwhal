@@ -12,9 +12,10 @@ from narwhal.backends import load as load_backend
 from narwhal.profiling.probe import cli as profile_cli
 from narwhal.profiling.probe import instance as instance_probe
 from narwhal.profiling.probe import prime
+from narwhal.profiling.probe.engine import make_prompt
 from narwhal.profiling.probe.instance import profile_instance
 from narwhal.profiling.probe.prime import PRIME_PREFIX, prime_engine
-from narwhal.profiling.probe.sweep import Sweep
+from narwhal.profiling.probe.sweep import Sweep, sweep_record
 from narwhal.types import Role
 from tests.profiling.fixtures import patched_profile_sweeps
 
@@ -43,6 +44,35 @@ class PrimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({body["max_tokens"] for body in bodies}, {5})
         # Each request takes a fresh cache salt, as the cold sweep's requests do.
         self.assertEqual(len({body["cache_salt"] for body in bodies}), 3)
+
+    async def test_the_prompt_stays_within_its_input_bound(self):
+        def tokens(text):
+            # A fixed overhead makes a proportional resize overshoot the target.
+            return len(text) // 4 + 6
+
+        prompts = []
+
+        def answer(request):
+            body = json.loads(request.content)
+            if request.url.path == "/tokenize":
+                return httpx.Response(200, json={"count": tokens(body["prompt"])})
+            prompts.append(body["prompt"])
+            return httpx.Response(200, json={"choices": [{"text": "x"}]})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+            _, count = await make_prompt(
+                client, "http://e", "m", 32, BACKEND.dialect, prefix=PRIME_PREFIX
+            )
+            self.assertGreater(count, 32)
+            await prime_engine(client, "http://e", "m", BACKEND.dialect, 2, 32, 3)
+        self.assertEqual(len(prompts), 2)
+        self.assertTrue(prompts[0].startswith(PRIME_PREFIX))
+        self.assertLessEqual(tokens(prompts[0]), 32)
+
+    def test_the_sidecar_records_a_warm_up_count_only_when_one_is_set(self):
+        self.assertNotIn("warmup_requests", sweep_record(Sweep()))
+        self.assertEqual(sweep_record(Sweep(warmup_requests=8))["warmup_requests"], 8)
+        self.assertEqual(sweep_record(Sweep())["prefill_repeats"], Sweep().prefill_repeats)
 
     async def test_a_failed_request_stops_the_profile(self):
         transport = httpx.MockTransport(lambda request: httpx.Response(503, text="busy"))

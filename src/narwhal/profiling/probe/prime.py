@@ -34,6 +34,8 @@ async def prime_engine(
         chars_per_token,
         timeout_s=observation_timeout_s or 30.0,
         prefix=PRIME_PREFIX,
+        # The prefix adds tokens, so the bound keeps the prompt within the context limit.
+        max_input_tokens=input_tokens if dialect.tokenize_path is not None else None,
     )
     for _ in range(requests):
         body = completion_body(model, prompt, output_tokens, dialect, dialect.cold_probe_extras())

@@ -124,7 +124,7 @@ The memory options then apply to each GPU, which holds one engine:
 - `--device-memory-mib` must be at least `--engine-memory-mib`, and `--device-allowance` at least `--gpu-memory-utilization`.
 - `init` requires each engine's GPU to have free memory for the engine's fraction plus `gpu.reserve_mib`, about 3,380 MiB for the small vLLM and SGLang templates and 6,660 MiB for the small TensorRT-LLM template. It also requires the engines' GPUs to share one product name.
 - `up` starts the engines with [`narwhal-engine start-native`](Engine.md#own-gpu-startup), which starts each engine when its GPU's free memory covers its fraction and records the engine's memory growth on that GPU in `native-start.json`.
-- `up` profiles each engine after it serves 8 discarded requests in each role, through [`narwhal-profile --warmup-requests 8`](Profile.md#prefill-and-decode-sweeps).
+- `up` profiles each engine after it serves warm-up requests, through [`narwhal-profile --warmup-requests 8`](Profile.md#prefill-and-decode-sweeps): 8 in each role on SGLang, and 16 on vLLM and TensorRT-LLM.
 
 An engine of this fleet can [leave the router and rejoin it](../Dev-Runtime.md#removing-and-rejoining-an-engine) while the fleet runs, on vLLM, SGLang and TensorRT-LLM.
 

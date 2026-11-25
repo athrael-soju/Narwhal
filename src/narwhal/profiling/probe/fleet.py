@@ -33,7 +33,13 @@ from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
 from .pairing import PairedTransport, paired_transport
-from .sweep import Sweep, bounded_sweep, decode_concurrency, load_sequence_limits
+from .sweep import (
+    Sweep,
+    bounded_sweep,
+    decode_concurrency,
+    load_sequence_limits,
+    sweep_record,
+)
 
 
 class _Unhealthy(Exception): ...
@@ -396,7 +402,7 @@ async def run(
         "method_version": 2,
         **stamp(),
         "model": cfg.model,
-        "sweep": asdict(sweep or Sweep()),
+        "sweep": sweep_record(sweep or Sweep()),
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
@@ -481,7 +487,7 @@ async def run(
             )
             engine_evidence: dict[str, object] = {
                 "max_model_len": max_model_len,
-                "sweep": asdict(engine_sweep),
+                "sweep": sweep_record(engine_sweep),
             }
             if max_num_seqs is not None and limits_path is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs
