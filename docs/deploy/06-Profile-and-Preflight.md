@@ -164,7 +164,7 @@ The full preflight runs these gates:
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reach`       | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                                  |
 | `calibration` | The configured first-token calibration is valid, matches every running process generation, and has a candidate deadline below `engine.first_token_timeout_s` |
-| `contract`    | Attestation matches the current process and declared runtime                                                                                                 |
+| `contract`    | Attestation matches the current process and declared runtime, and every engine attests the same model files                                                  |
 | `profile`     | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy             |
 | `model`       | Every engine serves the configured model                                                                                                                     |
 | `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
