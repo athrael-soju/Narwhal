@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import socket
 import stat
 import tempfile
 import unittest
@@ -213,6 +214,37 @@ class ListenerTests(unittest.TestCase):
             observe_services.Listener("127.0.0.1", 3000), runner
         )
         self.assertEqual(owner, "222 right right --listener 127.0.0.1:3000")
+
+    def test_a_port_with_only_closed_connections_is_available(self) -> None:
+        """A connection the listener closed first leaves its address in TIME-WAIT."""
+        server = socket.create_server(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+        client = socket.create_connection(("127.0.0.1", port))
+        accepted, _ = server.accept()
+        server.close()
+        accepted.close()
+        client.recv(1)
+        client.close()
+        listener = observe_services.Listener("127.0.0.1", port)
+        self.assertTrue(observe_listeners.listener_available(listener))
+        with socket.create_server(("127.0.0.1", port)):
+            self.assertFalse(observe_listeners.listener_available(listener))
+
+    def test_owner_lists_only_sockets_in_listen_state(self) -> None:
+        def runner(command: list[str], **kwargs: object) -> CompletedProcess[str]:
+            del kwargs
+            if command[:2] == ["ss", "-H"]:
+                output = (
+                    "TIME-WAIT 0 0 127.0.0.1:9090 127.0.0.1:51234\n"
+                    "TIME-WAIT 0 0 127.0.0.1:9090 127.0.0.1:51236\n"
+                )
+            else:
+                output = ""
+            return CompletedProcess(command, 0, output, "")
+
+        listener = observe_services.Listener("127.0.0.1", 9090)
+        owner = observe_listeners.listener_owner(listener, runner)
+        self.assertEqual(owner, "owner unavailable from ss")
 
     def test_socket_unit_match_rejects_a_port_prefix(self) -> None:
         listener = observe_services.Listener("127.0.0.1", 3000)
