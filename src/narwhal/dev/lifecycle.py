@@ -42,6 +42,9 @@ from .template import (
     starts_directly,
 )
 
+# Discarded requests each engine on its own GPU serves in each role before profiling.
+WARMUP_REQUESTS = 8
+
 
 class LifecycleDocumentError(ValueError):
     pass
@@ -285,6 +288,9 @@ def _profiles(run: Path, fleet: dict, spec: dict) -> None:
         args = ["--fleet", str(fleet_path)]
         if colocated:
             args.append("--colocated")
+        if not shared:
+            # Without neighbour load, nothing else exercises an engine before its sweep.
+            args.extend(["--warmup-requests", str(WARMUP_REQUESTS)])
         for key, value in spec["profile"].items():
             if key.startswith("neighbour_") and not colocated:
                 continue

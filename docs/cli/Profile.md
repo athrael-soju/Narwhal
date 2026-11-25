@@ -80,6 +80,7 @@ Every mode validates these options:
 | `--cached-suffix-lens LIST` | `700,1300,2600` | Comma-separated uncached suffix lengths for the warm prefill sweep. | Positive, with at least two distinct values |
 | `--prefill-repeats N` | `3` | Repetitions per prefill length. | At least 3 |
 | `--decode-repeats N` | `1` | Repetitions per decode input length and concurrency. | At least 1 |
+| `--warmup-requests N` | `0` | Requests each engine serves before its sweep, first in the prefill role and then in the decode role. Each takes the shortest prefill length as input, shortened to leave room for `--decode-tokens` within the context limit, and asks for `--decode-tokens` output tokens. The profiler discards their timings. | At least 0 |
 
 The live context limit comes from `/tokenize` on vLLM. On SGLang, it is the lower of `context_length` and `max_req_input_len` on `/server_info`. On TensorRT-LLM, it is `--max_seq_len` in the engine's attested launch.
 

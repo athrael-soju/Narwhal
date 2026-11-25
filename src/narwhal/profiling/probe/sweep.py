@@ -34,6 +34,8 @@ class Sweep:
     cached_prefix_lens: tuple[int, ...] = CACHED_PREFIX_LENS
     cached_suffix_lens: tuple[int, ...] = CACHED_SUFFIX_LENS
     cached_repeats: int = CACHED_REPEATS
+    # Discarded requests each engine serves in each role before its sweep.
+    warmup_requests: int = 0
 
 
 def warm_cases(sweep: Sweep, max_model_len: int | None = None) -> list[tuple[int, int]]:

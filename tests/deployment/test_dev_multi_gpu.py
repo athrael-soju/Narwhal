@@ -305,6 +305,25 @@ class MultiGpuLifecycleTests(Instance):
         args = command.call_args.args[2]
         self.assertNotIn("--colocated", args)
         self.assertFalse(any(arg.startswith("--neighbour-") for arg in args))
+        # Each engine serves discarded requests before its sweep.
+        self.assertEqual(args[args.index("--warmup-requests") + 1], str(lifecycle.WARMUP_REQUESTS))
+
+    def test_engines_on_one_gpu_profile_without_the_warm_up(self):
+        sglang = template._read_template("small-cuda-sglang-v1.json")
+        for spec in (self.spec, sglang):
+            with self.subTest(template=spec["name"]):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.initialize(gpu_uuid="GPU-aaaa")
+                run = self.root / "run-profiles"
+                run.mkdir()
+                (run / "profiles-1p1d.json").write_text('{"profiles": []}')
+                with (
+                    patch.object(lifecycle, "_run") as command,
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    lifecycle._profiles(run, lifecycle.read(self.root / "fleet.json"), spec)
+                for call in command.call_args_list:
+                    self.assertNotIn("--warmup-requests", call.args[2])
 
     def test_memory_samples_name_each_gpu(self):
         run = self.parent / "samples"
