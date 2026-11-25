@@ -432,6 +432,30 @@ class RouterAlertTests(PromtoolCase):
         # Without a failed scrape, no staleness marker ends the previous origin's series.
         self.check_alerts(routers, {330: {}, 390: {}, 450: {}})
 
+    def test_the_last_down_sample_of_a_router_no_longer_scraped_raises_no_alert(self):
+        """A recreated Prometheus answers the previous origin's `up` of 0 for 5 minutes."""
+        old = {"job": "narwhal-router", "instance": "old:8000"}
+        previous = Router(old, [Phase(0, 280, "standby"), Phase(280, 300, "down")])
+        pair = [
+            Router(A, [Phase(300, LENGTH, "active", ready=1, epoch=8)]),
+            Router(B, [Phase(300, LENGTH, "standby")]),
+        ]
+        self.check_alerts([previous, *pair], {at: {} for at in (450, 500, 580)})
+        # With no active router, the stale `up` of 0 would page as a stopped router.
+        single = [Router(A, [Phase(300, LENGTH, "fenced")])]
+        self.check_alerts([previous, *single], {at: {} for at in (450, 500, 580)})
+
+    def test_gauge_alerts_ignore_the_lease_epoch_of_a_router_no_longer_scraped(self):
+        """The previous origin's higher epoch stays in the lookback without hiding the holder."""
+        old = {"job": "narwhal-router", "instance": "old:8000"}
+        previous = Router(old, [Phase(0, 300, "active", ready=1, epoch=9)])
+        holder = Router(A, [Phase(300, LENGTH, "active", ready=1, epoch=8, ejected=1)])
+        ejected = {**A, "alertname": "NarwhalEngineEjected", "severity": "page"}
+        tests = ["    alert_rule_test:"]
+        tests += alert_test(450, "NarwhalEngineEjected", [ejected], "1")
+        tests += alert_test(580, "NarwhalEngineEjected", [ejected], "1")
+        self.run_promtool([previous, holder], tests)
+
     def test_gauge_alerts_read_the_lease_holder(self):
         """A standby's own breaker view raises no alert until it holds the lease."""
         routers = takeover(standby_ejected=1)

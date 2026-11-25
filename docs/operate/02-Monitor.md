@@ -71,7 +71,7 @@ Use the [router metrics](../telemetry/03-Metrics-and-Control.md#metric-families)
 
 A stopped single router raises `NarwhalRouterDown` only, and a single router that is not ready raises no router alert. The router rules count only samples scraped in the last 30 seconds.
 
-`NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch`: the lease holder, or the router that held the lease last.
+`NarwhalEngineEjected`, `NarwhalPoolStarved`, `NarwhalPrefillBelowFloor` and `NarwhalDecodeBelowFloor` read the router with the highest `narwhal_router_lease_epoch` among the routers scraped in the last 30 seconds: the lease holder, or the router that held the lease last.
 
 `NarwhalRejectedRising`, `NarwhalExpiredRising` and `NarwhalRetryDeniedRising` divide by `narwhal_offered_total`, which includes early refusals and rejections. Their 1% threshold is the share at which the dashboard's [**Dropped** headline](../observability/05-Dashboard.md#headline-row) turns yellow.
 
