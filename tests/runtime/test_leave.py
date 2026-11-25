@@ -285,6 +285,25 @@ class LeaveTests(unittest.IsolatedAsyncioTestCase):
             self.manager.membership_counts.leaves, {"left": 0, "refused": 0, "cancelled": 1}
         )
 
+    async def test_a_whole_wave_drain_over_an_outage_cancels_a_pending_leave(self):
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.leave()
+        for iid in ("e0", "e3"):
+            self.router.scheduler.eject(iid, "liveness")
+        self.assertEqual(self.router.scheduler.live_instances(), [])
+        self.manager.begin(["e0", "e1", "e3"], wave=True, deadline_s=60.0)
+        self.assertFalse(self.manager.records["e1"].leaving)
+        self.assertEqual(self.manager.membership_counts.leaves["cancelled"], 1)
+
+    async def test_recovery_validation_leaves_a_pending_leave_alone(self):
+        # A leaving engine holds a record, so recovery validation waits for it.
+        self.router.monitor.dispatched("e1", Request("r", 64))
+        await self.leave()
+        self.router.scheduler.eject("e1", "liveness")
+        self.assertFalse(self.manager.start_recovery_validation(["e1"]))
+        self.assertTrue(self.manager.records["e1"].leaving)
+        self.assertEqual(self.manager.membership_counts.leaves["cancelled"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

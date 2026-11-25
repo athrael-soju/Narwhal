@@ -110,8 +110,8 @@ Each outcome counts these events:
 | `narwhal_engine_joins_total{outcome="joined"}` | Each `joined` [engine lifecycle event](01-Journal.md#engine-lifecycle-events). |
 | `narwhal_engine_joins_total{outcome="refused"}` | Each `join_refused` event. |
 | `narwhal_engine_leaves_total{outcome="left"}` | Each `left` event. |
-| `narwhal_engine_leaves_total{outcome="refused"}` | Each removal that a rule of [`DELETE /narwhal/engines/{iid}`](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) refused with HTTP `409`. |
-| `narwhal_engine_leaves_total{outcome="cancelled"}` | Each leave that a readmission or a whole-wave hold ended before the engine left. |
+| `narwhal_engine_leaves_total{outcome="refused"}` | Each [`DELETE /narwhal/engines/{iid}`](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) answered with HTTP `409`: a removal rule refused it, or `deadline_s` is zero, negative or infinite. |
+| `narwhal_engine_leaves_total{outcome="cancelled"}` | Each leave that ended before the engine left, when one of these replaced the engine's drain: a readmission of the engine, a whole-wave restart hold, or a whole-wave drain that took over the held engines while no engine was schedulable. |
 
 Both counters export every outcome from process start, at `0` until it occurs. A standby reports the generation of its own snapshot until it takes over. A resumed router and a standby that takes over adopt the handoff's generation, and start both counters at `0`.
 

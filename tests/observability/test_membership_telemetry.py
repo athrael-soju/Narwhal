@@ -236,6 +236,13 @@ class MembershipMetricTests(MembershipCase):
         response = await self.client.delete("/narwhal/engines/e9")
         self.assertEqual(response.status_code, 404, response.text)
         self.assertEqual(await self.membership_metrics(), self.expected(leave_refused=1))
+        # A deadline that is not positive and finite is a 409 refusal too; a 422 is not.
+        for deadline in ("0", "-1", "inf"):
+            response = await self.client.delete(f"/narwhal/engines/e1?deadline_s={deadline}")
+            self.assertEqual(response.status_code, 409, response.text)
+        response = await self.client.delete("/narwhal/engines/e1?deadline_s=soon")
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(await self.membership_metrics(), self.expected(leave_refused=4))
 
     async def test_readmission_cancels_a_leave(self):
         response = await self.client.post("/narwhal/engines", json=NEW_ROW)
