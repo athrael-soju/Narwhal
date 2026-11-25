@@ -64,7 +64,7 @@ class CheckpointManifestTests(unittest.TestCase):
             root = Path(folder)
             (root / "config.json").write_text("{}")
             (root / "source.safetensors").write_bytes(b"weights")
-            (root / "linked.safetensors").symlink_to(root / "source.safetensors")
+            (root / "linked.safetensors").symlink_to("source.safetensors")
             metadata = root / ".cache/huggingface/download/config.json.metadata"
             metadata.parent.mkdir(parents=True)
             metadata.write_text("a" * 40)
@@ -139,6 +139,21 @@ class CheckpointManifestTests(unittest.TestCase):
                     capture_output=True,
                 )
                 self.assertEqual(result.returncode, code, result.stderr)
+
+    def test_an_absolute_link_inside_the_directory_is_refused_unless_links_are_followed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "model"
+            root.mkdir()
+            (root / "config.json").write_text("{}")
+            (root / "weights.bin").write_bytes(b"weights")
+            # The host path resolves inside the directory; under /model it names nothing.
+            (root / "model.safetensors").symlink_to(root / "weights.bin")
+            with self.assertRaisesRegex(ValueError, "links to an absolute path: model.safetensors"):
+                inspect_checkpoint(root)
+            self.assertEqual(inspect_checkpoint(root, contained=False)["file_count"], 3)
+            (root / "model.safetensors").unlink()
+            (root / "model.safetensors").symlink_to("weights.bin")
+            self.assertEqual(inspect_checkpoint(root)["file_count"], 3)
 
     def test_a_non_regular_file_is_refused_without_blocking(self):
         with tempfile.TemporaryDirectory() as folder:

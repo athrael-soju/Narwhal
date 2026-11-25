@@ -204,6 +204,26 @@ class EngineLauncherTests(unittest.TestCase):
                     prepare(root / "launch", env)
                 self.assertFalse((root / "launch").exists())
 
+    def test_check_refuses_a_container_model_file_replaced_by_a_link_out_of_the_mount(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            elsewhere = root / "elsewhere.safetensors"
+            elsewhere.write_bytes(b"weights")
+            weights.unlink()
+            weights.symlink_to(elsewhere)
+            with (
+                patched_docker() as docker,
+                self.assertRaisesRegex(ValueError, "resolves outside the model directory"),
+            ):
+                check(run, load(run))
+            docker.assert_not_called()
+
     def test_check_refuses_model_files_replaced_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

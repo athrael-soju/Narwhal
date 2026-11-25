@@ -35,8 +35,8 @@ def file_status(relative: str, info: os.stat_result) -> list:
 def _files(root: Path, *, contained: bool) -> list[tuple[str, Path]]:
     """Return the checkpoint files under `root` in path order, as relative names and paths.
 
-    With `contained`, every entry must resolve inside `root`, so a symbolic link cannot name
-    a file that a container mount of `root` would not serve.
+    With `contained`, every entry must resolve inside `root` through relative links only, so
+    a symbolic link cannot name a file that a container mount of `root` would not serve.
     """
     root = root.resolve(strict=True)
     if not root.is_dir() or not (root / "config.json").is_file():
@@ -52,6 +52,9 @@ def _files(root: Path, *, contained: bool) -> list[tuple[str, Path]]:
             raise ValueError(f"checkpoint entry is not a regular file: {relative}")
         if contained and not path.resolve().is_relative_to(root):
             raise ValueError(f"checkpoint entry resolves outside the model directory: {relative}")
+        # A container resolves an absolute target under its mount point, not the host path.
+        if contained and path.is_symlink() and os.path.isabs(os.readlink(path)):
+            raise ValueError(f"checkpoint entry links to an absolute path: {relative}")
         files.append((relative.as_posix(), path))
     if not files:
         raise ValueError("checkpoint directory contains no files")

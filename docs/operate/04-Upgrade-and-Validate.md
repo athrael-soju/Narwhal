@@ -38,7 +38,7 @@ A router rejects a handoff whose `schema_version` differs from its own, whether 
 
 ## Upgrading to model file digests
 
-From this release, each engine's attested `launch` evidence carries `model_tree_sha256`, the digest of every model file it reads. The router refuses a joining or readmitted engine whose model files differ from those of the members, and it counts a member that attests no `model_tree_sha256` as different. So a re-prepared engine cannot rejoin a fleet whose other members still run the earlier release. Upgrade the router hosts and every engine in one maintenance window:
+Each engine's attested `launch` evidence carries `model_tree_sha256`, the digest of every model file it reads. An engine prepared by an earlier release attests none. The router refuses a joining or readmitted engine whose model files differ from those of the members, and it counts a member that attests no `model_tree_sha256` as different, so a re-prepared engine cannot rejoin a fleet whose other members run the earlier release. Upgrade the router hosts and every engine in one maintenance window:
 
 1. Stop ingress.
 2. Archive the generated `config/` files and [run discovery](../deploy/01-Discover.md#running-discovery-and-access-checks) into a new output directory with the new release. Engine export requires the `NARWHAL_NODE_<n>_MODEL_TREE_SHA256` values that discovery derives.
