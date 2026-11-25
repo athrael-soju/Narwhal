@@ -90,7 +90,7 @@ The `role` label takes these values:
 | --- | --- |
 | `active` | Controls the fleet. A router started without `--lease-path` is always active. |
 | `standby` | Shadows the active router, and takes over when the active router releases the lease or the lease expires. |
-| `fenced` | Released or lost the lease, holds a lease that has lapsed before its renewal failed, or had its takeover blocked. The [`ha.blocked`](../http-api/05-Live-State.md#ha) field of `/narwhal/state` gives the reason, such as `shutting down` or `lease renewal failed`. A standby whose takeover attempt found no fresh handoff, or could not reach the lease, reports `standby` again once the active router answers its probe. |
+| `fenced` | Released or lost the lease, holds a lease that has lapsed before its renewal failed, or had its takeover blocked. The `reason` of its [fleet-state refusal](../http-api/04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) gives the cause, such as `shutting down` or `lease renewal failed`. A standby whose takeover attempt found no fresh handoff, or could not reach the lease, reports `standby` again once the active router answers its probe. |
 
 An active router can report `narwhal_router_ready` `0`, for example with no available engines. The router that claimed the lease most recently reports the highest `narwhal_router_lease_epoch`.
 

@@ -225,7 +225,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                     for name in ("active", "standby", "fenced"):
                         value = 1 if name == role else 0
                         self.assertIn(f'narwhal_router_role{{role="{name}"}} {value}', text)
-                    state = (await self.client.get("/narwhal/state")).json()
+                    state = (
+                        await self.client.get(
+                            "/narwhal/state", headers={"X-Narwhal-Diagnostic": "true"}
+                        )
+                    ).json()
                     self.assertEqual(state["ha"]["role"], role)
                     # /health names the same role for a router that is not ready.
                     health = (await self.client.get("/health")).json()["status"]
