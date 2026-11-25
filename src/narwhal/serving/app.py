@@ -356,6 +356,7 @@ def create_app(
                 router.seat,
                 router.queue_wait,
                 router.monitor.requests_sent,
+                adopted=router.adopted,
             ),
             media_type=CONTENT_TYPE,
         )

@@ -98,12 +98,7 @@ narwhal_flips_total
 narwhal_event_loop_busy_seconds_total
 ```
 
-Router counters at process start:
-
-| Counter | At process start |
-| --- | --- |
-| `narwhal_offered_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_flips_total`, `narwhal_event_loop_busy_seconds_total` | Resets to `0` |
-| `narwhal_served_total`, `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Restores from the saved handoff state |
+Each router process starts these counters at `0`, and a resume or standby takeover leaves them unchanged.
 
 The collector also raises these diagnostics:
 

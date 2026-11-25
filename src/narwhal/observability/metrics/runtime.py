@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from .exposition import metric_lines
 
+# The active router holds the lease. A standby shadows it, and a fenced router can do neither:
+# its `/narwhal/state` `ha.blocked` gives the reason, such as `shutting down`.
+ROUTER_ROLES = ("active", "standby", "fenced")
+
 
 def render_runtime(state: dict) -> list[str]:
     """Render router readiness and runtime status."""
@@ -20,6 +24,14 @@ def render_runtime(state: dict) -> list[str]:
         "Current router lease epoch, or zero when fencing is disabled",
         "gauge",
         [({}, ha.get("epoch", 0))],
+    )
+    standby = bool(ha.get("standby", False))
+    role = ("fenced" if ha.get("blocked") else "standby") if standby else "active"
+    out += metric_lines(
+        "narwhal_router_role",
+        "1 on the router's lease role: active, standby or fenced",
+        "gauge",
+        [({"role": name}, 1 if name == role else 0) for name in ROUTER_ROLES],
     )
     monitoring = state.get("monitoring") or {}
     out += metric_lines(

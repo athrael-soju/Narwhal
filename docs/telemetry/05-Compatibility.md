@@ -36,7 +36,7 @@ Interface versions in this release:
 | Engine membership | `narwhal.membership` | 1 | `membership` |
 | Request journal | `narwhal.journal` | 1 | `journal` |
 | Live state | `narwhal.state` | 1 | `state` |
-| Prometheus metrics | `narwhal.metrics` | 2 | `metrics` |
+| Prometheus metrics | `narwhal.metrics` | 3 | `metrics` |
 | Command result | `narwhal.command-result` | 1 | `command_result` |
 | Contract manifest | `narwhal.contract-manifest` | 1 | `cli` |
 | Diagnostic bundle | `narwhal.diagnostic-bundle` | 1 | `diagnostic_bundle` |
@@ -65,7 +65,9 @@ When the manifests are identical, installed-release documents pass validation on
 
 ## Schema version changes
 
-The schema version of each interface, including the [command result](../Command-Results.md) envelope, changes when a field is renamed, removed, or retyped. A metrics version also changes when an existing series gains a label.
+The schema version of each interface, including the [command result](../Command-Results.md) envelope, changes when a field is renamed, removed, or retyped. A metrics version also changes when an existing series gains a label or changes what it counts.
+
+Metrics version `3` leaves the request totals a router adopts from a state handoff out of its counters, so each counter counts the requests of one router process. It also adds the `narwhal_router_role` gauge. See [Prometheus metrics](03-Metrics-and-Control.md#prometheus-metrics).
 
 Metrics version `2` adds the `reason` label to `narwhal_failed_total`, `narwhal_rejected_total`, and `narwhal_expired_total`, the `cause` label to `narwhal_refused_total`, and the `stage` label to `narwhal_queue_wait_seconds`. It also adds the `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, and `narwhal_saturation_threshold_seconds` gauges.
 

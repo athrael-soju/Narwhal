@@ -182,12 +182,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual({group["labels"]["backend"] for group in response.json()}, {"vllm"})
 
-    async def test_metrics_use_narwhal_prefix_and_contract_version_two(self):
+    async def test_metrics_use_narwhal_prefix_and_contract_version_three(self):
         self.router.served = 7
         response = await self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(current(METRICS), 2)
-        self.assertIn('narwhal_contract_info{contract="metrics",version="2"} 1', response.text)
+        self.assertEqual(current(METRICS), 3)
+        self.assertIn('narwhal_contract_info{contract="metrics",version="3"} 1', response.text)
         self.assertIn("narwhal_served_total 7", response.text)
         self.assertIn('narwhal_instance_role{iid="p",role="prefill"} 1', response.text)
         self.assertIn('narwhal_slo_seconds{metric="ttft",slo="1"} 1.0', response.text)
@@ -201,6 +201,21 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         names = re.findall(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", response.text, re.M)
         self.assertTrue(names)
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
+
+    async def test_router_role_names_the_active_standby_or_fenced_router(self):
+        cases = (
+            (False, "", "active"),
+            (True, "", "standby"),
+            (True, "shutting down", "fenced"),
+            (True, "lease renewal failed", "fenced"),
+        )
+        for standby, blocked, role in cases:
+            with self.subTest(standby=standby, blocked=blocked):
+                self.router.standby, self.router.failover_blocked = standby, blocked
+                text = (await self.client.get("/metrics")).text
+                for name in ("active", "standby", "fenced"):
+                    value = 1 if name == role else 0
+                    self.assertIn(f'narwhal_router_role{{role="{name}"}} {value}', text)
 
     async def test_flip_counters_start_at_zero_for_every_caller(self):
         response = await self.client.get("/metrics")

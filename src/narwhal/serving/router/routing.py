@@ -19,6 +19,7 @@ from ...engines.client import EngineClient, client_options
 from ...engines.wire import Dial, dial_tcp
 from ...observability.journal import RunJournal
 from ...observability.metrics.exposition import Histogram, buckets_for, slo_histogram, slo_label
+from ...observability.metrics.traffic import AdoptedCounts
 from ...profiling.calibration import CalibrationCheck
 from ...profiling.store import ProfileStore
 from ...runtime.lifecycle.manager import LifecycleManager
@@ -223,6 +224,8 @@ class NarwhalRouter:
         self.outcome_reasons: dict[str, Counter[str]] = {
             terminal: Counter() for terminal in OUTCOME_REASONS
         }
+        # The share of these totals that state handoffs carried in, which /metrics leaves out.
+        self.adopted = AdoptedCounts()
         # Attempt failures by request phase and failure reason.
         self.attempt_failures: Counter[tuple[str, str]] = Counter()
         self.served_after_retry = 0

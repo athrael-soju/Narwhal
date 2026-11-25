@@ -69,7 +69,7 @@ The state document carries these top-level fields:
 | `flips_refused`           | The 20 most recent refused role changes                                                                       |
 | `flips`                   | The most recent role changes, up to `flip_history`                                                            |
 
-After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero.
+After a resume or takeover, the new router process restores `offered`, `unsized_offered`, `served`, `slo_met`, `failed`, `expired`, `cancelled`, `invalid_requests`, `unserved`, `admission.rejected`, `admission.refused`, and `outcome_reasons` from the state handoff. Its other counters start at zero. Its [Prometheus counters](../telemetry/03-Metrics-and-Control.md#prometheus-metrics) leave the restored totals out.
 
 - [`GET /narwhal/lifecycle`](07-Handoff-and-Lifecycle.md#get-narwhallifecycle): the drain state, resident work and lifecycle events in `lifecycle`.
 - [SLO attainment and demand accounting](06-SLO-and-Demand.md): the `attainment`, `demand_history` and `demand_evidence` objects.

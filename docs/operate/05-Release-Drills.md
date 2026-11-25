@@ -40,7 +40,7 @@ The router failover drill passes when:
 - The load balancer selects one lease holder.
 - The standby admits traffic while the stopped primary drains.
 - The open stream completes.
-- Roles survive takeover, and the new primary's counters match the handoff.
+- Roles survive takeover, and the new primary's `/narwhal/state` counters match the handoff.
 - The previous primary stays fenced.
 
 ### Individual restart drill

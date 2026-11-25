@@ -2,8 +2,78 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+
 from ...contracts import METRICS, current
 from .exposition import metric_lines, slo_label
+
+# Request totals a state handoff carries, by their `/narwhal/state` field.
+_TOP_LEVEL = (
+    "offered",
+    "unsized_offered",
+    "served",
+    "slo_met",
+    "expired",
+    "failed",
+    "cancelled",
+    "invalid_requests",
+    "unserved",
+)
+_ADMISSION = ("rejected", "refused")
+
+
+@dataclass
+class AdoptedCounts:
+    """Request totals that state handoffs added to this router process's own counts.
+
+    `/narwhal/state` and the next handoff report totals that include them. `/metrics` leaves
+    them out, so each counter counts the requests this process answered and changes only by its
+    own increments and its restart.
+    """
+
+    totals: Counter[str] = field(default_factory=Counter)
+    reasons: defaultdict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
+
+    def add(
+        self,
+        before: dict[str, int],
+        after: dict[str, int],
+        reasons_before: dict[str, Counter[str]],
+        reasons_after: dict[str, Counter[str]],
+    ) -> None:
+        """Record the change one handoff made to the totals and their reason counts."""
+        for name, value in after.items():
+            self.totals[name] += value - before.get(name, 0)
+        for terminal, counts in reasons_after.items():
+            previous = reasons_before.get(terminal, Counter())
+            for reason in set(counts) | set(previous):
+                self.reasons[terminal][reason] += counts[reason] - previous[reason]
+
+    def local(self, state: dict) -> dict:
+        """Return `state` with the adopted totals and reason counts taken out."""
+        out = dict(state)
+        for name in _TOP_LEVEL:
+            if name in out:
+                out[name] = out[name] - self.totals[name]
+        if "admission" in out:
+            admission = dict(out["admission"])
+            for name in _ADMISSION:
+                if name in admission:
+                    admission[name] = admission[name] - self.totals[name]
+            out["admission"] = admission
+        if "outcome_reasons" in out:
+            out["outcome_reasons"] = {
+                terminal: {
+                    reason: local
+                    for reason, count in counts.items()
+                    if (local := count - self.reasons[terminal][reason])
+                    # A restored `unclassified` count appears once this process counts one.
+                    or reason != "unclassified"
+                }
+                for terminal, counts in out["outcome_reasons"].items()
+            }
+        return out
 
 
 def _by_reason(state: dict, terminal: str, label: str) -> list:

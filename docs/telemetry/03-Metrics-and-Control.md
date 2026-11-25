@@ -8,17 +8,11 @@ description: Read Narwhal Prometheus metrics for scheduling, role control, laten
 
 For the JSON state document, use [`GET /narwhal/state`](../http-api/05-Live-State.md). For the Grafana panels, follow [Reading the dashboard](../observability/05-Dashboard.md).
 
-A new router process starts each series at these values:
+A new router process starts every counter and histogram at `0`, and `narwhal_retry_credits` at `serving.retry_budget`. It starts `narwhal_membership_generation` at the handoff's generation on resume and standby takeover when the handoff carries a changed membership, otherwise at `0`.
 
-| Series | Starting value |
-| --- | --- |
-| `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total` | Handoff values on resume and standby takeover, otherwise `0`. |
-| `narwhal_retry_credits` | `serving.retry_budget`. |
-| `narwhal_membership_generation` | The handoff's generation on resume and standby takeover when the handoff carries a changed membership, otherwise `0`. |
-| Reason series of `narwhal_failed_total`, `narwhal_refused_total`, `narwhal_rejected_total`, and `narwhal_expired_total` | Handoff values on resume and standby takeover, otherwise `0`. A handoff without reason counts restores its totals under `unclassified`. |
-| Histograms and every other counter | `0`. |
+Each counter counts what that router process observed. On resume and standby takeover, the router adopts the request totals behind these counters from the state handoff: `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total` and `narwhal_cancelled_total`. [`GET /narwhal/state`](../http-api/05-Live-State.md) and the next handoff include the adopted totals, and `/metrics` leaves them out. Each counter therefore rises only with the process's own requests, and returns to `0` only when the process restarts, which Prometheus treats as a counter reset. To count the requests of a router pair, sum each counter over its routers.
 
-Split journal rows by `run` when comparing restored outcome counts with offered counts.
+Compare a router's counters with the journal rows of its process's `run`.
 
 ### Metric families
 
@@ -28,7 +22,7 @@ The router exports these series on `/metrics`, grouped by area:
 | --- | --- |
 | Contract identity | `narwhal_contract_info` |
 | Admission mode | `narwhal_admission_info`, `narwhal_admission_margin` |
-| Router lease | `narwhal_router_ready`, `narwhal_router_lease_epoch` |
+| Router lease | `narwhal_router_ready`, `narwhal_router_lease_epoch`, `narwhal_router_role` |
 | Engine monitoring | `narwhal_monitoring_degraded`, `narwhal_monitoring_core_consecutive_failures`, `narwhal_monitoring_core_failures_total`, `narwhal_monitoring_stage_failures_total`, `narwhal_monitoring_stage_consecutive_failures`, `narwhal_event_loop_lag_seconds`, `narwhal_event_loop_lag_high_water_seconds`, `narwhal_event_loop_busy_seconds_total` |
 | Request outcomes | `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_expired_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total`, `narwhal_cancelled_total`, `narwhal_invalid_requests_total` |
 | Attempts and quota | `narwhal_prefill_attempts_total`, `narwhal_decode_attempts_total`, `narwhal_retry_attempts_total`, `narwhal_attempt_failures_total`, `narwhal_served_after_retry_total`, `narwhal_retry_credits`, `narwhal_retry_credits_spent_total`, `narwhal_retry_denied_total`, `narwhal_decode_tokens_observed_total`, `narwhal_output_tokens_total`, `narwhal_upstream_seconds_total` |
@@ -72,7 +66,7 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 
-The four outcome counters export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the total that `/narwhal/state` reports.
+The four outcome counters export every documented reason other than `unclassified` from process start, at `0` until it occurs. An `unclassified` series appears once the router counts one. Sum a counter over its `reason` or `cause` label for the process's total. `/narwhal/state` reports that total plus the count adopted from a handoff.
 
 ## Reading admission mode and retries
 
@@ -81,6 +75,24 @@ The four outcome counters export every documented reason other than `unclassifie
 | `narwhal_admission_info` | gauge | `mode` | `1` on the series for `serving.admission`. |
 | `narwhal_admission_margin` | gauge | | `serving.admission_margin`. |
 | `narwhal_served_after_retry_total` | counter | | Completed requests whose final attempt followed a failed one. |
+
+## Reading router lease gauges
+
+| Metric | Type | Labels | Value |
+| --- | --- | --- | --- |
+| `narwhal_router_ready` | gauge | | `1` while the router admits new traffic, when `/ready` returns HTTP 200. |
+| `narwhal_router_lease_epoch` | gauge | | Epoch of the lease this process last claimed or renewed. `0` before the process holds the lease, and without `--lease-path`. |
+| `narwhal_router_role` | gauge | `role` | `1` on the series for the router's role, `0` on the others. |
+
+The `role` label takes these values:
+
+| Role | Router |
+| --- | --- |
+| `active` | Controls the fleet. A router started without `--lease-path` is always active. |
+| `standby` | Shadows the active router, and takes over when the active router releases the lease or the lease expires. |
+| `fenced` | Released or lost the lease, or had its takeover blocked. The [`ha.blocked`](../http-api/05-Live-State.md#ha) field of `/narwhal/state` gives the reason, such as `shutting down` or `lease renewal failed`. |
+
+An active router can report `narwhal_router_ready` `0`, for example with no available engines. The router that claimed the lease most recently reports the highest `narwhal_router_lease_epoch`.
 
 ## Reading engine lifecycle gauges
 
