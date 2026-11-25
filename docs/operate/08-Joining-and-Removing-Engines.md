@@ -76,7 +76,7 @@ PY
 
 ### Profile the engine
 
-The join requires a store with a profile for each member and the new engine. A removal leaves the engine's rows in the store until you [update the store](#update-the-fleet-file-and-the-profile-store). An engine that rejoins with the [process generation](../configuration/01-Fleet-Schema.md#attestation) of its stored profile needs no new profile, so skip this section.
+The join requires a store with a profile for each member and the new engine. A removal leaves the engine's rows in the store. A merge whose `--fleet` file omits the engine drops them, as the [store update after a removal](#update-the-fleet-file-and-the-profile-store) does, and as step 6 below does for another engine's join once the fleet file omits it. An engine that rejoins while the store still holds its rows, with the [process generation](../configuration/01-Fleet-Schema.md#attestation) of its stored profile, needs no new profile, so skip this section.
 
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 
