@@ -76,7 +76,7 @@ PY
 
 ### Profile the engine
 
-The join requires a store with a profile for exactly the members and the new engine.
+The join requires a store with a profile for each member and the new engine. A removal leaves the engine's rows in the store until you [update the store](#update-the-fleet-file-and-the-profile-store). An engine that rejoins with the [process generation](../configuration/01-Fleet-Schema.md#attestation) of its stored profile needs no new profile, so skip this section.
 
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 
@@ -276,4 +276,4 @@ After the router removes the engine:
 
 4. Copy the fleet file and every file these steps wrote under `runs/` to the same paths on the standby router host.
 
-The next join requires a store without the removed engine's rows. The first-token calibration artifact stays valid after a removal.
+A router started with resume off serves the fleet file's engines and requires a store with a profile for exactly those engines. The first-token calibration artifact stays valid after a removal.

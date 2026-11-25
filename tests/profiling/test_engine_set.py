@@ -66,21 +66,32 @@ class EngineSetTests(unittest.IsolatedAsyncioTestCase):
         self.digests: dict[str, str] = {}
         self.reads = live_generations(self, self.digests)
 
-    async def test_the_store_must_hold_exactly_the_proposed_engines(self) -> None:
+    async def test_the_store_must_hold_every_proposed_engine(self) -> None:
         proposed = joined(self.cfg)
         result = await check_engine_set(self.cfg, proposed)
         self.assertEqual(len(result.problems), 1)
         self.assertIn("no profile for e6", result.problems[0])
-        self.assertIn("exactly the proposed engine set", result.problems[0])
+        self.assertIn("every engine in the proposed set", result.problems[0])
         self.store.put(measured("e6"))
         result = await check_engine_set(self.cfg, proposed)
         self.assertEqual(result.problems, ())
         self.assertIsNotNone(result.profiles)
         self.assertIsNotNone(result.profiles.get("e6"))
         self.assertEqual(result.calibration.status, "uncalibrated")
-        # A profile for an engine outside the set is stale.
+
+    async def test_a_row_for_an_engine_outside_the_set_is_not_checked(self) -> None:
+        # e6 left the membership, and its row no longer matches any live engine.
+        self.store.put(profile("e6", generation_digest=OTHER))
+        self.digests["e6"] = DIGEST
         result = await check_engine_set(self.cfg, self.cfg.engines)
-        self.assertIn("stale profiles for engines outside the proposed set: e6", result.problems[0])
+        self.assertEqual(result.problems, ())
+        self.assertEqual(sorted(set(self.reads)), ["e0", "e3"])
+        self.assertEqual(result.profiles.get("e6").generation_digest, OTHER)
+        # A missing profile is still refused alongside the extra row.
+        result = await check_engine_set(self.cfg, joined(self.cfg, "e7"))
+        self.assertEqual(len(result.problems), 1)
+        self.assertIn("no profile for e7", result.problems[0])
+        self.assertNotIn("e6", result.problems[0])
 
     async def test_an_unreadable_store_names_the_file(self) -> None:
         self.cfg.profiles_path.write_text("{")
