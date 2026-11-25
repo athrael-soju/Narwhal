@@ -605,6 +605,15 @@ def _hashed_file(path: Path) -> tuple[str, str]:
     return content, json_digest(status)
 
 
+def _contained(plan: dict) -> bool:
+    """Whether every model directory entry must resolve inside it.
+
+    A container serves only the mounted directory. A native engine follows Hugging Face
+    snapshot links into the cache.
+    """
+    return plan.get("backend") != "native"
+
+
 def _combined(model_dir: str, outside: str | None) -> str:
     return model_dir if outside is None else json_digest([model_dir, outside])
 
@@ -640,7 +649,7 @@ def model_files(plan: dict) -> ModelFiles:
     The files are those under `model_dir`, plus a native launch's model file or directory
     outside it. A model file in `model_dir` takes its SHA-256 from the directory's manifest.
     """
-    manifest = inspect_checkpoint(Path(plan["model_dir"]))
+    manifest = inspect_checkpoint(Path(plan["model_dir"]), contained=_contained(plan))
     directory = manifest["model_tree_sha256"]
     path = Path(os.path.abspath(plan["model_path"])) if plan.get("model_path") else None
     outside = _outside_model_dir(plan)
@@ -652,7 +661,7 @@ def model_files(plan: dict) -> ModelFiles:
                 raise ValueError(f"model file is excluded from the model file digest: {path}")
         return ModelFiles(directory, manifest["status_sha256"], directory, model_file)
     if outside.is_dir():
-        extra = inspect_checkpoint(outside)
+        extra = inspect_checkpoint(outside, contained=False)
         content, status = extra["model_tree_sha256"], extra["status_sha256"]
         model_file = None
     else:
@@ -667,12 +676,12 @@ def model_files(plan: dict) -> ModelFiles:
 
 
 def _model_status(plan: dict) -> str:
-    status = checkpoint_status(Path(plan["model_dir"]))
+    status = checkpoint_status(Path(plan["model_dir"]), contained=_contained(plan))
     outside = _outside_model_dir(plan)
     if outside is None:
         return status
     if outside.is_dir():
-        return _combined(status, checkpoint_status(outside))
+        return _combined(status, checkpoint_status(outside, contained=False))
     return _combined(status, json_digest(file_status(outside.name, outside.stat())))
 
 

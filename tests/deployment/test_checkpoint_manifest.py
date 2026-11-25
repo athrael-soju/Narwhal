@@ -1,13 +1,18 @@
 """Checkpoint discovery binds complete file content across replicas."""
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from narwhal.deployment.launch_engine import checkpoint
-from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspect_checkpoint
+from narwhal.deployment.launch_engine.checkpoint import (
+    checkpoint_status,
+    hash_regular_file,
+    inspect_checkpoint,
+)
 
 
 class CheckpointManifestTests(unittest.TestCase):
@@ -109,6 +114,38 @@ class CheckpointManifestTests(unittest.TestCase):
             before = checkpoint_status(root)
             (root / "extra.safetensors").write_bytes(b"more")
             self.assertNotEqual(checkpoint_status(root), before)
+
+    def test_a_link_out_of_the_directory_is_refused_unless_links_are_followed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "model"
+            root.mkdir()
+            (root / "config.json").write_text("{}")
+            elsewhere = Path(folder) / "other.safetensors"
+            elsewhere.write_bytes(b"other weights")
+            (root / "model.safetensors").symlink_to(elsewhere)
+            with self.assertRaisesRegex(ValueError, "resolves outside the model directory"):
+                inspect_checkpoint(root)
+            with self.assertRaisesRegex(ValueError, "resolves outside the model directory"):
+                checkpoint_status(root)
+            followed = inspect_checkpoint(root, contained=False)
+            self.assertEqual(followed["file_count"], 2)
+            self.assertEqual(checkpoint_status(root, contained=False), followed["status_sha256"])
+            script = Path(checkpoint.__file__).read_text()
+            for inputs, code in (({}, 1), ({"follow_links": True}, 0)):
+                result = subprocess.run(
+                    ["python3", "-c", script],
+                    input=json.dumps({"model_dir": str(root), **inputs}),
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, code, result.stderr)
+
+    def test_a_non_regular_file_is_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fifo = Path(folder) / "weights.gguf"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ValueError, "not a regular file: weights.gguf"):
+                hash_regular_file(fifo, "weights.gguf")
 
     def test_missing_config_blocks_inspection(self):
         with (

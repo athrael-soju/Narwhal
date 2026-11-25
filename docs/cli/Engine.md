@@ -24,19 +24,21 @@ A vLLM container engine can load a GGUF file in `NARWHAL_MODEL_DIR`. Set `NARWHA
 
 `prepare` also hashes every file in the model directory except `README.md` and `.cache/huggingface/`, and records the digest as `model_tree_sha256` in `launch.json` and in the attestation `launch` evidence. For a native launch from a model file or checkpoint directory outside `NARWHAL_MODEL_DIR`, `model_tree_sha256` also covers that path.
 
+For a container launch, every file in the model directory must resolve inside it, because the container mounts only that directory. `prepare` refuses a symbolic link that points outside it. A native launch follows such links, as a Hugging Face cache snapshot needs.
+
 When `NARWHAL_MODEL_TREE_SHA256` is set, `prepare` refuses a model directory with another digest. The pin covers `NARWHAL_MODEL_DIR` alone, also for a native model path outside it. Engine export sets it from discovery. To compute it for another directory, run:
 
 ```bash
 echo '{"model_dir": "/path/to/model"}' | .venv/bin/python -m narwhal.deployment.launch_engine.checkpoint
 ```
 
-The output's `model_tree_sha256` is the pin.
+The output's `model_tree_sha256` is the pin. For a native launch whose model directory links outside itself, add `"follow_links": true` to the input.
 
 `prepare` records each model file's size, inode, modification time and change time. `check`, `start`, `start-shared`, `start-native`, and the attestation tool's `generate` and `serve` compare them, hashing no model file other than `config.json`, and refuse the launch when a file was added, removed or changed. A `chmod` or a new hard link changes the change time, so they refuse the launch even when the content is unchanged. To serve changed files, run `prepare` with a fresh `--out` directory.
 
 These later stages trust file status. They miss a rewrite that keeps a file's size, inode, modification time and change time, such as one after the system clock was set back, a write to the block device beneath the file system, or a write through a network or FUSE mount that does not update those times.
 
-For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. `prepare` records the file's SHA-256, checks it against `NARWHAL_MODEL_SHA256` when you set it, and `start-shared` and `start-native` refuse the file if it changes. `prepare` refuses `NARWHAL_MODEL_SHA256` for a model directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
+For the `native` backend, set `NARWHAL_MODEL_REVISION` to a 40-character commit or a `sha256:` digest. To load a model other than `NARWHAL_MODEL_DIR`, set `NARWHAL_MODEL_PATH` to a checkpoint directory, or on vLLM to a GGUF file. For a model file, `prepare` checks it against `NARWHAL_MODEL_SHA256` when you set it and records its SHA-256 as `model_sha256` in `launch.json`. `prepare` refuses `NARWHAL_MODEL_SHA256` for a model directory. A GGUF launch requires `vllm-gguf-plugin` in `runtime.expected_packages`, and the vLLM dev template sets `runtime.tokenizer` and `--hf-config-path` in `runtime.extra_args` to the directory that holds the tokenizer and `config.json`.
 
 ## Engine environment
 

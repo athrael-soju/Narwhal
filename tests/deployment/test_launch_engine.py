@@ -180,6 +180,30 @@ class EngineLauncherTests(unittest.TestCase):
                     self.assertFalse((run / "container.id").exists())
                     self.assertLessEqual(docker.call_count, 2)
 
+    def test_a_container_model_dir_link_out_of_the_mount_is_refused_and_native_follows_it(self):
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                blob = root / "blobs/weights"
+                blob.parent.mkdir()
+                blob.write_bytes(b"weights")
+                (root / "model/model.safetensors").symlink_to(blob)
+                if native:
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        prepare(root / "launch", env, backend="native")
+                    tree = inspect_checkpoint(root / "model", contained=False)
+                    self.assertEqual(
+                        load(root / "launch")["model_tree_sha256"], tree["model_tree_sha256"]
+                    )
+                    continue
+                # The container mounts only the model directory, so it cannot load the link.
+                with self.assertRaisesRegex(ValueError, "resolves outside the model directory"):
+                    prepare(root / "launch", env)
+                self.assertFalse((root / "launch").exists())
+
     def test_check_refuses_model_files_replaced_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
