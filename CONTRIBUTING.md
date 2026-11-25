@@ -104,7 +104,10 @@ Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 2. Start each checked engine.
 3. Qualify directed links against the live cache.
 4. Attest and profile those processes.
-5. Run preflight and routed load through the private path.
+5. Run preflight.
+6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack-on-the-router) with `make observe`. Keep it running until the fleet stops.
+7. Run routed load through the private path.
+8. Check the behaviour under test in the **Narwhal Orchestrator** dashboard, and keep screenshots of those panels with the private records.
 
 ### Documentation preview
 
