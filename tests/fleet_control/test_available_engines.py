@@ -292,6 +292,34 @@ class JoinGateTests(unittest.TestCase):
             ],
         )
 
+    def test_a_refused_join_shows_the_routers_reason_verbatim(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is unavailable")
+        detail = (
+            "router refused join of e1 with HTTP 409: stale profiles for engines outside the "
+            "proposed set: e4"
+        )
+        script = (
+            'const OUTCOME_TONES = { ok: "ok", refused: "orange", failed: "bad" };\n'
+            + page_function("actionEntry")
+            + "\n"
+            + page_function("outcomeOf")
+            + "\nconsole.log(JSON.stringify(outcomeOf(JSON.parse(process.argv[1]))));"
+        )
+        reply = {"status": 409, "body": {"detail": detail}}
+        result = subprocess.run(
+            [node, "-e", script, json.dumps(reply)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        self.assertEqual(json.loads(result.stdout), {"kind": "refused", "detail": detail})
+        page = PAGE.read_text(encoding="utf-8")
+        self.assertIn('act("join", "Join " + iid, "engineBaselineJoin", { iid })', page)
+        self.assertIn('renderFeedback($("fb-join"), "join");', page)
+
     def test_the_session_gate_covers_exclusive_actions_and_running_joins(self) -> None:
         gate = page_function("busyGate")
         self.assertIn("state.health.in_progress", gate)
