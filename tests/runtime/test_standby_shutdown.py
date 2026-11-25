@@ -298,7 +298,11 @@ class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
 
         server.servers = [Listener()]
         server.server_state.connections.add(Connection())
-        server.lifespan = type("Lifespan", (), {"shutdown": AsyncMock()})()
-        await server.shutdown()
-        # Requests that reach the router before the yield are admitted under the lease.
-        self.assertEqual(order[:3], ["close", "shutdown", "yield"])
+        lifespan = AsyncMock(side_effect=lambda: order.append("lifespan"))
+        server.lifespan = type("Lifespan", (), {"shutdown": lifespan})()
+        with self.assertLogs("uvicorn.error", "INFO") as logs:
+            await server.shutdown()
+        # Requests that reach the router before the yield are admitted under the lease, and
+        # each shutdown step runs once.
+        self.assertEqual(order, ["close", "shutdown", "yield", "lifespan"])
+        self.assertEqual(logs.output[0], "INFO:uvicorn.error:Shutting down")

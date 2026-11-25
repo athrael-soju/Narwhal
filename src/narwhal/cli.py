@@ -17,6 +17,9 @@ from .config import FleetConfig
 from .runtime.listeners import check_http_bind
 from .serving.app import create_app
 
+# uvicorn logs its shutdown steps here.
+server_log = logging.getLogger("uvicorn.error")
+
 # Map uvicorn's trace level to logging's DEBUG.
 LOG_LEVELS = {
     "critical": "CRITICAL",
@@ -207,28 +210,42 @@ def serve(argv: list[str] | None = None) -> int:
     return 0
 
 
-# Time for requests that reached the router before it stopped accepting to pass admission.
-ADMISSION_SETTLE_S = 0.1
-
-
 class YieldingServer(uvicorn.Server):
-    """Hand router control to the standby before uvicorn drains open connections."""
+    """Hand router control to the standby once the router stops accepting connections."""
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        """Run uvicorn's shutdown, releasing the lease before the open requests drain.
+
+        The router stops accepting connections and closes its idle ones first, so a request
+        that reaches it is admitted while it still holds the lease. The steps follow
+        `uvicorn.Server.shutdown`.
+        """
         yield_control = getattr(getattr(self.config.app, "state", None), "yield_control", None)
-        if yield_control is not None:
-            # Stop accepting and close idle connections first, so that every request this
-            # router receives is admitted while it still holds the lease. A request answered
-            # after the yield would get a standby 503 that the load balancer cannot retry.
-            for server in self.servers:
-                server.close()
-            for sock in sockets or []:
-                sock.close()
-            for connection in list(self.server_state.connections):
-                connection.shutdown()
-            await asyncio.sleep(ADMISSION_SETTLE_S)
-            yield_control()
-        await super().shutdown(sockets=sockets)
+        if yield_control is None:
+            await super().shutdown(sockets=sockets)
+            return
+        server_log.info("Shutting down")
+        for server in self.servers:
+            server.close()
+        for sock in sockets or []:
+            sock.close()
+        for connection in list(self.server_state.connections):
+            connection.shutdown()
+        await asyncio.sleep(0.1)
+        yield_control()
+        try:
+            await asyncio.wait_for(
+                self._wait_tasks_to_complete(), timeout=self.config.timeout_graceful_shutdown
+            )
+        except TimeoutError:
+            server_log.error(
+                "Cancel %s running task(s), timeout graceful shutdown exceeded",
+                len(self.server_state.tasks),
+            )
+            for task in self.server_state.tasks:
+                task.cancel(msg="Task cancelled, timeout graceful shutdown exceeded")
+        if not self.force_exit:
+            await self.lifespan.shutdown()
 
 
 def _port_in_use(port: int, host: str = "127.0.0.1") -> str | None:
