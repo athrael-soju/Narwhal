@@ -355,6 +355,54 @@ class DashboardTakeoverTests(PromtoolCase):
                 tests += samples_test(query, at, {claimed: 8} if at == mark else {})
         self.check(tests)
 
+    def test_the_takeover_marker_marks_a_single_router_that_claims_a_new_epoch(self):
+        """The marker compares each point with the one before, so it needs both samples."""
+        restarted = [
+            Router(
+                A,
+                [
+                    Phase(0, 305, "active", ready=1, epoch=7),
+                    Phase(305, 310, "down"),
+                    Phase(310, LENGTH, "active", ready=1, epoch=8),
+                ],
+            )
+        ]
+        claimed = series_labels("narwhal_router_lease_epoch", A)
+        tests = []
+        for step, mark in ((15, 315), (60, 360)):
+            query = marker_query("Router takeovers", step)
+            for at in range(step, LENGTH, step):
+                tests += samples_test(query, at, {claimed: 8} if at == mark else {})
+        # A restart spanning a point leaves no sample there, so no point is marked.
+        gap = [
+            Router(
+                A,
+                [
+                    Phase(0, 295, "active", ready=1, epoch=7),
+                    Phase(295, 305, "down"),
+                    Phase(305, LENGTH, "active", ready=1, epoch=8),
+                ],
+            )
+        ]
+        quiet = []
+        query = marker_query("Router takeovers", 15)
+        for at in range(15, LENGTH, 15):
+            quiet += samples_test(query, at, {})
+        self.run_promtool(restarted, ["    promql_expr_test:", *tests])
+        self.run_promtool(gap, ["    promql_expr_test:", *quiet])
+
+    def test_two_ready_routers_are_both_followed(self):
+        routers = [
+            Router(A, [Phase(0, LENGTH, "active", ready=1, epoch=7)]),
+            Router(B, [Phase(0, 300, "standby"), Phase(300, LENGTH, "active", ready=1, epoch=8)]),
+        ]
+        stat = panel_query("panel-1", "A")
+        pool = panel_query("panel-10", "A")
+        ready = {series_labels("narwhal_router_ready", r): 1 for r in (A, B)}
+        decode = {series_labels("narwhal_pool_instances", r, role="decode"): 2 for r in (A, B)}
+        tests = samples_test(stat, 450, ready) + samples_test(pool, 450, decode)
+        self.run_promtool(routers, ["    promql_expr_test:", *tests])
+
     def test_the_membership_marker_skips_the_takeover_and_the_restarted_standby(self):
         """The restarted router's generation changes after a step at which it was ready."""
         tests = []
