@@ -590,3 +590,25 @@ class OutputFloorTests(HttpHarness):
         self.assertEqual((short.status_code, served.status_code), (400, 200))
         self.assertIn("at least 2", short.json()["error"]["message"])
         self.assertEqual([row["status"] for row in self.terminal_rows()], [400, 200])
+
+
+class ShutdownReadinessTests(HttpHarness):
+    async def test_a_stopping_router_refuses_ready_and_still_serves_open_connections(self):
+        client = self.client()
+        self.assertEqual((await client.get("/ready")).status_code, 200)
+        client._transport.app.state.begin_shutdown()
+        ready = await client.get("/ready")
+        self.assertEqual(ready.status_code, 503)
+        body = ready.json()
+        # The standby's probe counts a refusal without control as a miss.
+        self.assertEqual(
+            (body["status"], body["control_ready"], body["reason"]),
+            ("not_ready", False, "shutting down"),
+        )
+        # The load balancer's fleet-state check fails too.
+        targets = await client.get("/narwhal/targets")
+        self.assertEqual(targets.status_code, 503)
+        self.assertEqual(targets.json()["error"]["reason"], "shutting down")
+        # A request that still reaches the router is served under the lease.
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assert_released()

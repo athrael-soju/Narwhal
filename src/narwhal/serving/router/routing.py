@@ -90,6 +90,8 @@ class NarwhalRouter:
             )
         # Standby takeover clears this flag after applying the primary's handoff.
         self.standby = False
+        # Set as shutdown begins: readiness and fleet-state reads refuse while requests serve.
+        self.stopping = False
         # Whether the standby's last probe found its primary controlling the fleet.
         self.primary_seen = False
         self.takeover_gap_s: float | None = None

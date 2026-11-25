@@ -126,7 +126,10 @@ async def require_control(request: HTTPRequest) -> None:
     A standby or fenced router holds the fleet file's state, or state from before it lost the
     lease, so its answer would misdescribe the fleet.
     """
-    if not controls_fleet(request.app.state.router):
+    router = request.app.state.router
+    # A stopping router refuses, so the load balancer's fleet-state check takes it out of
+    # rotation before it stops listening.
+    if router.stopping or not controls_fleet(router):
         raise FleetNotControlled
 
 
@@ -149,10 +152,15 @@ async def require_control_or_diagnostic(
 def control_lost_reason(router: NarwhalRouter) -> str:
     """Name why the router does not control the fleet.
 
-    The failover block comes first, then `shadowing` on a standby, then `lease expired`. `/ready`
+    The failover block comes first, then `shutting down` on a router that has begun to stop,
+    then `shadowing` on a standby, then `lease expired`. `/ready`
     can name another cause first, such as a whole-wave hold or degraded monitoring.
     """
-    return router.failover_blocked or ("shadowing" if router.standby else "lease expired")
+    return (
+        router.failover_blocked
+        or ("shutting down" if router.stopping else "")
+        or ("shadowing" if router.standby else "lease expired")
+    )
 
 
 async def not_controlling_response(request: HTTPRequest, exc: Exception) -> JSONResponse:
