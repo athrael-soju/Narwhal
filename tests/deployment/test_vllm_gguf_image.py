@@ -38,13 +38,20 @@ def archive(files: dict[str, bytes]) -> bytes:
 class GgufImageRecipeTests(unittest.TestCase):
     def test_dockerfile_pins_the_dev_template_runtime(self):
         text = (RECIPE / "Dockerfile").read_text()
+        requirements = (RECIPE / "requirements.txt").read_text()
         arguments = dict(re.findall(r"^ARG ([A-Z0-9_]+)=(\S+)$", text, re.M))
         template = json.loads((ROOT / "src/narwhal/dev/small-cuda-v1.json").read_text())["runtime"]
         packages = dict(re.findall(r"'([a-z0-9-]+)==([^']+)'", text))
-        packages["vllm-gguf-plugin"] = re.search(r"/vllm_gguf_plugin-([^-]+)-cp310", text)[1]
-        # The plugin's own requirement, installed beside it; the templates do not pin it.
-        self.assertEqual(packages.pop("gguf"), "0.19.0")
         self.assertEqual(packages, template["expected_packages"])
+        wheel = re.search(r"/vllm_gguf_plugin-([^-]+)-cp310", requirements)[1]
+        self.assertEqual(wheel, template["expected_packages"]["vllm-gguf-plugin"])
+        # pip installs exactly the two pinned files, each checked against its SHA-256.
+        entries = re.split(r"\n(?=\S)", re.sub(r"(?m)^#.*\n", "", requirements).strip())
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertRegex(entry, r"--hash=sha256:[0-9a-f]{64}$")
+        self.assertIn("--require-hashes", text)
+        self.assertIn("--no-deps", text)
         self.assertEqual(arguments["GGUF_PLUGIN_REVISION"], template["gguf_plugin_source_revision"])
         for name in ("gguf_plugin_python_sha256", "gguf_plugin_extension_sha256"):
             self.assertEqual(arguments[name.upper()], template[name])

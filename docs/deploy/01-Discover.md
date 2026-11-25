@@ -86,7 +86,7 @@ Discovery hashes the GGUF file with the rest of the directory and writes its SHA
 
 In each launch record, discovery pins the image's `vllm-gguf-plugin` version in `runtime.expected_packages`, and records `NARWHAL_GGUF_PLUGIN_PYTHON_SHA256` and `NARWHAL_GGUF_PLUGIN_EXTENSION_SHA256` as `runtime.gguf_plugin_python_sha256` and `runtime.gguf_plugin_extension_sha256`. It adds `--load-format gguf` and `--hf-config-path /model` to `runtime.extra_args` when `NARWHAL_ENGINE_ARGS` does not set them, and sets `runtime.tokenizer` to `/model` when `NARWHAL_TOKENIZER` is unset. The container mounts `NARWHAL_MODEL_DIR` at `/model`.
 
-When `config.json` has a `vision_config` or an `audio_config`, discovery also adds `--language-model-only`. vLLM then sets every multimodal input limit to 0, and the engine serves text prompts only.
+When `config.json` has a `vision_config` or an `audio_config`, discovery also adds `--language-model-only`. vLLM then sets every multimodal input limit to 0, and the engine serves text prompts only. To keep multimodal input, set `NARWHAL_LANGUAGE_MODEL_ONLY=false` in `.env` and stage the multimodal projector as in step 3.
 
 Discovery fails when:
 
@@ -98,7 +98,7 @@ Discovery fails when:
 
 #### Building a GGUF engine image
 
-[`deploy/vllm-gguf/Dockerfile`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/vllm-gguf/Dockerfile) builds a CUDA engine image from `vllm/vllm-openai:v0.30.0`, pinned by digest. It installs `vllm-gguf-plugin` 0.0.5 and `gguf` 0.19.0 and replaces the plugin's Python files with those at plugin revision `d4c1f0d082fc7cd4350da56689109a01c1f29d6c`, as the [dev CUDA runtime](../dev/CUDA-Runtime.md) does. The build fails unless the image holds the package versions and plugin digests of the vLLM dev templates.
+[`deploy/vllm-gguf/Dockerfile`](https://github.com/athrael-soju/Narwhal/blob/main/deploy/vllm-gguf/Dockerfile) builds a CUDA engine image from `vllm/vllm-openai:v0.30.0`, pinned by digest. It installs `vllm-gguf-plugin` 0.0.5 and `gguf` 0.19.0, each checked against the SHA-256 in `deploy/vllm-gguf/requirements.txt`, and replaces the plugin's Python files with those at plugin revision `d4c1f0d082fc7cd4350da56689109a01c1f29d6c`, as the [dev CUDA runtime](../dev/CUDA-Runtime.md) does. The build fails unless the image holds the package versions and plugin digests of the vLLM dev templates.
 
 Build the image once, then copy it to the engine hosts:
 
@@ -185,13 +185,13 @@ Keep the generated `config/` files together.
 
 The discovery output directory, mode 0700:
 
-| File                                                         | Content                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code and convolutional-state flags, fabric interface addresses, image runtime environment, and for a GGUF model `model_file` and `model_file_sha256` |
-| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                                                                                 |
-| `logs/`                                                      | SSH command logs                                                                                                                                                                                                                                                |
-| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                                                                                          |
-| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                                   |
+| File                                                         | Content                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine-<n>.json`                                            | GPU products and device mappings, image identity and package versions, model-config hash and dtype, custom-code, convolutional-state and `multimodal` flags, fabric interface addresses, image runtime environment, and for a GGUF model `model_file` and `model_file_sha256` |
+| `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                                                                                               |
+| `logs/`                                                      | SSH command logs                                                                                                                                                                                                                                                              |
+| `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                                                                                                        |
+| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                                                 |
 
 Reuse an inspected fleet:
 

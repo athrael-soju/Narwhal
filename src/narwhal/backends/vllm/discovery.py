@@ -42,7 +42,10 @@ def runtime(observed: dict, setting: Callable[[str, str], str]) -> dict:
         for flag, value in GGUF_ARGS:
             if flag not in args:
                 args.extend((flag, value))
-        if observed.get("multimodal") and LANGUAGE_MODEL_ONLY not in args:
+        text_only = setting("LANGUAGE_MODEL_ONLY", "")
+        if text_only not in ("", "true", "false"):
+            raise ValueError("set LANGUAGE_MODEL_ONLY to true or false in .env")
+        if observed.get("multimodal") and text_only != "false" and LANGUAGE_MODEL_ONLY not in args:
             args.append(LANGUAGE_MODEL_ONLY)
         launch.setdefault("tokenizer", MODEL_MOUNT)
         for name in GGUF_PLUGIN_PINS:

@@ -286,6 +286,19 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(
             launches["engines"]["engine-1"]["runtime"]["extra_args"][-1], "--language-model-only"
         )
+        # The operator keeps multimodal input for one engine or for the fleet.
+        env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"] = "false"
+        _, launches, _, _ = records(multimodal)
+        self.assertIn(
+            "--language-model-only", launches["engines"]["engine-1"]["runtime"]["extra_args"]
+        )
+        self.assertNotIn(
+            "--language-model-only", launches["engines"]["engine-2"]["runtime"]["extra_args"]
+        )
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "no"
+        with self.assertRaisesRegex(ValueError, "engine-1: set LANGUAGE_MODEL_ONLY to true"):
+            records(multimodal)
+        del env["NARWHAL_LANGUAGE_MODEL_ONLY"], env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"]
         env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--hf-config-path", "/model/config"])
         _, launches, _, _ = records()
         self.assertEqual(
