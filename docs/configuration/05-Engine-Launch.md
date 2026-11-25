@@ -127,7 +127,7 @@ If you leave a field unset and the table gives no default, the engine uses its o
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
-Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device`, the launcher also bounds a TensorRT-LLM engine's KV cache to `shared_device.gpu_memory_utilization` times the GPU's memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
+Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `shared_device.gpu_memory_utilization` times the GPU's memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
 
 ### vLLM runtime fields
 
@@ -172,9 +172,10 @@ On an earlier SGLang release, for a model with SSM state, discovery adds `--mamb
 
 With `NARWHAL_ENGINE_BACKEND=trtllm`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) sets `runtime.backend` to `trtllm` and `runtime.connector` to `NARWHAL_ENGINE_CONNECTOR`: `ucx`, the default, or `nixl`. Discovery fails when `NARWHAL_KV_EVENTS` is `true`.
 
-A TensorRT-LLM record adds two optional fields:
+A TensorRT-LLM record adds three optional fields:
 
-- `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine on a shared GPU for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
+- `bound_kv_cache`, `false` by default, applies the bound of a shared GPU to an engine on a GPU of its own when `true`. The Narwhal dev TensorRT-LLM runtime sets it.
+- `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
 - `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
 `expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`. `extra_args` accepts the options `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`, each with a value, and the flag `--trust_remote_code`.
@@ -222,7 +223,7 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 
 `peer_release` is `true` for an engine without CUDA IPC peers. For an engine with CUDA IPC peers, it is `true` only when UCX is 1.22 or later and `UCX_CUDA_IPC_CACHE` is off. When it is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 
-On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
+On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` and `start-native` compare the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
 
 Record the application revision, launcher digest and container ID with each deployment.
 

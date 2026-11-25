@@ -215,15 +215,15 @@ def _main(argv: list[str]) -> int:
                 "--gpu-memory-utilization",
                 type=float,
                 help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
-                "engine-count * fraction <= device-allowance "
-                "(default: template value)",
+                "on one shared GPU, engine-count * fraction <= device-allowance, and with "
+                "--gpus, fraction <= device-allowance (default: template value)",
             )
             action.add_argument(
                 "--device-allowance",
                 type=float,
                 help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
-                "engine fractions; bounds startup memory increase "
-                "(default: template value)",
+                "the fractions of the engines on one GPU; on a shared GPU, bounds the free "
+                "memory init requires and the startup memory increase (default: template value)",
             )
             action.add_argument(
                 "--engine-memory-mib",
@@ -234,8 +234,9 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--device-memory-mib",
                 type=int,
-                help="GPU memory all engines may take in MiB, at least --engine-count times "
-                "--engine-memory-mib (default: template value, installed 7168 or 9728)",
+                help="GPU memory the engines on one GPU may take in MiB: on a shared GPU, at "
+                "least --engine-count times --engine-memory-mib, and with --gpus, at least "
+                "--engine-memory-mib (default: template value, installed 7168, 9728 or 13312)",
             )
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"

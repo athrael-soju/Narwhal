@@ -215,7 +215,7 @@ class SharedGpuTests(unittest.TestCase):
             (Path(folder) / "training_args.bin").write_bytes(b"\0" * MIB)
             self.assertEqual(weight_bytes(folder), 2 * MIB)
 
-    def test_only_a_shared_launch_carries_the_reserve(self):
+    def test_a_shared_or_bounded_launch_carries_the_reserve(self):
         from narwhal.backends.trtllm.plan import serve_args
         from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
 
@@ -228,6 +228,10 @@ class SharedGpuTests(unittest.TestCase):
         self.assertNotIn(SHARED_GPU_FLAG, args())
         shared = args(shared_device={"gpu_memory_utilization": 0.4})
         self.assertEqual(shared[shared.index(SHARED_GPU_FLAG) + 1], "4096")
+        # An engine on a GPU of its own takes the same bound with runtime.bound_kv_cache.
+        bounded = args(runtime={**runtime, "bound_kv_cache": True})
+        self.assertEqual(bounded[bounded.index(SHARED_GPU_FLAG) + 1], "4096")
+        self.assertNotIn(SHARED_GPU_FLAG, args(runtime={**runtime, "bound_kv_cache": False}))
 
 
 class TrtllmMetricsTests(unittest.TestCase):

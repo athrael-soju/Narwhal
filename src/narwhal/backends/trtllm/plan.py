@@ -27,7 +27,7 @@ MIN_KV_LEASE_S = 6
 MAX_BATCH_SIZE = 64
 # The scheduler's token budget per iteration; chunked prefill serves longer prompts.
 MAX_NUM_TOKENS = 8192
-# MiB an engine on a shared GPU holds for activations, CUDA graphs and transfer buffers.
+# MiB a bounded engine holds for activations, CUDA graphs and transfer buffers.
 MEMORY_RESERVE_MIB = 8192
 VALUE_OPTIONS = {
     "--free_gpu_memory_fraction",
@@ -87,6 +87,8 @@ def validate_runtime(runtime: dict) -> None:
     reserve = runtime.get("memory_reserve_mib", MEMORY_RESERVE_MIB)
     if type(reserve) is not int or reserve < 1:
         raise ValueError("runtime.memory_reserve_mib must be a positive integer")
+    if type(runtime.get("bound_kv_cache", False)) is not bool:
+        raise ValueError("runtime.bound_kv_cache must be true or false")
     check_settings(runtime, SETTINGS)
     check_extra_args(runtime.get("extra_args", []), VALUE_OPTIONS, FLAG_OPTIONS)
     if runtime.get("kv_events") is True:
@@ -161,7 +163,7 @@ def serve_args(record: dict, *, model: str, served_name: str, host: str, port: i
     if "tokenizer" in runtime:
         args += ["--tokenizer", runtime["tokenizer"]]
     args += setting_args(runtime, SETTINGS, "prefix_caching")
-    if record.get("shared_device") is not None:
+    if record.get("shared_device") is not None or runtime.get("bound_kv_cache") is True:
         # The wrapper bounds the KV cache to the engine's share of the GPU.
         args += [SHARED_GPU_FLAG, str(runtime.get("memory_reserve_mib", MEMORY_RESERVE_MIB))]
     return [*args, *runtime.get("extra_args", [])]

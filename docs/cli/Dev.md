@@ -116,16 +116,16 @@ With `--format json`, the command prints a [versioned command result](../Command
 
 ### One GPU per engine
 
-With `--gpus`, `init` gives engine `n` the `n`th GPU of the list and writes no `shared_device` group to `fleet.json`. It uses the first `--engine-count` GPUs of the list and records them in order as `gpu_uuids` in `instance.json`.
+With `--gpus`, `init` gives engine `n` the `n`th GPU of the list and writes no `shared_device` group to `fleet.json`. It uses the first `--engine-count` GPUs of the list and records them in order as `gpu_uuids` in `instance.json`. Templates that start their engines directly, the llama.cpp templates, refuse `--gpus`.
 
 The memory options then apply to each GPU, which holds one engine:
 
 - `init` converts `--engine-memory-mib` and `--device-memory-mib` to fractions of the smallest of the engines' GPUs.
 - `--device-memory-mib` must be at least `--engine-memory-mib`, and `--device-allowance` at least `--gpu-memory-utilization`.
-- `init` checks the free memory of each engine's GPU against the allowance plus `gpu.reserve_mib`, and requires the engines' GPUs to share one product name.
-- `up` starts the engines with [`narwhal-engine start-native`](Engine.md#own-gpu-startup), which starts each engine when its GPU's free memory covers its fraction. No device allowance bounds an engine's memory growth during startup.
+- `init` requires each engine's GPU to have free memory for the engine's fraction plus `gpu.reserve_mib`, about 3,380 MiB for the small vLLM and SGLang templates and 6,660 MiB for the small TensorRT-LLM template. It also requires the engines' GPUs to share one product name.
+- `up` starts the engines with [`narwhal-engine start-native`](Engine.md#own-gpu-startup), which starts each engine when its GPU's free memory covers its fraction and records the engine's memory growth on that GPU in `native-start.json`.
 
-An engine of this fleet can [leave the router and rejoin it](../Dev-Runtime.md#removing-and-rejoining-an-engine) while the fleet runs, on vLLM, SGLang and TensorRT-LLM. A llama.cpp fleet has no engine contract, so its router refuses both.
+An engine of this fleet can [leave the router and rejoin it](../Dev-Runtime.md#removing-and-rejoining-an-engine) while the fleet runs, on vLLM, SGLang and TensorRT-LLM.
 
 To serve another model or runtime, write a [custom template](../Dev-Runtime.md#template-and-gpu-allocation) and select it with `--template`.
 

@@ -12,8 +12,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from narwhal.backends.vllm import dev as vllm_dev
 from narwhal.config import FleetConfig
+from narwhal.config.loading import read_engine_spec
 from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine.plan import option
 from narwhal.dev import lifecycle, template
@@ -144,13 +147,17 @@ class MultiGpuInitTests(Instance):
         runtime = lifecycle.read(self.root / "engine-launch.json")["engines"]["engine-1"]["runtime"]
         self.assertEqual(option(runtime["extra_args"], "--gpu-memory-utilization"), "0.35")
         shutil.rmtree(self.root)
-        # Each GPU needs free memory for the allowance and the reserve.
-        self.memory["GPU-bbbb"] = {"total_mib": 8192, "used_mib": 1000}
+        # Each GPU needs free memory for its engine's fraction and the reserve.
+        self.memory["GPU-bbbb"] = {"total_mib": 8192, "used_mib": 4800}
+        self.initialize(gpu_uuids=GPUS[:2])
+        shutil.rmtree(self.root)
+        self.memory["GPU-bbbb"] = {"total_mib": 8192, "used_mib": 5000}
         with self.assertRaisesRegex(
-            ValueError, "GPU GPU-bbbb VRAM reserve failed: 7192 MiB free, 7680 MiB required"
+            ValueError, "GPU GPU-bbbb VRAM reserve failed: 3192 MiB free, 3379 MiB required"
         ):
             self.initialize(gpu_uuids=GPUS[:2])
         self.assertFalse(self.root.exists())
+        self.memory["GPU-bbbb"] = {"total_mib": 8192, "used_mib": 0}
         with self.assertRaisesRegex(ValueError, "an engine of 8000 MiB exceeds the 7168 MiB"):
             self.initialize(gpu_uuids=GPUS[:2], engine_memory_mib=8000, device_memory_mib=7168)
         # The smallest GPU sets the fractions.
@@ -170,6 +177,11 @@ class MultiGpuInitTests(Instance):
             ({"gpu_uuids": ["GPU-aaaa", "GPU-aaaa"]}, "names GPU-aaaa more than once"),
             ({"gpu_uuids": ["GPU-aaaa", "0"]}, "start with GPU-"),
             ({"gpu_uuids": ["GPU-aaaa", "GPU-eeee"]}, "nvidia-smi lists no GPU GPU-eeee"),
+            # The GPUs past the engine count are checked too.
+            (
+                {"gpu_uuids": ["GPU-aaaa", "GPU-bbbb", "GPU-eeee"]},
+                "nvidia-smi lists no GPU GPU-eeee",
+            ),
             ({"gpu_uuids": GPUS[:2], "gpu_uuid": "GPU-aaaa"}, "--gpu or a GPU per engine"),
         ):
             with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, message):
@@ -191,14 +203,17 @@ class MultiGpuInitTests(Instance):
         # The same list reuses the instance; another list, or one shared GPU, conflicts.
         code, output, _ = self.cli("--gpus", ",".join(GPUS))
         self.assertEqual((code, json.loads(output)["status"]), (0, "reused"))
-        for flags, conflict in (
-            (("--gpus", "GPU-aaaa,GPU-cccc,GPU-bbbb"), "--gpus"),
-            (("--gpu", "GPU-aaaa"), "--gpu"),
+        for flags, detail in (
+            (("--gpus", "GPU-aaaa,GPU-cccc,GPU-bbbb"), "conflicts with --gpus"),
+            (("--gpu", "GPU-aaaa"), "conflicts with --gpu"),
+            # Reuse checks the whole list as a fresh init does.
+            (("--gpus", ",".join([*GPUS, "GPU-eeee"])), "nvidia-smi lists no GPU GPU-eeee"),
+            (("--gpus", ",".join([*GPUS[:3], "GPU-aaaa"])), "names GPU-aaaa more than once"),
         ):
             with self.subTest(flags=flags):
                 code, output, errors = self.cli(*flags)
                 self.assertEqual((code, output), (2, ""))
-                self.assertIn(f"conflicts with {conflict}", errors)
+                self.assertIn(detail, errors)
 
     def test_the_cli_refuses_an_empty_entry_and_both_gpu_options(self):
         for flags in (("--gpus", "GPU-aaaa,,GPU-bbbb"), ("--gpu", "GPU-a", "--gpus", "GPU-b")):
@@ -213,6 +228,23 @@ class MultiGpuInitTests(Instance):
         code, _, errors = self.cli("--gpus", "GPU-aaaa,GPU-bbbb")
         self.assertEqual(code, 2)
         self.assertIn("conflicts with --gpus", errors)
+
+    def test_a_trtllm_engine_on_its_own_gpu_keeps_the_bound_to_its_share(self):
+        from narwhal.backends.trtllm import dev as trtllm_dev
+        from narwhal.backends.trtllm.plan import serve_args
+        from narwhal.backends.trtllm.runtime import SHARED_GPU_FLAG
+
+        spec = template._read_template("small-cuda-trtllm-v1.json")
+        runtime = trtllm_dev.runtime(spec["runtime"], self.model, 0.075)
+        self.assertIs(runtime["bound_kv_cache"], True)
+        args = serve_args(
+            {"runtime": runtime, "tensor_parallel_size": 1},
+            model=str(self.model),
+            served_name="m",
+            host="127.0.0.1",
+            port=1,
+        )
+        self.assertEqual(args[args.index(SHARED_GPU_FLAG) + 1], "3072")
 
     def test_a_template_that_starts_its_engines_directly_takes_no_gpu_list(self):
         spec = template._read_template("direct-qwen35-08b-v1.json")
@@ -341,7 +373,8 @@ class DevFleetRejoinTests(test_join.JoinHarness):
         instance.setUp()
         self.addCleanup(instance.doCleanups)
         instance.initialize(gpu_uuids=GPUS[:3], engine_count=3)
-        cfg = attested(FleetConfig.load(instance.root / "fleet.json"), instance.parent)
+        self.fleet_path = instance.root / "fleet.json"
+        cfg = attested(FleetConfig.load(self.fleet_path), instance.parent)
         with (
             patch.object(test_join, "fleet", return_value=cfg),
             patch.object(test_join.JoinHarness, "bind_profile"),
@@ -356,6 +389,33 @@ class DevFleetRejoinTests(test_join.JoinHarness):
         # The harness's candidate is a member of this fleet, so its own routes answer.
         with patch.object(test_join, "NEW", self.cfg.engines[0]):
             return super().http(request)
+
+    async def test_the_documented_requests_remove_and_rejoin_an_engine(self):
+        # Dev-Runtime saves the engine's entry from the fleet file and posts it back.
+        fleet = json.loads(self.fleet_path.read_text())
+        saved = json.dumps(next(e for e in fleet["engines"] if e["iid"] == "n3"))
+        departed = next(spec for spec in self.cfg.engines if spec.iid == "n3")
+        self.assertEqual(read_engine_spec(json.loads(saved)), departed)
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self.app), base_url="http://router"
+        )
+        self.addAsyncCleanup(client.aclose)
+        capture = AsyncMock(return_value=({"n3": 100.0}, {}))
+        with patch.object(leave, "capture_process_identities", capture):
+            left = await client.delete("/narwhal/engines/n3", params={"deadline_s": 300})
+        self.assertEqual(left.status_code, 200, left.text)
+        listed = (await client.get("/narwhal/engines")).json()
+        self.assertEqual(
+            (listed["generation"], [e["iid"] for e in listed["engines"]]), (1, ["n1", "n2"])
+        )
+        joined = await client.post(
+            "/narwhal/engines", content=saved, headers={"content-type": "application/json"}
+        )
+        self.assertEqual(joined.status_code, 200, joined.text)
+        self.assertTrue(joined.json()["join"]["joined"])
+        listed = (await client.get("/narwhal/engines")).json()
+        self.assertEqual(listed["generation"], 2)
+        self.assertEqual([e["iid"] for e in listed["engines"]], ["n1", "n2", "n3"])
 
     async def test_a_departed_engine_rejoins_with_its_profile(self):
         capture = AsyncMock(return_value=({"n3": 100.0}, {}))

@@ -210,7 +210,7 @@ def _select_gpus(
             raise ValueError("select exactly one physical GPU with gpu_uuid")
         return selected
     found = {row["uuid"]: row for row in rows}
-    missing = [uuid for uuid in gpu_uuids[:count] if uuid not in found]
+    missing = [uuid for uuid in gpu_uuids if uuid not in found]
     if missing:
         raise ValueError(f"nvidia-smi lists no GPU {', '.join(missing)}")
     selected = [found[uuid] for uuid in gpu_uuids[:count]]
@@ -387,10 +387,11 @@ def materialize(
             if value is not None and value != existing.get(field):
                 conflicts.append(flag)
         # The engines run on the first GPUs of the list, one each.
-        if gpu_uuids is not None and gpu_uuids[: existing["engine_count"]] != existing.get(
-            "gpu_uuids"
-        ):
-            conflicts.append("--gpus")
+        if gpu_uuids is not None:
+            _check_gpu_list(gpu_uuids, existing["engine_count"])
+            _select_gpus(_gpu_rows(), None, gpu_uuids, existing["engine_count"])
+            if gpu_uuids[: existing["engine_count"]] != existing.get("gpu_uuids"):
+                conflicts.append("--gpus")
         conflicts.extend(
             "--" + field.replace("_", "-")
             for field in (*_FRACTIONS, *_MIB)
@@ -499,9 +500,11 @@ def materialize(
         _check_budgets(needs, per_gpu)
     fraction = spec["allocation"]["gpu_memory_utilization"]
     allowance = spec["allocation"]["device_allowance"]
+    # A shared GPU holds the whole allowance; a GPU of its own holds one engine's fraction.
+    held = allowance if gpu_uuids is None else fraction
     for uuid, memory in memories.items():
         available = memory["total_mib"] - memory["used_mib"]
-        required = int(memory["total_mib"] * allowance) + spec["gpu"]["reserve_mib"]
+        required = int(memory["total_mib"] * held) + spec["gpu"]["reserve_mib"]
         if available < required:
             raise ValueError(
                 ("GPU VRAM" if gpu_uuids is None else f"GPU {uuid} VRAM")

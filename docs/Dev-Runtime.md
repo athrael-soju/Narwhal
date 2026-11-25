@@ -256,8 +256,6 @@ On a host with several NVIDIA GPUs, `narwhal dev init --gpus` runs each engine o
 
 The router refuses a removal that would leave fewer than `controller.min_prefill` plus `controller.min_decode` engines, 2 in the installed templates, so remove an engine only from a fleet of three or more.
 
-On its own GPU, a TensorRT-LLM engine's KV cache takes `--free_gpu_memory_fraction` of the memory left free after the model loads, without the bound to the engine's share of total VRAM.
-
 ### Removing and rejoining an engine
 
 The engines of an instance are `n1` to `n<count>`, and the router listens at `http://127.0.0.1:18000` with the installed ports.
