@@ -76,6 +76,15 @@ PY
 
 The join requires a store with a profile for each member and the new engine. A removal leaves the engine's rows in the store. A merge whose `--fleet` file omits the engine drops them, as the [store update after a removal](#update-the-fleet-file-and-the-profile-store) does, and as step 6 below does for another engine's join once the fleet file omits it. An engine that rejoins while the store still holds its rows, with the [process generation](../configuration/01-Fleet-Schema.md#attestation) of its stored profile, needs no new profile, so skip this section.
 
+When the new engine runs the same launch and model files as a member, on the same GPU type, copy that member's profile in place of steps 1 to 4. Replace `e0` with the member:
+
+```bash
+.venv/bin/narwhal-profile --fleet "$RUN_DIR/fleet-with-$IID.json" \
+  --copy-from e0 --only "$IID" --out "runs/profiles-$IID-$STAMP.json"
+```
+
+The copy needs no drained peer. It refuses an engine whose generation digest or KV capacity differs from the member's profile, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes; profile that engine with steps 1 to 4. Then continue at step 5.
+
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 
     ```bash

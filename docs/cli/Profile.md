@@ -52,10 +52,11 @@ These options select engines, choose the mode, and set the output files:
 | `--version` | | Print the installed distribution version. |
 | `--format` | `text` | Output format, either `text` or `json` for [versioned command results](../Command-Results.md). |
 | `--fleet PATH` | required | Fleet configuration file that defines engine membership for every mode. |
-| `--only IID` | every engine | Engine `iid` to include in a live sweep, repeatable. |
+| `--only IID` | every engine | Engine `iid` to include in a live sweep, repeatable, or the one engine that `--copy-from` writes a profile for. |
 | `--refit-samples PATH` | optional | Sample sidecar to refit. |
 | `--merge PATH` | optional | Profile store to combine, read with its matching sample sidecar, repeatable. |
-| `--out PATH` | optional | New profile store, written with a matching sample sidecar. Required for `--refit-samples` and `--merge`. A live sweep writes here in place of `profiles.path`. |
+| `--copy-from IID` | optional | Member whose measured profile at `profiles.path` to copy to the `--only` engine, as [Copying a member's profile](#copying-a-members-profile) describes. |
+| `--out PATH` | optional | New profile store, written with a matching sample sidecar. Required for `--refit-samples`, `--merge` and `--copy-from`. A live sweep writes here in place of `profiles.path`. |
 | `--limits PATH` | requested concurrency points | [`profiling-limits.json`](../deploy/06-Profile-and-Preflight.md) with each engine's `runtime.max_sequences`, above which the profiler drops decode concurrency points. |
 | `--observation-timeout-s SECONDS` | each probe's built-in timeout | Finite, positive HTTP timeout for every live probe. |
 | `--overwrite` | `false` | Replace the live profile store and sample sidecar, starting when the first engine completes. |
@@ -69,11 +70,12 @@ The mode options depend on each other:
 | --- | --- | --- |
 | `--refit-samples` | `--out`, and samples covering every fleet engine | `--only`, `--merge` |
 | `--merge` | `--out` | `--only`, `--overwrite`, `--refit-samples` |
+| `--copy-from` | `--out`, and one `--only` | `--merge`, `--overwrite`, `--refit-samples` |
 | `--out` | A store path and sidecar path that do not exist yet | `--overwrite` |
-| `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge` |
-| `--metrics-url` | A live sweep | `--refit-samples`, `--merge` |
-| `--router-url` | A live sweep | `--no-router`, `--refit-samples`, `--merge` |
-| `--no-router` | A live sweep | `--router-url`, `--refit-samples`, `--merge` |
+| `--observation-timeout-s` | A live sweep | `--refit-samples`, `--merge`, `--copy-from` |
+| `--metrics-url` | A live sweep | `--refit-samples`, `--merge`, `--copy-from` |
+| `--router-url` | A live sweep | `--no-router`, `--refit-samples`, `--merge`, `--copy-from` |
+| `--no-router` | A live sweep | `--router-url`, `--refit-samples`, `--merge`, `--copy-from` |
 
 With `--only`, `--overwrite` writes a store that holds only the selected engines' profiles.
 
@@ -87,7 +89,19 @@ Run each mode with:
 narwhal-profile --fleet fleet.json
 narwhal-profile --fleet fleet.json --refit-samples profiles.samples.json --out refitted.json
 narwhal-profile --fleet fleet.json --merge split-1.json --merge split-2.json --out combined.json
+narwhal-profile --fleet fleet.json --copy-from e0 --only e4 --out copied.json
 ```
+
+### Copying a member's profile
+
+`--copy-from` gives a new engine the measured profile of a member without a sweep, so the new engine needs no drained peer and no idle time. It reads the member's row at `profiles.path` and the matching evidence in its sample sidecar, then checks the `--only` engine, which must be in the `--fleet` file:
+
+- The fleet sets a complete `engine_contract`.
+- The engine's attestation matches the contract, and its generation digest equals the member's profiled `generation_digest`. The digest covers the contract, the launch arguments other than per-engine flags such as ports, the image, the expected packages, and the model files in `model_config_sha256`, `model_tree_sha256` and `model_sha256`.
+- The engine reports the same KV capacity, in tokens, as the member's `kv_capacity_tokens`.
+- The member's profile is measured, not nominal, and outside a shared-device group.
+
+Any failed check stops the copy with exit code 2 and no output. The attestation does not record the GPU model, so copy a profile only between engines on the same GPU type. The output store holds only the new engine's row, and its sample sidecar records the member's evidence, the new engine's generation evidence and `copied_from`, the member and the store it came from. Merge it into the fleet's store as you would a swept profile.
 
 ## Prefill and decode sweeps
 
