@@ -58,6 +58,7 @@ class SglangGroup:
         # Each engine launches as prefill.
         self.roles = dict.fromkeys(hosts, Role.PREFILL)
         self.inflight = dict.fromkeys(hosts, 0)
+        self.finished = dict.fromkeys(hosts, 0)
         self.received = []
         self.busy_controls = []
         self.flush_timeouts = []
@@ -85,6 +86,16 @@ class SglangGroup:
             return httpx.Response(200)
         if path == "/health":
             return httpx.Response(200)
+        if path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    f'sglang:num_running_reqs{{model_name="m"}} {self.inflight[host]}.0\n'
+                    'sglang:num_queue_reqs{model_name="m"} 0.0\n'
+                    'sglang:num_requests_total{is_streaming="false",model_name="m"} '
+                    f"{self.finished[host]}.0\n"
+                ),
+            )
         body = json.loads(request.content)
         role = self.roles[host]
         self.received.append(
@@ -103,6 +114,7 @@ class SglangGroup:
                 await asyncio.sleep(0.02 if body["prompt"] == "neighbour" else 0.002)
             finally:
                 self.inflight[host] -= 1
+                self.finished[host] += 1
 
         task = asyncio.ensure_future(serve())
         self.serving.add(task)
@@ -158,6 +170,7 @@ def sglang_engines(cfg, group, measured):
     with (
         colocated_run(group.handle, measured),
         patch.object(pairing_probe, "attested_launches", AsyncMock(return_value=launches)),
+        patch.object(fleet_probe, "SERVING_WINDOW_S", 0.05),
     ):
         yield
 
@@ -558,3 +571,139 @@ class SweepRoleRestoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)
         measured.assert_not_called()
         self.assertEqual((switches, after), ([], before))
+
+
+def metrics_text(text):
+    return httpx.Response(200, text=text)
+
+
+class ServingPeerTests(unittest.IsolatedAsyncioTestCase):
+    """An SGLang sweep refuses, before any switch or request, an engine that serves traffic."""
+
+    def setUp(self):
+        switcher = load_backend("sglang").role_switcher("mooncake")
+        for state in (switcher._received, switcher._generations):
+            saved = dict(state)
+            state.clear()
+            self.addCleanup(lambda state=state, saved=saved: (state.clear(), state.update(saved)))
+
+    async def sweep(self, metrics=None):
+        """Profile e0 of four engines, so e1 is its peer; `metrics(iid, scrape)` sets /metrics."""
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = fleet(Path(folder), engines=("e0", "e1", "e2", "e3"))
+            cfg.backend, cfg.connector = "sglang", "mooncake"
+            cfg.profiles_path = Path(folder) / "swept.json"
+            group = SglangGroup(cfg)
+            iids = {httpx.URL(spec.url).host: spec.iid for spec in cfg.engines}
+            requests = []
+            scrapes = dict.fromkeys(iids.values(), 0)
+
+            async def handle(request):
+                iid = iids[request.url.host]
+                requests.append((iid, request.url.path))
+                if request.url.path == "/metrics" and metrics is not None:
+                    scrapes[iid] += 1
+                    text = metrics(iid, scrapes[iid])
+                    if text is not None:
+                        return text
+                return await group.handle(request)
+
+            async def measured(client, iid, *args, roles, **kwargs):
+                await roles(Role.PREFILL)
+                await roles(Role.DECODE)
+                return profile(iid)
+
+            measure = AsyncMock(side_effect=measured)
+            with (
+                sglang_engines(cfg, SimpleNamespace(handle=handle), measure),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                try:
+                    outcome = await fleet_probe.run(cfg, {"e0"}, split_lanes=False)
+                except RuntimeError as exc:
+                    outcome = exc
+            stored = cfg.profiles_path.exists()
+        return outcome, requests, measure, stored
+
+    def assert_refused(self, swept, message):
+        outcome, requests, measure, stored = swept
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertRegex(str(outcome), message)
+        # The profiler read only the engines' metrics: no switch, cache reset or request.
+        self.assertEqual({path for _, path in requests}, {"/metrics"})
+        measure.assert_not_called()
+        self.assertFalse(stored)
+
+    async def test_a_peer_that_holds_requests_is_refused_before_any_switch(self):
+        def busy(iid, scrape):
+            text = 'sglang:num_prefill_inflight_queue_reqs{tp_rank="0"} 3\n'
+            return metrics_text(text) if iid == "e1" else None
+
+        swept = await self.sweep(busy)
+        self.assert_refused(swept, r"peer e1 \(3 held, 0 finished in [0-9.]+ s\)")
+        self.assertIn("POST /narwhal/lifecycle/drain", str(swept[0]))
+        self.assertNotIn("e0 (", str(swept[0]))
+
+    async def test_a_peer_that_finishes_requests_between_scrapes_is_refused(self):
+        def bursty(iid, scrape):
+            # The engine holds no request at either scrape and finishes 7 between them.
+            text = (
+                "sglang:num_running_reqs 0\n"
+                f'sglang:num_requests_total{{is_streaming="true"}} {100 + 7 * (scrape - 1)}\n'
+            )
+            return metrics_text(text) if iid == "e1" else None
+
+        self.assert_refused(await self.sweep(bursty), r"peer e1 \(0 held, 7 finished")
+
+    async def test_a_busy_target_is_named_without_the_peer_prefix(self):
+        def busy(iid, scrape):
+            text = "sglang:num_running_reqs 2\nsglang:num_queue_reqs 1\n"
+            return metrics_text(text) if iid == "e0" else None
+
+        self.assert_refused(
+            await self.sweep(busy), r"still serve requests: e0 \(3 held, 0 finished"
+        )
+
+    async def test_unreadable_metrics_are_refused(self):
+        def missing(iid, scrape):
+            return httpx.Response(404) if iid == "e1" else None
+
+        self.assert_refused(
+            await self.sweep(missing), "cannot read the requests of e1 from /metrics"
+        )
+
+    async def test_an_idle_peer_passes_after_two_scrapes_of_each_switched_engine(self):
+        outcome, requests, measure, stored = await self.sweep()
+        self.assertEqual(outcome, 0)
+        self.assertTrue(stored)
+        measure.assert_awaited_once()
+        first = next(i for i, (_, path) in enumerate(requests) if path != "/metrics")
+        self.assertEqual(
+            sorted(requests[:first]), sorted([("e0", "/metrics"), ("e1", "/metrics")] * 2)
+        )
+        self.assertIn(("e1", "/pd_role_switch"), requests)
+
+    async def test_a_request_held_at_one_scrape_only_passes(self):
+        # A health check, or a request that starts and ends inside the window, counts no finish.
+        def transient(iid, scrape):
+            held = 1 if iid == "e1" and scrape == 1 else 0
+            return metrics_text(f"sglang:num_running_reqs {held}\n")
+
+        outcome, *_ = await self.sweep(transient)
+        self.assertEqual(outcome, 0)
+
+    def test_priority_series_count_once(self):
+        text = (
+            'sglang:num_running_reqs{model_name="m",priority=""} 2\n'
+            'sglang:num_running_reqs{model_name="m",priority="1"} 2\n'
+            'sglang:num_decode_transfer_queue_reqs{model_name="m"} 1\n'
+            "sglang:num_requests_created 1.7e9\n"
+        )
+        self.assertEqual(load_backend("sglang").metrics.held_requests(text), 3)
+        self.assertEqual(load_backend("sglang").metrics.finished_requests(text), 0)
+        self.assertIsNone(load_backend("vllm").metrics.held_requests(text))
+
+    def test_lane_workers_skip_the_check_their_parent_ran(self):
+        with patch.object(fleet_probe, "run", new=AsyncMock(return_value=0)) as run:
+            fleet_probe._lane_worker(SimpleNamespace(), {"e0"}, None, None, None, None, [])
+        self.assertIs(run.await_args.kwargs["serving_checked"], True)
