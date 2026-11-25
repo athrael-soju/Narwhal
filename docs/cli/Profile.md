@@ -97,11 +97,11 @@ narwhal-profile --fleet fleet.json --copy-from e0 --only e4 --out copied.json
 `--copy-from` gives a new engine the measured profile of a member without a sweep, so the new engine needs no drained peer and no idle time. It reads the member's row at `profiles.path` and the matching evidence in its sample sidecar, then checks the `--only` engine, which must be in the `--fleet` file:
 
 - The fleet sets a complete `engine_contract`.
-- The engine's attestation matches the contract, and its generation digest equals the member's profiled `generation_digest`. The digest covers the contract, the launch arguments other than per-engine flags such as ports, the image, the expected packages, and the model files in `model_config_sha256`, `model_tree_sha256` and `model_sha256`.
+- The engine's attestation matches the contract, and its launch evidence matches the generation evidence of the member's profile: the launch arguments other than per-engine flags such as ports, the image, the expected packages, the launcher code, and the model files in `model_config_sha256`, `model_tree_sha256` and `model_sha256`. The check leaves out `launch_sha256`, the digest of each engine's whole launch file, because ports and devices make it differ between engines. It therefore does not compare the engines' environment variables, so give the new engine the member's runtime environment.
 - The engine reports the same KV capacity, in tokens, as the member's `kv_capacity_tokens`.
 - The member's profile is measured, not nominal, and outside a shared-device group.
 
-Any failed check stops the copy with exit code 2 and no output. The attestation does not record the GPU model, so copy a profile only between engines on the same GPU type. The output store holds only the new engine's row, and its sample sidecar records the member's evidence, the new engine's generation evidence and `copied_from`, the member and the store it came from. Merge it into the fleet's store as you would a swept profile.
+Any failed check stops the copy with exit code 2 and no output. The attestation does not record the GPU model, so copy a profile only between engines on the same GPU type. The output store holds only the new engine's row, bound to the new engine's own generation digest, and its sample sidecar records the member's evidence, the new engine's generation evidence and `copied_from`, the member and the store it came from. Merge it into the fleet's store as you would a swept profile.
 
 ## Prefill and decode sweeps
 

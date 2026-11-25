@@ -30,10 +30,14 @@ class ProfileCopyTests(unittest.IsolatedAsyncioTestCase):
         self.cfg = fleet(self.root, engines=("e0", "e1", "e3"))
         self.by_host = {httpx.URL(spec.url).host: spec.iid for spec in self.cfg.engines}
         contract = self.cfg.engine_contract
-        document = AttestationDocument(
-            contract, dict.fromkeys(contract.fields(), "fixture"), launch=LAUNCH
-        )
-        self.documents = {spec.iid: document for spec in self.cfg.engines}
+        sources = dict.fromkeys(contract.fields(), "fixture")
+        # As on a live fleet, each engine's launch file differs in its ports and devices.
+        self.documents = {
+            spec.iid: AttestationDocument(
+                contract, sources, launch={**LAUNCH, "launch_sha256": f"{index:064x}"}
+            )
+            for index, spec in enumerate(self.cfg.engines)
+        }
         self.capacity = dict.fromkeys(self.documents, CAPACITY)
         self.transport = httpx.MockTransport(self.respond)
         self.cfg.profiles_path.unlink()
@@ -75,7 +79,12 @@ class ProfileCopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.copy(), 0)
         copied = ProfileStore(self.root / "copied.json")
         source = ProfileStore(self.cfg.profiles_path).get("e0")
-        self.assertEqual(copied.get("e1"), replace(source, iid="e1"))
+        spec = next(spec for spec in self.cfg.engines if spec.iid == "e1")
+        generation = await read_generation(self.cfg, spec, transport=self.transport)
+        self.assertNotEqual(generation.digest, source.generation_digest)
+        self.assertEqual(
+            copied.get("e1"), replace(source, iid="e1", generation_digest=generation.digest)
+        )
         sidecar = json.loads((self.root / "copied.samples.json").read_text())
         self.assertEqual(sidecar["engines"]["e1"]["copied_from"]["iid"], "e0")
         # The copy merges into the fleet's store like a swept profile, and the join checks pass.
@@ -92,15 +101,21 @@ class ProfileCopyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_engine_with_a_different_launch_is_refused(self):
         self.documents["e1"] = replace(
-            self.documents["e1"], launch={**LAUNCH, "args": ["--max-num-seqs", "32"]}
+            self.documents["e1"],
+            launch={**self.documents["e1"].launch, "args": ["--max-num-seqs", "32"]},
         )
         with self.assertRaisesRegex(ValueError, "launch or model files differ"):
             await self.copy()
         self.assertFalse((self.root / "copied.json").exists())
 
     async def test_an_engine_with_different_model_files_is_refused(self):
-        launch = {**LAUNCH, "model_tree_sha256": "b" * 64}
+        launch = {**self.documents["e1"].launch, "model_tree_sha256": "b" * 64}
         self.documents["e1"] = replace(self.documents["e1"], launch=launch)
+        with self.assertRaisesRegex(ValueError, "launch or model files differ"):
+            await self.copy()
+
+    async def test_an_engine_without_launch_evidence_is_refused(self):
+        self.documents["e1"] = replace(self.documents["e1"], launch=None)
         with self.assertRaisesRegex(ValueError, "launch or model files differ"):
             await self.copy()
 

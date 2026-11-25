@@ -83,7 +83,7 @@ When the new engine runs the same launch and model files as a member, on the sam
   --copy-from e0 --only "$IID" --out "runs/profiles-$IID-$STAMP.json"
 ```
 
-The copy needs no drained peer. It refuses an engine whose generation digest or KV capacity differs from the member's profile, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes; profile that engine with steps 1 to 4. Then continue at step 5.
+The copy needs no drained peer. It refuses an engine whose launch evidence or KV capacity differs from the member's profile, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes; profile that engine with steps 1 to 4. Then continue at step 5.
 
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 

@@ -14,9 +14,10 @@ import httpx
 from ...backends import load as load_backend
 from ...config import FleetConfig
 from ...contracts import PROFILES, versioned
+from ...engines.attestation import launch_digest
 from ...provenance import stamp
 from ..fitting import fit_prefill_samples
-from ..generation import read_generation
+from ..generation import binding_digest, read_generation
 from ..model import (
     CACHED_PROFILE_FIELDS,
     PREFILL_SHARE_FIELDS,
@@ -259,8 +260,14 @@ async def copy_profile(
         saved.append(match)
     spec = specs[target]
     generation = await read_generation(cfg, spec, transport=transport)
-    for row in rows:
-        if row.generation_digest != generation.digest:
+    for row, item in zip(rows, saved, strict=True):
+        member = item.get("generation_evidence")
+        if not isinstance(member, dict) or binding_digest(member) != row.generation_digest:
+            raise ValueError(
+                f"{samples}: the {source} generation evidence does not match its profile"
+            )
+        measured, live = shared_generation(member), shared_generation(generation.document)
+        if measured is None or live is None or measured != live:
             raise ValueError(
                 f"{target} runs generation {generation.digest}, and the {source} profile was "
                 f"measured on {row.generation_digest}: the engine contract, launch or model "
@@ -278,7 +285,8 @@ async def copy_profile(
                 f"{target} KV capacity is {live}, and the {source} profile was measured with "
                 f"{row.kv_capacity_tokens} tokens; profile the new engine"
             )
-    copied = [replace(row, iid=target) for row in rows]
+    # Each copied row binds to the new engine's own generation, as a sweep's row would.
+    copied = [replace(row, iid=target, generation_digest=generation.digest) for row in rows]
     engines = {
         target: {
             **saved[0],
@@ -303,3 +311,19 @@ async def copy_profile(
         output.write(json.dumps(record, indent=2) + "\n")
     print(f"copied the {source} profile to {target} in {output_path}")
     return 0
+
+
+def shared_generation(payload: dict[str, Any]) -> str | None:
+    """Digest an attestation's contract and launch evidence without its engine's own launch file.
+
+    `launch_sha256` covers the whole launch file, which differs between engines in their ports
+    and devices, so two engines with the same launch never share a generation digest. The rest
+    of the launch evidence names the launch arguments other than per-engine flags, the image,
+    the packages and the model files. Without launch evidence, return None.
+    """
+    contract, launch = payload.get("contract"), payload.get("launch")
+    if not isinstance(contract, dict) or not isinstance(launch, dict):
+        return None
+    if payload.get("launch_digest") != launch_digest(contract, launch):
+        return None
+    return launch_digest(contract, {k: v for k, v in launch.items() if k != "launch_sha256"})
