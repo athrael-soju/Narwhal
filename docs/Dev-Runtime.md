@@ -245,7 +245,7 @@ The run directory that `status` prints holds:
 | Probe and fit outcomes | `profile-*.log` |
 | Runtime, profile, and transfer checks | `verify-*/preflight.log` |
 
-Stop the instance:
+Stop the instance. For an instance in another directory, such as `runs/dev-sglang` or `runs/dev-trtllm`, pass its `--instance` to both commands:
 
 ```bash
 narwhal dev down
