@@ -346,6 +346,20 @@ class RouterInstanceQueryTests(unittest.TestCase):
             ],
         )
 
+    def test_available_engines_names_why_it_lists_no_engine(self):
+        times = scrapes(0)
+        control = {'up{job="fleet-control",instance="control:8000"}': dict.fromkeys(times, "1")}
+        routed = {**control, **router("r1:8000", 0, LENGTH, {"n1": "prefill"})}
+        unrouted = {
+            **control,
+            'up{job="narwhal-router",instance="r1:8000"}': dict.fromkeys(times, "0"),
+        }
+        query = panel_query("panel-61", "A")
+        # Every baseline engine is a member, the router is down, and fleet control is not scraped.
+        self.check(routed, [(query, 60, {"{}": -1})])
+        self.check(unrouted, [(query, 60, {"{}": -2})])
+        self.check(engines("n1"), [(query, 60, {"{}": -3})])
+
     def marks(self, layer: str, inputs: dict[str, Samples], step: int, expected: dict):
         """Evaluate `layer` at each `step`, expecting {second: {labels: value}} and no other."""
         query = marker_query(layer, step)

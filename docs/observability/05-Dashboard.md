@@ -134,7 +134,11 @@ In **Engine role history**, teal is Prefill, blue is Decode and violet is Coloca
 
 ### Available engines
 
-**Available engines**, below the engine table, lists the engines of the [fleet control](../operate/fleet-control/05-Engine-Actions.md#join-an-engine) baseline that are not members of the router's fleet, such as an engine that left and still runs. **Engine and sidecar** reads **Respond** when the engine's health route and its attestation sidecar both answer, and **Starting** when fleet control started the engine less than `router.timeout_s` ago and it has not answered since. Otherwise it reads **No response**. Its cells are grey because these engines take no placements. The table lists only fleet control's baseline engines, and it is empty while Prometheus does not scrape fleet control, as in [Dashboard annotations](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
+**Available engines**, below the engine table, lists the engines of the [fleet control](../operate/fleet-control/05-Engine-Actions.md#join-an-engine) baseline that are not members of the router's fleet, such as an engine that left and still runs. **Engine and sidecar** reads **Respond** when the engine's health route and its attestation sidecar both answer, and **Starting** when fleet control started the engine less than `router.timeout_s` ago and it has not answered since. Otherwise it reads **No response**. Its cells are grey because these engines take no placements. The table lists only fleet control's baseline engines. When it lists none, one row names the reason:
+
+- **Every baseline engine is a member.** Prometheus scrapes fleet control and a selected router.
+- **The router cannot be read.** Prometheus scrapes fleet control but no selected router.
+- **Fleet control is not scraped.** Prometheus has not scraped fleet control in the last 15 seconds. To scrape it, see [Dashboard annotations](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
 
 ## Request outcomes and fleet events
 

@@ -424,9 +424,9 @@ class AvailableEnginesPanelTests(unittest.TestCase):
         [query] = [q["spec"]["query"]["spec"] for q in panel["data"]["spec"]["queries"]]
         available = f'max by(iid, backend) ({GAUGE}{{job="fleet-control"}})'
         starting = f'max by(iid, backend) ({STARTING}{{job="fleet-control"}})'
-        self.assertEqual(
-            query["expr"], f"{available} + on(iid, backend) (2 * {starting} or 0 * {available})"
-        )
+        engines = f"{available} + on(iid, backend) (2 * {starting} or 0 * {available})"
+        # Without an engine to list, one row names the reason.
+        self.assertTrue(query["expr"].startswith(f"({engines}) or on() (vector(-1)"))
         self.assertTrue(query["instant"])
         overrides = {
             override["matcher"]["options"]: override["properties"]
@@ -441,6 +441,9 @@ class AvailableEnginesPanelTests(unittest.TestCase):
                 "0": {"text": "No response", "color": "#8E9196"},
                 "1": {"text": "Respond", "color": "#8E9196"},
                 "2": {"text": "Starting", "color": "#8E9196"},
+                "-1": {"text": "Every baseline engine is a member.", "color": "transparent"},
+                "-2": {"text": "The router cannot be read.", "color": "transparent"},
+                "-3": {"text": "Fleet control is not scraped.", "color": "transparent"},
             },
         )
         self.assertEqual(
