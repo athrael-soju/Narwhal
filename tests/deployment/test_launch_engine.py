@@ -26,7 +26,7 @@ from narwhal.deployment.launch_engine.plan import (
     releases_peers,
     validate_runtime,
 )
-from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.runtime import digest, regular_file_digest
 from narwhal.deployment.launch_engine.start import (
     start_shared,
     validate_shared_gpu,
@@ -1187,3 +1187,18 @@ class SharedEngineStartTests(unittest.TestCase):
                 docker(["logs", "container"], Path(folder), "launch.log", include_stderr=True),
                 "CUDA IPC failed",
             )
+
+
+class RegularFileDigestTests(unittest.TestCase):
+    def test_refuses_a_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "weights.gguf"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                regular_file_digest(fifo)
+
+    def test_hashes_a_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "weights.gguf"
+            path.write_bytes(b"gguf")
+            self.assertEqual(regular_file_digest(path), hashlib.sha256(b"gguf").hexdigest())

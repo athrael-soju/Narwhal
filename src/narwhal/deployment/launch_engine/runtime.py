@@ -15,7 +15,8 @@ def digest(path: Path) -> str:
 
 def regular_file_digest(path: Path) -> str:
     """Hash a regular file without following a symbolic link in its last path component."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # O_NONBLOCK keeps a FIFO from blocking the open; regular files ignore it.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError(f"{path} is not a regular file")
