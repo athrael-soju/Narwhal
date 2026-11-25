@@ -36,6 +36,9 @@ The router reads the profile store when an engine joins, at startup, and when a 
 ### Start the engine
 
 1. Start the engine and its attestation sidecar from the members' checkpoint, under the fleet's engine contract, as in [Preparing, checking, and starting each engine](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) and [Starting the sidecar](../deploy/05-Attest.md#starting-the-sidecar).
+
+    A native vLLM engine must also load the model from the members' path. Set `NARWHAL_MODEL_DIR`, and `NARWHAL_MODEL_PATH` when the members set it, to the members' values. vLLM's NIXL handshake compares a hash that covers the `--model` path, so an engine that loads identical files from another directory passes `model identity` and then fails the fabric check with `NIXL compatibility hash mismatch` in a member's engine log. A container engine loads a checkpoint directory at `/model` on every host, so its host directory can differ.
+
 2. Check that the engine's `/health` returns HTTP 200 and that `/v1/models` lists the configured model.
 
 ### Write the candidate fleet file
