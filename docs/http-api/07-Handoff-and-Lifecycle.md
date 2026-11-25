@@ -195,6 +195,8 @@ Readmission checks:
 
 Checks 1 to 4 cover the candidate and its role-permitted peers.
 
+`checks` lists the checks that passed, in this order. The failed checks appear in the engine's `error`, or in `join.failures` for a [join](08-Engine-Membership.md#post-narwhalengines). A `model identity` failure does not stop checks 6 and 7, so a refused engine can list `process identity` or `new process identity`, and `generation`, in `checks`. Checks 8 and 9 run only after checks 1 to 7 pass for every engine.
+
 Missing profiles, missing generation evidence, or a digest mismatch fail readmission with an error naming the engine to reprofile. For an engine the breaker ejected transiently, readmission accepts its current process.
 
 A failed readmission returns one of these statuses:
