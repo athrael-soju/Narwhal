@@ -200,22 +200,28 @@ class RouterInstanceQueryTests(unittest.TestCase):
 
     def test_without_a_ready_router_the_views_follow_the_newest_lease(self):
         # During a whole-wave drain both routers answer not ready, and their roles disagree.
-        pair = {
-            **router("r1:8000", 0, LENGTH, {"n1": "prefill", "n2": "decode"}, ready="0"),
-            **router("r2:8000", 0, LENGTH, {"n1": "decode", "n2": "decode"}, ready="0"),
-            **engines("n1", "n2"),
-        }
-        for instance, epoch in (("r1", "5"), ("r2", "4")):
-            labels = f'job="narwhal-router",instance="{instance}:8000"'
-            pair[f"narwhal_router_lease_epoch{{{labels}}}"] = dict.fromkeys(scrapes(0), epoch)
-        roles = {'{iid="n1"}': PREFILL, '{iid="n2"}': DECODE}
-        self.check(
-            pair,
-            [
-                (panel_query("panel-7", "A"), 60, roles),
-                (at_step(panel_query("panel-8", "A"), 60), END, roles),
-            ],
-        )
+        # The holder reports its lease epoch, a standby reports 0 until it takes over, and a
+        # fenced former holder keeps its older epoch.
+        for holder, other in (("5", "0"), ("5", "4")):
+            with self.subTest(holder=holder, other=other):
+                pair = {
+                    **router("r1:8000", 0, LENGTH, {"n1": "prefill", "n2": "decode"}, ready="0"),
+                    **router("r2:8000", 0, LENGTH, {"n1": "decode", "n2": "decode"}, ready="0"),
+                    **engines("n1", "n2"),
+                }
+                for instance, epoch in (("r1", holder), ("r2", other)):
+                    labels = f'job="narwhal-router",instance="{instance}:8000"'
+                    pair[f"narwhal_router_lease_epoch{{{labels}}}"] = dict.fromkeys(
+                        scrapes(0), epoch
+                    )
+                roles = {'{iid="n1"}': PREFILL, '{iid="n2"}': DECODE}
+                self.check(
+                    pair,
+                    [
+                        (panel_query("panel-7", "A"), 60, roles),
+                        (at_step(panel_query("panel-8", "A"), 60), END, roles),
+                    ],
+                )
 
     def test_role_history_follows_the_active_router_at_each_step(self):
         members = {'{iid="n1"}': PREFILL, '{iid="n2"}': DECODE}
@@ -355,9 +361,18 @@ class RouterInstanceQueryTests(unittest.TestCase):
             'up{job="narwhal-router",instance="r1:8000"}': dict.fromkeys(times, "0"),
         }
         query = panel_query("panel-61", "A")
-        # Every baseline engine is a member, the router is down, and fleet control is not scraped.
+
+        def readable(value: str) -> dict[str, Samples]:
+            labels = 'job="fleet-control",instance="control:8000"'
+            return {f"narwhal_control_membership_readable{{{labels}}}": dict.fromkeys(times, value)}
+
+        # Every baseline engine is a member, Prometheus cannot scrape the router, fleet control
+        # cannot read the membership, and fleet control is not scraped.
+        self.check({**routed, **readable("1")}, [(query, 60, {"{}": -1})])
         self.check(routed, [(query, 60, {"{}": -1})])
-        self.check(unrouted, [(query, 60, {"{}": -2})])
+        self.check({**unrouted, **readable("1")}, [(query, 60, {"{}": -2})])
+        self.check({**routed, **readable("0")}, [(query, 60, {"{}": -4})])
+        self.check({**unrouted, **readable("0")}, [(query, 60, {"{}": -4})])
         self.check(engines("n1"), [(query, 60, {"{}": -3})])
 
     def marks(self, layer: str, inputs: dict[str, Samples], step: int, expected: dict):
@@ -400,6 +415,12 @@ class RouterInstanceQueryTests(unittest.TestCase):
         mark = '{__name__="narwhal_membership_generation",instance="r2:8000",job="narwhal-router"}'
         self.marks("Membership changes", fleet, 15, {90: {mark: 4}})
         self.marks("Membership changes", fleet, 60, {120: {mark: 4}})
+        # The takeover changes the standby's generation from 0 to 3 at 60 s; only the ready
+        # condition at the previous step, which holds for the former holder alone, keeps it
+        # unmarked.
+        change, ready = marker_query("Membership changes", 15).split(" and on(job, instance) ")
+        held = '{__name__="narwhal_router_ready",instance="r1:8000",job="narwhal-router"}'
+        self.check(fleet, [(change, 60, {mark: 3}), (ready, 60, {held: 1})])
 
     def test_an_alert_that_starts_between_long_steps_is_marked(self):
         alert = 'ALERTS{alertname="NarwhalEngineDown",alertstate="firing",severity="page",iid="n1"}'
