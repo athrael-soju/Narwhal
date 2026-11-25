@@ -123,6 +123,8 @@ class BackendDashboardTests(unittest.TestCase):
     def test_staging_renders_the_dashboard_for_every_backend(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "mounts"
-            artifacts.stage_artifacts(make_targets.TargetContract("127.0.0.1:8000"), root=root)
+            artifacts.stage_artifacts(
+                make_targets.TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000"), root=root
+            )
             staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
         self.assertEqual(engine_prefixes(staged), charted())

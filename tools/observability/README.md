@@ -10,7 +10,7 @@ Follow [Setting up observability](../../docs/Observability.md) to select listene
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
-The shipped scrape configuration binds one router to each Prometheus data source and discovers the engines from that router's `/narwhal/targets`.
+The shipped scrape configuration scrapes each router of one deployment, a single router or a router pair, and discovers the engines from `/narwhal/targets` at the single router or at the load balancer in front of the pair.
 
 The dashboard expects these label contracts:
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import stat
 import tempfile
@@ -260,7 +261,7 @@ class ReadinessTests(unittest.TestCase):
         self.services = observe_services.configured_services({})
         self.prometheus = _container("p" * 64, observe_services.PROMETHEUS_IMAGE)
         self.grafana = _container("g" * 64, observe_services.GRAFANA_IMAGE)
-        self.contract = TargetContract("router:8000")
+        self.contract = TargetContract(("router:8000",), "router:8000")
 
     def _collection_get(
         self,
@@ -268,17 +269,22 @@ class ReadinessTests(unittest.TestCase):
         router_health: str = "up",
         engine_health: str = "up",
         readiness: list[dict[str, object]] | None = None,
+        routers: tuple[str, ...] = ("router:8000",),
+        targets: str = "router:8000",
     ) -> Callable[[str, float], tuple[int, str]]:
         def get(url: str, timeout_s: float) -> tuple[int, str]:
             del timeout_s
             if url.endswith("/api/v1/targets"):
                 active = [
-                    {
-                        "scrapePool": "narwhal-router",
-                        "scrapeUrl": "http://router:8000/metrics",
-                        "health": router_health,
-                        "lastError": "router scrape failed" if router_health != "up" else "",
-                    },
+                    *(
+                        {
+                            "scrapePool": "narwhal-router",
+                            "scrapeUrl": f"http://{router}/metrics",
+                            "health": router_health,
+                            "lastError": "router scrape failed" if router_health != "up" else "",
+                        }
+                        for router in routers
+                    ),
                     {
                         "scrapePool": "engines",
                         "scrapeUrl": "http://engine-a:8002/metrics",
@@ -295,7 +301,7 @@ class ReadinessTests(unittest.TestCase):
                     },
                 ]
                 return 200, json.dumps({"data": {"activeTargets": active}})
-            if url == "http://router:8000/narwhal/targets":
+            if url == f"http://{targets}/narwhal/targets":
                 groups = [
                     {"targets": ["engine-a:8002"], "labels": {"iid": "e0"}},
                     {"targets": ["engine-b:8002"], "labels": {"iid": "e1"}},
@@ -305,7 +311,10 @@ class ReadinessTests(unittest.TestCase):
                 result = (
                     readiness
                     if readiness is not None
-                    else [{"value": [123.0, "1"], "metric": {"instance": "router:8000"}}]
+                    else [
+                        {"value": [123.0, "1" if i == 0 else "0"], "metric": {"instance": router}}
+                        for i, router in enumerate(routers)
+                    ]
                 )
                 return 200, json.dumps({"data": {"result": result}})
             raise AssertionError(url)
@@ -407,6 +416,50 @@ class ReadinessTests(unittest.TestCase):
                 self._collection_get(readiness=[]),
             )
 
+    def test_collection_accepts_a_router_pair_with_one_ready_router(self) -> None:
+        pair = ("router-a:8000", "router-b:8000")
+        contract = TargetContract(pair, "balancer:8000")
+        get = self._collection_get(routers=pair, targets="balancer:8000")
+        observe_readiness._verify_targets(self.services[0], contract, get)
+
+    def test_collection_requires_a_target_for_each_router_of_a_pair(self) -> None:
+        contract = TargetContract(("router-a:8000", "router-b:8000"), "balancer:8000")
+        get = self._collection_get(routers=("router-a:8000",), targets="balancer:8000")
+        with self.assertRaisesRegex(observe_services.StartupError, "router targets use"):
+            observe_readiness._verify_targets(self.services[0], contract, get)
+
+    def test_collection_rejects_a_failed_standby_scrape(self) -> None:
+        pair = ("router-a:8000", "router-b:8000")
+        contract = TargetContract(pair, "balancer:8000")
+        get = self._collection_get(routers=pair, targets="balancer:8000", router_health="down")
+        with self.assertRaisesRegex(
+            observe_services.StartupError, "router-a:8000 reports down: router scrape failed"
+        ):
+            observe_readiness._verify_targets(self.services[0], contract, get)
+
+    def test_collection_requires_exactly_one_ready_router_of_a_pair(self) -> None:
+        pair = ("router-a:8000", "router-b:8000")
+        contract = TargetContract(pair, "balancer:8000")
+        for values, message in (
+            (("0", "0"), "0 routers report narwhal_router_ready 1; expected exactly 1$"),
+            (
+                ("1", "1"),
+                "2 routers report narwhal_router_ready 1; expected exactly 1: "
+                "router-a:8000, router-b:8000",
+            ),
+            (("1",), "returned 1 series; expected one for each of"),
+        ):
+            with self.subTest(values=values):
+                readiness: list[dict[str, object]] = [
+                    {"value": [123.0, value], "metric": {"instance": router}}
+                    for router, value in zip(pair, values, strict=False)
+                ]
+                get = self._collection_get(
+                    routers=pair, targets="balancer:8000", readiness=readiness
+                )
+                with self.assertRaisesRegex(observe_services.StartupError, message):
+                    observe_readiness._verify_targets(self.services[0], contract, get)
+
     def test_dashboard_rejects_an_empty_router_selection(self) -> None:
         document = _dashboard()
         router = document["spec"]["variables"][0]["spec"]  # type: ignore[index]
@@ -439,7 +492,7 @@ class ReadinessTests(unittest.TestCase):
     def test_shipped_prometheus_config_discovers_both_target_groups(self) -> None:
         config = (observe_stack.BASE / "prometheus.yml").read_text()
         self.assertIn("/etc/prometheus/targets/router.json", config)
-        self.assertIn("url: http://<<router>>/narwhal/targets", config)
+        self.assertIn("url: http://<<targets>>/narwhal/targets", config)
         self.assertNotIn("static_configs:", config)
 
     def test_start_writes_targets_after_listener_ownership_check(self) -> None:
@@ -757,6 +810,36 @@ class ReadinessTests(unittest.TestCase):
         self.assertIsNone(stack.container("prometheus"))
         self.assertEqual(calls[0][1], observe_stack.COMPOSE_UP_TIMEOUT_S)
         self.assertEqual(calls[1][1], observe_services.COMMAND_TIMEOUT_S)
+
+    def test_main_reads_every_router_of_a_pair_and_the_targets_origin(self) -> None:
+        cases = (
+            (["--router-url", "http://a:8000", "--router-url", "http://b:8000"], {}),
+            ([], {"NARWHAL_ROUTER_URL": "http://a:8000,http://b:8000"}),
+        )
+        for argv, env in cases:
+            with (
+                self.subTest(argv=argv),
+                mock.patch.dict(
+                    os.environ, {**env, "NARWHAL_TARGETS_URL": "http://lb:8000"}, clear=True
+                ),
+                mock.patch.object(observe_cli, "ComposeStack"),
+                mock.patch.object(observe_cli, "start") as start,
+            ):
+                self.assertEqual(observe_cli.main(argv), 0)
+            contract = start.call_args.args[2]
+            self.assertEqual(contract, TargetContract(("a:8000", "b:8000"), "lb:8000"))
+
+    def test_main_refuses_a_pair_without_the_targets_origin(self) -> None:
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(observe_cli, "start") as start,
+            redirect_stderr(stderr),
+        ):
+            code = observe_cli.main(["--router-url", "http://a:8000,http://b:8000"])
+        self.assertEqual(code, 1)
+        self.assertIn("a router pair requires --targets-url", stderr.getvalue())
+        start.assert_not_called()
 
     def test_main_reports_command_timeout(self) -> None:
         stderr = io.StringIO()

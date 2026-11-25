@@ -28,9 +28,9 @@ class TargetGenerationTests(unittest.TestCase):
     def test_writes_router_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "targets"
-            contract = make_targets.write_targets("http://localhost:8000", output)
+            contract = make_targets.write_targets(["http://localhost:8000"], None, output)
 
-            self.assertEqual(contract.router, "localhost:8000")
+            self.assertEqual(contract.routers, ("localhost:8000",))
             self.assertEqual(contract.engine_targets_url, "http://localhost:8000/narwhal/targets")
             self.assertEqual(
                 json.loads((output / "router.json").read_text()),
@@ -38,6 +38,40 @@ class TargetGenerationTests(unittest.TestCase):
             )
             self.assertEqual((output / "router.json").stat().st_mode & 0o777, 0o644)
             self.assertFalse((output / "engines.json").exists())
+
+    def test_writes_every_router_of_a_pair_and_reads_engines_through_the_load_balancer(self):
+        for urls in (
+            ["http://router-a:8000", "http://router-b:8000"],
+            ["http://router-a:8000,http://router-b:8000"],
+            [" http://router-a:8000 , http://router-b:8000 ,"],
+        ):
+            with self.subTest(urls=urls), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "targets"
+                contract = make_targets.write_targets(urls, "http://balancer:8000", output)
+                self.assertEqual(contract.routers, ("router-a:8000", "router-b:8000"))
+                self.assertEqual(
+                    contract.engine_targets_url, "http://balancer:8000/narwhal/targets"
+                )
+                self.assertEqual(
+                    json.loads((output / "router.json").read_text()),
+                    [{"targets": ["router-a:8000", "router-b:8000"]}],
+                )
+
+    def test_a_pair_requires_the_origin_that_reaches_its_active_router(self) -> None:
+        with self.assertRaisesRegex(ValueError, "router pair requires --targets-url"):
+            make_targets.load_contract(["http://router-a:8000", "http://router-b:8000"])
+
+    def test_rejects_a_missing_or_repeated_router(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one router origin"):
+            make_targets.load_contract([" , "])
+        with self.assertRaisesRegex(ValueError, "repeat a router"):
+            make_targets.load_contract(
+                ["http://router-a:8000", "http://router-a:8000/"], "http://balancer:8000"
+            )
+
+    def test_one_router_may_serve_its_engine_targets_from_another_origin(self) -> None:
+        contract = make_targets.load_contract(["http://router-a:8000"], "http://balancer:8000")
+        self.assertEqual(contract.targets, "balancer:8000")
 
     def test_rejects_router_urls_without_an_explicit_port(self) -> None:
         with self.assertRaisesRegex(ValueError, "explicit host and port"):

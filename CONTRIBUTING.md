@@ -263,7 +263,7 @@ Import each name from the subpackage module that defines it.
 
 | Module                                      | Contents                                         |
 | ------------------------------------------- | ------------------------------------------------ |
-| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router target |
+| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router targets |
 | `tools/observability/start/services.py`     | Listener and service contracts                   |
 | `tools/observability/start/stack.py`        | Docker Compose control                           |
 | `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |

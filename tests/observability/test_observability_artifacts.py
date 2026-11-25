@@ -18,7 +18,7 @@ class MonitoringArtifactTests(unittest.TestCase):
             checkout = Path(temporary)
             source = checkout / "tools" / "observability"
             root = checkout / "runs" / "observability" / "mounts"
-            contract = TargetContract("127.0.0.1:8000")
+            contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
             previous_umask = os.umask(0o077)
             try:
                 for relative in (*artifacts.FILES, "grafana-narwhal.json"):
@@ -55,7 +55,7 @@ class MonitoringArtifactTests(unittest.TestCase):
                 for relative, target in artifacts.FILES.items():
                     expected_bytes = (source / relative).read_bytes()
                     if relative == "prometheus.yml":
-                        expected_bytes = expected_bytes.replace(b"<<router>>", b"127.0.0.1:8000")
+                        expected_bytes = expected_bytes.replace(b"<<targets>>", b"127.0.0.1:8000")
                     self.assertEqual((root / target).read_bytes(), expected_bytes)
                 for path, mode in original_modes.items():
                     self.assertEqual(path.stat().st_mode, mode, str(path))
@@ -76,7 +76,9 @@ class MonitoringArtifactTests(unittest.TestCase):
             external.mkdir(mode=0o700)
             (root / "prometheus").symlink_to(external, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "real directory"):
-                artifacts.stage_artifacts(TargetContract("127.0.0.1:8000"), root=root)
+                artifacts.stage_artifacts(
+                    TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000"), root=root
+                )
             self.assertEqual(external.stat().st_mode & 0o777, 0o700)
             self.assertEqual(list(external.iterdir()), [])
 
@@ -121,7 +123,9 @@ class OrchestratorDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "mounts"
             console = artifacts.console_url({artifacts.CONSOLE_URL_ENV: "/fleet-control/console"})
-            artifacts.stage_artifacts(TargetContract("127.0.0.1:8000"), console, root=root)
+            artifacts.stage_artifacts(
+                TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000"), console, root=root
+            )
             staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
             urls = [link["url"] for link in staged["spec"]["links"] if link["type"] == "link"]
             self.assertEqual(urls, ["/fleet-control/console"])
@@ -152,7 +156,7 @@ class OrchestratorDashboardTests(unittest.TestCase):
     def test_staging_writes_the_control_target_and_token(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "mounts"
-            contract = TargetContract("127.0.0.1:8000")
+            contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
             artifacts.stage_artifacts(contract, root=root)
             self.assertEqual(json.loads((root / artifacts.CONTROL_TARGETS).read_text()), [])
             self.assertEqual((root / artifacts.CONTROL_TOKEN_FILE).read_text(), "")
@@ -180,7 +184,7 @@ class OrchestratorDashboardTests(unittest.TestCase):
     def test_staging_writes_the_tool_target_for_the_tool_job(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "mounts"
-            contract = TargetContract("127.0.0.1:8000")
+            contract = TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000")
             artifacts.stage_artifacts(contract, root=root)
             self.assertEqual(json.loads((root / artifacts.TOOL_TARGETS).read_text()), [])
             artifacts.stage_artifacts(contract, tools="127.0.0.1:18030", root=root)

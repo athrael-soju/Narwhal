@@ -107,3 +107,7 @@ Admission sequence:
 A router that holds a valid lease and admits traffic returns HTTP 200 from `/ready`. During a network partition, the active lease holder fences itself before its local lease deadline, and the standby claims the lease at expiry. When shared storage becomes unavailable, both routers withdraw readiness.
 
 At shutdown, the active lease holder writes its handoff and releases the lease, then finishes its open streams. It accepts no new connections during the drain, so its `/ready` check fails. The standby takes over during that drain and counts the drained streams as offered but not served. A standby or fenced router retains its saved primary state handoff when it shuts down.
+
+## Monitoring the router pair
+
+To scrape both routers and discover the engines through the load balancer, start the monitoring stack as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).

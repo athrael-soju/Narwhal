@@ -268,7 +268,7 @@ def stage_artifacts(
     for origin, destination in FILES.items():
         data = (source / origin).read_bytes()
         if origin == "prometheus.yml":
-            data = data.replace(b"<<router>>", contract.router.encode())
+            data = data.replace(b"<<targets>>", contract.targets.encode())
         _write(root / destination, data)
     shipped = json.loads((source / "grafana-narwhal.json").read_text(encoding="utf-8"))
     dashboard = narwhal_dashboard(shipped, console)
