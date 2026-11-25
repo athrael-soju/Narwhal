@@ -116,6 +116,8 @@ At shutdown, the active lease holder's `/ready` and fleet-state reads return HTT
 
 When the supervisor restarts the stopped router at once with `--standby-of` set to the standby, both routers are standbys until one claims the lease. Each counts the other's `/ready` answer, HTTP 503 with reason `shadowing`, as a failed poll. The first router to reach its `--standby-takeover-after` failed polls while the lease is free claims it. The standby resumes from the handoff it received from the stopped router, and the restarted router resumes from the handoff the stopped router last saved. The other router then shadows the new primary. After a `SIGTERM`, which frees the lease, the standby claims first when both routers run with the same options, because it starts counting failed polls before the restarted process starts. After a `SIGKILL`, both routers wait for the lease to expire, and either can claim it.
 
+When both routers restart at once, each with `--standby-of` set to the other, the same rule elects one holder: each counts the other's `shadowing` answers as failed polls, and the first to find the lease free claims it and resumes from the handoff at its state path. That handoff must be at most `--standby-max-handoff-age` seconds old. The other router then shadows the new holder. HAProxy holds new requests until the holder is ready, after the lease expires when the old holder was killed.
+
 ## Monitoring the router pair
 
 To scrape both routers and discover the engines through the load balancer, start the monitoring stack as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).

@@ -3,9 +3,11 @@
 The check starts two simulated engines, a router pair on one lease, and HAProxy in Docker
 with `deploy/ha/haproxy.cfg`. It offers open-loop Poisson load through HAProxy, stops the
 active router with a signal, and restarts it on the same port as a standby of the other
-router, as soon as it exits or `--restart-after` seconds after the new holder is ready. It
-prints one JSON report and exits 1 when a client request got a status other than 200 or 429,
-or a stream that started after the signal did not complete.
+router, as soon as it exits or `--restart-after` seconds after the new holder is ready. With
+`--both`, it also stops the standby with SIGTERM and restarts both routers at once, each a
+standby of the other. It prints one JSON report and exits 1 when a client request got a status
+other than 200 or 429, a stream that started after the signal did not complete, or both routers
+reported ready at once.
 """
 
 from __future__ import annotations
@@ -154,6 +156,18 @@ class Timeline:
                     self.events.append((time.time(), name, state))
             await asyncio.sleep(POLL_S)
 
+    def both_ready(self) -> list[float]:
+        """Return each moment at which both routers answered `/ready` with HTTP 200."""
+        state: dict[str, str] = {}
+        moments = []
+        for moment, name, value in self.events:
+            state[name] = value
+            if len(state) == len(self.routers.ports) and all(
+                item == "200 ready" for item in state.values()
+            ):
+                moments.append(moment)
+        return moments
+
     def first(self, name: str, after: float, predicate) -> float | None:
         for moment, router, state in self.events:
             if router == name and moment >= after and predicate(state):
@@ -255,6 +269,24 @@ async def takeovers(
         signalled = time.time()
         old.send_signal(signal.SIGKILL if args.signal == "KILL" else signal.SIGTERM)
         record: dict = {"stopped": active, "signal": args.signal, "signalled_at": signalled}
+        if args.both:
+            # Both routers restart together, each a standby of the other.
+            shadow = routers.processes[standby]
+            shadow.send_signal(signal.SIGTERM)
+            await wait_exit(old, 60.0)
+            await wait_exit(shadow, 60.0)
+            record["exited_s"] = round(time.time() - signalled, 3)
+            routers.start(active, standby_of=standby)
+            routers.start(standby, standby_of=active)
+            holder = await wait_holder(http, routers, [active, standby])
+            record["holder"] = holder
+            record["holder_ready_s"] = round(time.time() - signalled, 3)
+            other = standby if holder == active else active
+            await wait_standby(http, routers.url(other), 30.0)
+            records.append(record)
+            active = holder
+            await asyncio.sleep(args.interval)
+            continue
         if args.restart_after is None:
             await wait_exit(old, 60.0)
             record["exited_s"] = round(time.time() - signalled, 3)
@@ -359,7 +391,12 @@ async def run(args: argparse.Namespace) -> int:
             timeline = Timeline(routers)
             stop = asyncio.Event()
             poller = asyncio.create_task(timeline.poll(http, stop))
-            each = args.interval + 3.0 + (args.restart_after or 0.0)
+            each = (
+                args.interval
+                + 3.0
+                + (args.restart_after or 0.0)
+                + (args.lease_ttl if args.both else 0.0)
+            )
             duration = args.warmup + args.takeovers * each + 2.0
             load = asyncio.create_task(
                 offer(http, f"http://127.0.0.1:{lb_port}", args.rate, duration, args.seed)
@@ -414,6 +451,12 @@ async def run(args: argparse.Namespace) -> int:
         "statuses": dict(statuses),
         "takeovers": records,
         "errors": errors,
+        # Moments, in seconds after the first signal, at which both routers reported ready.
+        "both_ready": [
+            round(moment - records[0]["signalled_at"], 3) for moment in timeline.both_ready()
+        ]
+        if records
+        else [],
         "timeline": [
             [round(moment - records[0]["signalled_at"], 3), name, state]
             for moment, name, state in timeline.events
@@ -427,7 +470,7 @@ async def run(args: argparse.Namespace) -> int:
         for row in rows:
             stream.write(json.dumps(row) + "\n")
     print(json.dumps({key: report[key] for key in report if key != "timeline"}, indent=2))
-    return 1 if any(not error["cut"] for error in errors) else 0
+    return 1 if any(not error["cut"] for error in errors) or report["both_ready"] else 0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -444,6 +487,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="seconds after the new holder is ready before the stopped router restarts "
         "(default: restart it as soon as it exits)",
     )
+    options.add_argument(
+        "--both",
+        action="store_true",
+        help="also stop the standby with SIGTERM, then restart both routers at once, each a "
+        "standby of the other",
+    )
     options.add_argument("--warmup", type=float, default=5.0)
     options.add_argument("--interval", type=float, default=12.0, help="seconds between takeovers")
     options.add_argument("--lease-ttl", type=float, default=5.0)
@@ -455,7 +504,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "delay the new holder's readiness after a SIGTERM",
     )
     options.add_argument("--seed", type=int, default=1)
-    return options.parse_args(argv)
+    args = options.parse_args(argv)
+    if args.both and args.restart_after is not None:
+        options.error("--both restarts both routers at once; drop --restart-after")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
