@@ -45,7 +45,7 @@ Each engine's attested `launch` evidence carries `model_tree_sha256`, the digest
 3. Stop every engine and its attestation sidecar, and [build and install the release](../deploy/02-Install.md#building-an-immutable-deployment-package) on every host. The new release refuses a launch directory prepared by the earlier release.
 4. [Prepare, check and start](../deploy/03-Validate-Engines.md#preparing-checking-and-starting-each-engine) every engine from a fresh launch directory, then [attest it](../deploy/05-Attest.md) and run `finalize-fleet`.
 5. [Profile every engine](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) and [calibrate the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) again, because each engine has a new `launch_digest`.
-6. Stop both routers, install the new deployment set on both router hosts, start the intended primary and then its standby, and run preflight.
+6. Stop both routers and install the new deployment set on both router hosts. Set `recovery.resume: false`, start the intended primary without `--resume` and then its standby, and run preflight.
 7. Restore ingress.
 
 ## Rolling back
