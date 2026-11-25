@@ -61,7 +61,7 @@ The engine table and **Engine role history** colour engine states:
 | Red          | `#D44A3A` | Ejected, Unreachable and KV cache from 95%             |
 | Maroon       | `#A11D1D` | Blocked                                                |
 | Magenta      | `#9E4AA4` | Switching and Validating                               |
-| Grey         | `#8E9196` | Draining, Restarting, N/A and the engine table bars    |
+| Grey         | `#8E9196` | Draining, Restarting, N/A, the engine table bars and **Available engines** |
 | Brown        | `#9C6B4E` | Probing, Calibrating, Profiling and Preflight          |
 
 The charts and the headline row colour request outcomes, alerts, status values and the router's own measurements:
@@ -128,6 +128,10 @@ The engine table shows each engine's backend, current role, state and load, 8 en
 | Tokens/s       | Prompt tokens prefilled per second on prefill engines, and output tokens per second on decode and colocated engines                                                                                    |
 
 In **Engine role history**, teal is Prefill, blue is Decode and violet is Colocated. A change between roles is a role flip. While an engine is out of service, its row takes the colour of its **State** cell in the engine table.
+
+### Available engines
+
+**Available engines**, below the engine table, lists the engines of the [fleet control](../operate/fleet-control/05-Engine-Actions.md#join-an-engine) baseline that are not members of the router's fleet, such as an engine that left and still runs. **Engine and sidecar** reads **Respond** when the engine's health route and its attestation sidecar both answer, otherwise **No response**. Its cells are grey because these engines take no placements. The table lists only fleet control's baseline engines, and it is empty while Prometheus does not scrape fleet control, as in [Dashboard annotations](../operate/fleet-control/03-Grafana-Dashboard.md#dashboard-annotations).
 
 ## Request outcomes and fleet events
 

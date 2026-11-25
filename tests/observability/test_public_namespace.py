@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -17,6 +18,8 @@ from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tools.fleet_control.engines import Availability, AvailableEngine
+from tools.fleet_control.signals import metrics as control_metrics
 from tools.observability.artifacts import render_dashboard
 from tools.observability.start import readiness as observe_readiness
 
@@ -369,7 +372,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_and_alert_queries_name_exported_metrics(self):
         response = await self.client.get("/metrics")
         exported = set()
-        exposition = response.text + ToolActivity("preflight").render()
+        # The fleet control service exports the dashboard's narwhal_control_* series.
+        control = control_metrics(
+            SimpleNamespace(session=None, jobs=None),
+            Availability((AvailableEngine("e1", "vllm", True, True),)),
+        )
+        exposition = response.text + ToolActivity("preflight").render() + control
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":

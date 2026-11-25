@@ -1,4 +1,4 @@
-"""Engine pause, resume, stop, start, drain, readmit, join and leave."""
+"""Engine pause, resume, stop, start, drain, readmit, join and leave, and available engines."""
 
 from __future__ import annotations
 
@@ -8,12 +8,17 @@ import logging
 import math
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+from narwhal.backends import DEFAULT_BACKEND
+from narwhal.backends import load as load_backend
+from narwhal.engines.dialect import EngineDialect
 
 from .app import API, action_reply
 from .config import Hook
@@ -51,10 +56,66 @@ STATE_TIMEOUT_S = 10.0
 # Actions that wait for the engine to return to service.
 RETURNING_ACTIONS = frozenset({"start", "resume"})
 RETURN_POLL_S = 2.0
+# Bound on each request that reads which baseline engines are available, in seconds.
+AVAILABILITY_TIMEOUT_S = 2.0
+# How long one availability reading serves the console and the metrics, in seconds.
+AVAILABILITY_TTL_S = 10.0
 
 
 class StateUnavailable(Exception):
     """The router's state document could not be read."""
+
+
+@dataclass(frozen=True)
+class AvailableEngine:
+    """A baseline engine outside the router's membership, and whether it answers."""
+
+    iid: str
+    backend: str
+    engine: bool
+    sidecar: bool
+    # Why the engine cannot be probed, such as an endpoint that does not resolve.
+    error: str = ""
+
+    @property
+    def available(self) -> bool:
+        """Return whether the engine's API and its attestation sidecar both respond."""
+        return self.engine and self.sidecar
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "iid": self.iid,
+            "backend": self.backend,
+            "engine": self.engine,
+            "sidecar": self.sidecar,
+            "available": self.available,
+            "error": self.error or None,
+        }
+
+
+@dataclass(frozen=True)
+class Availability:
+    """The baseline engines outside the membership, or why the membership could not be read."""
+
+    engines: tuple[AvailableEngine, ...]
+    error: str = ""
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "engines": [engine.document() for engine in self.engines],
+            "error": self.error or None,
+        }
+
+
+async def _responds(client: httpx.AsyncClient, url: str) -> bool:
+    """Return whether `url` answers HTTP 200 within the availability timeout."""
+    if not url:
+        return False
+    try:
+        response = await client.get(url, timeout=AVAILABILITY_TIMEOUT_S)
+    except httpx.HTTPError:
+        return False
+    return response.status_code == 200
 
 
 class EngineActions:
@@ -70,6 +131,87 @@ class EngineActions:
         self._transport = transport
         self._poll_s = poll_s
         service.members = self.live_members
+        # The latest availability reading and its monotonic time.
+        self._availability: tuple[float, Availability | None] | None = None
+        self._availability_lock = asyncio.Lock()
+
+    async def available(self, current: Mapping[str, Any] | None = None) -> Availability | None:
+        """Return the baseline engines outside the router's membership and whether each answers.
+
+        `current`, a membership the caller has just read, saves reading it again. Return None
+        when the router has no membership route. A reading serves for `AVAILABILITY_TTL_S`,
+        and every engine action starts a new one.
+        """
+        async with self._availability_lock:
+            cached = self._availability
+            if cached is not None and time.monotonic() - cached[0] < AVAILABILITY_TTL_S:
+                return cached[1]
+            reading = await self._read_availability(current)
+            self._availability = (time.monotonic(), reading)
+            return reading
+
+    async def _read_availability(self, current: Mapping[str, Any] | None) -> Availability | None:
+        if current is None:
+            try:
+                async with self._client() as client:
+                    current = await self.membership(client, timeout_s=AVAILABILITY_TIMEOUT_S)
+            except ActionError as exc:
+                return Availability((), str(exc))
+            if current is None:
+                return None
+        session = self.service.session
+        try:
+            baseline: Mapping[str, Any] = (
+                session.baseline
+                if session is not None
+                else json.loads(self.service.config.fleet.read_text(encoding="utf-8"))
+            )
+            entries = [
+                entry
+                for entry in baseline["engines"]
+                if str(entry["iid"]) not in current["engines"]
+            ]
+            backend = str((baseline.get("engine") or {}).get("backend", DEFAULT_BACKEND))
+        except (OSError, ValueError, LookupError, TypeError, AttributeError) as exc:
+            return Availability((), f"baseline fleet configuration is unreadable: {exc}")
+        try:
+            health = load_backend(backend).dialect.health_path
+        except ValueError:
+            health = EngineDialect.health_path
+        async with httpx.AsyncClient(transport=self._transport) as client:
+            found = await asyncio.gather(
+                *(self._probe(client, entry, backend, health) for entry in entries)
+            )
+        return Availability(tuple(found))
+
+    async def _probe(
+        self, client: httpx.AsyncClient, entry: Mapping[str, Any], backend: str, health: str
+    ) -> AvailableEngine:
+        iid = str(entry["iid"])
+        try:
+            resolved = self.service.resolved(entry, {})
+        except ActionError as exc:
+            return AvailableEngine(iid, backend, False, False, str(exc))
+        url = str(resolved.get("url") or "").rstrip("/")
+        attestation = str(resolved.get("attestation_url") or "")
+        engine, sidecar = await asyncio.gather(
+            _responds(client, url + health if url else ""), _responds(client, attestation)
+        )
+        error = "" if attestation else "attestation_url is not configured"
+        return AvailableEngine(iid, backend, engine, sidecar, error)
+
+    async def join_baseline(self, iid: str) -> Action:
+        """Join baseline engine `iid` with its baseline entry, references resolved, as an
+        exclusive action."""
+
+        async def operate(session: Session | None) -> Mapping[str, Any] | None:
+            assert session is not None
+            spec = self.service.resolved(baseline_engine(session, iid), {"engine": iid})
+            return await self._join(spec)(session)
+
+        return await self.service.act(
+            "engine.join", {"engine": iid, "baseline": True}, operate, exclusive=True
+        )
 
     async def live_members(self) -> dict[str, Mapping[str, Any]] | None:
         """Return the router's member engine entries, or None when they cannot be read."""
@@ -104,6 +246,17 @@ class EngineActions:
         return await self.service._perform(
             name, {"engine": iid}, self._operation(iid, action, {}, engine), True
         )
+
+    def _refreshing(self, operation: Operation) -> Operation:
+        """Return `operation`, after which the next availability read probes again."""
+
+        async def operate(session: Session | None) -> Mapping[str, Any] | None:
+            try:
+                return await operation(session)
+            finally:
+                self._availability = None
+
+        return operate
 
     def _operation(
         self,
@@ -141,7 +294,7 @@ class EngineActions:
                 after = await self.engine_state(client, iid)
             return {"engine": iid, "before": before, **effect, "after": after}
 
-        return operate
+        return self._refreshing(operate)
 
     async def join(self, spec: Mapping[str, Any]) -> Action:
         """Ask the router to validate `spec` and add it to the fleet, as an exclusive action."""
@@ -207,7 +360,7 @@ class EngineActions:
                 effect["after"] = await self.engine_state(client, iid)
             return effect
 
-        return operate
+        return self._refreshing(operate)
 
     def _leave(self, iid: str, params: Mapping[str, Any]) -> Operation:
         async def operate(session: Session | None) -> Mapping[str, Any]:
@@ -247,7 +400,7 @@ class EngineActions:
                 effect["removal"] = await self._await_removal(client, iid, deadline, effect)
             return effect
 
-        return operate
+        return self._refreshing(operate)
 
     async def _await_removal(
         self, client: httpx.AsyncClient, iid: str, deadline_s: float, effect: Mapping[str, Any]
@@ -280,13 +433,15 @@ class EngineActions:
                 )
             await asyncio.sleep(min(self._poll_s, max(limit - waited, 0.0)))
 
-    async def membership(self, client: httpx.AsyncClient) -> dict[str, Any] | None:
+    async def membership(
+        self, client: httpx.AsyncClient, timeout_s: float = STATE_TIMEOUT_S
+    ) -> dict[str, Any] | None:
         """Return the router's membership generation and engine entries.
 
         Return None when the router has no membership route. Raise ActionError with HTTP 502
         when the router does not answer or answers with anything else.
         """
-        timeout = min(STATE_TIMEOUT_S, self.service.config.router.timeout_s)
+        timeout = min(timeout_s, self.service.config.router.timeout_s)
         try:
             response = await client.get(MEMBERSHIP_PATH, timeout=timeout)
         except httpx.HTTPError as exc:
@@ -535,22 +690,32 @@ def _lifecycle_error(response: httpx.Response) -> str:
 
 
 def engine_routes(actions: EngineActions) -> APIRouter:
-    """Return the engine state route and one POST route per engine action."""
+    """Return the engine state route, one POST route per engine action and the join routes."""
     routes = APIRouter(prefix=f"{API}/engines")
     service = actions.service
 
     @routes.get("")
     async def engines() -> JSONResponse:
+        problem = ""
         async with actions._client() as client:
             try:
                 current = await actions.membership(client)
-            except ActionError:
+            except ActionError as exc:
                 # Each baseline engine's state then reports the router error.
-                current = None
+                current, problem = None, str(exc)
+        if current is not None:
+            reading = await actions.available(current)
+        else:
+            reading = Availability((), problem) if problem else None
+        available = None if reading is None else reading.document()
         if current is not None:
             iids = list(current["engines"])
             return JSONResponse(
-                {"generation": current["generation"], "engines": await actions.fleet_state(iids)}
+                {
+                    "generation": current["generation"],
+                    "engines": await actions.fleet_state(iids),
+                    "available": available,
+                }
             )
         if service.session is not None:
             iids = list(baseline_engines(service.session))
@@ -561,7 +726,7 @@ def engine_routes(actions: EngineActions) -> APIRouter:
                 log.error("baseline fleet configuration is unreadable: %s", exc)
                 detail = "baseline fleet configuration is unreadable"
                 return JSONResponse({"detail": detail}, status_code=500)
-        return JSONResponse({"engines": await actions.fleet_state(iids)})
+        return JSONResponse({"engines": await actions.fleet_state(iids), "available": available})
 
     def add(action: str) -> None:
         async def run(iid: str, request: Request) -> JSONResponse:
@@ -580,6 +745,10 @@ def engine_routes(actions: EngineActions) -> APIRouter:
 
     for action in ACTIONS:
         add(action)
+
+    @routes.post("/{iid}/join")
+    async def join_baseline(iid: str) -> JSONResponse:
+        return action_reply(await actions.join_baseline(iid))
 
     @routes.post("/join")
     async def join(request: Request) -> JSONResponse:

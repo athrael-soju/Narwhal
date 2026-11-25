@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
 from .app import API
+from .engines import Availability, EngineActions
 from .overlays import READY_PATH, READY_PROBE_TIMEOUT_S, probe
 from .records import Action
 from .service import ControlService
@@ -51,7 +53,7 @@ def _label(value: object) -> str:
     return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def _sample(name: str, labels: dict[str, object], value: float | int) -> str:
+def _sample(name: str, labels: Mapping[str, object], value: float | int) -> str:
     inner = ",".join(f'{key}="{_label(item)}"' for key, item in labels.items())
     return f"{name}{{{inner}}} {value}" if inner else f"{name} {value}"
 
@@ -60,8 +62,11 @@ def _milliseconds(stamp: str) -> int:
     return round(datetime.fromisoformat(stamp).timestamp() * 1000)
 
 
-def metrics(service: ControlService) -> str:
-    """Return the service's metrics in the Prometheus text format."""
+def metrics(service: ControlService, available: Availability | None = None) -> str:
+    """Return the service's metrics in the Prometheus text format.
+
+    `available` lists the baseline engines outside the router's membership.
+    """
     session = service.session
     lines = [
         "# HELP narwhal_control_session_active Whether an operator session is active.",
@@ -94,6 +99,14 @@ def metrics(service: ControlService) -> str:
     if job is not None and job.state == "running":
         labels = {"job": job.id, "workload": job.params.get("workload", "")}
         lines.append(_sample("narwhal_control_load_job_running", labels, 1))
+    lines += [
+        "# HELP narwhal_control_engine_available Whether a baseline engine outside the "
+        "router's membership and its attestation sidecar respond.",
+        "# TYPE narwhal_control_engine_available gauge",
+    ]
+    for engine in () if available is None else available.engines:
+        labels = {"iid": engine.iid, "backend": engine.backend}
+        lines.append(_sample("narwhal_control_engine_available", labels, int(engine.available)))
     return "\n".join(lines) + "\n"
 
 
@@ -101,10 +114,15 @@ class FleetSignals:
     """Read the router's readiness and the alerts Prometheus reports firing."""
 
     def __init__(
-        self, service: ControlService, transport: httpx.AsyncBaseTransport | None = None
+        self,
+        service: ControlService,
+        transport: httpx.AsyncBaseTransport | None = None,
+        engines: EngineActions | None = None,
     ) -> None:
         self.service = service
         self._transport = transport
+        # Reads the baseline engines outside the membership for the metrics.
+        self.engines = engines
 
     async def document(self) -> dict[str, Any]:
         """Return the router's readiness and, when `prometheus_url` is set, the firing alerts."""
@@ -157,6 +175,7 @@ def signal_routes(signals: FleetSignals) -> APIRouter:
 
     @routes.get(METRICS_PATH, include_in_schema=False)
     async def service_metrics() -> PlainTextResponse:
-        return PlainTextResponse(metrics(signals.service), media_type=METRICS_TYPE)
+        available = None if signals.engines is None else await signals.engines.available()
+        return PlainTextResponse(metrics(signals.service, available), media_type=METRICS_TYPE)
 
     return routes

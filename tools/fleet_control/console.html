@@ -692,6 +692,18 @@ dialog ul:empty { display: none; }
       <aside id="engine-drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
     </div>
     <div id="last-action" class="inset last-action" hidden></div>
+    <div id="available" class="overlay-field" hidden>
+      <span class="k">Available engines</span>
+      <span id="available-help" class="lbl">Baseline engines outside the router's membership. Join sends an engine's baseline entry to the router.</span>
+      <div class="scroll">
+        <table class="tbl" aria-describedby="available-help">
+          <thead><tr>
+            <th scope="col">Engine</th><th scope="col">Engine API</th><th scope="col">Sidecar</th><th scope="col" class="end">Actions</th>
+          </tr></thead>
+          <tbody id="available-engines"></tbody>
+        </table>
+      </div>
+    </div>
     <div class="overlay-field">
       <label for="join-engine" class="k">Join engine</label>
       <span id="join-help" class="lbl">One engine entry as the fleet file holds it. The router validates the engine against the fleet's contract, profiles and calibration before it joins.</span>
@@ -830,6 +842,7 @@ const ROUTES = {
   engines: ["GET", "/api/engines"],
   engineAction: ["POST", "/api/engines/{iid}/{action}"],
   engineJoin: ["POST", "/api/engines/join"],
+  engineBaselineJoin: ["POST", "/api/engines/{iid}/join"],
   workloads: ["GET", "/api/workloads"],
   jobStart: ["POST", "/api/jobs"],
   jobCurrent: ["GET", "/api/jobs/current"],
@@ -918,6 +931,8 @@ const state = {
   reachable: true,
   engines: null,
   enginesError: "",
+  // Baseline engines outside the membership, or null without a membership route.
+  available: null,
   fleet: null,
   workloads: {},
   live: null,
@@ -1232,6 +1247,7 @@ async function refreshEngines() {
     const reply = await call("engines", {});
     if (reply.status === 200 && reply.body) {
       state.engines = reply.body.engines;
+      state.available = reply.body.available || null;
       state.enginesError = "";
     } else {
       state.enginesError = text(reply.body && reply.body.detail);
@@ -1805,6 +1821,54 @@ function renderEngines() {
   renderEngineDrawer(context, entries);
   if (menuFor) renderMenu();
   renderLastAction(context);
+  renderAvailable();
+}
+
+// Why an available engine's Join is disabled, or "" when it is enabled. `gate` is the session
+// gate and `routerError` the reason the router's membership cannot be read.
+function availableGate(engine, routerError, gate) {
+  if (gate) return gate;
+  if (routerError) return "The router cannot be read: " + routerError;
+  if (engine.error) return engine.error;
+  if (!engine.engine && !engine.sidecar) return "The engine and its attestation sidecar do not respond.";
+  if (!engine.engine) return "The engine does not respond.";
+  if (!engine.sidecar) return "The attestation sidecar does not respond.";
+  return "";
+}
+
+function renderAvailable() {
+  const listed = state.available;
+  $("available").hidden = !listed;
+  if (!listed) return;
+  const routerError = state.enginesError || listed.error || "";
+  const gate = sessionGate();
+  const responds = (value) => (value ? toned("ok", "responds") : toned("muted", "no response"));
+  update("available", $("available-engines"), () => {
+    const reasons = listed.engines.map((engine) => availableGate(engine, routerError, gate));
+    const children = listed.engines.map((engine, index) => {
+      const reason = reasons[index];
+      const button = el("button", { class: "btn btn-sm" + (reason ? "" : " btn-primary"), type: "button" }, "Join");
+      setControl(button, reason);
+      button.setAttribute("aria-label", "Join " + engine.iid + (reason ? " (unavailable: " + reason + ")" : ""));
+      button.setAttribute("aria-busy", String(state.pending.has("join")));
+      button.addEventListener("click", () => joinAvailable(engine.iid));
+      return el("tr", {}, el("td", { class: "mono" }, engine.iid), el("td", {}, responds(engine.engine)),
+        el("td", {}, responds(engine.sidecar)), el("td", { class: "end" }, button));
+    });
+    if (!children.length) {
+      const message = routerError ? "The router cannot be read." : "Every baseline engine is a member.";
+      children.push(el("tr", {}, el("td", { colSpan: 4, class: "empty" }, message)));
+    }
+    return [JSON.stringify([listed, reasons, state.pending.has("join")]), children];
+  });
+}
+
+async function joinAvailable(iid) {
+  const confirmed = await confirmAction("Join engine " + iid + "?",
+    "The service sends " + iid + "'s baseline entry to the router. The router checks the engine's health, process identity, attestation, profile and a KV handoff with a live peer, then places requests on it.",
+    [], "Join " + iid);
+  if (!confirmed) return;
+  await act("join", "Join " + iid, "engineBaselineJoin", { iid });
 }
 
 function renderLastAction(context) {

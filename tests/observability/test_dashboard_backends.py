@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "c7a9ec32dffb3a8277c78507b5987a97a06d535b41c576972aa8df72156a7e28"
+RENDERED_SHA256 = "907473d5857dbdb098a31d9b75ac3ce5a3b75ec22b12380449d19fc8009b206f"
 
 
 def charted() -> set[str]:
@@ -94,6 +94,7 @@ class BackendDashboardTests(unittest.TestCase):
     def test_a_panel_no_backend_can_fill_is_left_out(self):
         metrics = load_backend("vllm").metrics
         partial = SimpleNamespace(
+            icon=load_backend("vllm").icon,
             metrics=SimpleNamespace(
                 dashboard_series={
                     key: value

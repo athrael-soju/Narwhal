@@ -38,7 +38,8 @@ A malformed request body returns HTTP 422 with a `detail` alone, and the service
 | `POST /api/engines/{iid}/readmit` | Readmits the engine                                                                      |
 | `POST /api/engines/{iid}/leave`   | Removes the engine from the router's membership. Accepts an optional `deadline_s`        |
 | `POST /api/engines/join`          | Joins the engine entry in the body                                                       |
-| `GET /api/engines`                | The membership `generation` and the router state of every member engine                  |
+| `POST /api/engines/{iid}/join`    | Joins the engine's entry from the session's baseline                                     |
+| `GET /api/engines`                | The membership `generation`, the router state of every member engine and `available`     |
 
 Engine actions return these statuses:
 
@@ -64,15 +65,30 @@ When the state read fails, the record holds the reason in `error` and the action
 
 `GET /api/engines` reads the engine IDs and `generation` from the router's `GET /narwhal/engines`. When that read fails, the route reads the engine IDs from the session's baseline, or from the `fleet` file outside a session, and leaves out `generation`. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
 
-`POST /api/engines/join` and `POST /api/engines/{iid}/leave` are exclusive actions and return these statuses:
+`available` lists the baseline engines outside the router's membership, read from the session's baseline or from the `fleet` file outside a session. It is `null` when the router has no `GET /narwhal/engines` route. Otherwise it holds:
+
+| Field                 | Meaning                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| `engines`             | One entry per engine, in baseline order, with `iid`, `backend`, `engine`, `sidecar`, `available` and `error` |
+| `engines[].engine`    | `true` when the engine's health route answers HTTP 200 within 2 seconds                                   |
+| `engines[].sidecar`   | `true` when the engine's `attestation_url` answers HTTP 200 within 2 seconds                              |
+| `engines[].available` | `true` when `engine` and `sidecar` are both `true`                                                        |
+| `engines[].error`     | Why the service cannot probe the engine, such as a `${VARIABLE}` endpoint that does not resolve, or `null` |
+| `error`               | Why the router's membership could not be read, with `engines` empty, or `null`                            |
+
+The service probes the engines at most once every 10 seconds, and again after each engine action.
+
+`POST /api/engines/{iid}/join` sends the baseline entry with its `${VARIABLE}` endpoint references resolved from the service's environment, as **Restore baseline** does. The run record lists it as `engine.join` with the params `{"engine": "<iid>", "baseline": true}`.
+
+`POST /api/engines/join`, `POST /api/engines/{iid}/join` and `POST /api/engines/{iid}/leave` are exclusive actions and return these statuses:
 
 | Status | Meaning                                                                                                                       |
 | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | 200    | The engine joined, or the router removed the engine                                                                           |
-| 404    | Leave only. The engine is not in the router's membership                                                                      |
+| 404    | Leave: the engine is not in the router's membership. Baseline join: the engine is not in the session's baseline               |
 | 409    | No session is active, an exclusive action is in progress, or the router refused the call with HTTP 409                        |
 | 422, 503 | The router refused the call with that status                                                                               |
-| 422    | Join: the body is not a JSON object or has no `iid`. Leave: the body is not a JSON object, has a field other than `deadline_s`, or has an invalid `deadline_s` |
+| 422    | Join: the body is not a JSON object or has no `iid`. Baseline join: an endpoint reference does not resolve. Leave: the body is not a JSON object, has a field other than `deadline_s`, or has an invalid `deadline_s` |
 | 502    | The router was unreachable, its membership was unreadable, or it refused the call with another status                         |
 | 504    | Leave only. The router did not remove the engine within `deadline_s` plus `router.timeout_s`, or the engine's drain passed its deadline with resident requests. The router removes the engine once they finish |
 
@@ -157,12 +173,15 @@ The service queries `ALERTS{alertname=~"Narwhal.+",alertstate="firing",severity!
 
 ## Metrics
 
-`GET /metrics` returns the metrics behind the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) in the Prometheus text format:
+`GET /metrics` returns the metrics behind the [dashboard annotations](03-Grafana-Dashboard.md#dashboard-annotations) and the dashboard's [Available engines](../../observability/05-Dashboard.md#available-engines) table in the Prometheus text format:
 
 | Metric                              | Labels                                                   | Value                                   |
 | ----------------------------------- | -------------------------------------------------------- | --------------------------------------- |
 | `narwhal_control_session_active`    | none                                                     | `1` during a session, otherwise `0`     |
 | `narwhal_control_action_started_ms` | `session`, `seq`, `action`, `target`, `outcome`, `title` | Action start time, in Unix milliseconds |
 | `narwhal_control_load_job_running`  | `job`, `workload`                                        | `1` while the job runs                  |
+| `narwhal_control_engine_available`  | `iid`, `backend`                                         | `1` when the engine and its attestation sidecar respond, otherwise `0` |
 
 `narwhal_control_action_started_ms` has one series for each engine action, overlay, cold restart and restore that ran in the active session, failed ones included. `title` holds the chart label, such as `drain n7`.
+
+`narwhal_control_engine_available` has one series for each engine in `available.engines` of [`GET /api/engines`](#engines), and none while the router's membership cannot be read. `backend` is the baseline's `engine.backend`, `vllm` when the baseline leaves it unset.
