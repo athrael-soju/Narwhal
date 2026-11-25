@@ -35,8 +35,9 @@ def file_status(relative: str, info: os.stat_result) -> list:
 def _files(root: Path, *, contained: bool) -> list[tuple[str, Path]]:
     """Return the checkpoint files under `root` in path order, as relative names and paths.
 
-    With `contained`, every entry must resolve inside `root` through relative links only, so
-    a symbolic link cannot name a file that a container mount of `root` would not serve.
+    With `contained`, every entry must resolve inside `root` through relative links only, both
+    on the host and as a mount of `root` alone resolves them, so a symbolic link cannot name a
+    file that a container mount of `root` would not serve.
     """
     root = root.resolve(strict=True)
     if not root.is_dir() or not (root / "config.json").is_file():
@@ -55,10 +56,44 @@ def _files(root: Path, *, contained: bool) -> list[tuple[str, Path]]:
         # A container resolves an absolute target under its mount point, not the host path.
         if contained and path.is_symlink() and os.path.isabs(os.readlink(path)):
             raise ValueError(f"checkpoint entry links to an absolute path: {relative}")
+        if contained and not _inside_mount(root, relative.parts):
+            raise ValueError(
+                f"checkpoint entry links outside the model directory as a mount sees it: {relative}"
+            )
         files.append((relative.as_posix(), path))
     if not files:
         raise ValueError("checkpoint directory contains no files")
     return files
+
+
+def _inside_mount(root: Path, parts: tuple[str, ...]) -> bool:
+    """Whether a path stays inside `root` when `root` is mounted alone, as at /model.
+
+    The walk resolves each relative link target against the mount root, so a link that
+    climbs above the directory fails even when its host path comes back inside it.
+    """
+    pending = list(parts)
+    resolved: list[str] = []
+    links = 0
+    while pending:
+        part = pending.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not resolved:
+                return False
+            resolved.pop()
+            continue
+        resolved.append(part)
+        path = root.joinpath(*resolved)
+        if path.is_symlink():
+            links += 1
+            target = os.readlink(path)
+            if links > 40 or os.path.isabs(target):
+                return False
+            resolved.pop()
+            pending[:0] = target.split("/")
+    return True
 
 
 def hash_regular_file(path: Path, relative: str) -> tuple[str, list]:

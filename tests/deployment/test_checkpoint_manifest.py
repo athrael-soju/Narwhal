@@ -155,6 +155,45 @@ class CheckpointManifestTests(unittest.TestCase):
             (root / "model.safetensors").symlink_to("weights.bin")
             self.assertEqual(inspect_checkpoint(root)["file_count"], 3)
 
+    def test_a_link_that_climbs_out_of_the_mount_and_back_is_refused_unless_followed(self):
+        for name, link, target in (
+            # On the host, ../m2/real names m2/real; under /model it names /m2/real.
+            ("direct", "loop", "../m2/real"),
+            ("nested", "sub/loop", "../../m2/real"),
+            ("chained", "hop", "sub/up"),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder).resolve() / "m2"
+                (root / "sub").mkdir(parents=True)
+                (root / "config.json").write_text("{}")
+                (root / "real").write_bytes(b"weights")
+                if name == "chained":
+                    # The hop's own target stays inside; the link it reaches climbs out.
+                    (root / "sub/up").symlink_to("../../m2/real")
+                (root / link).symlink_to(target)
+                self.assertTrue((root / link).resolve().is_relative_to(root))
+                with self.assertRaisesRegex(
+                    ValueError, f"outside the model directory as a mount sees it: {link}$"
+                ):
+                    inspect_checkpoint(root)
+                with self.assertRaisesRegex(ValueError, "outside the model directory as a mount"):
+                    checkpoint_status(root)
+                self.assertGreaterEqual(inspect_checkpoint(root, contained=False)["file_count"], 3)
+
+    def test_a_relative_link_that_stays_in_the_mount_is_hashed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "m2"
+            (root / "sub").mkdir(parents=True)
+            (root / "config.json").write_text("{}")
+            (root / "real").write_bytes(b"weights")
+            (root / "sub/link").symlink_to("../real")
+            (root / "hop").symlink_to("sub/link")
+            manifest = inspect_checkpoint(root)
+            self.assertEqual(
+                [row["path"] for row in manifest["files"]],
+                ["config.json", "hop", "real", "sub/link"],
+            )
+
     def test_a_non_regular_file_is_refused_without_blocking(self):
         with tempfile.TemporaryDirectory() as folder:
             fifo = Path(folder) / "weights.gguf"

@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -237,6 +238,77 @@ class EngineLauncherTests(unittest.TestCase):
             ):
                 check(run, load(run))
             docker.assert_not_called()
+
+    def test_a_container_link_that_climbs_out_of_the_mount_and_back_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/real").write_bytes(b"weights")
+            loop = root / "model/loop"
+            # On the host, ../model/real names model/real; under /model it names /model/real.
+            loop.symlink_to("../model/real")
+            message = "outside the model directory as a mount sees it: loop"
+            with self.assertRaisesRegex(ValueError, message):
+                prepare(root / "launch", env)
+            self.assertFalse((root / "launch").exists())
+            loop.unlink()
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            loop.symlink_to("../model/real")
+            with patched_docker() as docker, self.assertRaisesRegex(ValueError, message):
+                check(run, load(run))
+            docker.assert_not_called()
+            native = dict(env, NARWHAL_MODEL_REVISION="a" * 40)
+            native.pop("NARWHAL_ENGINE_IMAGE")
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(root / "native", native, backend="native")
+
+    def test_check_refuses_a_fifo_swapped_in_after_preparation_without_blocking(self):
+        def container(root, env):
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            return env, "container", weights, "not a regular file: model.safetensors"
+
+        def native(root, env):
+            # The model file sits in a snapshot outside the model directory, as on narwhal dev.
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            weights = snapshot / "weights.gguf"
+            weights.write_bytes(b"gguf")
+            record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+            record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+            Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env.update(NARWHAL_MODEL_PATH=str(weights), NARWHAL_MODEL_REVISION="a" * 40)
+            return env, "native", weights, "native model file changed after launch preparation"
+
+        for layout in (container, native):
+            with self.subTest(layout.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                env, backend, weights, message = layout(root, launcher_inputs(root)[1])
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend=backend)
+                weights.unlink()
+                os.mkfifo(weights)
+                outcome = {}
+
+                def refuse(run=run, outcome=outcome):
+                    try:
+                        check(run, load(run))
+                    except ValueError as error:
+                        outcome["error"] = str(error)
+
+                with patched_docker() as docker, patch("narwhal.deployment.stages.run") as invoke:
+                    worker = threading.Thread(target=refuse, daemon=True)
+                    worker.start()
+                    worker.join(10)
+                    # Opening the FIFO for reading would block until a writer opened it.
+                    self.assertFalse(worker.is_alive(), "check blocked on the FIFO")
+                docker.assert_not_called()
+                invoke.assert_not_called()
+                self.assertRegex(outcome.get("error", ""), message)
 
     def test_check_refuses_model_files_replaced_after_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
