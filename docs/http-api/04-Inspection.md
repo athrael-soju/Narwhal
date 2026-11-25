@@ -1,5 +1,5 @@
 ---
-description: Inspect a Narwhal router through GET /v1/models, /health, /ready, /metrics and /narwhal/targets.
+description: Inspect a Narwhal router through GET /v1/models, /health, /ready, /metrics and /narwhal/targets, and read fleet state from the router that holds the lease.
 ---
 
 # Model, health, and metrics inspection
@@ -116,3 +116,26 @@ Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prome
 ```
 
 The `engines` job of the [monitoring stack](../observability/01-Start-and-Verify.md) reads this route every 15 seconds.
+
+A router that does not control the fleet returns the [fleet-state refusal](#fleet-state-reads-on-a-router-without-the-lease). A standby holds the fleet file's membership until it takes over, so its list would drop engines that joined and keep engines that left. When a refresh fails, Prometheus keeps using the targets of its last successful read and counts the failure in `prometheus_sd_refresh_failures_total`. A standby in the discovery path therefore leaves the engine targets in place, and the targets follow the fleet again on the next read that reaches the active router.
+
+## Fleet-state reads on a router without the lease
+
+`GET /narwhal/engines`, `GET /narwhal/lifecycle`, `GET /narwhal/state`, `GET /narwhal/handoff` and `GET /narwhal/targets` describe the fleet that the lease holder serves. A router that does not control the fleet answers each of them with HTTP `503` and `Retry-After: 1`:
+
+```json
+{
+  "error": {
+    "message": "this router does not control the fleet",
+    "type": "standby",
+    "code": "standby",
+    "reason": "shadowing"
+  }
+}
+```
+
+`reason` names the cause as `/ready` does: `shadowing` on a standby, the failover block on a fenced router, such as `lease renewal failed`, `shutting down` once the lease holder releases its lease at shutdown, or `lease expired`.
+
+A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause, such as degraded engine monitoring. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
+
+The [shipped HAProxy configuration](../operate/01-Start-Routers.md#configuring-the-client-path) retries an HTTP `503` while both routers are in rotation, so a read through it reaches the active router or returns this refusal.

@@ -8,7 +8,7 @@ The router serves the engines in its membership snapshot. Generation `0` holds t
 
 ## Membership document
 
-Every route on this page returns the `narwhal.membership` schema version `1` document, except the HTTP `422` for a `deadline_s` that is not a number, which carries FastAPI's validation body with `detail`.
+Every route on this page returns the `narwhal.membership` schema version `1` document, except the HTTP `422` for a `deadline_s` that is not a number, which carries FastAPI's validation body with `detail`, and the HTTP `503` of `GET /narwhal/engines` on a router that does not control the fleet.
 
 | Field            | Meaning                                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------------- |
@@ -51,7 +51,7 @@ Returns HTTP `200` with the router's snapshot:
 }
 ```
 
-A standby router returns its own snapshot. When it takes over, it adopts the active router's saved snapshot as [Membership in the handoff](07-Handoff-and-Lifecycle.md#membership-in-the-handoff) describes.
+A router that does not control the fleet, such as a standby, a fenced router or a lease holder that is shutting down, returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) in place of its snapshot. When a standby takes over, it adopts the active router's saved snapshot as [Membership in the handoff](07-Handoff-and-Lifecycle.md#membership-in-the-handoff) describes.
 
 ## `POST /narwhal/engines`
 

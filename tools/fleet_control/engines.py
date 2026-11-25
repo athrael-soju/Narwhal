@@ -53,6 +53,8 @@ MEMBERSHIP_SCHEMA = "narwhal.membership"
 LEAVE_DEADLINE_S = 300.0
 # Timeout for router state reads, in seconds.
 STATE_TIMEOUT_S = 10.0
+# Wait before repeating a router read refused with HTTP 503, in seconds.
+READ_RETRY_S = 0.5
 # Actions that wait for the engine to return to service.
 RETURNING_ACTIONS = frozenset({"start", "resume"})
 RETURN_POLL_S = 2.0
@@ -130,10 +132,12 @@ class EngineActions:
         service: ControlService,
         transport: httpx.AsyncBaseTransport | None = None,
         poll_s: float = RETURN_POLL_S,
+        read_retry_s: float = READ_RETRY_S,
     ) -> None:
         self.service = service
         self._transport = transport
         self._poll_s = poll_s
+        self._read_retry_s = read_retry_s
         service.members = self.live_members
         # The latest availability reading and its monotonic time.
         self._availability: tuple[float, Availability | None] | None = None
@@ -465,17 +469,19 @@ class EngineActions:
         """Return the router's membership generation and engine entries.
 
         Return None when the router has no membership route. Raise ActionError with HTTP 502
-        when the router does not answer or answers with anything else.
+        when the router does not answer or answers with anything else, naming the router's
+        reason when it does not control the fleet.
         """
-        timeout = min(timeout_s, self.service.config.router.timeout_s)
         try:
-            response = await client.get(MEMBERSHIP_PATH, timeout=timeout)
+            response = await self._read(client, MEMBERSHIP_PATH, timeout_s)
         except httpx.HTTPError as exc:
             raise ActionError(
                 f"router {MEMBERSHIP_PATH} failed: {type(exc).__name__}: {exc}"
             ) from exc
         if response.status_code in (404, 405):
             return None
+        if response.status_code == 503:
+            raise ActionError(f"router {MEMBERSHIP_PATH} answered {_refusal(response)}")
         try:
             document = response.json()
             if response.status_code != 200 or document.get("schema") != MEMBERSHIP_SCHEMA:
@@ -591,10 +597,28 @@ class EngineActions:
             except StateUnavailable as exc:
                 raise ActionError(str(exc)) from exc
 
+    async def _read(
+        self, client: httpx.AsyncClient, path: str, timeout_s: float = STATE_TIMEOUT_S
+    ) -> httpx.Response:
+        """GET `path`, repeating an HTTP 503 until `timeout_s` passes.
+
+        A router that does not control the fleet, such as a standby the load balancer still
+        routes to during a takeover, answers 503. Return the last response.
+        """
+        timeout = min(timeout_s, self.service.config.router.timeout_s)
+        deadline = time.monotonic() + timeout
+        while True:
+            response = await client.get(path, timeout=max(deadline - time.monotonic(), 0.05))
+            remaining = deadline - time.monotonic()
+            if response.status_code != 503 or remaining <= 0:
+                return response
+            await asyncio.sleep(min(self._read_retry_s, remaining))
+
     async def _slices(self, client: httpx.AsyncClient, iids: list[str]) -> dict[str, Any]:
-        timeout = min(STATE_TIMEOUT_S, self.service.config.router.timeout_s)
         try:
-            response = await client.get(STATE_PATH, timeout=timeout)
+            response = await self._read(client, STATE_PATH)
+            if response.status_code == 503:
+                raise StateUnavailable(f"router state unavailable: {_refusal(response)}")
             response.raise_for_status()
             state = response.json()
             return {iid: engine_slice(state, iid) for iid in iids}
@@ -697,6 +721,16 @@ def _document(response: httpx.Response) -> dict[str, Any]:
 def _relayed(status: int) -> int:
     """Return the control status for a router refusal: client errors pass through."""
     return status if status in (404, 409, 422, 503) else 502
+
+
+def _refusal(response: httpx.Response) -> str:
+    """Describe an HTTP 503 read refusal with the message and reason the router gives."""
+    try:
+        error = response.json()["error"]
+        message, reason = error["message"], error.get("reason")
+    except (ValueError, LookupError, TypeError):
+        return f"HTTP {response.status_code}"
+    return f"HTTP {response.status_code}: {message}" + (f" ({reason})" if reason else "")
 
 
 def _lifecycle_error(response: httpx.Response) -> str:

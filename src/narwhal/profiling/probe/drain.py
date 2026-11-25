@@ -40,13 +40,23 @@ async def _document(client: httpx.AsyncClient, url: str, name: str) -> dict[str,
     except httpx.HTTPError as exc:
         raise RuntimeError(f"cannot read {url}: {type(exc).__name__}: {exc}") from exc
     if response.status_code != 200:
-        raise RuntimeError(f"cannot read {url}: HTTP {response.status_code}")
+        raise RuntimeError(f"cannot read {url}: HTTP {response.status_code}{_refusal(response)}")
     try:
         document = response.json()
         validate_document(document, name)
     except ValueError as exc:
         raise RuntimeError(f"cannot read {url}: {exc}") from exc
     return document
+
+
+def _refusal(response: httpx.Response) -> str:
+    """Return `: <message> (<reason>)` for a router's error body, such as a standby's refusal."""
+    try:
+        error = response.json()["error"]
+        message, reason = error["message"], error.get("reason")
+    except (ValueError, LookupError, TypeError):
+        return ""
+    return f": {message}" + (f" ({reason})" if reason else "")
 
 
 def _held(record: Mapping[str, Any]) -> bool:

@@ -63,6 +63,8 @@ Before and after each engine action, the service reads the router's `GET /narwha
 
 When the state read fails, the record holds the reason in `error` and the action still runs.
 
+The service repeats a read of `GET /narwhal/engines` or `GET /narwhal/state` that the router answers with HTTP 503, within the [read timeout](09-Configuration-Reference.md#router). When the membership read still answers HTTP 503, the action fails with HTTP 502 before it runs, and its error names the router's reason, such as `router /narwhal/engines answered HTTP 503: this router does not control the fleet (shadowing)`.
+
 `GET /api/engines` reads the engine IDs and `generation` from the router's `GET /narwhal/engines`. When that read fails, the route reads the engine IDs from the session's baseline, or from the `fleet` file outside a session, and leaves out `generation`. It returns HTTP 500 when that file is unreadable and HTTP 502 when the router state is unreadable.
 
 `available` lists the baseline engines outside the router's membership, read from the session's baseline or from the `fleet` file outside a session. It is `null` when the router has no `GET /narwhal/engines` route. Otherwise it holds:

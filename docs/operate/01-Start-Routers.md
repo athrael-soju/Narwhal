@@ -65,6 +65,8 @@ Configure the load balancer from the shipped [HAProxy configuration](https://git
 
 While both routers are in rotation, HAProxy also retries an HTTP 503, alternating between them up to 10 times. This happens only during a takeover, after the standby passes `/ready` and while the old router, or a process restarted in its place, still answers within its 8 seconds. One client request can reach one router up to 6 times. Each router journals every attempt it answers: a `standby` or not-ready refusal as `rejected` with reason `not_ready`, and a `no_schedulable_engines` failure, or a `backend_unavailable` failure after prefill, as `failed` with reason `no_engine`. A request that a router fails after prefill can therefore run there in up to 6 rows, each recording up to `serving.max_attempts` attempts in its `attempts` field. The 503 retry applies to requests up to about 127 KiB, headers included.
 
+A router that does not hold the lease answers the fleet-state reads, such as `GET /narwhal/engines` and `GET /narwhal/state`, with an HTTP 503 [fleet-state refusal](../http-api/04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease). Through HAProxy, a read during a takeover therefore reaches the active router or returns that 503, which names the reason.
+
 ## Starting a router pair
 
 Run the final [preflight](../deploy/06-Profile-and-Preflight.md#running-preflight) against the deployment set.

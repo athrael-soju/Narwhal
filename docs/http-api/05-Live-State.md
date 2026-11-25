@@ -6,7 +6,7 @@ description: Read live admission, scheduler and role controller state from GET /
 
 ## `GET /narwhal/state`
 
-Returns the live router and scheduler state as a `narwhal.state` schema version `1` document.
+Returns the live router and scheduler state as a `narwhal.state` schema version `1` document. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
 For the Prometheus series, use [Metrics and role controller state](../telemetry/03-Metrics-and-Control.md). For their Grafana panels, use [Reading the dashboard](../observability/05-Dashboard.md).
 
