@@ -74,6 +74,29 @@ class FleetReadTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(path=path):
                 self.assert_refused(await self.client.get(path), "shadowing")
 
+    async def test_a_diagnostic_read_returns_the_standbys_own_documents(self):
+        self.router.standby = True
+        self.router.failover_blocked = "no fresh handoff"
+        for path, schema in FLEET_READS.items():
+            with self.subTest(path=path):
+                response = await self.client.get(path, headers={"x-narwhal-diagnostic": "true"})
+                self.assertEqual(response.status_code, 200, response.text)
+                if schema is not None:
+                    self.assertEqual(response.json()["schema"], schema)
+                refused = await self.client.get(path, headers={"x-narwhal-diagnostic": "false"})
+                self.assert_refused(refused, "no fresh handoff")
+        state = await self.client.get("/narwhal/state", headers={"x-narwhal-diagnostic": "1"})
+        self.assertEqual(
+            (state.json()["ha"]["standby"], state.json()["ha"]["blocked"]),
+            (True, "no fresh handoff"),
+        )
+
+    async def test_the_reason_names_the_lost_control_not_another_readiness_cause(self):
+        self.router.standby = True
+        self.router.lifecycle_blocked = "whole-wave drain w1"
+        self.assertEqual((await self.client.get("/ready")).json()["reason"], "whole-wave drain w1")
+        self.assert_refused(await self.client.get("/narwhal/engines"), "shadowing")
+
     async def test_a_fenced_router_names_its_failover_block(self):
         self.router.standby = True
         self.router.failover_blocked = "lease renewal failed"

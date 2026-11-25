@@ -6,6 +6,7 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any
 
+from fastapi import Header
 from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse
 
@@ -112,18 +113,30 @@ class FleetNotControlled(Exception):
     """A fleet-state read reached a router that does not hold the active lease."""
 
 
-async def require_control(request: HTTPRequest) -> None:
-    """Refuse a fleet-state read unless this router controls the fleet.
+async def require_control(
+    request: HTTPRequest,
+    x_narwhal_diagnostic: bool = Header(
+        False,
+        description="`true` answers with this router's own document even when it does not "
+        "control the fleet. Diagnostic bundles send it",
+    ),
+) -> None:
+    """Refuse a fleet-state read unless this router controls the fleet or the read is diagnostic.
 
     A standby or fenced router holds the fleet file's state, or state from before it lost the
-    lease, so its answer would misdescribe the fleet.
+    lease, so its answer would misdescribe the fleet. A diagnostic read keeps that state as
+    failure evidence.
     """
-    if not controls_fleet(request.app.state.router):
+    if not x_narwhal_diagnostic and not controls_fleet(request.app.state.router):
         raise FleetNotControlled
 
 
 def control_lost_reason(router: NarwhalRouter) -> str:
-    """Name why the router does not control the fleet, as `/ready` names it."""
+    """Name why the router does not control the fleet.
+
+    The failover block comes first, then `shadowing` on a standby, then `lease expired`. `/ready`
+    can name another cause first, such as a whole-wave hold or degraded monitoring.
+    """
     return router.failover_blocked or ("shadowing" if router.standby else "lease expired")
 
 

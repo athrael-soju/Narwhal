@@ -6,6 +6,8 @@ description: Collect a private bundle of Narwhal router state and local artifact
 
 `narwhal diagnostics collect` writes a router's `/health`, `/ready`, `/narwhal/state`, `/narwhal/lifecycle`, and `/metrics` GET responses and selected local artifacts to a fresh private directory.
 
+The collector sends the header `X-Narwhal-Diagnostic: true`. A standby or fenced router then returns its own `/narwhal/state` and `/narwhal/lifecycle` documents, which hold the failover block and lease state, in place of the HTTP 503 [fleet-state refusal](http-api/04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease).
+
 1. Create the parent directory.
 2. Run the collector with a fresh `--out` path per router.
 
@@ -97,7 +99,7 @@ OUT=runs/diagnostics/manual-incident-001
 umask 077
 mkdir -p "$OUT"
 for route in health ready narwhal/state narwhal/lifecycle metrics; do
-  curl -sS -w '\nHTTP %{http_code}\n' "$ROUTER_URL/$route" \
+  curl -sS -H 'X-Narwhal-Diagnostic: true' -w '\nHTTP %{http_code}\n' "$ROUTER_URL/$route" \
     > "$OUT/$(echo "$route" | tr / -).txt"
 done
 ```

@@ -31,6 +31,9 @@ SNAPSHOTS = (
     ("lifecycle", "/narwhal/lifecycle"),
     ("metrics", "/metrics"),
 )
+# A router that does not control the fleet answers the state and lifecycle reads with its own
+# documents for this header, so the bundle keeps the evidence of a standby or a blocked takeover.
+DIAGNOSTIC_HEADERS = {"x-narwhal-diagnostic": "true"}
 _REQUEST_FILES = {"journal.jsonl", "completion.json"}
 _SECRET_KEY = re.compile(
     r"(?:password|passwd|secret|token|api[_-]?key|authorization|private[_-]?key|credential)",
@@ -382,7 +385,10 @@ async def collect(
         manifest["sources"].append(row)
 
     async with httpx.AsyncClient(
-        transport=transport, trust_env=False, follow_redirects=False
+        transport=transport,
+        trust_env=False,
+        follow_redirects=False,
+        headers=DIAGNOSTIC_HEADERS,
     ) as client:
         for name, endpoint in SNAPSHOTS:
             url = router.rstrip("/") + endpoint

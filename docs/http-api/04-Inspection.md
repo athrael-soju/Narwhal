@@ -117,7 +117,7 @@ Returns one Prometheus [HTTP service discovery](https://prometheus.io/docs/prome
 
 The `engines` job of the [monitoring stack](../observability/01-Start-and-Verify.md) reads this route every 15 seconds.
 
-A router that does not control the fleet returns the [fleet-state refusal](#fleet-state-reads-on-a-router-without-the-lease). A standby holds the fleet file's membership until it takes over, so its list would drop engines that joined and keep engines that left. When a refresh fails, Prometheus keeps using the targets of its last successful read and counts the failure in `prometheus_sd_refresh_failures_total`. A standby in the discovery path therefore leaves the engine targets in place, and the targets follow the fleet again on the next read that reaches the active router.
+A router that does not control the fleet returns the [fleet-state refusal](#fleet-state-reads-on-a-router-without-the-lease). A standby holds the fleet file's membership until it takes over, so its list would drop engines that joined and keep engines that left. When a refresh fails, Prometheus keeps using the targets of its last successful read and counts the failure in `prometheus_sd_refresh_failures_total`. A standby in the discovery path therefore leaves in place the engine targets Prometheus already holds, and the targets follow the fleet again on the next read that reaches the active router. A Prometheus whose first read reaches a standby holds no engine targets until a read succeeds.
 
 ## Fleet-state reads on a router without the lease
 
@@ -134,8 +134,16 @@ A router that does not control the fleet returns the [fleet-state refusal](#flee
 }
 ```
 
-`reason` names the cause as `/ready` does: `shadowing` on a standby, the failover block on a fenced router, such as `lease renewal failed`, `shutting down` once the lease holder releases its lease at shutdown, or `lease expired`.
+`reason` names why the router does not control the fleet. The first matching cause sets it:
 
-A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause, such as degraded engine monitoring. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
+1. The failover block, when one is set, such as `lease renewal failed` on a fenced router, the cause of a blocked takeover, such as `no fresh handoff`, or `shutting down` once the lease holder releases its lease at shutdown.
+2. `shadowing` on a standby.
+3. `lease expired`.
+
+`/ready` can name another cause for the same router, such as a whole-wave hold or degraded engine monitoring, because it checks those before `shadowing`.
+
+A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
+
+A request with the header `X-Narwhal-Diagnostic: true` receives the router's own document from each of these routes, whether or not it controls the fleet. [Diagnostic bundles](../Diagnostic-Bundles.md) send it to keep a standby's or a fenced router's state.
 
 The [shipped HAProxy configuration](../operate/01-Start-Routers.md#configuring-the-client-path) retries an HTTP `503` while both routers are in rotation, so a read through it reaches the active router or returns this refusal.
