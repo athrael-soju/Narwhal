@@ -87,6 +87,11 @@ def load_contract(urls: Sequence[str], targets_url: str | None = None) -> Target
         raise ValueError(f"router origins {', '.join(routers)} repeat a router")
     if targets_url:
         targets = metrics_authority(targets_url)
+        if targets in routers:
+            raise ValueError(
+                f"{TARGETS_URL_ENV} names router {targets}; give the load balancer origin "
+                "that reaches the active router, or leave it unset for a single router"
+            )
     elif len(routers) == 1:
         targets = routers[0]
     else:

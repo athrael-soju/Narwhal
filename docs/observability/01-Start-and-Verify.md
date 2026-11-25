@@ -34,7 +34,9 @@ export NARWHAL_ROUTER_URL=http://router-a:8000,http://router-b:8000
 export NARWHAL_TARGETS_URL=http://<load-balancer>:8000
 ```
 
-Replace `<load-balancer>` with the address of the load balancer in front of the pair. Without `NARWHAL_TARGETS_URL`, `make observe` stops with an error for a pair. When the load balancer stops answering, Prometheus keeps the engine targets it read last.
+Replace `<load-balancer>` with the address of the load balancer in front of the pair. Without `NARWHAL_TARGETS_URL`, or with one of the router origins in it, `make observe` stops with an error for a pair. When the load balancer stops answering, Prometheus keeps the engine targets it read last.
+
+When one router of the pair is down, `make observe` starts once the other router answers and is ready, and prints `warning: Prometheus router target <origin> reports down: <error>` for the down router.
 
 Scrape each router at its own origin, not through the load balancer. Each router counts the requests it answered, and its series carry its origin as the `instance` label. Through the load balancer, one series can switch between the two routers' counts during a takeover, and Prometheus reads each switch as a counter reset.
 
@@ -90,9 +92,9 @@ To pass options, run the start command directly:
 | Grafana datasource       | The `Prometheus` datasource points at the Prometheus listener                                                                       |
 | Dashboard                | `narwhal-router` loads from Grafana's `dashboard.grafana.app/v2beta1` API with its `router` selector defaulting to All (regex `.*`) |
 | Dashboard router queries | Every router-scoped query uses `instance=~"$router"`, with at least one present                                                     |
-| `narwhal-router` job     | One healthy target at each router origin in `NARWHAL_ROUTER_URL`                                                                    |
+| `narwhal-router` job     | One healthy target at each router origin in `NARWHAL_ROUTER_URL`. For a pair, one router can be down while the other answers         |
 | `engines` job            | One healthy target per engine in `/narwhal/targets` at the engine targets origin, labelled with its `iid`                           |
-| Router readiness         | Every router reports `narwhal_router_ready`, and exactly one reports `1`                                                            |
+| Router readiness         | Every router that answers its scrape reports `narwhal_router_ready`, and exactly one reports `1`                                    |
 
 Each startup stage has a deadline:
 

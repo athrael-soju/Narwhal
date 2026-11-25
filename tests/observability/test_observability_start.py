@@ -10,6 +10,7 @@ import stat
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 from collections.abc import Callable
 from contextlib import redirect_stderr
 from email.message import Message
@@ -271,7 +272,13 @@ class ReadinessTests(unittest.TestCase):
         readiness: list[dict[str, object]] | None = None,
         routers: tuple[str, ...] = ("router:8000",),
         targets: str = "router:8000",
+        down: tuple[str, ...] = (),
     ) -> Callable[[str, float], tuple[int, str]]:
+        self.queries: list[str] = []
+
+        def health(router: str) -> str:
+            return "down" if router in down else router_health
+
         def get(url: str, timeout_s: float) -> tuple[int, str]:
             del timeout_s
             if url.endswith("/api/v1/targets"):
@@ -280,8 +287,8 @@ class ReadinessTests(unittest.TestCase):
                         {
                             "scrapePool": "narwhal-router",
                             "scrapeUrl": f"http://{router}/metrics",
-                            "health": router_health,
-                            "lastError": "router scrape failed" if router_health != "up" else "",
+                            "health": health(router),
+                            "lastError": "router scrape failed" if health(router) != "up" else "",
                         }
                         for router in routers
                     ),
@@ -308,6 +315,8 @@ class ReadinessTests(unittest.TestCase):
                 ]
                 return 200, json.dumps(groups)
             if "/api/v1/query?" in url:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["query"][0]
+                self.queries.append(query)
                 result = (
                     readiness
                     if readiness is not None
@@ -428,14 +437,48 @@ class ReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(observe_services.StartupError, "router targets use"):
             observe_readiness._verify_targets(self.services[0], contract, get)
 
-    def test_collection_rejects_a_failed_standby_scrape(self) -> None:
+    def test_collection_rejects_a_pair_with_every_router_down(self) -> None:
         pair = ("router-a:8000", "router-b:8000")
         contract = TargetContract(pair, "balancer:8000")
         get = self._collection_get(routers=pair, targets="balancer:8000", router_health="down")
         with self.assertRaisesRegex(
-            observe_services.StartupError, "router-a:8000 reports down: router scrape failed"
+            observe_services.StartupError,
+            "every router target is down: .*router-a:8000 reports down: router scrape failed",
         ):
             observe_readiness._verify_targets(self.services[0], contract, get)
+
+    def test_collection_warns_of_a_down_router_while_the_other_serves(self) -> None:
+        pair = ("router-a:8000", "router-b:8000")
+        contract = TargetContract(pair, "balancer:8000")
+        readiness: list[dict[str, object]] = [
+            {"value": [123.0, "1"], "metric": {"instance": "router-a:8000"}},
+            # The stopped router's last sample stays in the 5-minute lookback.
+            {"value": [123.0, "1"], "metric": {"instance": "router-b:8000"}},
+        ]
+        get = self._collection_get(
+            routers=pair, targets="balancer:8000", down=("router-b:8000",), readiness=readiness
+        )
+        warnings = observe_readiness._verify_targets(self.services[0], contract, get)
+        self.assertEqual(
+            warnings,
+            ["Prometheus router target router-b:8000 reports down: router scrape failed"],
+        )
+        self.assertEqual(self.queries, ['narwhal_router_ready{job="narwhal-router"}'])
+
+    def test_a_single_router_must_answer_its_scrape(self) -> None:
+        get = self._collection_get(down=("router:8000",))
+        with self.assertRaisesRegex(observe_services.StartupError, "router:8000 reports down"):
+            observe_readiness._verify_targets(self.services[0], self.contract, get)
+
+    def test_collection_ignores_the_readiness_of_a_router_no_longer_configured(self) -> None:
+        """A recreated Prometheus still answers the previous origin's samples for 5 minutes."""
+        readiness: list[dict[str, object]] = [
+            {"value": [123.0, "1"], "metric": {"instance": "router:8000"}},
+            {"value": [123.0, "1"], "metric": {"instance": "old-router:8000"}},
+        ]
+        get = self._collection_get(readiness=readiness)
+        warnings = observe_readiness._verify_targets(self.services[0], self.contract, get)
+        self.assertEqual(warnings, [])
 
     def test_collection_requires_exactly_one_ready_router_of_a_pair(self) -> None:
         pair = ("router-a:8000", "router-b:8000")
@@ -537,6 +580,19 @@ class ReadinessTests(unittest.TestCase):
         writer.assert_called_once_with(
             self.contract, "http://127.0.0.1:18020/console", None, "127.0.0.1:18030"
         )
+
+    def test_start_reports_a_down_router_of_a_pair_as_a_warning(self) -> None:
+        stack = mock.Mock(spec=observe_stack.Stack)
+        launched = {"prometheus": self.prometheus, "grafana": self.grafana}
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(observe_cli, "check_listeners"),
+            mock.patch.object(observe_cli, "wait_ready", return_value=launched),
+            mock.patch.object(observe_cli, "wait_collection", return_value=["b reports down"]),
+            redirect_stderr(stderr),
+        ):
+            observe_cli.start({}, stack, self.contract, target_writer=mock.Mock())
+        self.assertEqual(stderr.getvalue(), "warning: b reports down\n")
 
     def test_start_refuses_an_unsafe_console_url_before_any_change(self) -> None:
         stack = mock.Mock(spec=observe_stack.Stack)

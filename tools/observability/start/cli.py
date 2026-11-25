@@ -51,7 +51,8 @@ def start(
     stack.up()
     launched = wait_ready(services, stack, get=get, timeout_s=timeout_s)
     prometheus = next(service for service in services if service.name == "prometheus")
-    wait_collection(prometheus, contract, get=get, timeout_s=timeout_s)
+    for warning in wait_collection(prometheus, contract, get=get, timeout_s=timeout_s):
+        print(f"warning: {warning}", file=sys.stderr)
     for service in services:
         container = launched[service.name]
         print(

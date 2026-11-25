@@ -69,6 +69,14 @@ class TargetGenerationTests(unittest.TestCase):
                 ["http://router-a:8000", "http://router-a:8000/"], "http://balancer:8000"
             )
 
+    def test_the_targets_origin_is_not_one_of_the_routers(self) -> None:
+        for routers in (["http://router-a:8000", "http://router-b:8000"], ["http://router-a:8000"]):
+            with (
+                self.subTest(routers=routers),
+                self.assertRaisesRegex(ValueError, "NARWHAL_TARGETS_URL names router router-a"),
+            ):
+                make_targets.load_contract(routers, "http://router-a:8000/")
+
     def test_one_router_may_serve_its_engine_targets_from_another_origin(self) -> None:
         contract = make_targets.load_contract(["http://router-a:8000"], "http://balancer:8000")
         self.assertEqual(contract.targets, "balancer:8000")

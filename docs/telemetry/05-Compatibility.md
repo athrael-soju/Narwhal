@@ -69,6 +69,8 @@ The schema version of each interface, including the [command result](../Command-
 
 Metrics version `3` leaves the request totals a router adopts from a state handoff out of its counters, so each counter counts the requests of one router process. It also adds the `narwhal_router_role` gauge. See [Prometheus metrics](03-Metrics-and-Control.md#prometheus-metrics).
 
+From version `3`, a single router restarted with `--resume` starts its counters at `0`. Read deployment totals from [`GET /narwhal/state`](../http-api/05-Live-State.md), or from `sum(increase())` of each counter over the routers. During a rolling upgrade from version `2`, a version `2` router that takes over still raises its counters to the adopted totals, and `rate()` and `increase()` across that takeover show a spike.
+
 Metrics version `2` adds the `reason` label to `narwhal_failed_total`, `narwhal_rejected_total`, and `narwhal_expired_total`, the `cause` label to `narwhal_refused_total`, and the `stage` label to `narwhal_queue_wait_seconds`. It also adds the `narwhal_admission_inflight`, `narwhal_admission_inflight_limit`, `narwhal_router_loop_lag_seconds`, `narwhal_request_sizing_delay_seconds`, and `narwhal_saturation_threshold_seconds` gauges.
 
 Fleet configuration version `2` and effective fleet configuration version `2` remove `serving.prefill_concurrency`, `serving.decode_concurrency` and `serving.handoff_timeout_s`. The router sets [engine seats](../configuration/02-Serving-and-Role-Control.md#engine-seats) and each producer's [KV handoff bound](../configuration/02-Serving-and-Role-Control.md#kv-handoff-bound) from engine attestation in their place. Delete the three keys and set `schema_version` to `2` to upgrade a version `1` fleet file.

@@ -120,8 +120,12 @@ def _verify_targets(
     prometheus: Service,
     contract: TargetContract,
     get: HttpGet,
-) -> None:
-    """Require the deployed target identities, scrape health and router readiness."""
+) -> list[str]:
+    """Require the deployed target identities, scrape health and router readiness.
+
+    Return a warning for each router of a pair whose scrape fails while another router is up
+    and ready.
+    """
     base = prometheus.listener.url
     status, body = get(f"{base}/api/v1/targets", 2.0)
     if status != 200:
@@ -139,12 +143,22 @@ def _verify_targets(
         raise StartupError(
             f"Prometheus router targets use {actual_routers!r}; expected {expected_routers!r}"
         )
+    warnings: list[str] = []
+    up: list[str] = []
     for router in router_rows:
-        if router.get("health") != "up":
-            raise StartupError(
-                f"Prometheus router target {_scrape_authority(router.get('scrapeUrl'))} reports "
-                f"{router.get('health')}: {router.get('lastError', '')}"
-            )
+        authority = _scrape_authority(router.get("scrapeUrl"))
+        health = router.get("health")
+        problem = f"Prometheus router target {authority} reports {health}: "
+        problem += str(router.get("lastError", ""))
+        if health == "up":
+            up.append(authority)
+        elif health == "down" and len(contract.routers) > 1:
+            # The other router of the pair can serve while this one is down.
+            warnings.append(problem)
+        else:
+            raise StartupError(problem)
+    if not up:
+        raise StartupError(f"every router target is down: {'; '.join(warnings)}")
 
     try:
         status, body = get(contract.engine_targets_url, 2.0)
@@ -188,10 +202,13 @@ def _verify_targets(
         instance = metric.get("instance") if isinstance(metric, dict) else None
         if isinstance(instance, str) and isinstance(value, list) and len(value) == 2:
             ready[instance] = value[1]
-    if sorted(ready) != expected_routers:
+    # Prometheus answers a target's last sample for 5 minutes, including one from a router that
+    # stopped or that a previous configuration named, so only the answering routers count.
+    ready = {instance: value for instance, value in ready.items() if instance in up}
+    if sorted(ready) != sorted(up):
         raise StartupError(
-            f"Prometheus router readiness returned {len(rows)} series; "
-            f"expected one for each of {expected_routers!r}"
+            f"Prometheus router readiness returned {len(ready)} series; "
+            f"expected one for each of {sorted(up)!r}"
         )
     serving = sorted(instance for instance, value in ready.items() if value == "1")
     if len(serving) != 1:
@@ -199,6 +216,7 @@ def _verify_targets(
         raise StartupError(
             f"{len(serving)} routers report narwhal_router_ready 1; expected exactly 1{named}"
         )
+    return warnings
 
 
 def _refusal(body: str) -> str:
@@ -230,14 +248,16 @@ def wait_collection(
     poll_s: float = 1.0,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-) -> None:
-    """Wait for every configured target and the router metric contract."""
+) -> list[str]:
+    """Wait for every configured target and the router metric contract.
+
+    Return the warning for each router of a pair that is down while the other serves.
+    """
     deadline = clock() + timeout_s
     last_error = "target collection is starting"
     while clock() < deadline:
         try:
-            _verify_targets(prometheus, contract, get)
-            return
+            return _verify_targets(prometheus, contract, get)
         except (
             StartupError,
             ValueError,
