@@ -23,15 +23,13 @@ These metrics track failed passes, monitoring-deadline delay and event-loop CPU 
 
 `rate(narwhal_event_loop_busy_seconds_total[5m])` is the share of wall time the event-loop thread spends on CPU, from `0` to `1`. The router updates the counter each time the monitoring loop wakes, at a scheduled monitoring deadline or on an urgent control wake.
 
-The `stage` label takes the stage names `controller`, `health`, `drains`, `rollover`, `readmission`, `transfer_refresh`, `liveness`, `residency`, `handoff` and `telemetry`.
-
 ## Engine breaker state
 
 These metrics track each engine's failure streaks, verification probes, and placement holds:
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `narwhal_engine_breaker_streak` | gauge | `iid`, `class` | Current consecutive-failure streak for every configured engine and failure class. |
+| `narwhal_engine_breaker_streak` | gauge | `iid`, `class` | Current consecutive-failure streak for every member engine and failure class. |
 | `narwhal_engine_breaker_verifying` | gauge | `iid`, `kind` | `1` while an engine verification probe is running. |
 | `narwhal_engine_quarantined` | gauge | `iid` | `1` while a hold of either kind keeps the engine out of placement. |
 | `narwhal_engine_held` | gauge | `iid`, `kind` | `1` while a hold of this kind, `timed` or `inference`, keeps the engine out of placement. |
@@ -55,8 +53,6 @@ For the action the breaker takes on each class at `recovery.eject_after` consecu
 ### Dropped connections
 
 A dropped connection is an engine connection that closes or resets after the router sent the request and before the response body completes. The breaker counts it as `timeout` evidence on prefill and decode legs alike, so `recovery.eject_after` dropped connections in a row start a health probe and no inference hold. The request's [outcome reason](01-Journal.md#outcome-reasons) is `engine_connection`, and with `recovery.failure_quarantine_s` above `0` a [covered engine](../concepts/03-Failure-and-State.md#failure-evidence) enters a timed quarantine.
-
-A refused connection or a connect timeout counts as `connection` evidence instead, and its streak ejects the engine at `recovery.eject_after`. A decode response body that ends without the `[DONE]` terminator counts as `stream` evidence, and its streak starts an inference hold at `recovery.eject_after`.
 
 ### Hold kinds
 

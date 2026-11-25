@@ -37,9 +37,9 @@ The session strip runs along the top of the console.
 
 ## Exclusive actions
 
-Session start and end, configuration overlays, cold restarts and baseline restores are exclusive. While one runs, the service refuses every other action with `<action> is in progress`.
+Session start and end, engine joins and leaves, configuration overlays, cold restarts and baseline restores are exclusive. While one runs, the service refuses every other action with `<action> is in progress`.
 
-Engine actions and load jobs can run at the same time, so a drain can run during a load job.
+The other engine actions and load jobs can run at the same time, so a drain can run during a load job.
 
 ## Activity
 

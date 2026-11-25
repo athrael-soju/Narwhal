@@ -18,6 +18,7 @@ from narwhal.runtime.release import (
     release_round,
     released_engines,
 )
+from narwhal.serving.router.membership import Membership
 from tests.fixtures import contract_free_router
 
 FABRIC = load_backend("vllm").fabric
@@ -52,6 +53,48 @@ class PeerReleaseScheduleTests(unittest.TestCase):
         self.assertEqual(release.snapshot(), {})
         release.track({"e5": "ejected"})
         self.assertEqual(release.snapshot()["e5"]["rounds"], 0)
+
+    def test_an_engine_that_leaves_keeps_its_remaining_rounds(self):
+        now = [100.0]
+        release = PeerRelease(lambda: now[0], FABRIC)
+        release.track({"e5": "drained"})
+        now[0] += RELEASE_AFTER_S[0]
+        self.assertEqual(release.due(), ["e5"])
+        release.forget("e5")
+        # The engine is no longer released, but its rounds continue off the state view.
+        release.track({})
+        self.assertEqual(release.snapshot(), {})
+        self.assertEqual(release.departed(), ["e5"])
+        now[0] = 100.0 + RELEASE_AFTER_S[1]
+        self.assertEqual(release.due(), ["e5"])
+        for _ in RELEASE_AFTER_S:
+            now[0] += max(RELEASE_AFTER_S)
+            release.due()
+        release.track({})
+        self.assertEqual(release.departed(), [])
+        self.assertEqual(release.due(), [])
+        # An engine that leaves without a released state gets the whole schedule.
+        release.forget("e6")
+        release.track({})
+        now[0] += RELEASE_AFTER_S[0]
+        self.assertEqual(release.due(), ["e6"])
+
+    def test_an_engine_that_rejoins_and_drains_again_starts_a_fresh_schedule(self):
+        now = [100.0]
+        release = PeerRelease(lambda: now[0], FABRIC)
+        release.track({"e5": "drained"})
+        now[0] += RELEASE_AFTER_S[0]
+        self.assertEqual(release.due(), ["e5"])
+        now[0] += 5.0
+        release.forget("e5")
+        release.track({})
+        now[0] += 25.0
+        # e5 rejoins and is drained again with the same reason.
+        release.track({"e5": "drained"})
+        self.assertEqual(release.departed(), [])
+        self.assertEqual(
+            release.snapshot(), {"e5": {"rounds": 0, "next_round_s": RELEASE_AFTER_S[0]}}
+        )
 
     def test_a_state_change_restarts_the_schedule(self):
         now = [100.0]
@@ -114,8 +157,11 @@ class PeerReleaseRoundTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("e5", {iid for call in self.calls for iid in call})
 
     async def test_role_pins_limit_producers_and_consumers(self):
-        engines = self.cfg.engines
-        self.cfg.engines = [replace(spec, pin=spec.iid in ("e0", "e3")) for spec in engines]
+        current = self.router.membership
+        self.router.membership = Membership(
+            current.generation,
+            tuple(replace(spec, pin=spec.iid in ("e0", "e3")) for spec in current),
+        )
         self.router.scheduler.eject("e5", "liveness")
         await release_round(self.router, ["e5"])
         consumers = sorted(consumer for _, consumer in self.calls)

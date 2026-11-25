@@ -40,7 +40,7 @@ The router failover drill passes when:
 - The load balancer selects one lease holder.
 - The standby admits traffic while the stopped primary drains.
 - The open stream completes.
-- Roles survive takeover, and the new primary's counters match the handoff.
+- Roles survive takeover, and the new primary's `/narwhal/state` counters match the handoff.
 - The previous primary stays fenced.
 
 ### Individual restart drill
@@ -180,16 +180,17 @@ If the router has ejected the stopped engine at the drain request, the drain suc
 
 ### Router failover drill
 
-Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-router-pair).
+Run the routers as in [Starting a router pair](01-Start-Routers.md#starting-a-router-pair), with the same standby options on both routers, so that the standby takes over after the `SIGTERM`. A restarted router that reaches its failed-poll count first claims the lease instead, as [Lease behavior](01-Start-Routers.md#lease-behavior) describes.
 
 1. Through the load balancer, start a streaming completion that runs for at least 10 seconds.
-2. After its first chunk, stop the active router with `SIGTERM` through the supervisor.
-3. Confirm that the stopped router's `/ready` returns HTTP 503 with reason `shutting down` and that its `/health` reports `fenced`.
+2. After its first chunk, save the active router's `/narwhal/state`, then stop that router with `SIGTERM` through the supervisor.
+3. Confirm that the stopped router's log reports `released the lease at epoch <n> for shutdown`, and that a new connection to its port is refused, with `curl` exiting with code 7, while the stream from step 1 continues.
 4. Confirm that the stream completes with its final usage frame.
 5. While the stopped router drains, confirm that the standby's `/ready` returns HTTP 200 with a higher `epoch` and that the load balancer marks it up.
 6. Confirm that the new primary is the only backend returning HTTP 200 from `/ready`.
-7. Compare `/narwhal/state` on the new primary with the stopped router's last `/narwhal/state`. The roles match, and the new primary counts the open stream as offered but not served.
-8. After the supervisor restarts the stopped router with `--standby-of`, confirm that its `/ready` returns HTTP 503 with reason `shadowing`.
+7. Compare `/narwhal/state` on the new primary with the state saved in step 2. The roles match, and the new primary counts the open stream as offered but not served.
+8. After the supervisor restarts the stopped router with `--standby-of`, confirm that its `/ready` and its `/narwhal/engines` return HTTP 503 with reason `shadowing`.
+9. Through the load balancer, confirm that `/narwhal/engines` returns HTTP 200 with the new primary's `generation`.
 
 ### Restoring service after the drill
 

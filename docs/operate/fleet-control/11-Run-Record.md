@@ -72,15 +72,17 @@ The `result` depends on the action:
 | `session.start`                                                | `session`, `baseline_digest`                                                               |
 | `session.end`                                                  | `changes` and `journal`                                                                    |
 | `engine.pause`, `engine.stop`                                  | `engine`, `before`, `hook`, `after`                                                        |
-| `engine.resume`, `engine.start`                                | `engine`, `before`, `hook`, `service` with `in_service` and `waited_s`, `after`            |
+| `engine.resume`, `engine.start`                                | `engine`, `before`, `hook`, `service` with `in_service` and `waited_s` except for an engine that restore returns, `after` |
 | `engine.drain`, `engine.readmit`                               | `engine`, `before`, `router` with the call's `path`, `body`, `status` and `error`, `after` |
+| `engine.join`                                                  | `engine`, `router` with the call's `path`, `status`, `error` and `join`, `generation` with `before` and `after`, and `after` when the engine joined |
+| `engine.leave`                                                 | `engine`, `spec`, the engine's entry, `before`, `router` with the call's `path`, `status` and `error`, and `removal` with `removed`, `waited_s` and `generation` |
 | `job.start`, `job.stop`                                        | `job`, the job document                                                                    |
 | `job.complete`                                                 | The job document                                                                           |
 | `config.overlay`                                               | `fleet`, `digest`, `base_digest`, `hook`, `readiness`                                      |
 | `config.cold_restart`                                          | `fleet`, `digest`, `hook`, `readiness`                                                     |
 | `config.restore`                                               | `changes`, `steps`, and `hook` and `readiness` when the configuration changed              |
 
-`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, the changes each engine still carries: `paused` or `stopped`, then `drained`. Each `steps` entry names the `engine`, the `action` that undid one change and that action's `seq`, or `null` when the engine was already in service.
+`changes` holds `configuration`, whether the configuration differs from the baseline, and `engines`, the changes each engine still carries: `paused` or `stopped`, then `drained`. When the router's membership differs from the baseline, `joined` lists the member engines the baseline does not configure, and `left` maps each baseline engine that is not a member to its baseline entry. `engines` then covers member engines only. Each `steps` entry records one change the service undid or failed to undo: the `engine`, the `action` the service took, and the action's `seq`. `seq` is `null` when the service skipped the action because the engine was already in service, already joined or already removed.
 
 A hook run holds `hook`, `argv`, `exit_code`, `timed_out`, `duration_s`, `log`, and `tail`, the last 4096 bytes of output.
 
@@ -100,6 +102,8 @@ Each load job and each session keeps a copy of the [router journal](../../teleme
 
 If the router restarted during a session, the extract holds rows from more than one router process. Each row's `run` field names its process.
 
+With [`router.journals`](09-Configuration-Reference.md#router), the service records each journal's size and copies the rows each one gained into the one extract, journal by journal in the listed order. The size limit covers the whole extract. A run that spans a takeover therefore holds the rows of both routers, each journal's rows in the order its router wrote them. Journal rows carry no wall-clock time, so the extract does not interleave the two routers' rows. Each row's `run` field names its router process.
+
 The service copies the extract while it handles the request, so a large extract delays other requests.
 
 The `journal` entry in a job document or a `session.end` result has:
@@ -107,9 +111,10 @@ The `journal` entry in a job document or a `session.end` result has:
 | Field          | Meaning                                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `extract`      | The extract file, or `null` when nothing was copied                                                                |
-| `start_offset` | Journal byte offset where the copy started                                                                         |
-| `end_offset`   | Journal byte offset after the last copied row                                                                      |
+| `start_offset` | Journal byte offset where the copy started, with `router.journal`                                                  |
+| `end_offset`   | Journal byte offset after the last copied row, with `router.journal`                                               |
 | `lines`        | Rows copied                                                                                                        |
 | `bytes`        | Bytes copied                                                                                                       |
 | `terminal`     | Count of finished requests by outcome, such as `completed` or `refused`                                            |
-| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit |
+| `notes`        | Conditions that affected the copy, such as a missing or replaced journal, a dropped partial row, or the size limit. With `router.journals`, each note starts with its journal's path |
+| `journals`     | With `router.journals`, one entry per journal in the listed order: `journal` (its path), `start_offset`, `end_offset`, `lines`, `bytes` and `notes`, or `journal` and `notes` alone when the journal is missing |

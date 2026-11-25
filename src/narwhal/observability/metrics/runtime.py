@@ -1,8 +1,12 @@
-"""Router readiness, monitoring and engine lifecycle metrics."""
+"""Router readiness, monitoring, engine lifecycle and membership metrics."""
 
 from __future__ import annotations
 
 from .exposition import metric_lines
+
+# The `/narwhal/state` `ha.role` values: the active router holds the lease, a standby shadows it,
+# and a fenced router can do neither.
+ROUTER_ROLES = ("active", "standby", "fenced")
 
 
 def render_runtime(state: dict) -> list[str]:
@@ -20,6 +24,13 @@ def render_runtime(state: dict) -> list[str]:
         "Current router lease epoch, or zero when fencing is disabled",
         "gauge",
         [({}, ha.get("epoch", 0))],
+    )
+    role = ha.get("role", "active")
+    out += metric_lines(
+        "narwhal_router_role",
+        "1 on the router's lease role: active, standby or fenced",
+        "gauge",
+        [({"role": name}, 1 if name == role else 0) for name in ROUTER_ROLES],
     )
     monitoring = state.get("monitoring") or {}
     out += metric_lines(
@@ -90,6 +101,15 @@ def render_runtime(state: dict) -> list[str]:
         ],
     )
     out += metric_lines(
+        "narwhal_engine_leaving",
+        "1 while a removal drains the engine before it leaves the membership",
+        "gauge",
+        [
+            ({"iid": iid}, 1 if entry.get("leaving") else 0)
+            for iid, entry in lifecycle_engines.items()
+        ],
+    )
+    out += metric_lines(
         "narwhal_engine_ready_to_stop",
         "1 after a drained engine has no resident work and a recorded process identity",
         "gauge",
@@ -107,4 +127,31 @@ def render_runtime(state: dict) -> list[str]:
             for iid, entry in lifecycle_engines.items()
         ],
     )
+    return out
+
+
+def render_membership(state: dict) -> list[str]:
+    """Render the membership generation and the join and leave outcomes since process start."""
+    membership = state.get("membership") or {}
+    out: list[str] = []
+    out += metric_lines(
+        "narwhal_membership_generation",
+        "Generation of the engine membership snapshot this router serves",
+        "gauge",
+        [({}, membership.get("generation", 0))],
+    )
+    # The state lists every outcome from startup; increase() skips a series' first sample.
+    for kind, help_text in (
+        ("joins", "Engine joins since router start, by outcome"),
+        ("leaves", "Engine removals since router start, by outcome"),
+    ):
+        out += metric_lines(
+            f"narwhal_engine_{kind}_total",
+            help_text,
+            "counter",
+            [
+                ({"outcome": outcome}, count)
+                for outcome, count in (membership.get(kind) or {}).items()
+            ],
+        )
     return out

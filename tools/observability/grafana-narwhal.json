@@ -38,7 +38,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset $__interval)",
               "step": "15s",
               "titleFormat": "{{alertname}}",
               "textFormat": "{{severity}} {{iid}}",
@@ -56,7 +56,7 @@
             ]
           },
           "legacyOptions": {
-            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset 15s)",
+            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"warn\"} offset $__interval)",
             "step": "15s",
             "titleFormat": "{{alertname}}",
             "textFormat": "{{severity}} {{iid}}",
@@ -74,7 +74,7 @@
           "query": {
             "kind": "prometheus",
             "spec": {
-              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+              "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset $__interval)",
               "step": "15s",
               "titleFormat": "{{alertname}}",
               "textFormat": "{{severity}} {{iid}}",
@@ -92,10 +92,70 @@
             ]
           },
           "legacyOptions": {
-            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset 15s)",
+            "expr": "ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} unless (ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=\"page\"} offset $__interval)",
             "step": "15s",
             "titleFormat": "{{alertname}}",
             "textFormat": "{{severity}} {{iid}}",
+            "useValueForTime": false
+          }
+        }
+      },
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "query": {
+            "kind": "prometheus",
+            "spec": {
+              "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1) and on(job, instance) (narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} == 1)",
+              "step": "15s",
+              "titleFormat": "Membership change",
+              "textFormat": "{{instance}}",
+              "useValueForTime": false
+            }
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "#00BCD4",
+          "name": "Membership changes",
+          "legacyOptions": {
+            "expr": "(narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_membership_generation{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval)) and on(job, instance) ((narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval) == 1) and on(job, instance) (narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} == 1)",
+            "step": "15s",
+            "titleFormat": "Membership change",
+            "textFormat": "{{instance}}",
+            "useValueForTime": false
+          }
+        }
+      },
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "query": {
+            "kind": "prometheus",
+            "spec": {
+              "expr": "(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} > 0) and on(job, instance) (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval))",
+              "step": "15s",
+              "titleFormat": "Router takeover",
+              "textFormat": "{{instance}} claimed a new lease epoch",
+              "useValueForTime": false
+            }
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "#96D98D",
+          "name": "Router takeovers",
+          "legacyOptions": {
+            "expr": "(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} > 0) and on(job, instance) (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} != (narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"} offset $__interval))",
+            "step": "15s",
+            "titleFormat": "Router takeover",
+            "textFormat": "{{instance}} claimed a new lease epoch",
             "useValueForTime": false
           }
         }
@@ -139,7 +199,7 @@
         "spec": {
           "id": 1,
           "title": "Router",
-          "description": "Router admission readiness and firing Narwhal alerts.",
+          "description": "Admission readiness of each router scraped in the last 15 seconds, named by its instance, and firing Narwhal alerts.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -150,8 +210,9 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) or ((-1 * (up{job=\"narwhal-router\",instance=~\"$router\"} == 0)) < 0)",
-                        "legendFormat": "Admission"
+                        "expr": "(last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (((-1 * (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == bool 0)) < 0) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))",
+                        "legendFormat": "{{instance}}",
+                        "instant": true
                       }
                     },
                     "datasource": {
@@ -214,8 +275,8 @@
                 "overrides": [
                   {
                     "matcher": {
-                      "id": "byName",
-                      "options": "Admission"
+                      "id": "byFrameRefID",
+                      "options": "A"
                     },
                     "properties": [
                       {
@@ -389,7 +450,7 @@
         "spec": {
           "id": 7,
           "title": "",
-          "description": "One row per engine, in engine ID order, 8 engines per page. Empty rows fill the last page. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Preflight, Profiling, Calibrating (the Narwhal tool reports the engine), Probing (the engine serves requests from a client other than a router or a Narwhal tool that reports it), Backlogged (the engine has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and Engine running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
+          "description": "One row per engine, in engine ID order, 8 engines per page. State shows the most serious state, ranking Restarting (unreachable during a drain), Unreachable, Blocked, Validating, Ejected, Draining, Quarantined, Verifying, Probation, Preflight, Profiling, Calibrating (the Narwhal tool reports the engine), Probing (the engine serves requests from a client other than a router or a Narwhal tool that reports it), Backlogged (the engine has waiting requests), Switching (still finishing requests from its previous role) and Serving. Resident and Engine running bars scale to the busiest engine; KV cache scales to 100%. Prefix hits is the share of prompt tokens served from the engine's prefix cache. Tokens/s counts prompt tokens on prefill engines and output tokens on decode engines. Select Engine detail to filter.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -400,7 +461,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) ((((sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) + 2 * ((sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or (0 * sum by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) or on(iid) (0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"})))",
+                        "expr": "(max by(iid) ((((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))) or (0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) + 2 * ((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))) or (0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))))) or on(iid) (0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"})))) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -419,7 +480,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid, backend) (up{job=\"engines\",iid=~\"$iid\"})",
+                        "expr": "(max by(iid, backend) (up{job=\"engines\",iid=~\"$iid\"})) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -438,7 +499,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(<<waiting{job=\"engines\",iid=~\"$iid\"}>>, 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * clamp_max(((max_over_time(<<running{job=\"engines\",iid=~\"$iid\"}>>[15s:1s] offset 8s) > 0) or (changes(<<processed_tokens{job=\"engines\",iid=~\"$iid\"}>>[15s:1s] offset 8s) > 0)) and on(iid) ((<<running{job=\"engines\",iid=~\"$iid\"}>> > 0) or (changes(<<processed_tokens{job=\"engines\",iid=~\"$iid\"}>>[5100ms:100ms]) > 0)) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} offset 23s)) unless on(iid) (max by(iid) (max_over_time(narwhal_resident_requests{job=\"narwhal-router\",iid=~\"$iid\"}[37s])) > 0) unless on(iid) (sum by(iid) (increase(narwhal_engine_requests_total{job=\"narwhal-router\",iid=~\"$iid\"}[37s])) > 0) unless on(iid) (max by(iid) (max_over_time(narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\"}[37s]))) unless on() ((max_over_time(up{job=\"narwhal-router\"}[37s]) == 1) and (min_over_time(up{job=\"narwhal-router\"}[37s]) == 0)), 1), \"s\", \"probing\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"calibration\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"calibrating\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"profiling\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"profiling\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"preflight\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"preflight\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"probation\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"verifying\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(10 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(11 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(12 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(13 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(14 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(15 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\"))",
+                        "expr": "(max by(iid) (label_replace(0 * max by(iid) (up{job=\"engines\",iid=~\"$iid\"}), \"s\", \"serving\", \"\", \"\") or label_replace(0 * max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"listed\", \"\", \"\") or label_replace(1 * (((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), 1)) or (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) * clamp_max(max by(iid) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",phase=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), 1))) unless on(iid) (count by(iid) (count by(iid, role) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))) > 1)), \"s\", \"switching\", \"\", \"\") or label_replace(2 * clamp_max(<<waiting{job=\"engines\",iid=~\"$iid\"}>>, 1), \"s\", \"backlog\", \"\", \"\") or label_replace(3 * clamp_max(((max_over_time(<<running{job=\"engines\",iid=~\"$iid\"}>>[15s:1s] offset 8s) > 0) or (changes(<<processed_tokens{job=\"engines\",iid=~\"$iid\"}>>[15s:1s] offset 8s) > 0)) and on(iid) ((<<running{job=\"engines\",iid=~\"$iid\"}>> > 0) or (changes(<<processed_tokens{job=\"engines\",iid=~\"$iid\"}>>[5100ms:100ms]) > 0)) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} offset 23s)) unless on(iid) (max by(iid) (max_over_time(narwhal_resident_requests{job=\"narwhal-router\",iid=~\"$iid\"}[37s])) > 0) unless on(iid) (sum by(iid) (increase(narwhal_engine_requests_total{job=\"narwhal-router\",iid=~\"$iid\"}[37s])) > 0) unless on(iid) (max by(iid) (max_over_time(narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\"}[37s]))) unless on() ((max_over_time(up{job=\"narwhal-router\"}[37s]) == 1) and (min_over_time(up{job=\"narwhal-router\"}[37s]) == 0)), 1), \"s\", \"probing\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"calibration\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"calibrating\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"profiling\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"profiling\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_tool_engine_in_use{job=\"narwhal-tools\",iid=~\"$iid\",operation=\"preflight\"} and on(job,instance) (up{job=\"narwhal-tools\"} == 1) and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}))), \"s\", \"preflight\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_probation_instances{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"probation\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_breaker_verifying{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"verifying\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"quarantined\", \"\", \"\") or label_replace(10 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"draining\", \"\", \"\") or label_replace(11 * max by(iid) (narwhal_engine_leaving{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"leaving\", \"\", \"\") or label_replace(12 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"ejected\", \"\", \"\") or label_replace(13 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"validating\", \"\", \"\") or label_replace(14 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"blocked\", \"\", \"\") or label_replace(15 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"scrape\", \"\", \"\") or label_replace(16 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))), \"s\", \"restarting\", \"\", \"\"))) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -457,7 +518,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max by(iid) (sum by(iid, job, instance) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
+                        "expr": "(max by(iid) (sum by(iid, job, instance) (narwhal_resident_requests{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -476,7 +537,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "<<running{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                        "expr": "(<<running{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -495,7 +556,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "<<kv_usage{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)",
+                        "expr": "(<<kv_usage{job=\"engines\",iid=~\"$iid\"}>> and on(iid) (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) == 1)) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -514,7 +575,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "<<prefix_hit_ratio{job=\"engines\",iid=~\"$iid\"}>>",
+                        "expr": "(<<prefix_hit_ratio{job=\"engines\",iid=~\"$iid\"}>>) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "instant": true,
                         "legendFormat": "",
                         "format": "table"
@@ -533,7 +594,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(<<output_tokens{job=\"engines\",iid=~\"$iid\"}>> * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))) or ((<<prompt_tokens{job=\"engines\",iid=~\"$iid\"}>>) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))",
+                        "expr": "((<<output_tokens{job=\"engines\",iid=~\"$iid\"}>> * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))) or ((<<prompt_tokens{job=\"engines\",iid=~\"$iid\"}>>) * on(iid) max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"}) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "instant": true,
                         "legendFormat": "",
                         "format": "table"
@@ -544,25 +605,6 @@
                       "uid": "${DS_PROMETHEUS}"
                     },
                     "refId": "T"
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "prometheus",
-                      "spec": {
-                        "expr": "(label_replace(label_replace(vector(1), \"iid\", \"\u9f981\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 1) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f982\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 2) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f983\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 3) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f984\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 4) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f985\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 5) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f986\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 6) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f987\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 7) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0))) or (label_replace(label_replace(vector(1), \"iid\", \"\u9f988\", \"\", \"\"), \"style\", \"{\\\"contentVisibility\\\":\\\"hidden\\\",\\\"background\\\":\\\"transparent\\\"}\", \"\", \"\") and on() ((8 - (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 >= 8) and on() ((count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) % 8 > 0 or (count(count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"})) or vector(0)) == 0)))",
-                        "format": "table",
-                        "instant": true,
-                        "legendFormat": ""
-                      }
-                    },
-                    "datasource": {
-                      "type": "prometheus",
-                      "uid": "${DS_PROMETHEUS}"
-                    },
-                    "refId": "Z"
                   }
                 }
               ],
@@ -583,7 +625,7 @@
                     "id": "filterFieldsByName",
                     "options": {
                       "include": {
-                        "pattern": "^(iid|backend|style|Value #[^BZ]*)$"
+                        "pattern": "^(iid|backend|Value #[^B]*)$"
                       }
                     }
                   }
@@ -657,8 +699,7 @@
                   ],
                   "noValue": "N/A",
                   "custom": {
-                    "minWidth": 70,
-                    "styleField": "style"
+                    "minWidth": 70
                   }
                 },
                 "overrides": [
@@ -817,22 +858,26 @@
                                 "color": "#8E9196"
                               },
                               "11": {
+                                "text": "Leaving",
+                                "color": "#4F6D7A"
+                              },
+                              "12": {
                                 "text": "Ejected",
                                 "color": "#D44A3A"
                               },
-                              "12": {
+                              "13": {
                                 "text": "Validating",
                                 "color": "#9E4AA4"
                               },
-                              "13": {
+                              "14": {
                                 "text": "Blocked",
                                 "color": "#A11D1D"
                               },
-                              "14": {
+                              "15": {
                                 "text": "Unreachable",
                                 "color": "#D44A3A"
                               },
-                              "15": {
+                              "16": {
                                 "text": "Restarting",
                                 "color": "#8E9196"
                               }
@@ -1036,7 +1081,7 @@
         "spec": {
           "id": 8,
           "title": "Engine role history",
-          "description": "Role over time for the engines in the Engines table, in the same rows. Quarantined, Draining, Ejected, Validating, Blocked, Unreachable and Restarting periods replace the role for their duration, in the Engines State colours.",
+          "description": "Role over time for the engines in the Engines table, in the same rows, followed by the engines that left during the displayed interval, each labelled with its ID. Quarantined, Draining, Ejected, Validating, Blocked, Unreachable and Restarting periods replace the role for their duration, in the Engines State colours.",
           "data": {
             "kind": "QueryGroup",
             "spec": {
@@ -1047,7 +1092,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(max by(iid) (label_replace(((((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))) + 2 * ((sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)))) or (0 * sum by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"quarantined\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"ejected\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"validating\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1)), \"s\", \"blocked\", \"\", \"\") or label_replace(9 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(10 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))), \"s\", \"restarting\", \"\", \"\")) > 0) and on(iid) (count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))",
+                        "expr": "(max by(iid) (label_replace(((((max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or (0 * max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))))) + 2 * ((max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or (0 * max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"quarantined\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_leaving{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"leaving\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"ejected\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"validating\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"blocked\", \"\", \"\") or label_replace(10 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(11 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))), \"s\", \"restarting\", \"\", \"\")) > 0) and on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)))",
                         "legendFormat": "{{iid}}"
                       }
                     },
@@ -1064,7 +1109,24 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(label_replace(vector(0), \"iid\", \"\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 1)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 2)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 3)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 4)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 5)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 6)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 7)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) % 8) % 8 + 8 * ((count((count by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end()) or count by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()))) or vector(0)) == bool 0)) >= 8))",
+                        "expr": "(max by(iid) (label_replace(((((max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"prefill\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or (0 * max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))))) + 2 * ((max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",role=\"decode\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or (0 * max by(iid) ((narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))))))), \"s\", \"role\", \"\", \"\") or label_replace(4 * max by(iid) (narwhal_engine_quarantined{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"quarantined\", \"\", \"\") or label_replace(5 * max by(iid) (narwhal_engine_draining{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"draining\", \"\", \"\") or label_replace(6 * max by(iid) (narwhal_engine_leaving{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"leaving\", \"\", \"\") or label_replace(7 * max by(iid) (narwhal_ejected{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"ejected\", \"\", \"\") or label_replace(8 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"validating\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"validating\", \"\", \"\") or label_replace(9 * max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=\"blocked\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))), \"s\", \"blocked\", \"\", \"\") or label_replace(10 * (1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})), \"s\", \"unreachable\", \"\", \"\") or label_replace(11 * ((1 - max by(iid) (up{job=\"engines\",iid=~\"$iid\"})) * on(iid) max by(iid) (narwhal_engine_lifecycle_state{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\",state=~\"draining|drained|deadline_exceeded\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))), \"s\", \"restarting\", \"\", \"\")) > 0) and on(iid) (max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())) unless on(iid) (max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))",
+                        "legendFormat": "{{iid}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "D"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(label_replace(vector(0), \"iid\", \"\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 1)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 2)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 3)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 4)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 5)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 6)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 7)) or (label_replace(vector(0), \"iid\", \"\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\", \"\", \"\") and on() (((8 - (count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) % 8) % 8 + 8 * ((count(((max by(iid) (narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"} @ end() and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or (max by(iid) (up{job=\"engines\",iid=~\"$iid\"} @ end()) unless on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s] @ end()) == 1))) or max by(iid) (max_over_time(narwhal_instance_role{job=\"narwhal-router\",instance=~\"$router\",iid=~\"$iid\"}[$__range] @ end())))) or vector(0)) == bool 0)) >= 8))",
                         "legendFormat": "{{iid}}"
                       }
                     },
@@ -1106,6 +1168,10 @@
                     {
                       "type": "value",
                       "options": {
+                        "0": {
+                          "text": " ",
+                          "color": "transparent"
+                        },
                         "1": {
                           "text": "Prefill",
                           "color": "#299E97"
@@ -1127,28 +1193,28 @@
                           "color": "#8E9196"
                         },
                         "6": {
+                          "text": "Leaving",
+                          "color": "#4F6D7A"
+                        },
+                        "7": {
                           "text": "Ejected",
                           "color": "#D44A3A"
                         },
-                        "7": {
+                        "8": {
                           "text": "Validating",
                           "color": "#9E4AA4"
                         },
-                        "8": {
+                        "9": {
                           "text": "Blocked",
                           "color": "#A11D1D"
                         },
-                        "9": {
+                        "10": {
                           "text": "Unreachable",
                           "color": "#D44A3A"
                         },
-                        "10": {
+                        "11": {
                           "text": "Restarting",
                           "color": "#8E9196"
-                        },
-                        "0": {
-                          "text": " ",
-                          "color": "transparent"
                         }
                       }
                     }
@@ -1162,7 +1228,20 @@
                   },
                   "displayName": "\u200b"
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "D"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "${__field.labels.iid} (left)"
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -1656,7 +1735,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.50, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.50, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p50"
                       }
                     },
@@ -1673,7 +1752,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p95"
                       }
                     },
@@ -1690,7 +1769,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.99, sum by (instance, slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.99, sum by (slo, le) (rate(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p99"
                       }
                     },
@@ -1707,7 +1786,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}",
+                        "expr": "max by (metric, slo) (narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"})",
                         "legendFormat": "SLO"
                       }
                     },
@@ -1840,7 +1919,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.50, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.50, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p50"
                       }
                     },
@@ -1857,7 +1936,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p95"
                       }
                     },
@@ -1874,7 +1953,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.99, sum by (instance, slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.99, sum by (slo, le) (rate(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "p99"
                       }
                     },
@@ -1891,7 +1970,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}",
+                        "expr": "max by (metric, slo) (narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"})",
                         "legendFormat": "SLO"
                       }
                     },
@@ -2024,7 +2103,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"admission\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"admission\"}[$__rate_interval])))",
                         "legendFormat": "admission wait p95"
                       }
                     },
@@ -2041,7 +2120,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"prefill\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"prefill\"}[$__rate_interval])))",
                         "legendFormat": "prefill seat wait p95"
                       }
                     },
@@ -2058,7 +2137,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"decode\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_queue_wait_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\",stage=\"decode\"}[$__rate_interval])))",
                         "legendFormat": "decode seat wait p95"
                       }
                     },
@@ -2075,7 +2154,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "histogram_quantile(0.95, sum by (instance, slo, le) (rate(narwhal_seat_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (slo, le) (rate(narwhal_seat_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__rate_interval])))",
                         "legendFormat": "seat time p95"
                       }
                     },
@@ -2194,7 +2273,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_pool_load{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_pool_load{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "{{role}}"
                       }
                     },
@@ -2309,6 +2388,23 @@
                     },
                     "refId": "A"
                   }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "vector(0) unless on() count(max_over_time(ALERTS{alertname=~\"Narwhal.+\",alertstate=\"firing\",severity=~\"page|warn\"}[$__range] @ end()))",
+                        "legendFormat": "No alerts in this window"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
                 }
               ],
               "transformations": [],
@@ -2347,6 +2443,10 @@
                         "2": {
                           "text": "Page",
                           "color": "#D44A3A"
+                        },
+                        "0": {
+                          "text": "No alerts",
+                          "color": "transparent"
                         }
                       }
                     }
@@ -2378,7 +2478,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_pool_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "{{role}}"
                       }
                     },
@@ -2395,7 +2495,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_ejected_instances{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "ejected"
                       }
                     },
@@ -2869,7 +2969,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(instance, slo) max by (instance, slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}[$__range])))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(slo) max by (slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"ttft\"}[$__range])))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2888,7 +2988,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(instance, slo) max by (instance, slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}[$__range])))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))) / on(slo) max by (slo) (max_over_time(narwhal_slo_seconds{job=\"narwhal-router\",instance=~\"$router\",metric=\"tpot\"}[$__range])))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2907,7 +3007,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_ttft_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range]))))",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -2926,7 +3026,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "max(histogram_quantile(0.95, sum by (instance, slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) * 1000",
+                        "expr": "max(histogram_quantile(0.95, sum by (slo, le) (increase(narwhal_tpot_seconds_bucket{job=\"narwhal-router\",instance=~\"$router\"}[$__range])))) * 1000",
                         "format": "table",
                         "instant": true,
                         "legendFormat": ""
@@ -3272,7 +3372,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_admission_inflight{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_admission_inflight{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "in-flight"
                       }
                     },
@@ -3289,7 +3389,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_admission_inflight_limit{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_admission_inflight_limit{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "limit"
                       }
                     },
@@ -3393,7 +3493,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_queued{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_queued{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "admission"
                       }
                     },
@@ -3410,7 +3510,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_waiting_prefill{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_waiting_prefill{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "prefill"
                       }
                     },
@@ -3427,7 +3527,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_waiting_decode{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_waiting_decode{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "decode"
                       }
                     },
@@ -3532,7 +3632,7 @@
                     "query": {
                       "kind": "prometheus",
                       "spec": {
-                        "expr": "(narwhal_retry_credits{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (up{job=\"narwhal-router\",instance=~\"$router\"} == 1))",
+                        "expr": "(narwhal_retry_credits{job=\"narwhal-router\",instance=~\"$router\"} and on(job,instance) (((last_over_time(narwhal_router_ready{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1 and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() ((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) == on() group_left() max((last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))))) or on() (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)))",
                         "legendFormat": "available"
                       }
                     },
@@ -3580,6 +3680,500 @@
                         "value": {
                           "mode": "fixed",
                           "fixedColor": "#B877D9"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-60": {
+        "kind": "Panel",
+        "spec": {
+          "id": 60,
+          "title": "Engine joins and leaves",
+          "description": "Joins and removals in the displayed interval. Completed counts engines that joined or left, Refused counts refused requests, yellow from 1, and Cancelled counts leaves that a readmission or a whole-wave hold ended.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_joins_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"joined\"}[$__range]))), \"change\", \"Join\", \"\", \"\") or label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"left\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_joins_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"refused\"}[$__range]))), \"change\", \"Join\", \"\", \"\") or label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"refused\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "label_replace(round(sum(increase(narwhal_engine_leaves_total{job=\"narwhal-router\",instance=~\"$router\",outcome=\"cancelled\"}[$__range]))), \"change\", \"Leave\", \"\", \"\")",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "C"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "joinByField",
+                  "spec": {
+                    "id": "joinByField",
+                    "options": {
+                      "byField": "change",
+                      "mode": "outer"
+                    }
+                  }
+                },
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true,
+                        "Time 1": true,
+                        "Time 2": true,
+                        "Time 3": true
+                      },
+                      "indexByName": {
+                        "change": 0,
+                        "Value #A": 1,
+                        "Value #B": 2,
+                        "Value #C": 3
+                      },
+                      "renameByName": {
+                        "change": "Change",
+                        "Value #A": "Completed",
+                        "Value #B": "Refused",
+                        "Value #C": "Cancelled"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Change",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "N/A",
+                  "custom": {
+                    "minWidth": 60
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Refused"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "thresholds"
+                        }
+                      },
+                      {
+                        "id": "thresholds",
+                        "value": {
+                          "mode": "absolute",
+                          "steps": [
+                            {
+                              "color": "transparent",
+                              "value": null
+                            },
+                            {
+                              "color": "#F2CC0C",
+                              "value": 1
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-61": {
+        "kind": "Panel",
+        "spec": {
+          "id": 61,
+          "title": "Available engines",
+          "description": "Engines of the fleet control baseline that are not members of the router's fleet, from fleet control's narwhal_control_engine_available and narwhal_control_engine_starting. Respond means the engine and its attestation sidecar answer. Starting means fleet control started the engine and it does not answer yet. Empty when Prometheus does not scrape fleet control.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "(max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}) + on(iid, backend) (2 * max by(iid, backend) (narwhal_control_engine_starting{job=\"fleet-control\"}) or 0 * max by(iid, backend) (narwhal_control_engine_available{job=\"fleet-control\"}))) or on() (vector(-4) and on() (max(last_over_time(narwhal_control_membership_readable{job=\"fleet-control\"}[15s])) == 0)) or on() (vector(-1) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1) and on() count(last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on() (vector(-2) and on() count(last_over_time(up{job=\"fleet-control\"}[15s]) == 1)) or on() vector(-3)",
+                        "format": "table",
+                        "instant": true,
+                        "legendFormat": ""
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "organize",
+                  "spec": {
+                    "id": "organize",
+                    "options": {
+                      "excludeByName": {
+                        "Time": true
+                      },
+                      "indexByName": {
+                        "iid": 0,
+                        "backend": 1,
+                        "Value": 2
+                      },
+                      "renameByName": {
+                        "iid": "Engine",
+                        "backend": "Backend",
+                        "Value": "Engine and sidecar"
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "table",
+            "spec": {
+              "options": {
+                "cellHeight": "sm",
+                "footer": {
+                  "show": false
+                },
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "displayName": "Engine",
+                    "desc": false
+                  }
+                ]
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "custom": {
+                    "minWidth": 70
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Engine"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 75
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Backend"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          "<<backend_badges>>"
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "image"
+                        }
+                      },
+                      {
+                        "id": "custom.width",
+                        "value": 70
+                      },
+                      {
+                        "id": "custom.align",
+                        "value": "center"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Engine and sidecar"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "0": {
+                                "text": "No response",
+                                "color": "#8E9196"
+                              },
+                              "1": {
+                                "text": "Respond",
+                                "color": "#8E9196"
+                              },
+                              "2": {
+                                "text": "Starting",
+                                "color": "#8E9196"
+                              },
+                              "-1": {
+                                "text": "Every baseline engine is a member.",
+                                "color": "transparent"
+                              },
+                              "-2": {
+                                "text": "Prometheus cannot scrape the router.",
+                                "color": "transparent"
+                              },
+                              "-3": {
+                                "text": "Fleet control is not scraped.",
+                                "color": "transparent"
+                              },
+                              "-4": {
+                                "text": "Fleet control cannot read the router's membership.",
+                                "color": "transparent"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "id": "custom.cellOptions",
+                        "value": {
+                          "type": "color-background",
+                          "mode": "basic"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "panel-62": {
+        "kind": "Panel",
+        "spec": {
+          "id": 62,
+          "title": "Router roles",
+          "description": "Each selected router's lease role over time, from narwhal_router_role: Active holds the lease, Standby can take over, Fenced released or lost the lease or had its takeover blocked, and Down failed its scrape. Each router's lane below shows its lease epoch. A Router takeover marker on every chart marks each new lease epoch.",
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "((max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"active\"}[15s])) + 2 * max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"standby\"}[15s])) + 3 * max by (instance) (last_over_time(narwhal_router_role{job=\"narwhal-router\",instance=~\"$router\",role=\"fenced\"}[15s]))) and on(instance) max by (instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1)) or on(instance) (4 * max by (instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == bool 0))",
+                        "legendFormat": "{{instance}}"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "A"
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "prometheus",
+                      "spec": {
+                        "expr": "max by (instance) (last_over_time(narwhal_router_lease_epoch{job=\"narwhal-router\",instance=~\"$router\"}[15s]) and on(job,instance) (last_over_time(up{job=\"narwhal-router\",instance=~\"$router\"}[15s]) == 1))",
+                        "legendFormat": "{{instance}} lease epoch"
+                      }
+                    },
+                    "datasource": {
+                      "type": "prometheus",
+                      "uid": "${DS_PROMETHEUS}"
+                    },
+                    "refId": "B"
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "state-timeline",
+            "spec": {
+              "options": {
+                "alignValue": "center",
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": false
+                },
+                "mergeValues": true,
+                "rowHeight": 0.8,
+                "showValue": "auto",
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "custom": {
+                    "fillOpacity": 75
+                  },
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "transparent"
+                  },
+                  "noValue": "No router scraped"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "mappings",
+                        "value": [
+                          {
+                            "type": "value",
+                            "options": {
+                              "1": {
+                                "text": "Active",
+                                "color": "#56A64B"
+                              },
+                              "2": {
+                                "text": "Standby",
+                                "color": "#8E9196"
+                              },
+                              "3": {
+                                "text": "Fenced",
+                                "color": "#A11D1D"
+                              },
+                              "4": {
+                                "text": "Down",
+                                "color": "#D44A3A"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "color",
+                        "value": {
+                          "mode": "fixed",
+                          "fixedColor": "transparent"
                         }
                       }
                     ]
@@ -3655,6 +4249,19 @@
                           "name": "panel-1"
                         }
                       }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 8,
+                        "width": 24,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-62"
+                        }
+                      }
                     }
                   ]
                 }
@@ -3696,6 +4303,19 @@
                           "name": "panel-8"
                         }
                       }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 12,
+                        "width": 16,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-61"
+                        }
+                      }
                     }
                   ]
                 }
@@ -3717,7 +4337,7 @@
                         "x": 0,
                         "y": 0,
                         "width": 18,
-                        "height": 8,
+                        "height": 9,
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-11"
@@ -3730,10 +4350,23 @@
                         "x": 18,
                         "y": 0,
                         "width": 6,
-                        "height": 8,
+                        "height": 5,
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-37"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 18,
+                        "y": 5,
+                        "width": 6,
+                        "height": 4,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-60"
                         }
                       }
                     }

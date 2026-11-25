@@ -58,14 +58,6 @@ cat "$ENGINE_RUN/model-dimensions.live.json"
 ```
 
 For a vLLM engine, the capture reads the dimensions from the live engine into `model-dimensions.live.json`, and requires the live container's plan and launcher hashes to match `launch.json`.
-
-| Dimension            | Source                                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `head_size`          | `ModelConfig.get_head_size()`, or `kv_lora_rank + qk_rope_head_dim` on a DeepSeek-style model with MLA enabled |
-| `kv_heads`           | `get_total_num_kv_heads()`                                                                                     |
-| `hidden_layers`      | `get_total_num_hidden_layers()`                                                                                |
-| `model_architecture` | Resolved architecture                                                                                          |
-
 For an SGLang or TensorRT-LLM engine, the capture reads the dimensions and the first listed architecture from the checkpoint's `config.json`, or from its `text_config`, into `model-dimensions.json`, the file to read in place of `model-dimensions.live.json`. `config.json` must match `model_config_sha256` in `launch.json`.
 
 ### Capturing the cache grouping
@@ -197,6 +189,8 @@ When the capture fails:
 export ATTEST_DOCUMENT="$ENGINE_RUN/engine-attestation.json"
 ```
 
+For a GGUF model, the document's `launch` records the file's `model_sha256` from `launch.json`. Generation fails when the file no longer matches it, has become a symbolic link, or has left `NARWHAL_MODEL_DIR`.
+
 ### Confirming the attested process
 
 1. Recheck the engine's `/health` and version: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, `version` in `/server_info` on SGLang, or `/version` on TensorRT-LLM.
@@ -285,8 +279,6 @@ In each engine's role shell, with that engine's `ENGINE_RUN`, run these sections
 8. [Checking the sidecar from the router](#checking-the-sidecar-from-the-router)
 9. [Verifying the sidecar against the engine](#verifying-the-sidecar-against-the-engine)
 
-When every engine has passed step 9, run [finalizing the fleet contract](#finalizing-the-fleet-contract) once.
-
 ### Finalizing the fleet contract
 
 Run once from the router shell after every sidecar passes:
@@ -299,15 +291,18 @@ Run once from the router shell after every sidecar passes:
 
 - Each sidecar's attestation matches its engine's live identity.
 - Every engine carries the same complete contract.
+- Every engine attests the same model files: the same `model_config_sha256`, `model_tree_sha256` and `model_sha256` in its `launch` evidence.
 
 `finalize-fleet` writes:
 
 - `engine_contract` in `runs/deployment/fleet.json`.
 - A copy of the previous fleet file at `runs/fleet.before-attestation-<id>.json`.
 
+If the fleet file already has an `engine_contract`, `finalize-fleet` checks it against the live contract instead. On a mismatch, `finalize-fleet` exits with status 1 and prints `Existing router contract differs from the live sidecars`.
+
 On success it prints `Router fleet contract verified across live sidecars: <fingerprint>`.
 
-If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`.
+If a sidecar fails, the error output names the engine and the failed checks. If the output reports `Engine sidecars report different contracts`, compare the `contract` objects in each engine's `engine-attestation.json`. If it reports `Engine sidecars attest different model files`, it names the differing field and the engines that attest each value. Start those engines from the same checkpoint.
 
 Recovery:
 

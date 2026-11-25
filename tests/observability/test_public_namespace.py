@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -11,12 +12,15 @@ from narwhal.backends import load as load_backend
 from narwhal.config import SLO, EngineSpec, FleetConfig
 from narwhal.contracts import METRICS, current
 from narwhal.observability.tools import ToolActivity
+from narwhal.runtime.lease import FileLease
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.release import PeerRelease
 from narwhal.scheduling.scheduler.placement import GlobalScheduler
 from narwhal.serving.app import create_app
 from narwhal.serving.router.routing import NarwhalRouter
 from narwhal.types import Instance, Request, Role
+from tools.fleet_control.engines import Availability, AvailableEngine
+from tools.fleet_control.signals import metrics as control_metrics
 from tools.observability.artifacts import render_dashboard
 from tools.observability.start import readiness as observe_readiness
 
@@ -49,6 +53,9 @@ DASHBOARD_PALETTE = {
     "router occupancy": "#CA95E5",
     "retry": "#B877D9",
     "unsized": "#8AB8FF",
+    "membership": "#00BCD4",
+    "takeover": "#96D98D",
+    "state leaving": "#4F6D7A",
 }
 
 
@@ -155,6 +162,9 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             ("/narwhal/lifecycle", "get"),
             ("/narwhal/lifecycle/drain", "post"),
             ("/narwhal/lifecycle/readmit", "post"),
+            ("/narwhal/engines", "get"),
+            ("/narwhal/engines", "post"),
+            ("/narwhal/engines/{iid}", "delete"),
             ("/v1/completions", "post"),
             ("/v1/chat/completions", "post"),
             ("/health", "get"),
@@ -174,12 +184,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual({group["labels"]["backend"] for group in response.json()}, {"vllm"})
 
-    async def test_metrics_use_narwhal_prefix_and_contract_version_two(self):
+    async def test_metrics_use_narwhal_prefix_and_contract_version_three(self):
         self.router.served = 7
         response = await self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(current(METRICS), 2)
-        self.assertIn('narwhal_contract_info{contract="metrics",version="2"} 1', response.text)
+        self.assertEqual(current(METRICS), 3)
+        self.assertIn('narwhal_contract_info{contract="metrics",version="3"} 1', response.text)
         self.assertIn("narwhal_served_total 7", response.text)
         self.assertIn('narwhal_instance_role{iid="p",role="prefill"} 1', response.text)
         self.assertIn('narwhal_slo_seconds{metric="ttft",slo="1"} 1.0', response.text)
@@ -193,6 +203,38 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         names = re.findall(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)", response.text, re.M)
         self.assertTrue(names)
         self.assertTrue(all(name.startswith("narwhal_") for name in names))
+
+    async def test_router_role_names_the_active_standby_or_fenced_router(self):
+        cases = (
+            (False, "", "active"),
+            (True, "", "standby"),
+            (True, "shutting down", "fenced"),
+            (True, "lease renewal failed", "fenced"),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            # A lease this process never claimed is as lapsed as one whose renewal is due.
+            lapsed = FileLease(Path(folder) / "lease.json", "router", 30)
+            for standby, blocked, lease, role in (
+                *((standby, blocked, None, role) for standby, blocked, role in cases),
+                (False, "", lapsed, "fenced"),
+            ):
+                with self.subTest(standby=standby, blocked=blocked, lease=lease):
+                    self.router.standby, self.router.failover_blocked = standby, blocked
+                    self.router.lease = lease
+                    text = (await self.client.get("/metrics")).text
+                    for name in ("active", "standby", "fenced"):
+                        value = 1 if name == role else 0
+                        self.assertIn(f'narwhal_router_role{{role="{name}"}} {value}', text)
+                    state = (
+                        await self.client.get(
+                            "/narwhal/state", headers={"X-Narwhal-Diagnostic": "true"}
+                        )
+                    ).json()
+                    self.assertEqual(state["ha"]["role"], role)
+                    # /health names the same role for a router that is not ready.
+                    health = (await self.client.get("/health")).json()["status"]
+                    if role != "active":
+                        self.assertEqual(health, role)
 
     async def test_flip_counters_start_at_zero_for_every_caller(self):
         response = await self.client.get("/metrics")
@@ -365,7 +407,12 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_and_alert_queries_name_exported_metrics(self):
         response = await self.client.get("/metrics")
         exported = set()
-        exposition = response.text + ToolActivity("preflight").render()
+        # The fleet control service exports the dashboard's narwhal_control_* series.
+        control = control_metrics(
+            SimpleNamespace(session=None, jobs=None, status=lambda: {"in_progress": None}),
+            Availability((AvailableEngine("e1", "vllm", True, True),)),
+        )
+        exposition = response.text + ToolActivity("preflight").render() + control
         for name, kind in re.findall(r"^# TYPE (\S+) (\w+)$", exposition, re.M):
             exported.add(name)
             if kind == "histogram":
@@ -470,20 +517,31 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             for rule in alert_rules().values()
             for selector in re.findall(r"\bup(\{[^}]*\})?", rule["expr"])
         ]
-        self.assertEqual(sorted(selectors), ['{job="engines"}', '{job="narwhal-router"}'])
+        self.assertEqual(sorted(set(selectors)), ['{job="engines"}', '{job="narwhal-router"}'])
 
     def test_warning_alerts_cover_rejected_expired_and_denied_retry_shares(self):
         rules = alert_rules()
+        # Each router of a pair counts its own requests, so the shares sum over routers.
+        offered = "sum without (instance) (rate(narwhal_offered_total[5m]))"
         for name, numerator in (
-            ("NarwhalRejectedRising", "sum without (reason) (rate(narwhal_rejected_total[5m]))"),
-            ("NarwhalExpiredRising", "sum without (reason) (rate(narwhal_expired_total[5m]))"),
-            ("NarwhalRetryDeniedRising", "rate(narwhal_retry_denied_total[5m])"),
+            (
+                "NarwhalRejectedRising",
+                "sum without (instance, reason) (rate(narwhal_rejected_total[5m]))",
+            ),
+            (
+                "NarwhalExpiredRising",
+                "sum without (instance, reason) (rate(narwhal_expired_total[5m]))",
+            ),
+            (
+                "NarwhalRetryDeniedRising",
+                "sum without (instance) (rate(narwhal_retry_denied_total[5m]))",
+            ),
         ):
             with self.subTest(alert=name):
                 self.assertEqual(
                     rules[name],
                     {
-                        "expr": f"{numerator} / rate(narwhal_offered_total[5m]) > 0.01",
+                        "expr": f"{numerator} / {offered} > 0.01",
                         "for": "5m",
                         "severity": "warn",
                     },
@@ -492,13 +550,13 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for name, rule in rules.items():
             for metric in re.findall(r"narwhal_(?:failed|rejected|expired)_total", rule["expr"]):
                 with self.subTest(alert=name):
-                    self.assertIn(f"sum without (reason) (rate({metric}[", rule["expr"])
+                    self.assertIn(f"sum without (instance, reason) (rate({metric}[", rule["expr"])
         # The monitoring guide lists every shipped alert.
         guide = (ROOT / "docs/operate/02-Monitor.md").read_text()
         for name in rules:
             self.assertIn(f"| `{name}` |", guide)
 
-    async def test_dashboard_scopes_latency_quantiles_to_the_selected_router(self):
+    async def test_dashboard_scopes_latency_quantiles_to_the_selected_routers(self):
         elements = dashboard()["spec"]["elements"]
         panels = {
             elements[name]["spec"]["title"]: elements[name]
@@ -515,7 +573,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all("$iid" not in expr for expr in expressions))
                 for expression in expressions:
                     if "histogram_quantile" in expression:
-                        self.assertIn("sum by (instance, slo, le)", expression)
+                        # A request is observed by one router, so a pair's buckets add.
+                        self.assertIn("sum by (slo, le)", expression)
                         self.assertIn("[$__rate_interval]", expression)
 
         ttft_queries = panels["Time to first token"]["spec"]["data"]["spec"]["queries"]
@@ -561,6 +620,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             'state="validating"',
             "narwhal_ejected",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_engine_breaker_verifying",
             'narwhal_engine_quarantined{job="narwhal-router",instance=~"$router",iid=~"$iid"}',
             "narwhal_probation_instances",
@@ -627,6 +687,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
                 "Verifying",
                 "Quarantined",
                 "Draining",
+                "Leaving",
                 "Ejected",
                 "Validating",
                 "Blocked",
@@ -645,6 +706,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         for source in (
             "narwhal_engine_quarantined",
             "narwhal_engine_draining",
+            "narwhal_engine_leaving",
             "narwhal_ejected",
             'state="validating"',
             'state="blocked"',
@@ -659,6 +721,7 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
         held = (
             "Quarantined",
             "Draining",
+            "Leaving",
             "Ejected",
             "Validating",
             "Blocked",
@@ -750,11 +813,11 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"narwhal_{metric}_seconds_bucket", share)
             self.assertIn(f'metric="{metric}"', share)
         self.assertTrue(latency["TPOT p95"].endswith(" * 1000"))
-        # Each router configuration's p95 is divided by that configuration's SLO.
+        # Each SLO configuration's p95, over the routers of a pair, is divided by that SLO.
         for metric in ("ttft", "tpot"):
             share = latency[f"{metric.upper()} / SLO"]
-            self.assertIn("sum by (instance, slo, le)", share)
-            self.assertIn("/ on(instance, slo)", share)
+            self.assertIn("sum by (slo, le)", share)
+            self.assertIn("/ on(slo)", share)
             self.assertIn("max_over_time(narwhal_slo_seconds{", share)
         # Status values colour their cells, as the engine table colours Role and State.
         for styles, name in (
@@ -1000,6 +1063,8 @@ class PublicNamespaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_haproxy_health_route_remains_available(self):
         config = (ROOT / "deploy/ha/haproxy.cfg").read_text()
-        path = re.search(r"http-check send meth GET uri (\S+)", config)[1]
-        response = await self.client.get(path)
-        self.assertEqual(response.status_code, 200, response.text)
+        paths = re.findall(r"http-check send meth GET uri (\S+)", config)
+        self.assertEqual(paths, ["/narwhal/targets", "/ready"])
+        for path in paths:
+            response = await self.client.get(path)
+            self.assertEqual(response.status_code, 200, response.text)

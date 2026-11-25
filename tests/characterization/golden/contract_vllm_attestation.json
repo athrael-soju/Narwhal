@@ -53,6 +53,7 @@
     "launcher_code_sha256": "<sha256>",
     "model_config_sha256": "51f95475923702b855b9c8bc342c5692adec323205052b4725a937b7bc0ee5f4",
     "model_revision": "",
+    "model_tree_sha256": "413737766b3bdb858a6539c383d76feb4fe2e896c85b37ea7c249802827129bf",
     "peer_release": true,
     "ucx_version": "1.22.0"
   },

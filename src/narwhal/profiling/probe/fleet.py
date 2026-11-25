@@ -29,11 +29,18 @@ from ..generation import read_generation
 from ..model import Profile, decode_evidence_problems
 from ..store import ProfileStore
 from ..tasks import cancel_tasks
+from .drain import refuse_undrained
 from .engine import engine_context_limit
 from .instance import profile_instance
 from .neighbours import ColocatedWorkload, NeighbourLoad
 from .pairing import PairedTransport, paired_transport
-from .sweep import Sweep, bounded_sweep, decode_concurrency, load_sequence_limits
+from .sweep import (
+    Sweep,
+    bounded_sweep,
+    decode_concurrency,
+    load_sequence_limits,
+    sweep_record,
+)
 
 
 class _Unhealthy(Exception): ...
@@ -208,6 +215,8 @@ def _lane_worker(
             split_lanes=False,
             phases=phases,
             done=done,
+            # The parent process checked every lane's engines before it started the lanes.
+            drain_checked=True,
         )
     )
 
@@ -329,6 +338,9 @@ async def run(
     phases: Any = None,
     activity: ToolActivity | None = None,
     done: MutableSequence[str] | None = None,
+    router_url: str | None = None,
+    no_router: bool = False,
+    drain_checked: bool = False,
 ) -> int:
     activity = activity or ToolActivity("profiling")
     if observation_timeout_s is not None and (
@@ -377,6 +389,15 @@ async def run(
         )
     if paired and len(cfg.engines) < 2:
         raise ValueError(f"profiling a {backend.label} engine needs a peer engine")
+    if router_url is not None and no_router:
+        raise ValueError("--router-url and --no-router are mutually exclusive")
+    if paired and only and router_url is None and not no_router and not drain_checked:
+        # A selected engine and its peer can be members of a running fleet.
+        raise ValueError(
+            f"a {backend.label} sweep with --only switches engine roles; pass --router-url "
+            "with the active router's URL to check that the router has drained them, or "
+            "--no-router when no router serves the fleet's engines"
+        )
     # A paired engine borrows a peer from its lane for its other leg.
     lanes = _profile_lanes(targets, colocated=colocated_workload is not None, paired=paired)
     used = {spec.iid for spec in targets}
@@ -396,10 +417,19 @@ async def run(
         "method_version": 2,
         **stamp(),
         "model": cfg.model,
-        "sweep": asdict(sweep or Sweep()),
+        "sweep": sweep_record(sweep or Sweep()),
         "observation_timeout_s": observation_timeout_s,
         "engines": evidence_rows,
     }
+    if paired and router_url is not None and not drain_checked:
+        # Before any engine request: the router sends requests to an engine it has not drained.
+        await refuse_undrained(
+            router_url,
+            [spec for spec in cfg.engines if spec.iid in used],
+            {spec.iid for spec in targets},
+            observation_timeout_s or cfg.health_timeout_s,
+            colocated=colocated_workload is not None,
+        )
     activity.use(used)
     if paired and split_lanes and len(lanes) > 1:
         return await _run_lanes_apart(
@@ -481,7 +511,7 @@ async def run(
             )
             engine_evidence: dict[str, object] = {
                 "max_model_len": max_model_len,
-                "sweep": asdict(engine_sweep),
+                "sweep": sweep_record(engine_sweep),
             }
             if max_num_seqs is not None and limits_path is not None:
                 engine_evidence["max_num_seqs"] = max_num_seqs

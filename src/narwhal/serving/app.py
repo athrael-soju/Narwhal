@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse, Response
 
@@ -22,12 +22,7 @@ from ..observability.metrics.exposition import CONTENT_TYPE
 from ..observability.metrics.render import render
 from ..observability.targets import scrape_targets
 from ..profiling.calibration import verify_calibration
-from ..profiling.generation import (
-    bound_profiles,
-    generation_problem,
-    nominal_problem,
-    read_generation,
-)
+from ..profiling.membership import engine_set_problem, generation_problems
 from ..runtime import state as handoff_state
 from ..runtime.lease import FileLease, LeaseError
 from ..runtime.lifecycle.identity import capture_process_identities, check_process_identities
@@ -41,15 +36,25 @@ from ..runtime.standby import (
     control_ready,
     controls_fleet,
     lease_renew_loop,
+    lease_role,
     ready,
     standby_loop,
 )
 from ..runtime.transfer_refresh import refresh_idle_consumers
 from .completion import completion_body_error
+from .engines_api import add_engine_routes
 from .ingress import LIFECYCLE, BodyTooLarge, ServingIngress, bounded_body, serve_connected
 from .lifecycle import RequestLifecycle
 from .outcomes import error_response
-from .records import monitoring_degraded_reason, not_ready_response
+from .records import (
+    CONTROLLED_READ,
+    FleetNotControlled,
+    monitoring_degraded_reason,
+    not_controlling_response,
+    not_ready_response,
+    require_control,
+    require_control_or_diagnostic,
+)
 from .router.routing import NarwhalRouter
 from .saturation import measure_loop_lag
 from .schemas import DrainIn, HealthOut, ModelsOut, ReadmitIn, StateOut
@@ -121,7 +126,19 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        calibration = await verify_calibration(cfg, transport=lifecycle_transport)
+        # A resumed handoff that carries membership sets the engine set the checks cover.
+        adopted = False
+        if cfg.resume and not standby_of:
+            saved = handoff_state.load(cfg.state_path)
+            handoff = handoff_state.apply(router, saved)
+            adopted = handoff.membership_adopted
+            if not handoff.applied:
+                log.info("no control-plane handoff applied: %s", handoff.why)
+                if cfg.engine_contract is not None and cfg.state_path.exists():
+                    router.lifecycle.require_restart_wave(f"handoff rejected: {handoff.why}")
+        calibration = await verify_calibration(
+            cfg, engines=router.membership.specs, transport=lifecycle_transport
+        )
         if calibration.status == "uncalibrated":
             log.warning(
                 "first-token deadline is uncalibrated; run narwhal-check "
@@ -132,40 +149,26 @@ def create_app(
         else:
             log.info("%s", calibration.summary(cfg.first_token_timeout_s))
         router.first_token_calibration = calibration
-        missing, extra = router.profile_set_diff()
-        if missing or extra:
-            detail = []
-            if missing:
-                detail.append(f"no profile for {', '.join(missing)}")
-            if extra:
-                detail.append(f"stale profiles for unconfigured engines: {', '.join(extra)}")
-            raise RuntimeError(
-                "; ".join(detail)
-                + ": run `narwhal-profile` against the fleet first. Placement requires "
-                "a profile for exactly the configured engine set."
+        # A resumed engine set keeps the profiles of engines that left it. A standby's store may
+        # already hold an engine that joined on the primary; its takeover checks the set it serves.
+        exact = not adopted and not standby_of
+        if problem := engine_set_problem(
+            router.profiles, router.membership.ids, "configured", exact=exact
+        ):
+            raise RuntimeError(problem)
+        # The takeover refuses extra profiles unless it adopts a membership that holds them.
+        extra: str | None = None
+        if not exact and not adopted:
+            extra = engine_set_problem(
+                router.profiles, router.membership.ids, "configured", exact=True
             )
-        generation_failures = []
-        for spec in cfg.engines:
-            if cfg.engine_contract is not None and (
-                problem := nominal_problem(router.profiles, spec.iid)
-            ):
-                generation_failures.append(problem)
-                continue
-            profiles = bound_profiles(router.profiles, spec.iid)
-            if not profiles:
-                continue
-            try:
-                generation = await read_generation(cfg, spec, transport=lifecycle_transport)
-            except (httpx.HTTPError, ValueError, KeyError) as exc:
-                generation_failures.append(
-                    f"{spec.iid} profile generation unreadable: {exc}; "
-                    "restart its attestation sidecar if it answers HTTP 503"
-                )
-                continue
-            for profile in profiles:
-                problem = generation_problem(spec.iid, profile.generation_digest, generation.digest)
-                if problem and problem not in generation_failures:
-                    generation_failures.append(problem)
+            if extra:
+                log.warning("standby profile store: %s", extra)
+        router.checked_engines = tuple(router.membership.ids)
+        router.checked_exact = exact or not extra
+        generation_failures = await generation_problems(
+            cfg, router.profiles, router.membership.specs, transport=lifecycle_transport
+        )
         if generation_failures:
             raise RuntimeError("; ".join(generation_failures))
         watch = None
@@ -204,12 +207,6 @@ def create_app(
                     transport=standby_transport,
                 )
             )
-        elif cfg.resume:
-            handoff = handoff_state.apply(router, handoff_state.load(cfg.state_path))
-            if not handoff.applied:
-                log.info("no control-plane handoff applied: %s", handoff.why)
-                if cfg.engine_contract is not None and cfg.state_path.exists():
-                    router.lifecycle.require_restart_wave(f"handoff rejected: {handoff.why}")
         journal.open()
         if controls_fleet(router):
             await check_process_identities(router)
@@ -220,7 +217,7 @@ def create_app(
         log.info(
             "narwhal up: %d instances, ttft<=%.3gs tpot<=%.3gs, interval %.2gs, "
             "admitting %d at once",
-            len(router.monitor.instances),
+            len(router.membership),
             cfg.slo.ttft_s,
             cfg.slo.tpot_s,
             cfg.monitor_interval_s,
@@ -282,6 +279,17 @@ def create_app(
     app.state.router = router
     app.state.yield_control = yield_control
     app.add_middleware(ServingIngress, router=router)
+    app.add_exception_handler(FleetNotControlled, not_controlling_response)
+    # Routes that describe the fleet answer only from the router that holds the lease.
+    controlled: dict[str, Any] = {
+        "dependencies": [Depends(require_control)],
+        "responses": CONTROLLED_READ,
+    }
+    # Diagnostic bundles keep a standby's state and lifecycle documents as evidence.
+    diagnosable: dict[str, Any] = {
+        "dependencies": [Depends(require_control_or_diagnostic)],
+        "responses": CONTROLLED_READ,
+    }
 
     @app.get("/v1/models", response_model=ModelsOut, summary="The one model this router fronts")
     async def models() -> dict[str, Any]:
@@ -292,13 +300,12 @@ def create_app(
 
     @app.get("/health", response_model=HealthOut, summary="Liveness, and the configured fleet size")
     async def health() -> dict[str, Any]:
-        lease_invalid = not router.standby and router.lease is not None and not router.lease.valid()
         status = (
             "ok"
             if ready(router)
             else (
                 "fenced"
-                if router.failover_blocked or lease_invalid
+                if lease_role(router) == "fenced"
                 else (
                     "maintenance"
                     if router.lifecycle_blocked
@@ -308,7 +315,7 @@ def create_app(
         )
         return {
             "status": status,
-            "instances": len(router.monitor.instances),
+            "instances": len(router.membership),
             "available_instances": len(router.scheduler.live_instances()),
         }
 
@@ -335,7 +342,7 @@ def create_app(
             return JSONResponse(content=content)
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
-    @app.get("/narwhal/handoff", summary="The live control-plane handoff document")
+    @app.get("/narwhal/handoff", summary="The live control-plane handoff document", **controlled)
     async def handoff() -> dict[str, Any]:
         return handoff_state.snapshot(router)
 
@@ -349,19 +356,31 @@ def create_app(
                 router.seat,
                 router.queue_wait,
                 router.monitor.requests_sent,
+                adopted=router.adopted,
             ),
             media_type=CONTENT_TYPE,
         )
 
-    @app.get("/narwhal/targets", summary="Engine scrape targets for Prometheus HTTP discovery")
+    @app.get(
+        "/narwhal/targets",
+        summary="Engine scrape targets for Prometheus HTTP discovery",
+        **controlled,
+    )
     async def targets() -> list[dict[str, Any]]:
-        return scrape_targets(cfg)
+        return scrape_targets(cfg, router.membership)
 
-    @app.get("/narwhal/state", response_model=StateOut, summary="The live scheduler picture")
+    @app.get(
+        "/narwhal/state",
+        response_model=StateOut,
+        summary="The live scheduler picture",
+        **diagnosable,
+    )
     async def state() -> dict[str, Any]:
         return router.state()
 
-    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state")
+    add_engine_routes(app, router, controlled)
+
+    @app.get("/narwhal/lifecycle", summary="Engine drain and readmission state", **diagnosable)
     async def lifecycle() -> dict[str, Any]:
         return router.lifecycle.document()
 
@@ -369,7 +388,7 @@ def create_app(
     async def drain(action: DrainIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
-        engines = action.engines or (sorted(router.monitor.instances) if action.wave else [])
+        engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             try:
                 router.lifecycle.begin(engines, wave=action.wave, deadline_s=action.deadline_s)
@@ -381,6 +400,7 @@ def create_app(
             starts, failures = await capture_process_identities(
                 cfg,
                 capture,
+                specs=router.membership.by_id(),
                 transport=lifecycle_transport,
             )
             failures = router.lifecycle.bind_drain_identities(capture, starts, failures)
@@ -399,7 +419,7 @@ def create_app(
     async def readmit(action: ReadmitIn) -> Response:
         if not controls_fleet(router):
             return _lifecycle_error(router, 503, "this router does not control the fleet")
-        engines = action.engines or (sorted(router.monitor.instances) if action.wave else [])
+        engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             if action.wave:
                 expected = {
@@ -523,8 +543,7 @@ def _lifecycle_error(router: NarwhalRouter, status_code: int, message: str) -> R
 
 
 def _persist_handoff(router: NarwhalRouter) -> None:
-    with contextlib.suppress(OSError):
-        handoff_state.write(router.cfg.state_path, handoff_state.snapshot(router))
+    handoff_state.persist(router)
 
 
 def _headers(request: HTTPRequest) -> dict[str, str]:

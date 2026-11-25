@@ -78,6 +78,12 @@ ip address show dev "$NARWHAL_FABRIC_INTERFACE"
 ss -ltnp
 ```
 
+For a GGUF model, also verify the file:
+
+```bash
+test "$(sha256sum "$NARWHAL_MODEL_PATH" | cut -d' ' -f1)" = "$NARWHAL_MODEL_SHA256"
+```
+
 A passing `test` command is silent and exits with status 0.
 
 - If `ss -ltnp` shows a planned HTTP, attestation, vLLM NIXL side-channel, SGLang bootstrap, TensorRT-LLM transfer, or UCX transfer port in use, free the port.
@@ -148,7 +154,7 @@ The launcher builds one launch plan per engine with these properties:
 | Property                      | Value                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Serving command               | vLLM: `python3 -m vllm.entrypoints.openai.api_server` inside `NARWHAL_ENGINE_IMAGE`. SGLang: `python3 -m sglang.launch_server`, and TensorRT-LLM: `trtllm-serve serve`, each started by the Narwhal launch wrapper inside `NARWHAL_ENGINE_IMAGE`                                         |
-| Model mount                   | `NARWHAL_MODEL_DIR`, read-only at `/model`                                                                                                                                                                                                  |
+| Model mount                   | `NARWHAL_MODEL_DIR`, read-only at `/model`. vLLM loads a GGUF file from its path under `/model`                                                                                                                                             |
 | Devices                       | The configured devices with the selected TP allocation                                                                                                                                                                                      |
 | KV connector                  | vLLM: `NixlConnector` with `kv_role=kv_both`, the UCX backend, `enforce_handshake_compat=true`, and `kv_load_failure_policy=fail`. SGLang: the `mooncake` transfer backend; every engine launches as prefill with `--enable-pd-role-switch`. TensorRT-LLM: the C++ cache transceiver with the `UCX` or `NIXL` backend, set in `engine.json` |
 | Side-channel address and port | The role environment, for the vLLM NIXL side channel, the SGLang bootstrap server or the TensorRT-LLM transfer port                                                                                                                                                         |
@@ -191,6 +197,8 @@ Inspect `launch.json` for:
 
 Keep `container.env` private.
 
+For a GGUF model, `prepare` checks the file against `NARWHAL_MODEL_SHA256` and records its SHA-256 as `model_sha256` in `launch.json`. `check` and `start` refuse the file if it changes, becomes a symbolic link, or leaves `NARWHAL_MODEL_DIR`.
+
 Validate the image and plan:
 
 ```bash
@@ -210,6 +218,7 @@ For vLLM, the check also confirms:
 - the connector
 - the tokenizer and its custom-code metadata
 - the DS convolutional-state layout, when required
+- the GGUF plugin's Python source and CUDA extension digests, when the launch record pins them
 
 For SGLang, the check also parses the serving arguments and confirms that the image's SGLang has each part that the launch wrapper replaces to [keep Mooncake registrations across role switches](../configuration/05-Engine-Launch.md#sglang-runtime-fields). For TensorRT-LLM, it also checks for `trtllm-serve` and reads block reuse from the `--config` file.
 

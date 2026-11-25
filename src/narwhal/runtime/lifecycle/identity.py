@@ -38,10 +38,10 @@ async def check_process_identities(
         if manager.wave_id:
             manager.identities_ready = True
             return []
-        selected = set(engines) if engines is not None else set(router.monitor.instances)
+        selected = set(engines) if engines is not None else set(router.membership.ids)
         specs = [
             spec
-            for spec in cfg.engines
+            for spec in router.membership
             if spec.iid in selected
             and spec.iid not in router.scheduler.ejected
             and spec.iid not in router.scheduler.draining
@@ -101,7 +101,7 @@ async def check_process_identities(
                     previous_process_start=previous,
                     observed_process_start=start,
                 )
-            elif start is not None:
+            elif start is not None and spec.iid in router.membership:
                 manager.process_starts[spec.iid] = start
         if excluded and cfg.engine_restart_policy == "whole_wave":
             manager.require_restart_wave("engine identity changed or could not be verified")
@@ -113,9 +113,9 @@ async def capture_process_identities(
     cfg: FleetConfig,
     engines: list[str],
     *,
+    specs: dict[str, EngineSpec],
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[dict[str, float], dict[str, str]]:
-    specs = {spec.iid: spec for spec in cfg.engines}
     starts: dict[str, float] = {}
     failures: dict[str, str] = {}
     if cfg.engine_contract is None or cfg.contract_missing():
@@ -140,12 +140,13 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             not controls_fleet(router)
             or router.lifecycle_blocked
             or iid in router.scheduler.draining
+            or iid not in router.membership
         ):
             return False
         if router.cfg.engine_restart_policy == "whole_wave" and iid in router.scheduler.ejected:
             manager.require_restart_wave("engine recovery requires a managed whole-wave restart")
             return False
-        spec = next(spec for spec in router.cfg.engines if spec.iid == iid)
+        spec = router.membership.spec(iid)
         try:
             live = ""
             if bound_profiles(router.profiles, iid):
@@ -165,6 +166,7 @@ async def allow_profile_recovery(router: NarwhalRouter, iid: str) -> bool:
             not controls_fleet(router)
             or router.lifecycle_blocked
             or iid in router.scheduler.draining
+            or iid not in router.membership
         ):
             return False
         if not problems:

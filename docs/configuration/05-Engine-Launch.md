@@ -38,7 +38,7 @@ The generated fleet references the derived variables:
 }
 ```
 
-Discovery needs at least two engines with the same accelerator product, GPU count and tensor parallel (TP) size. It adds one fleet record per engine. The first engine starts in the prefill role and every other engine in decode.
+Discovery adds one fleet record per engine.
 
 A fleet you write by hand can hold a single engine, with both [role floors](02-Serving-and-Role-Control.md#role-floors) at `1`.
 
@@ -83,7 +83,7 @@ Each launch record holds these allocation and transport fields:
 
 On a host with several CUDA engines, `prepare` lists each dedicated-GPU engine's own `gpu_ids` first in `CUDA_VISIBLE_DEVICES`, followed by the GPUs of the host's other dedicated-GPU engines. The engine still runs on its `gpu_ids`; the extra GPUs let UCX move KV between colocated engines over CUDA IPC. A `shared_device` engine sees only its own GPU and is left out of the other engines' lists. Under the container backend, an engine that can see another engine's GPUs and every `shared_device` engine run in the host PID namespace, because UCX CUDA IPC reaches a peer only from the same PID namespace.
 
-On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`. When that value is `n`, `no` or `0`, the launcher sets the NIXL `engine_ttl` to 60 seconds for that engine.
+On vLLM, an engine has CUDA IPC peers when `transfer.gpu_tls` is `cuda` and the engine shares a GPU or can see another engine's GPUs. [Peer memory release](../concepts/03-Failure-and-State.md#peer-memory-release) depends on `UCX_CUDA_IPC_CACHE` in `runtime.environment`.
 
 When preparation reports an error in an `.env` input or a remote prerequisite:
 
@@ -127,13 +127,13 @@ If you leave a field unset and the table gives no default, the engine uses its o
 
 `extra_args` rejects every flag in this table and `--kv-events-config`.
 
-Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, `--free_gpu_memory_fraction` sets the share of the memory left free after the model loads that the KV cache takes, `0.9` when unset. With `shared_device`, the launcher also bounds a TensorRT-LLM engine's KV cache to `shared_device.gpu_memory_utilization` times the GPU's memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
+Set the share of GPU memory the engine uses in `extra_args`, with `--gpu-memory-utilization` on vLLM or `--mem-fraction-static` on SGLang. With `shared_device`, set it once, to `shared_device.gpu_memory_utilization`. On TensorRT-LLM, the KV cache gets `--free_gpu_memory_fraction` of the GPU memory left after the model loads, `0.9` by default. With `shared_device` or `runtime.bound_kv_cache`, the launcher also bounds a TensorRT-LLM engine's KV cache to `--free_gpu_memory_fraction` times the GPU's total memory, less the checkpoint's weight bytes divided by `tensor_parallel_size` and less `runtime.memory_reserve_mib`.
 
 ### vLLM runtime fields
 
 A vLLM record adds the optional `kv_lease_s`, the number of seconds a prefill engine keeps a request's KV blocks for the decode engine to fetch. It takes a whole number of at least 6 and defaults to `30`. The launcher passes it as `kv_lease_duration`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
-`expected_packages` must pin `vllm` and either `nixl` or `nixl-rocm`. `environment` accepts the prefixes `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
+`expected_packages` must pin `vllm` and either `nixl` or `nixl-rocm`, and for a GGUF model `vllm-gguf-plugin`. The optional `gguf_plugin_python_sha256` and `gguf_plugin_extension_sha256` pin the GGUF plugin's Python sources and CUDA extension. Set both or neither, each as a SHA-256 digest. `narwhal-engine check` fails when the plugin in the image or the native runtime differs from them. `environment` accepts the prefixes `VLLM_`, `UCX_`, `NIXL_`, `ROCM_`, `HIP_`, `HSA_`, `AITER_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `NIXL_HOST_IP`, `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT` and `VLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY`, `SSH` or `SKIP_COMPAT`.
 
 `extra_args` accepts these options, each with a value: `--gpu-memory-utilization`, `--max-num-batched-tokens`, `--reasoning-parser`, `--attention-backend`, `--hf-config-path` and `--load-format`. It accepts these flags: `--trust-remote-code`, `--language-model-only`, `--enforce-eager`, `--async-scheduling`, `--disable-hybrid-kv-cache-manager` and `--no-disable-hybrid-kv-cache-manager`. `deploy_hosts.py prepare` requires `runtime.max_sequences`.
 
@@ -172,9 +172,10 @@ On an earlier SGLang release, for a model with SSM state, discovery adds `--mamb
 
 With `NARWHAL_ENGINE_BACKEND=trtllm`, [discovery](../deploy/01-Discover.md#confirming-the-launch-policy) sets `runtime.backend` to `trtllm` and `runtime.connector` to `NARWHAL_ENGINE_CONNECTOR`: `ucx`, the default, or `nixl`. Discovery fails when `NARWHAL_KV_EVENTS` is `true`.
 
-A TensorRT-LLM record adds two optional fields:
+A TensorRT-LLM record adds three optional fields:
 
-- `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine on a shared GPU for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
+- `bound_kv_cache`, `false` by default, applies the bound of a shared GPU to an engine on a GPU of its own when `true`. It requires `--free_gpu_memory_fraction` once in `extra_args`, above 0 and at most 1. The Narwhal dev TensorRT-LLM runtime sets both.
+- `memory_reserve_mib`, `8192` by default, is the memory in MiB that the bound leaves an engine for activations, CUDA graphs and transfer buffers. Raise it when `narwhal-engine start-shared` reports that observed shared GPU use exceeds the device allowance.
 - `kv_lease_s` is the number of seconds a context engine keeps a request's KV cache for the generation engine to fetch. It takes a whole number of at least 6 and defaults to `60`. The launcher passes it as `kv_transfer_timeout_ms`, and the router sets the [KV handoff bound](02-Serving-and-Role-Control.md#kv-handoff-bound) from it.
 
 `expected_packages` must pin `tensorrt_llm`, which also holds the cache transceiver. `environment` accepts the prefixes `TRTLLM_`, `TLLM_`, `UCX_`, `NIXL_`, `NCCL_`, `PYTORCH_` and `SAFETENSORS_`. It rejects the launcher-managed variables `CUDA_VISIBLE_DEVICES`, `UCX_NET_DEVICES`, `UCX_TLS`, `UCX_TCP_PORT_RANGE`, `TRTLLM_UCX_INTERFACE`, `NARWHAL_TRTLLM_TRANSFER_HOST`, `NARWHAL_TRTLLM_TRANSFER_PORT` and `NARWHAL_TRTLLM_API_KEY`, and names containing `PASSWORD`, `TOKEN`, `SECRET`, `API_KEY` or `SSH`. `extra_args` accepts the options `--free_gpu_memory_fraction`, `--max_num_tokens`, `--reasoning_parser`, `--tool_parser` and `--chat_template`, each with a value, and the flag `--trust_remote_code`.
@@ -220,9 +221,9 @@ The check fails when the resolved cache-event endpoints differ from `launch.json
 | `python_executable` | The launch plan's Python interpreter, for the native backend                                                  |
 | `expected_packages` | The launch plan's pinned package versions, for the native backend                                             |
 
-`peer_release` is `true` for an engine without CUDA IPC peers. For an engine with CUDA IPC peers, it is `true` only when UCX is 1.22 or later and `UCX_CUDA_IPC_CACHE` is off. When it is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
+When `peer_release` is `false`, the check prints a warning to recover a crashed engine with a whole-wave restart.
 
-On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` compares the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
+On vLLM, the [live HTTP process check](../deploy/03-Validate-Engines.md#proving-the-live-http-process) compares the engine's `/version` response with `engine_version`. For a native engine, `narwhal-engine start-shared` and `start-native` compare the version from `/version` on vLLM and TensorRT-LLM, or from `/server_info` on SGLang, with the checked version.
 
 Record the application revision, launcher digest and container ID with each deployment.
 

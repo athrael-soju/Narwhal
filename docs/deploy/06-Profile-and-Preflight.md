@@ -44,7 +44,7 @@ Preflight warns when an engine's profile measures decode below its sequence limi
 - regenerate the limits file, when the sidecar records a lower limit than the attestation.
 - pass shorter `--decode-input-lens`, or lower the engine's sequence limit and regenerate the limits file, when the sweep skipped cohorts that exceed the engine's KV capacity.
 
-Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
+Preflight fails and router startup stops when the profile engine IDs differ from the configured fleet. A standby router also starts when its store has profiles for engines outside the fleet. When a live engine's process generation differs from its saved profile, preflight and router startup require a [new profile](#reusing-or-repeating-profiles). The role controller holds a role change whose projected decode point falls outside the measured profile range.
 
 Set the service-level objective (SLO) targets before preflight:
 
@@ -67,6 +67,8 @@ After a change to the fleet or its engines, run preflight. Re-profile only the e
   --out runs/profiles-merged.json
 ```
 
+On an SGLang fleet, the sweep also switches each selected engine's peer, so add `--router-url` with the active router's URL, or `--no-router` when no router serves the fleet's engines. With `--router-url`, the router must hold every selected engine and peer that it serves, as [Router drain check](../cli/Profile.md#router-drain-check) describes. The router holds one engine at a time outside a whole-wave drain, so when the selected engine and its peer are both members, profile during a whole-wave drain or pair the engine with a spare engine outside the fleet, as [Refresh profiles](../operate/03-Restart-Engines.md#refresh-profiles) describes. A sweep with `--colocated` takes its peers from the engine's own `shared_device` group, so it needs the whole-wave drain.
+
 The later store replaces the earlier store's row for each engine variant it holds. After you remove an engine from the fleet, merge the current store alone to write a store without that engine's rows.
 
 Set `profiles.path` to the merged store and run preflight. To load it into a running router, follow [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles).
@@ -77,16 +79,18 @@ Calibrate with the engines idle. `narwhal-check --calibrate-first-token` takes t
 
 | Flag                      | Value                                                                                                                   |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--input-tokens`          | Lengths spanning the served range, including the longest admitted input, with room for one output token on both engines |
+| `--input-tokens`          | Lengths spanning the served range, up to the longest input that leaves room for two output tokens on both engines |
 | `--observation-timeout-s` | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`                                            |
 | `--calibration-out`       | A fresh artifact path under the ignored `runs/` tree                                                                    |
 | `--samples`               | 100, the default and the minimum for qualifying evidence                                                                |
 
-For an engine launch limit of 16,384 total tokens, run the calibration from the router shell:
+On SGLang the live context limit is the smaller of `context_length` and `max_req_input_len`, which is below the launch's context length.
+
+For engines whose live context limit is 16,384 tokens, run the calibration from the router shell:
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --calibrate-first-token --input-tokens 256,8192,16382 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-out runs/deployment/first-token-calibration.json
 ```
@@ -115,8 +119,6 @@ candidate deadline: above 1.840s
 duration 1200s
 ```
 
-The candidate deadline is the largest `max(observed maximum, 1.2 × nearest-rank p99) + 0.5 seconds` across pairs and input lengths.
-
 Diagnose the failed transfers and observation expiries before using the candidate. Set `engine.first_token_timeout_s` strictly above the candidate and `engine.first_token_calibration_path` to the artifact path.
 
 The deadline, the measured prefill and the router overhead must fit the client time to first token (TTFT) requirement.
@@ -126,15 +128,15 @@ The deadline, the measured prefill and the router overhead must fit the client t
 After a change to the fleet or its engines, run preflight. When the `calibration` gate fails, apply the fix its message names, or recalibrate when it names none. Also recalibrate when either of these changes:
 
 - the fabric route or host behind an unchanged engine URL
-- the longest admitted input, beyond the longest calibrated input
+- an engine's context limit, when it exceeds the longest calibrated input by more than two tokens
 
-The artifact stays valid when you remove or pin an engine. It stays valid across an engine restart only when the engine's attestation sidecar reports [launch evidence](../cli/Check.md#the-calibration-gate).
+The artifact stays valid when you remove or pin an engine.
 
-To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`:
+To measure only the groups a previous artifact lacks or did not complete, pass that artifact with `--calibration-base`, with the same `--input-tokens` and `--samples`. When an artifact records a length that leaves room for fewer than two output tokens, recalibrate without `--calibration-base`.
 
 ```bash
 .venv/bin/narwhal-check --fleet runs/deployment/fleet.json \
-  --calibrate-first-token --input-tokens 256,8192,16383 \
+  --calibrate-first-token --input-tokens 256,8192,16382 \
   --samples 100 --observation-timeout-s 20 \
   --calibration-base runs/deployment/first-token-calibration.json \
   --calibration-out runs/deployment/first-token-calibration-2.json
@@ -162,7 +164,7 @@ The full preflight runs these gates:
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reach`       | Every engine returns HTTP 200 within the configured health HTTP I/O timeout                                                                                  |
 | `calibration` | The configured first-token calibration is valid, matches every running process generation, and has a candidate deadline below `engine.first_token_timeout_s` |
-| `contract`    | Attestation matches the current process and declared runtime                                                                                                 |
+| `contract`    | Attestation matches the current process and declared runtime, and every engine attests the same model files                                                  |
 | `profile`     | Each saved process generation digest matches its live engine, the profile IDs match the fleet, and the measured decode errors stay within policy             |
 | `model`       | Every engine serves the configured model                                                                                                                     |
 | `pace`        | Prefill latency stays within the [permitted slowdown](#pace-gate)                                                                                            |
@@ -196,11 +198,9 @@ calibration
   ok    first-token calibration reused for n2, n4: launch unchanged since capture; candidate 1.840s, deadline 2.5s
 ```
 
-Under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about each host-sharing KV producer whose crash recovery needs a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback).
-
 ### Pace gate
 
-The pace gate sends two cold one-token completions to each engine and scores the engine by its faster probe time. The permitted slowdown is 1.5x, and a failed probe fails the gate.
+Preflight fails the [`pace` gate](../cli/Check.md#preflight) when a probe fails.
 
 When three or more engines probe successfully, the gate compares each engine against the fleet median. It compares every profiled engine against its profile's prefill prediction at the exact `usage.prompt_tokens`. With fewer than three successful engines, an unprofiled engine skips the gate.
 

@@ -26,13 +26,13 @@ When projected TTFT still exceeds `slo.ttft_s` after a move, the role controller
 
 ### Early decode recovery
 
-With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one, at most one every `controller.reactive.step_s`. The evaluation moves one prefill engine to decode when that move lowers the larger of the projected TPOT and decode queueing ratios. A pending projected-TTFT recovery evaluation runs first. `/narwhal/state` reports each decision in the [early decode recovery fields](../http-api/05-Live-State.md#early-decode-recovery-fields), and the [adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) list its conditions.
+With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one, at most one every `controller.reactive.step_s`. The evaluation can move one prefill engine to decode. A pending projected-TTFT recovery evaluation runs first. `/narwhal/state` reports each decision in the [early decode recovery fields](../http-api/05-Live-State.md#early-decode-recovery-fields), and the [adjacent-split decisions](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) list its conditions.
 
 ### Expansion and consolidation
 
-Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds capacity to a role whose load reaches `controller.thresholds.expand`. With complete demand, a move from decode to prefill then needs one confirmation. The [`mixed_pressure` rule](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) allows expansion while the other role's load is above `controller.thresholds.shrink`. Both kinds of move must pass the profile, safety, and confirmation checks.
+Consolidation takes an engine from a role with spare capacity. The role controller may consolidate when the projected load of the role giving up the engine, the source load, is at or below `controller.thresholds.shrink`. Expansion adds capacity to a role whose load reaches `controller.thresholds.expand`. With complete demand, the controller moves an engine from decode to prefill for expansion after one confirmation. The [`mixed_pressure` rule](../configuration/02-Serving-and-Role-Control.md#adjacent-split-decisions) allows expansion while the other role's load is above `controller.thresholds.shrink`. Both kinds of move must pass the profile, safety, and confirmation checks.
 
-Moving an engine from decode to prefill requires steady decode traffic and enough observed requests to measure demand (a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation)). While gathering this data, the controller can still move an engine from prefill to decode if prefill load is at or below `controller.thresholds.shrink`, or move an engine in either direction to restore a role's minimum count. If prefill load is above `controller.thresholds.shrink`, moving from decode to prefill requires waiting for enough arrivals only if a first-token timeout recently reset the measurement window.
+Moving an engine from decode to prefill requires steady decode traffic and enough observed requests to measure demand (a closed [arrival-evidence window](../configuration/02-Serving-and-Role-Control.md#evidence-gating-for-decode-to-prefill-consolidation)). While gathering this data, the controller can still move an engine from prefill to decode if prefill load is at or below `controller.thresholds.shrink`, or move an engine in either direction to restore a role's minimum count. When prefill load is above `controller.thresholds.shrink`, the controller can move an engine from decode to prefill before the arrival-evidence window closes, unless a first-token timeout started that window.
 
 A prefill surge allows a move from decode to prefill when all of these are true:
 
@@ -42,7 +42,7 @@ A prefill surge allows a move from decode to prefill when all of these are true:
 
 The move needs `max(controller.reactive.confirmations, controller.thresholds.sustained_intervals)` confirmations and closes any open departure toward decode.
 
-The window closes once `controller.reactive.evidence_span_s` has passed and at least `controller.reactive.evidence_min_arrivals` requests have arrived, or, under light traffic, once `controller.reactive.evidence_max_span_s` has passed. It starts over after a first-token timeout, after a move to decode takes effect, and after a decode floor repair.
+
 
 In `/narwhal/state`, the [demand accounting](../http-api/06-SLO-and-Demand.md#demand-accounting) fields show the demand, overflow, and inputs behind each decision, and the [controller decision](../http-api/05-Live-State.md#controller-decisions) fields name the rule each decision followed and the spans of demand it used.
 
@@ -62,26 +62,27 @@ While [demand is incomplete](../http-api/06-SLO-and-Demand.md#demand-completenes
 
 A pinned engine keeps its configured role. Moves keep at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines while enough healthy engines are available. Draining and recovering engines are on a lifecycle hold and take no new work.
 
-`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and the first such move waits the same time after the router starts. A moved engine stays in its new role for at least `controller.thresholds.dwell_s`. A move from decode to prefill gives up the least busy eligible decode engine, and with `controller.thresholds.flip_resident_guard` above `0`, that engine may have at most that many decode requests still running.
+`controller.thresholds.cooldown_s` is the minimum time between two moves from prefill to decode, and the first such move waits the same time after the router starts. A moved engine stays in its new role for at least `controller.thresholds.dwell_s`, and a joined engine stays in its joined role for that time. A move from decode to prefill gives up the least busy eligible decode engine, and with `controller.thresholds.flip_resident_guard` above `0`, that engine may have at most that many decode requests still running.
 
 While an engine is ejected, quarantined, draining, or recovering, the role controller scores splits on the remaining live engines. When that leaves a role with engines assigned and none of them live, it records a held decision.
 
 Requests already running on a vLLM engine finish there after the engine changes role.
 
-An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle. A move to decode needs its approval to still stand, as the next paragraph describes. A move to prefill needs the controller to still select it. The controller renews the hold each time it asks for the move. For a move to prefill, it also renews the hold at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
+An SGLang engine changes roles only while idle. When every engine in the source role is busy, the role controller holds the least busy one out of new placements while another engine in its role can take them, and changes its role once it is idle. The controller renews the hold each time it asks for the move. For a move to prefill, it also renews the hold at each evaluation that selects no move while the held engine still runs requests. The hold ends when any engine changes roles, or three `controller.reactive.step_s` intervals after its last renewal. The engine takes no work while the switch runs. When SGLang refuses the switch as not idle, the router retries it for up to 10 s. A switch that still fails ejects the engine.
 
 A move to decode that passes its confirmations while its engine is busy stays approved as long as that engine stays held and the number of live prefill engines stays the same. While it is approved, each evaluation asks for the move again without new confirmations, and the move happens at the first evaluation that finds a prefill engine idle. The approval ends, and the engine returns to new placements, when any of these happens:
 
 - three `controller.reactive.step_s` intervals pass after the latest evaluation that found the move eligible
+- an engine joins or leaves the fleet
 - a move to prefill becomes eligible
 - a projected-TTFT recovery evaluation runs, or an evaluation with incomplete demand finds the decode recovery ratio below `controller.thresholds.expand`
 - an evaluation stops before scoring splits
 - the role change is blocked, such as by the decode cooldown
-- the move is no longer eligible and fails the decode profile or role floor check, projects prefill load above `controller.thresholds.expand` at the new split, or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin`, or by zero or less when `mixed_pressure` approved it
+- the move is no longer eligible and fails the decode profile or role floor check, projects prefill load above `controller.thresholds.expand` at the new split, or improves the worst projected SLO ratio by less than `controller.reactive.movement_margin` (by zero or less when `mixed_pressure` approved it)
 
 A projected-TTFT recovery evaluation applies every guard above. It also needs a profile for every engine, decode KV capacity for the work of the new split, a closed arrival-evidence window, and recent decode demand at most `1 + controller.reactive.demand_rise_tolerance` times window demand.
 
-An early decode recovery evaluation applies every guard above. It also needs a profile for every engine and decode profiles that cover the work of the new split. At the new split, the projected TTFT ratio must be at or below `controller.thresholds.shrink`, or, with no departure open, the move must lower the worst projected SLO ratio. The evaluation holds for one confirmation span after any move to prefill. For one confirmation span after its move, a `source_shrink` move back to prefill holds unless it answers a prefill demand spike.
+An early decode recovery evaluation applies every guard above. It also needs a profile for every engine and decode profiles that cover the work of the new split. At the new split, the projected TTFT ratio must be at or below `controller.thresholds.shrink`, or, with no departure open, the move must lower the worst projected SLO ratio. The evaluation holds for one confirmation span after any move to prefill.
 
 ### Advisory mode
 

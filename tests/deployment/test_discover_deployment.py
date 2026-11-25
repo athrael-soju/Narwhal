@@ -2,6 +2,7 @@ import copy
 import inspect
 import io
 import json
+import re
 import shlex
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ from tools.deployment.discover_deployment import (
     derive_hosts,
     discover,
     fabric_address,
+    model_file,
     service_url,
 )
 from tools.deployment.host_access import SSH, load_hosts
@@ -33,6 +35,7 @@ def observation(runtime="rocm", address="10.0.0.1"):
         "hostname": "synthetic-host",
         "image_id": "sha256:" + "a" * 64,
         "model_sha256": "b" * 64,
+        "model_tree_sha256": "c" * 64,
         "model_dtype": "bfloat16",
         "max_model_len": 32768,
         "packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0", "torch": "2.12.0"},
@@ -107,7 +110,7 @@ class FakeInspectionSSH:
         self.calls = []
         self.trust = Path(env["NARWHAL_SSH_KNOWN_HOSTS"])
 
-    def run(self, host, gate, script, payload=None):
+    def run(self, host, gate, script, payload=None, reason=None):
         self.calls.append((host.id, gate))
         if payload:
             if gate == "hash checkpoint files":
@@ -125,7 +128,250 @@ class FakeInspectionSSH:
         return "synthetic-host"
 
 
+GGUF_SHA256 = "9" * 64
+PLUGIN_PINS = {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "6" * 64}
+
+
+def gguf_environment(env):
+    """Pin the qualified GGUF plugin files in a discovery environment."""
+    env.update({f"NARWHAL_{name.upper()}": digest for name, digest in PLUGIN_PINS.items()})
+    return env
+
+
+class GgufInspectionSSH(FakeInspectionSSH):
+    """Inspects a model directory with a GGUF file and an image with the GGUF plugin."""
+
+    def run(self, host, gate, script, payload=None, reason=None):
+        result = super().run(host, gate, script, payload)
+        if gate == "hash checkpoint files":
+            record = json.loads(result)
+            record["files"].append({"path": "weights.gguf", "size": 4, "sha256": GGUF_SHA256})
+            return json.dumps(record)
+        if gate == "inspect GPU and image":
+            pattern = re.compile(json.loads(payload.read_text())["packages"])
+            observed = json.loads(result)
+            observed["multimodal"] = True
+            observed["packages"]["vllm-gguf-plugin"] = "0.0.5"
+            observed["packages"] = {
+                name: version
+                for name, version in observed["packages"].items()
+                if pattern.fullmatch(name)
+            }
+            return json.dumps(observed)
+        return result
+
+
+def gguf_observation(address):
+    observed = observation(address=address)
+    observed["packages"]["vllm-gguf-plugin"] = "0.0.5"
+    observed.update(model_file="weights.gguf", model_file_sha256=GGUF_SHA256)
+    return observed
+
+
 class DiscoveryTests(unittest.TestCase):
+    def test_gguf_discovery_pins_the_file_and_plugin_and_feeds_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = gguf_environment(environment(root))
+            env["NARWHAL_MODEL_PATH"] = env["NARWHAL_MODEL_DIR"] + "/weights.gguf"
+            out = root / "discovery"
+            with (
+                patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                redirect_stdout(io.StringIO()),
+            ):
+                discover(env, out)
+            for line in (root / "config/deployment.env").read_text().splitlines():
+                name, quoted = line.removeprefix("export ").split("=", 1)
+                env[name] = shlex.split(quoted)[0]
+            inputs = json.loads((out / "engine-1-inputs.json").read_text())
+            self.assertEqual(inputs["packages"], "vllm|torch|nixl|nixl-rocm|vllm-gguf-plugin")
+            observed = json.loads((out / "engine-1.json").read_text())
+            self.assertEqual(observed["model_file"], "weights.gguf")
+            self.assertEqual(observed["model_file_sha256"], GGUF_SHA256)
+            fleet = json.loads(Path(env["NARWHAL_FLEET"]).read_text())
+            launches = json.loads(Path(env["NARWHAL_LAUNCH_CONFIG"]).read_text())
+            for node in (1, 2):
+                role = f"engine-{node}"
+                self.assertEqual(env[f"NARWHAL_NODE_{node}_MODEL_SHA256"], GGUF_SHA256)
+                serving = launches["engines"][role]["runtime"]
+                self.assertEqual(serving["expected_packages"]["vllm-gguf-plugin"], "0.0.5")
+                self.assertEqual(serving["tokenizer"], "/model")
+                self.assertEqual(
+                    serving["extra_args"][-5:],
+                    [
+                        "--load-format",
+                        "gguf",
+                        "--hf-config-path",
+                        "/model",
+                        "--language-model-only",
+                    ],
+                )
+                self.assertEqual({name: serving[name] for name in PLUGIN_PINS}, PLUGIN_PINS)
+                role_env = select_values("engine", node, fleet, env)
+                self.assertEqual(role_env["NARWHAL_MODEL_PATH"], env["NARWHAL_MODEL_PATH"])
+                self.assertEqual(role_env["NARWHAL_MODEL_SHA256"], GGUF_SHA256)
+                records = load_launches(
+                    Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
+                )
+                plan, _ = build(records[role], role_env, root / role)
+                self.assertEqual(
+                    plan["args"][plan["args"].index("--model") + 1], "/model/weights.gguf"
+                )
+                self.assertEqual(plan["model_path"], env["NARWHAL_MODEL_PATH"])
+                self.assertEqual(plan["runtime_pins"], PLUGIN_PINS)
+
+    def test_gguf_discovery_requires_a_file_in_the_model_directory(self):
+        for path, message in (
+            ("/elsewhere/weights.gguf", "absolute file path in NARWHAL_MODEL_DIR"),
+            ("weights.gguf", "absolute file path in NARWHAL_MODEL_DIR"),
+            ("/models/synthetic-model/other.gguf", "names no file in NARWHAL_MODEL_DIR"),
+            ("/models/synthetic-model/../weights.gguf", "absolute file path in NARWHAL_MODEL_DIR"),
+            ("/models/synthetic-model/sub/../../weights.gguf", "absolute file path in"),
+        ):
+            with self.subTest(path), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                env = environment(root)
+                env["NARWHAL_MODEL_PATH"] = path
+                with (
+                    patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                    redirect_stdout(io.StringIO()),
+                    self.assertRaisesRegex(ValueError, message),
+                ):
+                    discover(env, root / "discovery")
+                self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
+
+    def test_a_backend_without_model_files_refuses_a_model_path(self):
+        for name, label in (("sglang", "SGLang"), ("trtllm", "TensorRT-LLM")):
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                env = environment(root)
+                env.update(
+                    NARWHAL_ENGINE_BACKEND=name,
+                    NARWHAL_MODEL_PATH=env["NARWHAL_MODEL_DIR"] + "/weights.gguf",
+                )
+                with (
+                    patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                    redirect_stdout(io.StringIO()),
+                    self.assertRaisesRegex(ValueError, f"{label} serves a model directory"),
+                ):
+                    discover(env, root / "discovery")
+                self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
+
+    def test_a_model_path_through_a_subdirectory_segment_names_the_same_file(self):
+        env = environment(Path("/synthetic"))
+        env["NARWHAL_MODEL_PATH"] = "/models/synthetic-model/sub/../weights.gguf"
+        self.assertEqual(model_file(env, 1, env["NARWHAL_MODEL_DIR"]), "weights.gguf")
+
+    def test_gguf_records_need_the_plugin_one_pinned_file_and_a_gguf_name(self):
+        env = gguf_environment(environment(Path("/synthetic")))
+        hosts = derive_hosts(env)
+
+        def records(change=None):
+            observations = {f"engine-{i}": gguf_observation(f"10.0.0.{i}") for i in (1, 2)}
+            if change:
+                change(observations)
+            return build_records(hosts, env, observations, Path("/synthetic"))
+
+        _, launches, _, derived = records()
+        self.assertEqual(derived["NARWHAL_NODE_2_MODEL_SHA256"], GGUF_SHA256)
+        # A language-only configuration needs no flag to leave out encoders.
+        self.assertNotIn(
+            "--language-model-only", launches["engines"]["engine-1"]["runtime"]["extra_args"]
+        )
+
+        def multimodal(observations):
+            for observed in observations.values():
+                observed["multimodal"] = True
+
+        _, launches, _, _ = records(multimodal)
+        self.assertEqual(
+            launches["engines"]["engine-1"]["runtime"]["extra_args"][-1], "--language-model-only"
+        )
+        # The operator keeps multimodal input for the whole fleet.
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "false"
+        _, launches, _, _ = records(multimodal)
+        for name in ("engine-1", "engine-2"):
+            self.assertNotIn(
+                "--language-model-only", launches["engines"][name]["runtime"]["extra_args"]
+            )
+        # One engine cannot differ, since a multimodal request could reach a text-only engine.
+        env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"] = "true"
+        with self.assertRaisesRegex(
+            ValueError, "set NARWHAL_LANGUAGE_MODEL_ONLY once for the fleet, not NARWHAL_NODE_2_"
+        ):
+            records(multimodal)
+        del env["NARWHAL_LANGUAGE_MODEL_ONLY"], env["NARWHAL_NODE_2_LANGUAGE_MODEL_ONLY"]
+        env["NARWHAL_ENGINE_ARGS"] = json.dumps(["--hf-config-path", "/model/config"])
+        _, launches, _, _ = records()
+        self.assertEqual(
+            launches["engines"]["engine-1"]["runtime"]["extra_args"],
+            ["--hf-config-path", "/model/config", "--load-format", "gguf"],
+        )
+        del env["NARWHAL_ENGINE_ARGS"]
+
+        def unpinned_plugin(observations):
+            del observations["engine-1"]["packages"]["vllm-gguf-plugin"]
+
+        def other_file(observations):
+            observations["engine-2"]["model_file_sha256"] = "8" * 64
+
+        def checkpoint_peer(observations):
+            for field in ("model_file", "model_file_sha256"):
+                del observations["engine-2"][field]
+
+        def not_gguf(observations):
+            observations["engine-1"]["model_file"] = "weights.bin"
+
+        for change, message in (
+            (unpinned_plugin, "engine-1: a GGUF model requires vllm-gguf-plugin"),
+            (other_file, "Every engine must serve the same model file"),
+            (checkpoint_peer, "Every engine must serve the same model file"),
+            (not_gguf, "engine-1: set NARWHAL_MODEL_PATH to a .gguf file"),
+        ):
+            with self.subTest(change.__name__), self.assertRaisesRegex(ValueError, message):
+                records(change)
+        env["NARWHAL_NODE_1_GGUF_PLUGIN_EXTENSION_SHA256"] = "not-a-digest"
+        with self.assertRaisesRegex(ValueError, "engine-1: set GGUF_PLUGIN_PYTHON_SHA256"):
+            records()
+        del env["NARWHAL_NODE_1_GGUF_PLUGIN_EXTENSION_SHA256"]
+        del env["NARWHAL_GGUF_PLUGIN_PYTHON_SHA256"]
+        with self.assertRaisesRegex(ValueError, "engine-1: set GGUF_PLUGIN_PYTHON_SHA256"):
+            records()
+        gguf_environment(env)
+        env["NARWHAL_MODEL_SHA256"] = "7" * 64
+        with self.assertRaisesRegex(ValueError, "engine-1: model-file hash differs"):
+            records()
+
+    def test_checkpoint_records_name_no_model_file(self):
+        env = environment(Path("/synthetic"))
+        hosts = derive_hosts(env)
+        observations = {f"engine-{i}": observation(address=f"10.0.0.{i}") for i in (1, 2)}
+        _, launches, _, derived = build_records(hosts, env, observations, Path("/synthetic"))
+        self.assertNotIn("NARWHAL_NODE_1_MODEL_SHA256", derived)
+        serving = launches["engines"]["engine-1"]["runtime"]
+        self.assertNotIn("tokenizer", serving)
+        self.assertEqual(
+            serving["extra_args"], ["--gpu-memory-utilization", "0.9", "--enforce-eager"]
+        )
+        env["NARWHAL_MODEL_SHA256"] = GGUF_SHA256
+        with self.assertRaisesRegex(ValueError, "engine-1: model-file hash differs"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+        del env["NARWHAL_MODEL_SHA256"]
+        # A checkpoint deployment checks the fleet's language-only choice too.
+        for setting in ("true", "false"):
+            env["NARWHAL_LANGUAGE_MODEL_ONLY"] = setting
+            _, launches, _, _ = build_records(hosts, env, observations, Path("/synthetic"))
+            self.assertNotIn(
+                "--language-model-only", launches["engines"]["engine-1"]["runtime"]["extra_args"]
+            )
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "no"
+        with self.assertRaisesRegex(ValueError, "engine-1: set LANGUAGE_MODEL_ONLY to true"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+        env["NARWHAL_LANGUAGE_MODEL_ONLY"] = "true"
+        env["NARWHAL_NODE_1_LANGUAGE_MODEL_ONLY"] = "true"
+        with self.assertRaisesRegex(ValueError, "once for the fleet, not NARWHAL_NODE_1_"):
+            build_records(hosts, env, observations, Path("/synthetic"))
+
     def test_env_only_discovery_feeds_real_preparation_and_launcher(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -163,6 +409,8 @@ class DiscoveryTests(unittest.TestCase):
             for node in (1, 2):
                 role = f"engine-{node}"
                 role_env = select_values("engine", node, fleet, env)
+                # prepare checks the checkpoint against the digest discovery recorded.
+                self.assertEqual(role_env["NARWHAL_MODEL_TREE_SHA256"], "c" * 64)
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
                 )
@@ -182,7 +430,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_sglang_discovery_feeds_real_preparation_and_launcher(self):
         class SglangInspectionSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None):
+            def run(self, host, gate, script, payload=None, reason=None):
                 result = super().run(host, gate, script, payload)
                 if gate == "inspect GPU and image":
                     return json.dumps(sglang_observation("10.0.0." + host.id.split("-")[-1]))
@@ -341,7 +589,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None):
+            def run(self, host, gate, script, payload=None, reason=None):
                 result = super().run(host, gate, script, payload)
                 if gate == "hash checkpoint files" and host.id == "node-2":
                     record = json.loads(result)
@@ -573,21 +821,28 @@ class DiscoveryTests(unittest.TestCase):
                 self.fail(f"Unexpected remote command: {args[0]}")
             return subprocess.CompletedProcess(args, 0, output, "")
 
-        output = io.StringIO()
-        with (
-            patch("sys.stdin", io.StringIO(json.dumps(inputs))),
-            patch("subprocess.run", side_effect=run),
-            patch.object(Path, "exists", lambda p: str(p).startswith("/dev/")),
-            patch.object(Path, "is_dir", lambda p: str(p) == inputs["run_dir"]),
-            patch.object(Path, "read_bytes", lambda p: model),
-            patch.object(Path, "read_text", lambda p: properties[p]),
-            patch.object(Path, "glob", lambda p, pattern: [topology / str(i) for i in range(3)]),
-            redirect_stdout(output),
-        ):
-            exec(compile(PROBE, "remote discovery probe", "exec"), {})
-        result = json.loads(output.getvalue())
+        def probe(config: bytes) -> dict:
+            output = io.StringIO()
+            with (
+                patch("sys.stdin", io.StringIO(json.dumps(inputs))),
+                patch("subprocess.run", side_effect=run),
+                patch.object(Path, "exists", lambda p: str(p).startswith("/dev/")),
+                patch.object(Path, "is_dir", lambda p: str(p) == inputs["run_dir"]),
+                patch.object(Path, "read_bytes", lambda p: config),
+                patch.object(Path, "read_text", lambda p: properties[p]),
+                patch.object(
+                    Path, "glob", lambda p, pattern: [topology / str(i) for i in range(3)]
+                ),
+                redirect_stdout(output),
+            ):
+                exec(compile(PROBE, "remote discovery probe", "exec"), {})
+            return json.loads(output.getvalue())
+
+        self.assertTrue(probe(b'{"vision_config": {}, "text_config": {}}')["multimodal"])
+        result = probe(model)
         self.assertTrue(result["requires_trust_remote_code"])
         self.assertTrue(result["conv_state_layers"])
+        self.assertFalse(result["multimodal"])
         self.assertEqual(result["image_environment"], {"VLLM_ROCM_USE_AITER": "1"})
         self.assertEqual(
             [g["device"] for g in result["gpus"]],

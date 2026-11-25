@@ -23,8 +23,10 @@ def write_private_json(path: Path, value: dict) -> None:
     write_private(path, json.dumps(value, indent=2) + "\n")
 
 
-def read_shared_start(run: Path) -> dict:
-    return read_json(run / "shared-start.json")
+def read_native_start(run: Path) -> dict:
+    """The start record of a native engine, from start-native or start-shared."""
+    own = run / "native-start.json"
+    return read_json(own if own.exists() else run / "shared-start.json")
 
 
 def checked_plan(run: Path) -> tuple[dict, dict, str]:
@@ -71,7 +73,7 @@ def live_native(run: Path, plan: dict, checked: dict) -> dict:
             raise ValueError("Native serving process identity changed")
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Native serving process is no longer running") from error
-    startup = read_shared_start(run)
+    startup = read_native_start(run)
     if (
         startup.get("status") != "running"
         or startup.get("plan_sha256") != digest(run / "launch.json")

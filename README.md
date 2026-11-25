@@ -33,7 +33,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
   <tbody>
     <tr>
       <td>Role hot-swap</td>
-      <td>Reassigns prefill and decode roles across a fixed GPU fleet, with NIXL key-value (KV) transfer between them</td>
+      <td>Reassigns prefill and decode roles across a GPU fleet, with NIXL key-value (KV) transfer between them</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/Core-Concepts/"><img src="https://img.shields.io/badge/docs-Core%20concepts-0f766e" alt="Core concepts documentation"></a></td>
     </tr>
     <tr>
@@ -43,7 +43,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
     </tr>
     <tr>
       <td>Fault tolerance</td>
-      <td>Fails over to a warm-standby router and readmits engines against their live process generation</td>
+      <td>Fails over to a warm-standby router, readmits engines against their live process generation, and joins or removes engines without a restart</td>
       <td><a href="https://athrael-soju.github.io/Narwhal/Operate/"><img src="https://img.shields.io/badge/docs-Operating%20Narwhal-0f766e" alt="Operating Narwhal documentation"></a></td>
     </tr>
     <tr>

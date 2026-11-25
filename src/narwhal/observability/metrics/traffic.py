@@ -2,8 +2,92 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
+
 from ...contracts import METRICS, current
 from .exposition import metric_lines, slo_label
+
+# Request totals a state handoff carries, by their `/narwhal/state` field.
+_TOP_LEVEL = (
+    "offered",
+    "unsized_offered",
+    "served",
+    "slo_met",
+    "expired",
+    "failed",
+    "cancelled",
+    "invalid_requests",
+    "unserved",
+)
+_ADMISSION = ("rejected", "refused")
+
+
+@dataclass
+class AdoptedCounts:
+    """Counts that state handoffs added to this router process's own counts.
+
+    `/narwhal/state` and the next handoff report totals that include them. `/metrics` leaves
+    them out, so each counter counts what this process observed and changes only by its own
+    increments and its restart.
+    """
+
+    # The reasons each terminal outcome exports from process start, at 0 until one occurs.
+    exported: Mapping[str, Collection[str]] = field(default_factory=dict)
+    totals: Counter[str] = field(default_factory=Counter)
+    reasons: defaultdict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
+    # Decode risk events behind narwhal_demand_evidence_risk_events_total, by kind.
+    risk_events: Counter[str] = field(default_factory=Counter)
+
+    def add(
+        self,
+        before: dict[str, int],
+        after: dict[str, int],
+        reasons_before: dict[str, Counter[str]],
+        reasons_after: dict[str, Counter[str]],
+    ) -> None:
+        """Record the change one handoff made to the totals and their reason counts."""
+        for name, value in after.items():
+            self.totals[name] += value - before.get(name, 0)
+        for terminal, counts in reasons_after.items():
+            previous = reasons_before.get(terminal, Counter())
+            for reason in set(counts) | set(previous):
+                self.reasons[terminal][reason] += counts[reason] - previous[reason]
+
+    def local(self, state: dict) -> dict:
+        """Return `state` with the adopted counts taken out."""
+        out = dict(state)
+        for name in _TOP_LEVEL:
+            if name in out:
+                out[name] = out[name] - self.totals[name]
+        if "admission" in out:
+            admission = dict(out["admission"])
+            for name in _ADMISSION:
+                if name in admission:
+                    admission[name] = admission[name] - self.totals[name]
+            out["admission"] = admission
+        if "outcome_reasons" in out:
+            # Another reason appears once this process counts one.
+            out["outcome_reasons"] = {
+                terminal: {
+                    reason: local
+                    for reason, count in counts.items()
+                    if (local := count - self.reasons[terminal][reason])
+                    or reason in self.exported.get(terminal, ())
+                }
+                for terminal, counts in out["outcome_reasons"].items()
+            }
+        evidence = out.get("demand_evidence")
+        if isinstance(evidence, dict) and "risk_events" in evidence:
+            events = evidence["risk_events"]
+            out["demand_evidence"] = {
+                **evidence,
+                "risk_events": {
+                    kind: count - self.risk_events[kind] for kind, count in events.items()
+                },
+            }
+        return out
 
 
 def _by_reason(state: dict, terminal: str, label: str) -> list:
@@ -181,6 +265,15 @@ def render_refusals(state: dict) -> list[str]:
         "Requests refused with HTTP 429 for capacity or HTTP 503 for router readiness, by reason",
         "counter",
         _by_reason(state, "rejected", "reason"),
+    )
+    out += metric_lines(
+        "narwhal_standby_refusals_total",
+        "Requests a standby refused while its primary controlled the fleet, for retry there",
+        "counter",
+        [
+            ({"reason": reason}, count)
+            for reason, count in (state.get("admission") or {}).get("standby_refusals", {}).items()
+        ],
     )
     out += metric_lines(
         "narwhal_invalid_requests_total",

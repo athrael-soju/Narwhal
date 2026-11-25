@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ..contracts import ContractVersionError
+from ..profiling.calibration import verify_calibration
+from ..profiling.membership import engine_set_problem
 from . import state as handoff_state
 from .lease import FileLease, LeaseError
 
@@ -38,6 +40,28 @@ def control_ready(router: NarwhalRouter) -> bool:
         # Degraded monitoring counts as a missed standby probe while the primary holds its lease.
         and not router.monitoring_degraded
     )
+
+
+def lease_role(router: NarwhalRouter) -> str:
+    """Return `active`, `standby` or `fenced`, the lease role `/health` and `/metrics` report.
+
+    A router is fenced while a failover block holds it or its own lease has lapsed.
+    """
+    lease: FileLease | None = router.lease
+    lapsed = not router.standby and lease is not None and not lease.valid()
+    if router.failover_blocked or lapsed:
+        return "fenced"
+    return "standby" if router.standby else "active"
+
+
+def refusals_retried(router: NarwhalRouter) -> bool:
+    """Return whether the load balancer can retry this router's refusals on a live lease holder.
+
+    Only a standby whose last probe found its primary controlling the fleet knows of one. Every
+    other router counts a request it refuses as a client outcome, because no other router may
+    take the retry.
+    """
+    return router.standby and router.primary_seen
 
 
 def ready(router: NarwhalRouter) -> bool:
@@ -79,6 +103,42 @@ def _fresh(doc: dict[str, Any] | None, max_age_s: float) -> bool:
     return age <= max_age_s
 
 
+async def _takeover_problem(router: NarwhalRouter, report: handoff_state.HandoffReport) -> str:
+    """Return why the router cannot serve the engine set the handoff left it, or "".
+
+    The startup checks covered `router.checked_engines`. When the takeover serves another set, or
+    the startup profile check allowed extra profiles, the calibration and profile-set checks run
+    again over the served set. Ejected and draining engines are not read; recovery probes them.
+    """
+    served = tuple(router.membership.ids)
+    if served == router.checked_engines and router.checked_exact:
+        return ""
+    exact = not report.membership_adopted
+    if problem := engine_set_problem(router.profiles, served, "served", exact=exact):
+        return problem
+    if served == router.checked_engines:
+        # The startup calibration check covered this set.
+        router.checked_exact = True
+        return ""
+    scheduler = router.scheduler
+    live = {iid for iid in served if iid not in scheduler.ejected and iid not in scheduler.draining}
+    try:
+        calibration = await verify_calibration(
+            router.cfg,
+            engines=router.membership.specs,
+            live=live,
+            transport=router.lifecycle_transport,
+        )
+    except Exception as exc:
+        return f"first-token calibration check failed: {type(exc).__name__}: {exc}"
+    if calibration.status == "rejected":
+        return "; ".join(calibration.problems)
+    router.first_token_calibration = calibration
+    router.checked_engines = served
+    router.checked_exact = True
+    return ""
+
+
 async def standby_loop(
     router: NarwhalRouter,
     primary: str,
@@ -91,10 +151,39 @@ async def standby_loop(
 ) -> None:
     """Shadow an active primary and claim its expired lease before takeover.
 
-    A valid primary lease blocks takeover even when the primary HTTP path is lost.
+    A valid primary lease blocks takeover even when the primary HTTP path is lost. Once the loop
+    ends, for any reason, no probe vouches for the primary, so the router counts its refusals as
+    client outcomes again.
     """
+    try:
+        await _shadow(
+            router,
+            primary,
+            lease,
+            probe_interval_s=probe_interval_s,
+            takeover_after=takeover_after,
+            max_handoff_age_s=max_handoff_age_s,
+            transport=transport,
+        )
+    finally:
+        router.primary_seen = False
+
+
+async def _shadow(
+    router: NarwhalRouter,
+    primary: str,
+    lease: FileLease,
+    *,
+    probe_interval_s: float,
+    takeover_after: int,
+    max_handoff_age_s: float,
+    transport: httpx.AsyncBaseTransport | None,
+) -> None:
+    """Probe the primary and take over once it misses `takeover_after` probes in a row."""
     doc = handoff_state.load(router.cfg.state_path)
     misses = 0
+    # The block a failed takeover attempt set while the loop keeps shadowing, or "".
+    transient = ""
     last_good = time.monotonic()
     async with httpx.AsyncClient(timeout=probe_interval_s * 0.8, transport=transport) as client:
         while True:
@@ -121,20 +210,25 @@ async def standby_loop(
                 raise
             except (httpx.HTTPError, LeaseError, ValueError):
                 misses += 1
+                router.primary_seen = False
             else:
                 doc, misses = fresh, 0
+                router.primary_seen = True
                 last_good = time.monotonic()
+                if router.failover_blocked == transient:
+                    # Shadowing resumed, so the standby can take over again.
+                    router.failover_blocked = transient = ""
                 with contextlib.suppress(OSError):
                     handoff_state.write(router.cfg.state_path, doc)
 
             if misses >= takeover_after:
                 if not _fresh(doc, max_handoff_age_s):
-                    router.failover_blocked = "no fresh handoff"
+                    router.failover_blocked = transient = "no fresh handoff"
                 else:
                     try:
                         claimed = lease.claim()
                     except LeaseError as exc:
-                        router.failover_blocked = f"lease unavailable: {exc}"
+                        router.failover_blocked = transient = f"lease unavailable: {exc}"
                     else:
                         if claimed:
                             if doc is None:
@@ -153,6 +247,9 @@ async def standby_loop(
                                 report = handoff_state.apply(router, doc)
                                 if not report.applied:
                                     router.failover_blocked = report.why
+                                    return
+                                if problem := await _takeover_problem(router, report):
+                                    router.failover_blocked = problem
                                     return
                                 if not lease.valid():
                                     router.failover_blocked = "lease expired while applying handoff"

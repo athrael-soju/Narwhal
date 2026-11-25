@@ -98,13 +98,18 @@ Place tests under `tests/` by component, assert a named failure or invariant, an
 
 To measure the router's per-request bookkeeping cost before and after a change, run `python tools/measurement/bookkeeping_bench.py`. It prints one JSON line per measurement with the median microseconds per call. `--calls` sets the calls per round, default 20000, and `--rounds` sets the rounds, default 7.
 
+To count client errors through `deploy/ha/haproxy.cfg` across router takeovers, pull `haproxy:3.2-alpine` and run `python tools/measurement/takeover_check.py --out runs/takeover/<name>`. It starts two simulated engines, a router pair and HAProxy in Docker, offers 2 requests per second of open-loop load through HAProxy, and stops the active router with SIGTERM twice, restarting it as a standby as soon as it exits. `--signal KILL` sends SIGKILL, `--restart-after` restarts the stopped router that many seconds after the new holder is ready, and `--takeover-after` sets the standby's failed probes before it takes over, default 4, 0.25 seconds apart, to delay the new holder. The check writes `report.json`, the per-request rows and the HAProxy log to the `--out` directory, and exits 1 when a client request fails, apart from a request in flight on a killed router. `tests/measurement/test_takeover_check.py` runs a SIGTERM takeover with an immediate restart and a 3-second gap, and a SIGKILL takeover by the standby, when the image is present, and skips otherwise.
+
 Fleet acceptance on GPU hosts follows [Deploying a fleet](docs/Deploy.md):
 
 1. Inspect devices and artifacts.
 2. Start each checked engine.
 3. Qualify directed links against the live cache.
 4. Attest and profile those processes.
-5. Run preflight and routed load through the private path.
+5. Run preflight.
+6. Start the router, then [start the monitoring stack](docs/deploy/07-Serve-and-Measure.md#starting-the-monitoring-stack-on-the-router) with `make observe`. Keep it running until the fleet stops.
+7. Run routed load through the private path.
+8. Check the behaviour under test in the **Narwhal Orchestrator** dashboard, and keep screenshots of those panels with the private records.
 
 ### Documentation preview
 
@@ -214,12 +219,16 @@ Import each name from the subpackage module that defines it.
 | `profiling/probe/instance.py`                                                | One engine's profile from its sweeps                                     |
 | `profiling/probe/neighbours.py`                                              | Paced load on engines that share a GPU group                             |
 | `profiling/probe/fleet.py`                                                   | Fleet profiling run                                                      |
+| `profiling/probe/drain.py`                                                   | Router drain check of the engines a role-switching sweep uses            |
 | `profiling/probe/offline.py`                                                 | TTFT refit and profile merge                                             |
 | `profiling/probe/cli.py`                                                     | `narwhal-profile`                                                        |
+| `profiling/membership.py`                                                    | Profile and calibration checks of an engine set                          |
 | `runtime/lifecycle/records.py`                                               | Lifecycle errors, drain records and readmission outcomes                 |
 | `runtime/lifecycle/manager.py`                                               | `LifecycleManager` drain and hold state                                  |
 | `runtime/lifecycle/identity.py`                                              | Process identity binding, capture and profile recovery checks            |
 | `runtime/lifecycle/readmission.py`                                           | Readmission validation                                                   |
+| `runtime/lifecycle/join.py`                                                  | Join validation and the generation that adds an engine                   |
+| `runtime/lifecycle/leave.py`                                                 | Leave drains and the generation that removes an engine                   |
 | `diagnostics/check/report.py`                                                | Gate outcomes                                                            |
 | `diagnostics/check/engines.py`                                               | Reach, calibration, contract, model, pace and tokenize gates             |
 | `diagnostics/check/profiles.py`                                              | Profile, profile generation and SLO gates                                |
@@ -228,6 +237,7 @@ Import each name from the subpackage module that defines it.
 | `diagnostics/check/preflight.py`                                             | Gate order for one preflight run                                         |
 | `diagnostics/check/cli.py`                                                   | `narwhal-check`                                                          |
 | `serving/router/routing.py`                                                  | `NarwhalRouter` construction, request admission and live state           |
+| `serving/router/membership.py`                                               | `Membership` engine membership snapshot and its generation               |
 | `serving/router/sizing.py`                                                   | `RequestSizer` input counts and prefix-cache evidence                    |
 | `serving/router/verification.py`                                             | `SuspectVerifier` leg failure classes and suspect verification           |
 | `scheduling/scheduler/placement.py`                                          | `GlobalScheduler` placement, pricing, availability and engine health     |
@@ -237,6 +247,7 @@ Import each name from the subpackage module that defines it.
 | `observability/metrics/traffic.py`, `runtime.py`, `engines.py`, `control.py` | Metric section renderers                                                 |
 | `observability/metrics/render.py`                                            | Section order of the metrics document                                    |
 | `deployment/launch_engine/runtime.py`                                        | File digests and private file writes                                     |
+| `deployment/launch_engine/checkpoint.py`                                     | Checkpoint file digests and status, also run by discovery on engine hosts |
 | `deployment/launch_engine/plan.py`                                           | Launch plan building and loading                                         |
 | `deployment/launch_engine/settings.py`                                       | Runtime fields that become engine launch flags                           |
 | `deployment/launch_engine/docker.py`                                         | Docker commands and interrupted-command reconciliation                   |
@@ -254,7 +265,7 @@ Import each name from the subpackage module that defines it.
 
 | Module                                      | Contents                                         |
 | ------------------------------------------- | ------------------------------------------------ |
-| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router target |
+| `tools/observability/make_targets.py`       | Router origin validation and the Prometheus router targets |
 | `tools/observability/start/services.py`     | Listener and service contracts                   |
 | `tools/observability/start/stack.py`        | Docker Compose control                           |
 | `tools/observability/start/listeners.py`    | Listener occupancy and owner diagnostics         |

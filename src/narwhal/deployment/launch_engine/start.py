@@ -15,7 +15,15 @@ from .. import stages
 from .backend import cache_capture, plan_launcher
 from .check import read_checked, require_checked
 from .docker import docker, run_runtime_script
-from .plan import config_files_changed, container_options, env_file_name, load, read_env
+from .plan import (
+    check_model_files,
+    config_files_changed,
+    container_options,
+    env_file_name,
+    load,
+    model_file_changed,
+    read_env,
+)
 from .runtime import digest, write_private
 
 # Readiness budget for each engine of a shared start.
@@ -42,6 +50,9 @@ def _create_container(run: Path, plan: dict) -> str:
         raise ValueError("cache capture plan changed; prepare a fresh launch plan")
     if changed := config_files_changed(run, plan):
         raise ValueError(f"engine configuration {changed} changed; prepare a fresh launch plan")
+    if model_file_changed(plan):
+        raise ValueError("model file changed; prepare a fresh launch plan")
+    check_model_files(plan)
     if (run / "container.id").exists():
         raise ValueError("launch already has a container; inspect its recorded ID before recovery")
     cid = docker(
@@ -141,8 +152,6 @@ def validate_shared_runs(
         raise ValueError("shared GPU start requires a declared device allocation")
     allowance = Decimal(str(group["device_allowance"]))
     total = Decimal(0)
-    ports: dict[int, str] = {}
-    roles: set[str] = set()
     for run, plan in selected:
         if (plan.get("backend") or "container") != backend:
             raise ValueError(f"{plan['role']}: launch backend differs from requested startup")
@@ -164,11 +173,29 @@ def validate_shared_runs(
         ):
             raise ValueError(f"{plan['role']}: shared GPU identity or allowance differs")
         validate_shared_gpu(run, plan)
+        total += Decimal(str(shared["gpu_memory_utilization"]))
+        if any(
+            (run / name).exists()
+            for name in ("shared-start.json", "container.id", "native-process.json")
+        ):
+            raise ValueError(
+                f"{plan['role']}: launch directory already has a startup record or engine"
+            )
+    distinct_roles_and_ports(selected)
+    if total > allowance:
+        raise ValueError(f"shared GPU budgets total {total} above allowance {allowance}")
+    return selected
+
+
+def distinct_roles_and_ports(selected: list[tuple[Path, dict]]) -> None:
+    """Refuse plans that repeat an engine role or a port."""
+    ports: dict[int, str] = {}
+    roles: set[str] = set()
+    for _, plan in selected:
         role = plan["role"]
         if role in roles:
-            raise ValueError(f"{role}: duplicate engine role in shared GPU start")
+            raise ValueError(f"{role}: duplicate engine role in one start")
         roles.add(role)
-        total += Decimal(str(shared["gpu_memory_utilization"]))
         for label, port in (
             ("engine", urlsplit(plan["endpoint"]).port),
             ("attestation", plan["attestation_port"]),
@@ -177,14 +204,6 @@ def validate_shared_runs(
             if port in ports:
                 raise ValueError(f"{role} {label} port {port} collides with {ports[port]}")
             ports[port] = f"{role} {label}"
-        if any(
-            (run / name).exists()
-            for name in ("shared-start.json", "container.id", "native-process.json")
-        ):
-            raise ValueError(f"{role}: launch directory already has a startup record or engine")
-    if total > allowance:
-        raise ValueError(f"shared GPU budgets total {total} above allowance {allowance}")
-    return selected
 
 
 def wait_ready(run: Path, plan: dict, cid: str, seconds: int) -> None:

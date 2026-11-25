@@ -7,25 +7,32 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
 
 from narwhal.backends.vllm.captures import handshake_policy
+from narwhal.backends.vllm.dev import gguf_plugin_digests
 from narwhal.backends.vllm.identity import VllmIdentity
 from narwhal.backends.vllm.plan import ENGINE_TTL_S
+from narwhal.deployment import native_engine
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import plan as launch_plan
+from narwhal.deployment.launch_engine import start as launch_start
 from narwhal.deployment.launch_engine.check import check
+from narwhal.deployment.launch_engine.checkpoint import checkpoint_status, inspect_checkpoint
 from narwhal.deployment.launch_engine.plan import (
     build,
+    check_model_files,
     load,
     prepare,
     releases_peers,
     validate_runtime,
 )
-from narwhal.deployment.launch_engine.runtime import digest
+from narwhal.deployment.launch_engine.runtime import digest, regular_file_digest
 from narwhal.deployment.launch_engine.start import (
     start_shared,
     validate_shared_gpu,
@@ -104,9 +111,261 @@ class EngineLauncherTests(unittest.TestCase):
             prepare(run, env, backend="native")
             model.write_bytes(b"changed")
             with patch("narwhal.deployment.stages.run") as invoke:
-                with self.assertRaisesRegex(ValueError, "model file changed"):
+                with self.assertRaisesRegex(ValueError, "^model files changed"):
                     check(run, load(run))
                 invoke.assert_not_called()
+
+    def test_prepare_records_the_model_tree_and_checks_its_pin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/model.safetensors").write_bytes(b"weights")
+            tree = inspect_checkpoint(root / "model")["model_tree_sha256"]
+            with self.assertRaisesRegex(ValueError, "differ from NARWHAL_MODEL_TREE_SHA256"):
+                prepare(root / "refused", {**env, "NARWHAL_MODEL_TREE_SHA256": "0" * 64})
+            self.assertFalse((root / "refused").exists())
+            prepare(root / "launch", {**env, "NARWHAL_MODEL_TREE_SHA256": tree})
+            plan = load(root / "launch")
+            self.assertEqual(plan["model_tree_sha256"], tree)
+            self.assertEqual(plan["model_status_sha256"], checkpoint_status(root / "model"))
+
+    def test_check_refuses_a_status_change_that_keeps_the_content(self):
+        for change in ("chmod", "hard link"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                weights = root / "model/model.safetensors"
+                weights.write_bytes(b"weights")
+                run = root / "launch"
+                prepare(run, env)
+                # Step past the file system's timestamp granularity.
+                time.sleep(0.05)
+                if change == "chmod":
+                    weights.chmod(0o600)
+                else:
+                    os.link(weights, root / "linked.safetensors")
+                with (
+                    patched_docker() as docker,
+                    self.assertRaisesRegex(ValueError, "^model files changed"),
+                ):
+                    check(run, load(run))
+                docker.assert_not_called()
+
+    def test_start_and_native_starts_refuse_model_files_changed_after_the_check(self):
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                if native:
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend="native" if native else "container")
+                plan = load(run)
+                output = vllm_check_output(plan, packages=plan["expected_packages"])
+                image = json.dumps([{"Id": env.get("NARWHAL_ENGINE_IMAGE")}])
+                with (
+                    patched_docker(side_effect=[image, output]) as docker,
+                    patch("narwhal.deployment.stages.run") as invoke,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    invoke.return_value = subprocess.CompletedProcess([], 0, output, "")
+                    check(run, plan)
+                    (root / "model/model.safetensors").write_bytes(b"weights")
+                    with self.assertRaisesRegex(ValueError, "^model files changed"):
+                        if native:
+                            native_engine._checked_plan(run, plan)
+                        else:
+                            launch_start._create_container(run, plan)
+                    self.assertFalse((run / "container.id").exists())
+                    self.assertLessEqual(docker.call_count, 2)
+                if native:
+                    # start-native refuses the plan before it reads the GPU or starts a process.
+                    with (
+                        patch.object(native_engine, "own_gpu", return_value="GPU-1"),
+                        patch.object(native_engine, "_memory_fraction", return_value=0.5),
+                        patch.object(native_engine, "_ports_free"),
+                        patch.object(native_engine, "gpu_memory") as memory,
+                        patch.object(native_engine.subprocess, "Popen") as popen,
+                        self.assertRaisesRegex(ValueError, "^model files changed"),
+                    ):
+                        native_engine.start_each([run], ready_seconds=30)
+                    memory.assert_not_called()
+                    popen.assert_not_called()
+                    self.assertFalse((run / "native-start.json").exists())
+
+    def test_a_container_model_dir_link_out_of_the_mount_is_refused_and_native_follows_it(self):
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                blob = root / "blobs/weights"
+                blob.parent.mkdir()
+                blob.write_bytes(b"weights")
+                (root / "model/model.safetensors").symlink_to(blob)
+                if native:
+                    env.pop("NARWHAL_ENGINE_IMAGE")
+                    env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        prepare(root / "launch", env, backend="native")
+                    tree = inspect_checkpoint(root / "model", contained=False)
+                    self.assertEqual(
+                        load(root / "launch")["model_tree_sha256"], tree["model_tree_sha256"]
+                    )
+                    continue
+                # The container mounts only the model directory, so it cannot load the link.
+                with self.assertRaisesRegex(ValueError, "resolves outside the model directory"):
+                    prepare(root / "launch", env)
+                self.assertFalse((root / "launch").exists())
+
+    def test_check_refuses_a_container_model_file_replaced_by_a_link_out_of_the_mount(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            elsewhere = root / "elsewhere.safetensors"
+            elsewhere.write_bytes(b"weights")
+            weights.unlink()
+            weights.symlink_to(elsewhere)
+            with (
+                patched_docker() as docker,
+                self.assertRaisesRegex(ValueError, "resolves outside the model directory"),
+            ):
+                check(run, load(run))
+            docker.assert_not_called()
+
+    def test_a_container_link_that_climbs_out_of_the_mount_and_back_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            (root / "model/real").write_bytes(b"weights")
+            loop = root / "model/loop"
+            # On the host, ../model/real names model/real; under /model it names /model/real.
+            loop.symlink_to("../model/real")
+            message = "outside the model directory as a mount sees it: loop"
+            with self.assertRaisesRegex(ValueError, message):
+                prepare(root / "launch", env)
+            self.assertFalse((root / "launch").exists())
+            loop.unlink()
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            loop.symlink_to("../model/real")
+            with patched_docker() as docker, self.assertRaisesRegex(ValueError, message):
+                check(run, load(run))
+            docker.assert_not_called()
+            native = dict(env, NARWHAL_MODEL_REVISION="a" * 40)
+            native.pop("NARWHAL_ENGINE_IMAGE")
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(root / "native", native, backend="native")
+
+    def test_check_refuses_a_fifo_swapped_in_after_preparation_without_blocking(self):
+        def container(root, env):
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            return env, "container", weights, "not a regular file: model.safetensors"
+
+        def native(root, env):
+            # The model file sits in a snapshot outside the model directory, as on narwhal dev.
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            weights = snapshot / "weights.gguf"
+            weights.write_bytes(b"gguf")
+            record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+            record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+            Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env.update(NARWHAL_MODEL_PATH=str(weights), NARWHAL_MODEL_REVISION="a" * 40)
+            return env, "native", weights, "native model file changed after launch preparation"
+
+        for layout in (container, native):
+            with self.subTest(layout.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                env, backend, weights, message = layout(root, launcher_inputs(root)[1])
+                run = root / "launch"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    prepare(run, env, backend=backend)
+                weights.unlink()
+                os.mkfifo(weights)
+                outcome = {}
+
+                def refuse(run=run, outcome=outcome):
+                    try:
+                        check(run, load(run))
+                    except ValueError as error:
+                        outcome["error"] = str(error)
+
+                with patched_docker() as docker, patch("narwhal.deployment.stages.run") as invoke:
+                    worker = threading.Thread(target=refuse, daemon=True)
+                    worker.start()
+                    worker.join(10)
+                    # Opening the FIFO for reading would block until a writer opened it.
+                    self.assertFalse(worker.is_alive(), "check blocked on the FIFO")
+                docker.assert_not_called()
+                invoke.assert_not_called()
+                self.assertRegex(outcome.get("error", ""), message)
+
+    def test_check_refuses_model_files_replaced_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            weights = root / "model/model.safetensors"
+            weights.write_bytes(b"weights")
+            run = root / "launch"
+            prepare(run, env)
+            plan = load(run)
+            # Other weights of the same size, under the same name.
+            replacement = root / "replacement"
+            replacement.write_bytes(b"WEIGHTS")
+            replacement.replace(weights)
+            with (
+                patched_docker() as docker,
+                self.assertRaisesRegex(ValueError, "^model files changed after launch preparation"),
+            ):
+                check(run, plan)
+            docker.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "predates model file digests"):
+                check(run, {k: v for k, v in plan.items() if k != "model_status_sha256"})
+
+    def test_a_native_model_file_outside_the_model_dir_joins_the_tree(self):
+        trees = []
+        for content in (b"first", b"second"):
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env = launcher_inputs(root)
+                snapshot = root / "snapshot"
+                snapshot.mkdir()
+                (snapshot / "weights.gguf").write_bytes(content)
+                env.pop("NARWHAL_ENGINE_IMAGE")
+                env["NARWHAL_MODEL_PATH"] = str(snapshot / "weights.gguf")
+                env["NARWHAL_MODEL_REVISION"] = "a" * 40
+                record = json.loads(Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).read_text())
+                record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+                Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+                directory = inspect_checkpoint(root / "model")["model_tree_sha256"]
+                # The pin names the model directory's digest, as discovery computes it.
+                env["NARWHAL_MODEL_TREE_SHA256"] = directory
+                prepare(root / "launch", env, backend="native")
+                trees.append(load(root / "launch")["model_tree_sha256"])
+        self.assertNotEqual(trees[0], trees[1])
+        self.assertNotIn(directory, trees)
+
+    def test_a_native_model_path_outside_the_model_dir_must_be_a_regular_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            model = root / "plan"
+            model.mkdir()
+            (model / "config.json").write_text("{}")
+            fifo = root / "weights.gguf"
+            os.mkfifo(fifo)
+            plan = {"backend": "native", "model_dir": str(model), "model_path": str(fifo)}
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                launch_plan.model_files(plan)
 
     def test_native_gguf_keeps_snapshot_path_for_sidecar_files(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -129,6 +388,314 @@ class EngineLauncherTests(unittest.TestCase):
             plan, _ = build(record, env, root / "launch", backend="native")
             self.assertEqual(plan["model_path"], str(model))
             self.assertEqual(plan["args"][plan["args"].index("--model") + 1], str(model))
+
+    def test_prepare_reads_a_model_file_once(self):
+        def container(root):
+            _, env, model = self.gguf_inputs(root)
+            return env, model, "container"
+
+        def native_snapshot(root):
+            # A Hugging Face snapshot links each file to a blob outside the model directory.
+            _, env, weights = self.gguf_inputs(root)
+            blob = root / "blobs/weights"
+            blob.parent.mkdir()
+            weights.rename(blob)
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            (snapshot / "weights.gguf").symlink_to(blob)
+            # The model directory is a tokenizer snapshot with the same layout.
+            config = root / "model/config.json"
+            config.rename(blob.parent / "config")
+            config.symlink_to(Path("../blobs/config"))
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env["NARWHAL_MODEL_PATH"] = str(snapshot / "weights.gguf")
+            env["NARWHAL_MODEL_REVISION"] = "a" * 40
+            return env, blob, "native"
+
+        opened: list[Path] = []
+        real_os_open, real_io_open = os.open, io.open
+
+        def os_open(path, *args, **kwargs):
+            opened.append(Path(path).resolve())
+            return real_os_open(path, *args, **kwargs)
+
+        def io_open(path, *args, **kwargs):
+            if not isinstance(path, int):
+                opened.append(Path(path).resolve())
+            return real_io_open(path, *args, **kwargs)
+
+        for layout in (container, native_snapshot):
+            with self.subTest(layout.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder).resolve()
+                env, weights, backend = layout(root)
+                opened.clear()
+                with (
+                    patch("os.open", os_open),
+                    patch("io.open", io_open),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    prepare(root / "launch", env, backend=backend)
+                self.assertEqual(opened.count(weights), 1)
+                plan = load(root / "launch")
+                self.assertEqual(plan["model_sha256"], env["NARWHAL_MODEL_SHA256"])
+                check_model_files(plan)
+
+    def gguf_inputs(
+        self, root: Path, pins: dict[str, str] | None = None
+    ) -> tuple[dict, dict[str, str], Path]:
+        record, env = launcher_inputs(root)
+        model = root / "model" / "weights.gguf"
+        model.write_bytes(b"gguf")
+        record["runtime"]["expected_packages"]["vllm-gguf-plugin"] = "0.0.5"
+        record["runtime"].update(pins or {})
+        Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"]).write_text(json.dumps(record))
+        env.update(
+            NARWHAL_MODEL_PATH=str(model),
+            NARWHAL_MODEL_SHA256=hashlib.sha256(b"gguf").hexdigest(),
+        )
+        return record, env, model
+
+    def test_container_gguf_launch_serves_the_pinned_file_from_the_model_mount(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model/weights.gguf")
+            self.assertIn(
+                f"type=bind,src={(root / 'model').resolve()},dst=/model,readonly", plan["common"]
+            )
+            self.assertEqual(plan["model_path"], str(model))
+            self.assertEqual(plan["model_sha256"], env["NARWHAL_MODEL_SHA256"])
+
+    def test_runtime_check_compares_the_image_plugin_with_the_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            plugin = root / "site-packages" / "vllm_gguf_plugin"
+            (plugin / "ops").mkdir(parents=True)
+            (plugin / "__init__.py").write_text("qualified = True\n")
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            (plugin / "_C_gguf.abi3.so").write_bytes(b"extension")
+            pins = gguf_plugin_digests(plugin)
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["runtime_pins"], pins)
+            modules = {
+                "vllm.config": ModuleType("vllm.config"),
+                "vllm.distributed.kv_transfer.kv_connector.factory": ModuleType("factory"),
+                "vllm.version": ModuleType("vllm.version"),
+                "transformers": ModuleType("transformers"),
+                **engine_config_modules(),
+            }
+            modules["vllm.config"].KVTransferConfig = Mock()
+            connector = type("NixlConnector", (), {"__module__": "nixl"})
+            factory = Mock(**{"get_connector_class.return_value": connector})
+            modules[
+                "vllm.distributed.kv_transfer.kv_connector.factory"
+            ].KVConnectorFactory = factory
+            modules["vllm.version"].__version__ = "0.29.0"
+            modules["transformers"].AutoTokenizer = Mock()
+            distribution = Mock(**{"locate_file.return_value": plugin})
+
+            def execute_check(command, directory, log):
+                if command[0] == "image":
+                    return json.dumps([{"Id": plan["image"]}])
+                index = command.index("-c")
+                with (
+                    patch.dict(sys.modules, modules),
+                    patch.object(sys, "argv", ["-c", *command[index + 2 :]]),
+                    patch("importlib.metadata.version", plan["expected_packages"].__getitem__),
+                    patch("importlib.metadata.distribution", return_value=distribution),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                ):
+                    exec(command[index + 1], {})
+                return output.getvalue()
+
+            # Wheel sources in place of the qualified revision fail the check.
+            (plugin / "ops" / "kernels.py").write_text("wheel = True\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                self.assertRaisesRegex(AssertionError, "GGUF plugin files differ"),
+            ):
+                check(run, plan)
+            self.assertFalse((run / "checked.json").exists())
+            (plugin / "ops" / "kernels.py").write_text("pass\n")
+            with (
+                patched_docker(side_effect=execute_check),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            self.assertTrue((run / "checked.json").exists())
+
+    def test_runtime_check_requires_the_plugin_record_for_pinned_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pins = {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "6" * 64}
+            _, env, _ = self.gguf_inputs(root, pins)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            for plugin in (None, {**pins, "gguf_plugin_python_sha256": "7" * 64}):
+                with (
+                    self.subTest(plugin=plugin),
+                    patched_docker(side_effect=[image, vllm_check_output(plan, plugin=plugin)]),
+                    self.assertRaisesRegex(ValueError, "GGUF plugin files differ"),
+                ):
+                    check(run, plan)
+
+    def test_gguf_plugin_digests_come_in_pairs(self):
+        for pins in (
+            {"gguf_plugin_python_sha256": "5" * 64},
+            {"gguf_plugin_python_sha256": "5" * 64, "gguf_plugin_extension_sha256": "short"},
+        ):
+            with self.subTest(pins=pins), self.assertRaisesRegex(ValueError, "must both be"):
+                validate_runtime({**runtime(), **pins})
+
+    def test_container_checkpoint_launch_names_no_model_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model")
+            self.assertNotIn("model_path", plan)
+            self.assertNotIn("model_sha256", plan)
+
+    def test_container_gguf_preparation_requires_a_pinned_file_in_the_model_directory(self):
+        def unpinned(root, env, model):
+            del env["NARWHAL_MODEL_SHA256"]
+
+        def mismatched(root, env, model):
+            env["NARWHAL_MODEL_SHA256"] = "0" * 64
+
+        def outside(root, env, model):
+            other = root / "weights.gguf"
+            other.write_bytes(b"gguf")
+            env["NARWHAL_MODEL_PATH"] = str(other)
+
+        def linked(root, env, model):
+            target = root / "blob"
+            model.rename(target)
+            model.symlink_to(target)
+
+        def missing(root, env, model):
+            model.unlink()
+
+        def parent_segment(root, env, model):
+            other = root / "weights.gguf"
+            other.write_bytes(b"gguf")
+            env["NARWHAL_MODEL_PATH"] = str(root / "model" / ".." / "weights.gguf")
+
+        def not_gguf(root, env, model):
+            other = root / "model" / "weights.bin"
+            model.rename(other)
+            env["NARWHAL_MODEL_PATH"] = str(other)
+
+        def plugin_unpinned(root, env, model):
+            source = Path(env["NARWHAL_ENGINE_LAUNCH_CONFIG"])
+            record = json.loads(source.read_text())
+            del record["runtime"]["expected_packages"]["vllm-gguf-plugin"]
+            source.write_text(json.dumps(record))
+
+        for change, message in (
+            (unpinned, "set NARWHAL_MODEL_SHA256"),
+            (mismatched, "model file differs from its supplied hash"),
+            (outside, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (linked, "not a symbolic link"),
+            (missing, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (parent_segment, "NARWHAL_MODEL_PATH must name a file in NARWHAL_MODEL_DIR"),
+            (not_gguf, "vLLM launches take a model directory or a .gguf model file"),
+            (plugin_unpinned, "requires a pinned vllm-gguf-plugin"),
+        ):
+            with self.subTest(change.__name__), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, env, model = self.gguf_inputs(root)
+                change(root, env, model)
+                run = root / "launch"
+                with self.assertRaisesRegex(ValueError, message):
+                    prepare(run, env)
+                self.assertFalse(run.exists())
+
+    def test_container_gguf_path_may_pass_through_a_subdirectory_segment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, _ = self.gguf_inputs(root)
+            (root / "model" / "sub").mkdir()
+            env["NARWHAL_MODEL_PATH"] = str(root / "model" / "sub" / ".." / "weights.gguf")
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            self.assertEqual(plan["args"][plan["args"].index("--model") + 1], "/model/weights.gguf")
+            self.assertEqual(plan["model_path"], str(root / "model" / "weights.gguf"))
+
+    def test_native_model_directory_refuses_a_model_file_pin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env = launcher_inputs(root)
+            env.pop("NARWHAL_ENGINE_IMAGE")
+            env.update(NARWHAL_MODEL_REVISION="a" * 40, NARWHAL_MODEL_SHA256="9" * 64)
+            with self.assertRaisesRegex(ValueError, "NARWHAL_MODEL_SHA256 pins a model file"):
+                prepare(root / "launch", env, backend="native")
+
+    def test_container_check_and_start_refuse_a_symlink_swapped_in_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            with (
+                patched_docker(side_effect=[image, vllm_check_output(plan)]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            # The identical bytes now live outside the directory the container mounts.
+            outside = root / "outside.gguf"
+            model.rename(outside)
+            model.symlink_to(outside)
+            self.assertEqual(digest(model), plan["model_sha256"])
+            with patched_docker() as docker:
+                with self.assertRaisesRegex(ValueError, "model file changed after launch"):
+                    check(run, plan)
+                with self.assertRaisesRegex(ValueError, "model file changed; prepare a fresh"):
+                    launch_start.start(run, plan)
+                docker.assert_not_called()
+            self.assertFalse((run / "container.id").exists())
+
+    def test_container_check_and_start_refuse_a_model_file_changed_after_preparation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _, env, model = self.gguf_inputs(root)
+            run = root / "launch"
+            with contextlib.redirect_stdout(io.StringIO()):
+                prepare(run, env)
+            plan = load(run)
+            image = json.dumps([{"Id": env["NARWHAL_ENGINE_IMAGE"]}])
+            with (
+                patched_docker(side_effect=[image, vllm_check_output(plan)]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(run, plan)
+            model.write_bytes(b"changed")
+            with patched_docker() as docker:
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
+                    check(run, plan)
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
+                    launch_start.start(run, plan)
+                docker.assert_not_called()
+            self.assertFalse((run / "container.id").exists())
 
     def test_linear_convolution_layers_hold_a_conv_state(self):
         from narwhal.deployment.launch_engine.plan import model_conv_state_layers
@@ -1020,3 +1587,18 @@ class SharedEngineStartTests(unittest.TestCase):
                 docker(["logs", "container"], Path(folder), "launch.log", include_stderr=True),
                 "CUDA IPC failed",
             )
+
+
+class RegularFileDigestTests(unittest.TestCase):
+    def test_refuses_a_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "weights.gguf"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                regular_file_digest(fifo)
+
+    def test_hashes_a_regular_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "weights.gguf"
+            path.write_bytes(b"gguf")
+            self.assertEqual(regular_file_digest(path), hashlib.sha256(b"gguf").hexdigest())

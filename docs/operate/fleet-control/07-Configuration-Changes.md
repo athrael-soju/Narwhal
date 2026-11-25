@@ -40,13 +40,20 @@ The service validates the merged configuration as `narwhal config validate` does
 
 ## Restore the baseline
 
-Select **Restore baseline** to return the fleet to the state the session started from. Ending a session keeps its changes, so restore before you end it.
+Select **Restore baseline** to return the fleet to the state the session started from. For membership, that state is the set of engines the baseline fleet configuration names, so restore also removes an engine that joined before the session and returns a baseline engine that left before it. Ending a session keeps its changes, so restore before you end it.
 
 Restore baseline is an [exclusive action](04-Sessions.md#exclusive-actions) and undoes the session's changes in this order:
 
 1. If the current configuration differs from the baseline, the service restarts the router with the baseline through the `router_restart` hook and waits for readiness, as in [Router readiness](#router-readiness).
-2. For each engine the session paused, the service runs the `engine_resume` hook. For each engine it stopped, the service runs the `engine_start` hook.
-3. For each engine the session drained, the service calls the router's readmit.
+2. The service then returns each member engine the session changed, one engine at a time. For each engine, it first runs the `engine_resume` hook if the session paused the engine, or the `engine_start` hook if the session stopped it. It then calls the router's readmit if the session drained the engine.
+3. The service brings back each baseline engine missing from the router's membership. It runs the `engine_start` hook when that hook is configured, then joins the engine with its baseline entry, with each `${VARIABLE}` endpoint resolved from the service's environment.
+4. The service removes from the router's membership each engine missing from the baseline.
+
+For step 3, set each `${VARIABLE}` that a returning engine's endpoints use to the value the router uses, in the service's environment. For an engine of step 3, the `engine_start` hook runs even when the engine's process is running, so the hook must succeed for a running engine. The router refuses a returning engine unless its profile store holds a profile for each member and that engine, as in [Joining and removing engines](../08-Joining-and-Removing-Engines.md#profile-the-engine). After a removal, the store keeps the removed engine's profiles until a merge whose `--fleet` file omits the engine drops them, as the [store update after a removal](../08-Joining-and-Removing-Engines.md#update-the-fleet-file-and-the-profile-store) and the merge for another engine's join do. While the store still holds them, an engine that left returns with its stored profile when its [process generation](../../configuration/01-Fleet-Schema.md#attestation) matches that profile.
+
+After step 1, the service reads the router's `GET /narwhal/engines` and compares it with the baseline to find the engines of steps 3 and 4. With a router that lacks this route, the service uses the joins and leaves the session recorded.
+
+The run record holds each step as it completes. When a step fails, the run record holds that step too, and the restore fails with its status. Select **Restore baseline** again to continue from the fleet's current state.
 
 ## Router readiness
 

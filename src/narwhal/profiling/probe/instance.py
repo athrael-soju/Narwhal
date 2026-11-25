@@ -23,6 +23,7 @@ from ..model import Profile
 from .decode import probe_decode, probe_prefill_share
 from .engine import cache_block_tokens, kv_capacity, prefix_cache_hits
 from .prefill import probe_prefill
+from .prime import prime_engine
 from .sweep import Sweep, warm_cases
 from .warm import apply_cached_fit, probe_cached_prefill
 
@@ -92,6 +93,25 @@ async def profile_instance(
 
     s = sweep or Sweep()
     print(f"  {iid}")
+    if s.warmup_requests:
+        # Kernels an engine builds on first use would otherwise slow the sweep's first points.
+        warm_input = min(s.prefill_lens)
+        if max_model_len is not None:
+            warm_input = max(1, min(warm_input, max_model_len - s.decode_tokens - 1))
+        for role in (Role.PREFILL, Role.DECODE):
+            await serve_as(role)
+            await prime_engine(
+                client,
+                url,
+                model,
+                dialect,
+                s.warmup_requests,
+                warm_input,
+                s.decode_tokens,
+                chars_per_token,
+                observation_timeout_s,
+            )
+        print(f"    warm-up: {2 * s.warmup_requests} discarded requests")
     hits_before = await prefix_cache_hits(client, url, metrics, observation_timeout_s or 30.0)
     block_tokens = await cache_block_tokens(client, url, metrics, observation_timeout_s or 30.0)
     await serve_as(Role.PREFILL)

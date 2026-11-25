@@ -571,7 +571,8 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_engines_on_one_device_never_share_a_step_leg(self):
         self._four_engines()
         allocation = SharedDeviceAllocation("g0", "GPU-0", 0.5, 0.4)
-        self.cfg.engines[0].shared_device = self.cfg.engines[1].shared_device = allocation
+        engines = self.cfg.engines
+        engines[:2] = [replace(spec, shared_device=allocation) for spec in engines[:2]]
         client = RecordingClient()
         _, document = await self._run_recorded(client, samples=2)
         self.assertEqual(client.violations, [])
@@ -809,7 +810,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_calibration_reserves_available_output_at_context_boundary(self):
         """The real connector and client complete a one-token crossed handoff."""
-        self.cfg.engines[1].pin = True
+        self.cfg.engines[1] = replace(self.cfg.engines[1], pin=True)
         requests = []
 
         def handle(request):
@@ -856,15 +857,17 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         ):
             code = await calibration.calibrate(
                 self.cfg,
-                input_tokens=(128, 1021, 1022, 1023),
+                input_tokens=(128, 1021, 1022),
                 samples_per_group=1,
                 observation_timeout_s=1.0,
                 out=output,
             )
-            with self.assertRaisesRegex(ValueError, "e3: requested 1024 input tokens"):
+            with self.assertRaisesRegex(
+                ValueError, "e3: requested 1023 input tokens plus 2 output tokens"
+            ):
                 await calibration.calibrate(
                     self.cfg,
-                    input_tokens=(1024,),
+                    input_tokens=(1023,),
                     samples_per_group=1,
                     observation_timeout_s=1.0,
                     out=Path(self.folder.name) / "oversized.json",
@@ -872,7 +875,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 1)  # Boundary behavior does not establish 100-sample qualification.
         document = json.loads(output.read_text())
         self.assertTrue(all(row["status"] == "completed" for row in document["attempts"]))
-        expected = {128: 4, 1021: 3, 1022: 2, 1023: 1}
+        expected = {128: 4, 1021: 3, 1022: 2}
         for row in document["attempts"]:
             self.assertEqual(row["requested_output_tokens"], expected[row["target_input_tokens"]])
         for body in requests:

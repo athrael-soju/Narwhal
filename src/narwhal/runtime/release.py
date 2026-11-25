@@ -29,17 +29,39 @@ class PeerRelease:
         self.tasks: set[asyncio.Task[dict[str, str]]] = set()
         self.missed: set[str] = set()
         self.retry_at = 0.0
+        # Engines that left the fleet while a round ran.
+        self._departed: set[str] = set()
+        # Engines that left the fleet and keep their remaining rounds, so peers that mapped
+        # their memory release it on an idle fleet.
+        self._left: set[str] = set()
 
     def track(self, released: Mapping[str, str]) -> None:
         now = self._clock()
-        for iid in set(self._rounds) - set(released):
+        schedule = self.fabric.release_after_s
+        for iid in sorted(self._left):
+            if iid in released or self._rounds.get(iid, ("", 0.0, len(schedule)))[2] >= len(
+                schedule
+            ):
+                # An engine that rejoined and is released again starts a fresh schedule.
+                self._left.discard(iid)
+                self._rounds.pop(iid, None)
+        for iid in set(self._rounds) - set(released) - self._left:
             del self._rounds[iid]
         for iid, reason in released.items():
             current = self._rounds.get(iid)
             if current is None or current[0] != reason:
                 self._rounds[iid] = (reason, now, 0)
-        if not released:
+        if not released and not self._left:
             self.missed.clear()
+
+    def forget(self, iid: str) -> None:
+        """Keep the remaining release rounds of an engine that left the fleet."""
+        reason, since, done = self._rounds.get(iid, ("left", self._clock(), 0))
+        self._rounds[iid] = (reason, since, done)
+        self._left.add(iid)
+        self.missed.discard(iid)
+        if self.tasks:
+            self._departed.add(iid)
 
     def due(self) -> list[str]:
         now = self._clock()
@@ -52,12 +74,17 @@ class PeerRelease:
         return due
 
     def finish(self, task: asyncio.Task[dict[str, str]], *, retry: bool) -> None:
+        departed, self._departed = self._departed, set()
         if task.cancelled() or task.exception() is not None:
             return
         if retry:
             self.missed = set()
             return
-        self.missed = {iid for iid, outcome in task.result().items() if outcome not in SETTLED}
+        self.missed = {
+            iid
+            for iid, outcome in task.result().items()
+            if outcome not in SETTLED and iid not in departed
+        }
         self.retry_at = self._clock() + self.fabric.release_retry_s
 
     def retry_due(self) -> bool:
@@ -76,7 +103,12 @@ class PeerRelease:
                 ),
             }
             for iid, (_, since, done) in sorted(self._rounds.items())
+            if iid not in self._left
         }
+
+    def departed(self) -> list[str]:
+        """Return the engines that left the fleet and still have release rounds."""
+        return sorted(self._left)
 
 
 def released_engines(router: NarwhalRouter) -> dict[str, str]:
@@ -99,8 +131,8 @@ def release_peers(router: NarwhalRouter) -> None:
     only: set[str] | None = None
     if gone:
         release.missed = set()
-    elif released and release.retry_due():
-        gone, only = sorted(released), release.missed
+    elif (released or release.departed()) and release.retry_due():
+        gone, only = sorted({*released, *release.departed()}), release.missed
     else:
         return
     task = asyncio.create_task(release_round(router, gone, only))
@@ -112,7 +144,7 @@ def release_peers(router: NarwhalRouter) -> None:
 async def release_round(
     router: NarwhalRouter, gone: list[str], only: set[str] | None = None
 ) -> dict[str, str]:
-    specs = {spec.iid: spec for spec in router.cfg.engines}
+    specs = router.membership.by_id()
     live = [inst for inst in router.scheduler.live_instances() if inst.iid in specs]
     producers = [inst for inst in live if can_produce(specs[inst.iid])]
     consumers = [inst for inst in live if can_consume(specs[inst.iid])]

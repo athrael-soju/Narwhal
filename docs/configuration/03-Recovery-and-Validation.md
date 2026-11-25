@@ -78,7 +78,7 @@ These fields set the state handoff file, resume at startup and the shutdown drai
 | `recovery.resume`            | `false`             | Applies a compatible state handoff file at startup.                            |
 | `serving.graceful_timeout_s` | `30.0`              | Uvicorn drain interval after `SIGTERM`, in zero or more whole seconds.         |
 
-With resume off, the router starts with the role split declared in the fleet configuration. With resume on and a compatible state handoff at `recovery.state_path`, the router restores the split from the state handoff. With resume on, an uncontracted development fleet whose saved engine set differs from the current one starts with the declared split.
+With resume off, the router starts with the role split declared in the fleet configuration. With resume on and a compatible state handoff at `recovery.state_path`, the router restores the split from the state handoff, and a saved [engine membership](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff) at generation 1 or higher replaces the fleet file's engines. With resume on, the router starts an uncontracted development fleet with the declared split when the saved handoff's engines differ from the fleet file's and its `membership` is missing or at generation 0.
 
 Contracted resume and automatic takeover require:
 
@@ -88,6 +88,8 @@ Contracted resume and automatic takeover require:
 A saved state handoff with an unknown schema or version aborts startup. A schema-valid handoff that fails the contracted fleet's resume checks places a whole-wave hold that requires a managed restart of every engine.
 
 A successful resume restores roles, ejections, lifecycle holds and complete-backend-outage state. It clears per-engine dwell timestamps. The prefill-to-decode cooldown begins when Narwhal creates the replacement scheduler.
+
+A standby router checks its fleet file's engines at startup. Its profile store may also hold profiles for other engines, such as one that joined on the primary, and the standby logs a warning that names them. At takeover, when the engines it serves differ from its fleet file's, the standby checks the profile store and the first-token calibration against those engines. A takeover from a handoff without a membership at generation 1 or higher serves the fleet file's engines and refuses a store that holds profiles for other engines. A failed check blocks the takeover with its reason.
 
 Configure warm-standby takeover with the `narwhal-serve` options in [Starting a router pair](../operate/01-Start-Routers.md#starting-a-router-pair).
 

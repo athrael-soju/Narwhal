@@ -30,6 +30,7 @@ from narwhal.deployment.attestation_contract.evidence import live_native, read_j
 from narwhal.deployment.attestation_contract.fleet import finalize_fleet
 from narwhal.deployment.attestation_contract.sidecar import residency_arguments, serve
 from narwhal.engines.attestation import AttestationDocument, EngineIdentity, make_attestation
+from tests.deployment.fixtures import model_file_fields
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,8 +84,12 @@ class LaunchArgsTests(unittest.TestCase):
 
 
 class AttestationContractTests(unittest.TestCase):
-    def native_evidence(self, root: Path) -> tuple[Path, Path, dict]:
-        run, log = self.engine_evidence(root)
+    def native_evidence(
+        self, root: Path, plan_fields: dict | None = None
+    ) -> tuple[Path, Path, dict]:
+        run, log = self.engine_evidence(
+            root, plan_fields={"backend": "native", **(plan_fields or {})}
+        )
         plan = read_json(run / "launch.json")
         plan.update(
             backend="native",
@@ -93,6 +98,7 @@ class AttestationContractTests(unittest.TestCase):
             model_revision="a" * 40,
             model_config_path=str(root / "model/config.json"),
         )
+        plan.update(model_file_fields(plan))
         save(run / "launch.json", plan)
         plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
         checked = {
@@ -225,11 +231,13 @@ class AttestationContractTests(unittest.TestCase):
             [],
         )
 
-    def engine_evidence(self, root: Path, extra_args: tuple[str, ...] = ()) -> tuple[Path, Path]:
+    def engine_evidence(
+        self, root: Path, extra_args: tuple[str, ...] = (), plan_fields: dict | None = None
+    ) -> tuple[Path, Path]:
         run = root / "run"
         run.mkdir()
         model = root / "model"
-        model.mkdir()
+        model.mkdir(exist_ok=True)
         config = model / "config.json"
         save(config, {"architectures": ["TestForCausalLM"]})
         image = "sha256:" + "a" * 64
@@ -257,7 +265,9 @@ class AttestationContractTests(unittest.TestCase):
             "cache_capture_code_sha256": "f" * 64,
             "connector": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
             "expected_packages": {"vllm": "0.29.0+test", "nixl-rocm": "1.0.0"},
+            **(plan_fields or {}),
         }
+        plan.update(model_file_fields(plan))
         save(run / "launch.json", plan)
         plan_hash = hashlib.sha256((run / "launch.json").read_bytes()).hexdigest()
         save(
@@ -646,6 +656,17 @@ class AttestationContractTests(unittest.TestCase):
             ):
                 exec(compile(MODEL_DIMENSIONS_CAPTURE, "live-model-dimensions", "exec"), {})
 
+    def test_engine_document_attests_the_model_tree_and_refuses_changed_model_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, log = self.engine_evidence(Path(folder))
+            plan = read_json(run / "launch.json")
+            with patched_live_container(return_value="b" * 64):
+                document = engine_document(run, log)
+                self.assertEqual(document["launch"]["model_tree_sha256"], plan["model_tree_sha256"])
+                (Path(plan["model_dir"]) / "model.safetensors").write_bytes(b"other weights")
+                with self.assertRaisesRegex(ValueError, "^model files changed"):
+                    engine_document(run, log)
+
     def test_engine_document_uses_checked_captures_and_rejects_stale_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             run, log = self.engine_evidence(Path(folder))
@@ -681,6 +702,66 @@ class AttestationContractTests(unittest.TestCase):
                 save(run / "transfer-mode.json", stale)
                 with self.assertRaisesRegex(ValueError, "Transfer mode plan_sha256"):
                     engine_document(run, log)
+
+    def test_gguf_launch_attests_the_model_file_and_rejects_a_changed_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            weights = root / "model/weights.gguf"
+            weights.parent.mkdir()
+            weights.write_bytes(b"gguf")
+            fields = {
+                "model_path": str(weights),
+                "model_sha256": hashlib.sha256(b"gguf").hexdigest(),
+            }
+            run, log = self.engine_evidence(
+                root, ("--model", "/model/weights.gguf"), plan_fields=fields
+            )
+            with patched_live_container(return_value="b" * 64):
+                document = engine_document(run, log)
+                self.assertEqual(document["launch"]["model_sha256"], fields["model_sha256"])
+                # An identical file outside the mounted directory is another file to the engine.
+                outside = root / "outside.gguf"
+                weights.rename(outside)
+                weights.symlink_to(outside)
+                with self.assertRaisesRegex(ValueError, "Model file changed"):
+                    engine_document(run, log)
+                weights.unlink()
+                weights.write_bytes(b"other")
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
+                    engine_document(run, log)
+
+    def test_native_gguf_launch_attests_the_model_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            weights = root / "weights.gguf"
+            weights.write_bytes(b"gguf")
+            fields = {
+                "model_path": str(weights),
+                "model_sha256": hashlib.sha256(b"gguf").hexdigest(),
+            }
+            run, log, process = self.native_evidence(root, fields)
+            with (
+                patch(
+                    "narwhal.deployment.attestation_contract.evidence.process_identity",
+                    return_value=process,
+                ),
+                patch(
+                    "narwhal.deployment.native_engine.fetch_engine_identity",
+                    new_callable=AsyncMock,
+                    return_value=EngineIdentity("0.29.0", 100.0),
+                ),
+            ):
+                document = engine_document(run, log)
+                self.assertEqual(document["launch"]["model_sha256"], fields["model_sha256"])
+                weights.write_bytes(b"other")
+                with self.assertRaisesRegex(ValueError, "^model files changed after launch"):
+                    engine_document(run, log)
+
+    def test_checkpoint_launch_attests_no_model_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            run, log = self.engine_evidence(Path(folder))
+            with patched_live_container(return_value="b" * 64):
+                self.assertNotIn("model_sha256", engine_document(run, log)["launch"])
 
     def test_contract_records_the_launched_speculative_decoding(self):
         for extra, expected in (
@@ -726,6 +807,11 @@ class AttestationContractTests(unittest.TestCase):
                         ValueError, "differs from current serving evidence"
                     ):
                         serve(run)
+                    model = Path(read_json(run / "launch.json")["model_dir"])
+                    (model / "model.safetensors").write_bytes(b"other weights")
+                    with self.assertRaisesRegex(ValueError, "^model files changed"):
+                        serve(run)
+                    self.assertEqual(start.call_count, 1)
             finally:
                 os.chdir(previous)
 
@@ -759,6 +845,89 @@ class AttestationContractTests(unittest.TestCase):
             ):
                 client.return_value.__enter__.return_value.get.side_effect = responses
                 with self.assertRaisesRegex(ValueError, "different contracts"):
+                    finalize_fleet(path)
+            self.assertNotIn("engine_contract", json.loads(path.read_text()))
+
+    def test_router_finalization_requires_one_attested_model_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "fleet.local.json"
+            raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
+            contract = EngineContract(**raw.pop("engine_contract"))
+            save(path, raw)
+            identity = EngineIdentity(contract.engine_version, 100.0)
+            sources = dict.fromkeys(contract.fields(), "test evidence")
+            gguf, other, checkpoint = (
+                make_attestation(AttestationDocument(contract, sources, launch=launch), identity)
+                for launch in ({"model_sha256": "a" * 64}, {"model_sha256": "b" * 64}, {})
+            )
+            rest = len(raw["engines"]) - 1
+            for case, payloads in (
+                ("two GGUF files", [gguf] + [other] * rest),
+                ("GGUF beside a checkpoint", [gguf] + [checkpoint] * rest),
+            ):
+                with self.subTest(case):
+                    self.assert_mixed_model_files(path, identity, payloads)
+            self.assertNotIn("engine_contract", json.loads(path.read_text()))
+
+    def assert_mixed_model_files(
+        self, path: Path, identity: EngineIdentity, payloads: list[dict]
+    ) -> None:
+        with (
+            patch(
+                "narwhal.deployment.attestation_contract.fleet.fetch_spec_identity",
+                new_callable=AsyncMock,
+                return_value=identity,
+            ),
+            patch("narwhal.deployment.attestation_contract.fleet.httpx.Client") as client,
+        ):
+            client.return_value.__enter__.return_value.get.side_effect = [
+                httpx.Response(
+                    200, json=payload, request=httpx.Request("GET", "http://sidecar.invalid")
+                )
+                for payload in payloads
+            ]
+            with self.assertRaisesRegex(ValueError, "different model files"):
+                finalize_fleet(path)
+
+    def test_router_finalization_rejects_engines_with_different_model_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "fleet.local.json"
+            raw = json.loads((ROOT / "tests/data/fleet.json").read_text())
+            contract = EngineContract(**raw.pop("engine_contract"))
+            save(path, raw)
+            identity = EngineIdentity(contract.engine_version, 100.0)
+            sources = dict.fromkeys(contract.fields(), "test evidence")
+            payloads = [
+                make_attestation(
+                    AttestationDocument(contract, sources, launch={"model_tree_sha256": tree}),
+                    identity,
+                )
+                for tree in ("a" * 64, "b" * 64)
+            ]
+            iids = [engine["iid"] for engine in raw["engines"]]
+            responses = [
+                httpx.Response(
+                    200,
+                    json=payloads[index == len(iids) - 1],
+                    request=httpx.Request("GET", "http://sidecar.invalid"),
+                )
+                for index in range(len(iids))
+            ]
+            with (
+                patch(
+                    "narwhal.deployment.attestation_contract.fleet.fetch_spec_identity",
+                    new_callable=AsyncMock,
+                    return_value=identity,
+                ),
+                patch("narwhal.deployment.attestation_contract.fleet.httpx.Client") as client,
+            ):
+                client.return_value.__enter__.return_value.get.side_effect = responses
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "^Engine sidecars attest different model files: launch.model_tree_sha256 "
+                    f"differs: '{'a' * 64}' from {', '.join(sorted(iids[:-1]))}; "
+                    f"'{'b' * 64}' from {iids[-1]}$",
+                ):
                     finalize_fleet(path)
             self.assertNotIn("engine_contract", json.loads(path.read_text()))
 

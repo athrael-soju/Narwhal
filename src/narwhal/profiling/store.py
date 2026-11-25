@@ -152,6 +152,17 @@ class ProfileStore:
         self._by_mix[key] = profile
         self._mix_iids.add(profile.iid)
 
+    def adopt(self, other: ProfileStore) -> None:
+        """Take every profile row of `other` in place, keeping this store's bindings.
+
+        Readers that hold this store see the new rows at once.
+        """
+        self._by_id = dict(other._by_id)
+        self._by_mix = dict(other._by_mix)
+        self._mix_iids = set(other._mix_iids)
+        for iid, group in other._group_by_id.items():
+            self._group_by_id.setdefault(iid, group)
+
     def bind_role_mix(
         self,
         group_by_id: dict[str, str],

@@ -122,6 +122,16 @@ class ReactiveController:
             demand_rise_tolerance=demand_rise_tolerance,
         )
 
+    def membership_changed(self) -> None:
+        """Interrupt evaluation after the engine set changes.
+
+        The pending proposal, its confirmations and the steady runs describe splits of the
+        previous engine set. Pending urgent events stay: each is checked against the live pools
+        when it is used. Candidate splits and floors count the new set on the next evaluation.
+        """
+        self.reactive.reset(self)
+        self.scheduler.roles.membership_changed()
+
     def _clamp_prefill_target(self, want: int) -> int:
         return max(
             self.scheduler.min_prefill,

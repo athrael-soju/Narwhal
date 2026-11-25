@@ -69,6 +69,17 @@ class ReactivePolicy:
     def interrupt(self) -> None:
         self.settled_since = self.balanced_since = None
 
+    def reset(self, controller: ReactiveController) -> None:
+        """Drop the pending proposal, its confirmations, an approved drain and every run."""
+        self._release(controller, self.drain)
+        # A donor held for the dropped proposal returns to placement.
+        controller.scheduler.switch_holds.clear()
+        self.proposal, self.confirmations = None, 0
+        self.drain = None
+        self.departure = None
+        self.settled_since = self.balanced_since = None
+        self.unsettled_since = self.lead_break_since = None
+
     def step(
         self,
         controller: ReactiveController,

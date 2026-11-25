@@ -117,9 +117,9 @@ With the CUDA IPC cache off and UCX 1.22 or later in the engine image, a consume
 
 #### Release rounds
 
-On a vLLM fleet under `recovery.engine_restart_policy` `individual`, the router runs release rounds for each engine out of placement, at 65, 125, 245, 485, 965, 1925 and 3845 seconds after a start point. The start point is the engine's ejection, or its entry into lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`, and each change between those states starts the schedule again.
+On a vLLM fleet under `recovery.engine_restart_policy` `individual`, the router runs release rounds for each engine out of placement, at 65, 125, 245, 485, 965, 1925 and 3845 seconds after a start point. The start point is the engine's ejection, its removal from the fleet when no schedule is running, or its entry into lifecycle state `drained`, `deadline_exceeded`, `validating` or `blocked`. Each change between those states starts the schedule again.
 
-When a consumer's probe fails on the producer leg, cannot connect to the consumer, waits out the control pool, or raises an error, the router retries that consumer once, 5 seconds later, through the next producer. A consumer with zero other live producers gets a logged warning to recover with a whole-wave restart, and waits for the next round. `/narwhal/state` reports each engine's rounds in [`peer_release`](../http-api/05-Live-State.md#peer_release).
+When a consumer's probe fails on the producer leg, cannot connect to the consumer, waits out the control pool, or raises an error, the router retries that consumer once, 5 seconds later, through the next producer. A consumer with zero other live producers gets a logged warning to recover with a whole-wave restart, and waits for the next round. `/narwhal/state` reports the rounds of each engine in the fleet in [`peer_release`](../http-api/05-Live-State.md#peer_release).
 
 #### Startup wait
 
@@ -148,7 +148,7 @@ With `engine_contract` set and `recovery.engine_restart_policy` `individual`, au
 
 With `engine_contract` unset, automatic recovery checks health, or reruns the inference probe for an inference suspect, and matches profiles to the live process identity.
 
-Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's [process generation](../configuration/01-Fleet-Schema.md#attestation). A profile mismatch excludes the engine from recovery, readmission and takeover. The running router keeps its loaded profiles until it restarts.
+Profile checks cover every loaded variant. With `engine_contract` set, profile digests must match the verified attestation's [process generation](../configuration/01-Fleet-Schema.md#attestation). A profile mismatch excludes the engine from recovery, readmission and takeover. The router reads `profiles.path` when it starts and when an engine joins.
 
 An operator drain holds through healthy responses, resume and takeover until readmission clears it.
 
@@ -158,10 +158,10 @@ An admitted request that fails transiently before it shows any output retries on
 
 ## Durable control-plane state
 
-Each monitoring pass writes a state handoff that records engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router replaces the handoff file atomically, so a failed write leaves the previous handoff in place.
+Each monitoring pass writes a state handoff that records the membership snapshot, engine roles, ejections, lifecycle holds, inference-verification holds with their recorded producers, consolidation risk, counters, and the lease holder. The router replaces the handoff file atomically, so a failed write leaves the previous handoff in place.
 
-`narwhal-serve --resume` applies a saved handoff when its schema, engine set and engine restart policy match the configured fleet. With `engine_contract` configured, the handoff must also hold an accepted process identity for every engine it counts as available. Pinned engines take their configured roles, and saved ejections are probed for readmission at once. A saved inference suspect that another engine covers returns as an ejected engine due for a readmission probe. An engine whose readmission validation was running when the handoff was written resumes as `blocked`.
+`narwhal-serve --resume` applies a saved handoff when its schema and engine restart policy match the fleet. A saved [membership](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff) at generation 1 or higher replaces the fleet file's engines. Without one, the router applies the handoff only if the handoff's engine list matches the fleet file's `engines`. With `engine_contract` configured, the handoff must also hold an accepted process identity for every engine it counts as available. Pinned engines take their configured roles, and saved ejections are probed for readmission at once. A saved inference suspect that another engine covers returns as an ejected engine due for a readmission probe. An engine whose readmission validation was running when the handoff was written resumes as `blocked`.
 
 [Activating replacement profiles](../operate/03-Restart-Engines.md#activating-replacement-profiles) loads fresh measurements and keeps lifecycle holds and drain identities.
 
-A warm standby router, started with `--standby-of`, shadows the primary's handoff and reports not ready until it claims the expired shared lease. A load balancer that checks `/ready` therefore reaches only the serving router. [Standby takeover and lease fencing](../cli/Serve.md#standby-takeover-and-lease-fencing) gives the takeover conditions.
+A warm standby router, started with `--standby-of`, shadows the primary's handoff and reports not ready until it claims the expired shared lease. A load balancer that checks `/ready` therefore routes to the serving router. The shipped HAProxy configuration keeps only the router that controls the fleet in rotation and holds new requests while no router does, as [Configuring the client path](../operate/01-Start-Routers.md#configuring-the-client-path) describes. [Standby takeover and lease fencing](../cli/Serve.md#standby-takeover-and-lease-fencing) gives the takeover conditions.

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.observability.journal import RunJournal
+from narwhal.observability.metrics.render import render
 from narwhal.runtime import state
 from narwhal.runtime.lifecycle.records import LifecycleError
 from narwhal.serving.app import create_app
@@ -24,7 +25,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         self.cfg = fleet(self.root)
-        self.cfg.engines[0].pin = True
+        self.cfg.engines[0] = replace(self.cfg.engines[0], pin=True)
         self.router = create_app(self.cfg).state.router
         self.addAsyncCleanup(self.router.engines.aclose)
         self.router.lifecycle.process_starts = {"e0": 100, "e3": 100}
@@ -108,6 +109,61 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replacement.outcome_reasons["expired"], {})
         metrics = replacement.state()["outcome_reasons"]["rejected"]
         self.assertEqual((metrics["unclassified"], metrics["not_ready"]), (3, 0))
+
+    def test_metrics_count_this_process_across_a_takeover(self):
+        """/metrics leaves out adopted totals, so a counter neither jumps nor falls at takeover."""
+        source = create_app(self.cfg).state.router
+        self.addAsyncCleanup(source.engines.aclose)
+        source.lifecycle.process_starts = {"e0": 100, "e3": 100}
+        source.offered, source.served, source.failed, source.rejected = 201_439, 201_000, 39, 400
+        source.outcome_reasons["failed"]["no_engine"] = 39
+        source.outcome_reasons["rejected"]["inflight_limit"] = 400
+        source.scheduler.unserved = 12
+        doc = state.snapshot(source)
+        # Expiries the handoff gives no reason for, and a reason this release does not export.
+        doc["counters"]["expired"] = 4
+        doc["counters"]["failed"] = 40
+        doc["outcome_reasons"]["failed"]["retired_reason"] = 1
+        doc["demand_risk"] = {
+            "kind": "first_token_timeout",
+            "age_s": 1.0,
+            "events": {"first_token_timeout": 2},
+        }
+        # The standby answered three requests with a not-ready refusal before it took over.
+        self.router.offered = self.router.rejected = 3
+        self.router.outcome_reasons["rejected"]["not_ready"] = 3
+
+        def metrics() -> str:
+            router = self.router
+            return render(router.state(), router.ttft, router.tpot, adopted=router.adopted)
+
+        def sample(name: str) -> float:
+            lines = metrics().splitlines()
+            return sum(float(line.rsplit(" ", 1)[1]) for line in lines if line.startswith(name))
+
+        self.assertTrue(state.apply(self.router, doc).applied)
+        self.assertEqual((self.router.offered, self.router.state()["offered"]), (201_439, 201_439))
+        self.assertEqual(self.router.outcome_reasons["expired"], {"unclassified": 4})
+        self.assertEqual(sample("narwhal_offered_total"), 3)
+        self.assertEqual(sample('narwhal_rejected_total{reason="not_ready"}'), 3)
+        self.assertEqual(sample('narwhal_rejected_total{reason="inflight_limit"}'), 0)
+        self.assertEqual(sample("narwhal_failed_total"), 0)
+        self.assertEqual(sample("narwhal_unserved_total"), 0)
+        self.assertEqual(sample("narwhal_expired_total"), 0)
+        # This process has counted no unclassified expiry or retired failure of its own.
+        self.assertNotIn('reason="unclassified"', metrics())
+        self.assertNotIn('reason="retired_reason"', metrics())
+        # The adopted risk events stay out until this process records one.
+        self.assertNotIn("narwhal_demand_evidence_risk_events_total", metrics())
+        self.router.controller.safety.note_risk_event("first_token_timeout")
+        self.assertEqual(
+            sample('narwhal_demand_evidence_risk_events_total{kind="first_token_timeout"}'), 1
+        )
+        self.router.offered += 2
+        self.router.served += 2
+        self.assertEqual((sample("narwhal_offered_total"), sample("narwhal_served_total")), (5, 2))
+        # The next handoff still carries the deployment totals.
+        self.assertEqual(state.snapshot(self.router)["counters"]["offered"], 201_441)
 
     def test_a_restored_suspect_stays_live_while_it_alone_serves_its_role(self):
         for pinned, ejected in ((True, False), (False, True)):

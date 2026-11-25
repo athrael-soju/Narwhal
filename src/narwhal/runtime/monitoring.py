@@ -13,6 +13,7 @@ import httpx
 from ..types import Instance, Role
 from . import state as handoff_state
 from .lifecycle.identity import allow_profile_recovery, check_process_identities
+from .lifecycle.leave import complete_leaves
 from .lifecycle.readmission import validate_readmission
 from .lifecycle.records import ValidationOutcome
 from .release import release_peers
@@ -200,7 +201,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
     recovery_wave = router.cfg.engine_contract is not None and not router.scheduler.live_instances()
     if recovery_wave:
         due = router.scheduler.probe_due(0.0)
-        if set(due) != set(router.monitor.instances):
+        if set(due) != set(router.membership.ids):
             return []
     answers = await asyncio.gather(
         *(router.engines.healthy(router.monitor.instances[iid].url) for iid in due),
@@ -212,11 +213,14 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
         healthy = await attested(router, healthy)
     back: list[str] = []
     # A recovery wave validates only the complete fleet, atomically.
-    if recovery_wave and set(healthy) != set(router.monitor.instances):
+    if recovery_wave and set(healthy) != set(router.membership.ids):
         return []
     groups = [healthy] if recovery_wave else [[iid] for iid in healthy]
     for engines in groups:
         iid = engines[0]
+        if not set(engines).issubset(router.membership.ids):
+            # Membership changed while the health probes ran.
+            continue
         if router.cfg.engine_contract is None:
             if iid in router.scheduler.inference_suspects:
                 await router.verifier.verify_inference(iid, router.monitor.instances[iid].url)
@@ -258,7 +262,7 @@ async def readmit(router: NarwhalRouter, after_s: float) -> list[str]:
 
 
 async def attested(router: NarwhalRouter, engines: list[str]) -> list[str]:
-    urls = {spec.iid: spec.attestation_url for spec in router.cfg.engines}
+    urls = {spec.iid: spec.attestation_url for spec in router.membership}
     async with httpx.AsyncClient(
         timeout=router.cfg.health_timeout_s, transport=router.lifecycle_transport
     ) as client:
@@ -280,7 +284,7 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
     misses = router.scheduler.liveness_misses
     live = [
         iid
-        for iid in router.monitor.instances
+        for iid in router.membership.ids
         if iid not in router.scheduler.ejected and iid not in router.scheduler.draining
     ]
     if not live:
@@ -291,7 +295,11 @@ async def sweep_liveness(router: NarwhalRouter) -> list[str]:
     )
     gone = []
     for iid, ok in zip(live, answers, strict=True):
-        if iid in router.scheduler.ejected or iid in router.scheduler.draining:
+        if (
+            iid in router.scheduler.ejected
+            or iid in router.scheduler.draining
+            or iid not in router.membership
+        ):
             continue
         if ok is True:
             # A health 200 clears the health-evidence classes and lifts the quarantine.
@@ -383,6 +391,9 @@ async def monitor_once(router: NarwhalRouter, *, urgent: bool = False) -> Instan
     with router.monitoring.stage("readmission"):
         await readmit(router, interval * router.cfg.readmit_every)
         release_peers(router)
+        # A lifecycle action in progress finishes before a leaving engine is removed.
+        if not router.lifecycle.lock.locked() and controls_fleet(router):
+            complete_leaves(router)
     with router.monitoring.stage("transfer_refresh"):
         refresh_consumers(router)
     if router.cfg.liveness_every and router.scheduler.sweep_due(

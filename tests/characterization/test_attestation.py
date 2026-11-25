@@ -203,7 +203,7 @@ class AttestationCharacterizationTests(unittest.IsolatedAsyncioTestCase):
         records = {}
         with patch.dict(os.environ, {KEY_ENV: "fixture-key"}):
             records["capture"] = await capture_process_identities(
-                self.cfg, ["e0", "e3"], transport=transport
+                self.cfg, ["e0", "e3"], specs={s.iid: s for s in engines}, transport=transport
             )
             records["capture_requests"], requests[:] = list(requests), []
             for name, contract in (("contract_free", None), ("attested", self.contract)):

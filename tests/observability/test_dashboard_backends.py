@@ -14,7 +14,7 @@ from tools.observability import artifacts, make_targets
 from tools.observability.start.readiness import _expressions
 
 SHIPPED = json.loads((artifacts.BASE / "grafana-narwhal.json").read_text())
-RENDERED_SHA256 = "5e8509a937cd66c2101b6c23a8fb6d767cfa34a9502a9be8d424c0c7d029e767"
+RENDERED_SHA256 = "dbafa2b7d5d20ab45d4ccd565fecadafabb65840fefe5c485720904ff9a7b13a"
 
 
 def charted() -> set[str]:
@@ -51,7 +51,7 @@ class BackendDashboardTests(unittest.TestCase):
         [running] = [
             q["spec"]["query"]["spec"]["expr"]
             for q in SHIPPED["spec"]["elements"]["panel-7"]["spec"]["data"]["spec"]["queries"]
-            if q["spec"]["query"]["spec"]["expr"].startswith("<<running{")
+            if q["spec"]["query"]["spec"]["expr"].startswith("(<<running{")
         ]
         rendered = artifacts.render_dashboard(SHIPPED)["spec"]["elements"]["panel-7"]
         selector = 'job="engines",iid=~"$iid"'
@@ -89,11 +89,13 @@ class BackendDashboardTests(unittest.TestCase):
                     q["spec"]["query"]["spec"]["expr"]
                     for q in table["spec"]["data"]["spec"]["queries"]
                 ]
-                self.assertIn('max by(iid, backend) (up{job="engines",iid=~"$iid"})', exprs)
+                backends = '(max by(iid, backend) (up{job="engines",iid=~"$iid"})) and on(iid) '
+                self.assertTrue(any(expr.startswith(backends) for expr in exprs))
 
     def test_a_panel_no_backend_can_fill_is_left_out(self):
         metrics = load_backend("vllm").metrics
         partial = SimpleNamespace(
+            icon=load_backend("vllm").icon,
             metrics=SimpleNamespace(
                 dashboard_series={
                     key: value
@@ -121,6 +123,8 @@ class BackendDashboardTests(unittest.TestCase):
     def test_staging_renders_the_dashboard_for_every_backend(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "mounts"
-            artifacts.stage_artifacts(make_targets.TargetContract("127.0.0.1:8000"), root=root)
+            artifacts.stage_artifacts(
+                make_targets.TargetContract(("127.0.0.1:8000",), "127.0.0.1:8000"), root=root
+            )
             staged = json.loads((root / artifacts.NARWHAL_DASHBOARD).read_text())
         self.assertEqual(engine_prefixes(staged), charted())

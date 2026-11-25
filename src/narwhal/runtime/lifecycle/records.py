@@ -1,4 +1,4 @@
-"""Lifecycle errors, drain records and readmission outcomes."""
+"""Lifecycle errors, drain records, readmission outcomes and membership change counts."""
 
 from __future__ import annotations
 
@@ -23,6 +23,21 @@ class DrainRecord:
     new_process_start: float | None = None
     error: str = ""
     checks: list[str] = field(default_factory=list)
+    # The drain removes the engine from the fleet once it completes.
+    leaving: bool = False
+
+
+# Outcomes of the joins and leaves a router process counts.
+JOIN_OUTCOMES = ("joined", "refused")
+LEAVE_OUTCOMES = ("left", "refused", "cancelled")
+
+
+@dataclass
+class MembershipCounts:
+    """Join and leave outcomes since the router process started; a handoff does not carry them."""
+
+    joins: dict[str, int] = field(default_factory=lambda: dict.fromkeys(JOIN_OUTCOMES, 0))
+    leaves: dict[str, int] = field(default_factory=lambda: dict.fromkeys(LEAVE_OUTCOMES, 0))
 
 
 @dataclass

@@ -28,6 +28,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
+def _gpu_list(value: str) -> list[str]:
+    uuids = [item.strip() for item in value.split(",")]
+    if not all(uuids):
+        raise argparse.ArgumentTypeError("name each GPU by its UUID, separated by commas")
+    return uuids
+
+
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="narwhal",
@@ -57,8 +64,8 @@ def _main(argv: list[str]) -> int:
         help="Run a development fleet on one Linux or WSL2 workstation",
         description="Run a development fleet on one Linux or WSL2 workstation. setup prepares "
         "engines that start directly, on a GPU or the CPU, and init prepares attested engines "
-        "on one NVIDIA GPU. up starts the fleet, verify checks it, ask and watch exercise it, "
-        "status reports it and down stops it.",
+        "on one NVIDIA GPU or one GPU per engine. up starts the fleet, verify checks it, ask "
+        "and watch exercise it, status reports it and down stops it.",
         epilog="Documentation: https://athrael-soju.github.io/Narwhal/cli/Dev/",
     )
     actions = dev.add_subparsers(dest="action", required=True)
@@ -182,7 +189,19 @@ def _main(argv: list[str]) -> int:
                 type=Path,
                 help="pinned tokenizer and model config directory (default: pinned HF cache)",
             )
-            action.add_argument("--gpu", help="physical GPU UUID (default: single discovered GPU)")
+            gpus = action.add_mutually_exclusive_group()
+            gpus.add_argument(
+                "--gpu",
+                help="physical GPU UUID that every engine shares (default: single discovered GPU)",
+            )
+            gpus.add_argument(
+                "--gpus",
+                type=_gpu_list,
+                metavar="UUID,UUID,...",
+                help="physical GPU UUIDs, one GPU per engine: engine n runs on the nth GPU; "
+                "the engines form no shared_device group, so they can leave and rejoin the "
+                "router at runtime",
+            )
             action.add_argument(
                 "--engine-count",
                 type=int,
@@ -199,15 +218,15 @@ def _main(argv: list[str]) -> int:
                 "--gpu-memory-utilization",
                 type=float,
                 help="finite per-engine fraction of total GPU memory, 0 < fraction <= 1; "
-                "engine-count * fraction <= device-allowance "
-                "(default: template value)",
+                "on one shared GPU, engine-count * fraction <= device-allowance, and with "
+                "--gpus, fraction <= device-allowance (default: template value)",
             )
             action.add_argument(
                 "--device-allowance",
                 type=float,
                 help="finite aggregate fraction of total GPU memory, <= 1 and >= the sum of "
-                "engine fractions; bounds startup memory increase "
-                "(default: template value)",
+                "the fractions of the engines on one GPU; on a shared GPU, bounds the free "
+                "memory init requires and the startup memory increase (default: template value)",
             )
             action.add_argument(
                 "--engine-memory-mib",
@@ -218,8 +237,9 @@ def _main(argv: list[str]) -> int:
             action.add_argument(
                 "--device-memory-mib",
                 type=int,
-                help="GPU memory all engines may take in MiB, at least --engine-count times "
-                "--engine-memory-mib (default: template value, installed 7168 or 9728)",
+                help="GPU memory the engines on one GPU may take in MiB: on a shared GPU, at "
+                "least --engine-count times --engine-memory-mib, and with --gpus, at least "
+                "--engine-memory-mib (default: template value, installed 7168, 9728 or 13312)",
             )
             action.add_argument(
                 "--interface", help="Local KV transfer network interface (default: eth0)"
@@ -285,6 +305,7 @@ def _main(argv: list[str]) -> int:
                 model_path=args.model,
                 fabric_interface=args.interface,
                 gpu_uuid=args.gpu,
+                gpu_uuids=args.gpus,
                 template=lifecycle.read(args.template) if args.template else None,
                 engine_count=args.engine_count,
                 port_base=args.port_base,

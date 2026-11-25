@@ -19,16 +19,24 @@ ENGINE_FIELDS = (
     "MODEL_DIR",
     "RUN_DIR",
     "MODEL_CONFIG_SHA256",
+    "MODEL_TREE_SHA256",
     "FABRIC_INTERFACE",
     "ENGINE_PORT",
     "ATTEST_PORT",
     "UCX_TCP_PORT_RANGE",
     KV_SIDE_CHANNEL_PORT_ENV.removeprefix("NARWHAL_"),
 )
+# A deployment that serves a model file names it and pins its SHA-256.
+MODEL_FILE_FIELDS = ("MODEL_PATH", "MODEL_SHA256")
 REPLACED_PORT = re.compile(
     r"NARWHAL_(NODE_[1-9][0-9]*_)?(?:NIXL_SIDE_CHANNEL_PORT|SGLANG_BOOTSTRAP_PORT)"
 )
-ROUTER_OPTIONAL = ("ROUTER_URL", "GRAFANA_BIND_ADDRESS", "PROMETHEUS_LISTEN_ADDRESS")
+ROUTER_OPTIONAL = (
+    "ROUTER_URL",
+    "TARGETS_URL",
+    "GRAFANA_BIND_ADDRESS",
+    "PROMETHEUS_LISTEN_ADDRESS",
+)
 
 
 def select_values(
@@ -82,6 +90,12 @@ def select_values(
             name = f"NARWHAL_{field}"
             override = f"NARWHAL_NODE_{node}_{field}"
             include(name, override if override in env else name)
+        for field in MODEL_FILE_FIELDS:
+            name = f"NARWHAL_{field}"
+            override = f"NARWHAL_NODE_{node}_{field}"
+            include(name, override if override in env else name, required=False)
+        if sum(f"NARWHAL_{field}" in values for field in MODEL_FILE_FIELDS) == 1:
+            raise ValueError("set NARWHAL_MODEL_PATH and NARWHAL_MODEL_SHA256 together")
         for name in env:
             if re.fullmatch(r"NARWHAL_NODE_[1-9][0-9]*_IP", name):
                 include(name)

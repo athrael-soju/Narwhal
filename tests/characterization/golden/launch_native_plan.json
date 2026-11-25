@@ -78,6 +78,8 @@
     "model_dir": "<root>/model",
     "model_path": "<root>/model",
     "model_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "model_status_sha256": "<sha256>",
+    "model_tree_sha256": "14d034fa9d27bc249acf7e525e764d4d1bb22398d7618e9a20c46abe08bc6f9f",
     "name": "<name>",
     "python_executable": "<python>",
     "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

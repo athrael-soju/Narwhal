@@ -40,7 +40,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | Option | Default | Description | Valid values |
 | --- | --- | --- | --- |
 | `--calibrate-first-token` | off | Measure fresh KV handoffs at each input length and report a first-token deadline. | |
-| `--input-tokens LIST` | none, required | Comma-separated input lengths. | Distinct positive lengths, each leaving room for one output token within both engines' live context limits. |
+| `--input-tokens LIST` | none, required | Comma-separated input lengths. | Distinct positive lengths, each leaving room for two output tokens within both engines' live context limits. |
 | `--observation-timeout-s SECONDS` | none, required | First-output wait. | Above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`. |
 | `--calibration-out PATH` | none, required | Raw samples and group summaries file. | A new JSON file |
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
@@ -54,7 +54,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | --- | --- |
 | `reach` | Each engine answers `/health` with HTTP 200. Later gates skip an engine that fails here. |
 | `calibration` | The [first-token calibration](#the-calibration-gate) at `engine.first_token_calibration_path` matches the running engines. |
-| `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. |
+| `contract` | With `engine_contract` set, each engine's identity is readable, its version matches the contract, and its attestation sidecar verifies against the contract and the live process. Without it, the gate reads engine versions only. Mixed engine versions fail on either fleet. With `engine_contract` set, engines whose verified attestations differ in `launch.model_config_sha256`, `launch.model_tree_sha256` or `launch.model_sha256` also fail, and the failure names the field and the engines that attest each value. |
 | `profile` | Each engine has a profile within `profiles.max_decode_fit_mape` and `profiles.max_decode_cv_mape`, the store holds no profile for an unconfigured engine, and each profile's generation matches the live engine. It warns when a profile measures decode below the engine's sequence limit; see [Profile and preflight](../deploy/06-Profile-and-Preflight.md). |
 | `model` | Each engine lists the fleet's `model` in `/v1/models`. |
 | `pace` | Each engine's best time over two cold one-token completions of a long prompt stays within 1.5 times the fleet median, with at least three timed engines, and within 1.5 times its own profile's prefill time. |
@@ -62,7 +62,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | `produce`, `consume` | [KV transfer probes](#kv-transfer-probes) between engines. |
 | `slo` | Each engine's profile meets the [SLO targets](#the-slo-gate). |
 
-Between `reach` and `calibration`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
+Between `reach` and `calibration`, under `recovery.engine_restart_policy: individual`, preflight on vLLM warns about host-sharing producers that need a [whole-wave restart](../concepts/03-Failure-and-State.md#whole-wave-fallback) to recover from a crash.
 
 When `pace`, `contract`, profile generation or `model` fails on an engine, preflight skips `produce` and `consume`.
 
@@ -111,7 +111,7 @@ After an engine restart or a configuration change, record new evidence.
 
 Calibration measures how long fresh KV handoffs take to produce their first token, and reports a candidate deadline that `engine.first_token_timeout_s` must exceed. Follow the [calibration guide](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline) to run it before you record evidence for a fleet.
 
-`--calibrate-first-token` needs `--input-tokens`, `--observation-timeout-s` and `--calibration-out`. Those options, and a `--samples` value other than 100, apply only to calibration. Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
+Calibration probes every directed pair, so it excludes the evidence options, `--ring`, `--no-kv`, and a `--repeats` value other than 1. Include the longest input the service admits in `--input-tokens`, and keep the output file under `runs/`.
 
 Calibration needs at least one directed pair that role pins permit and an engine tokenizer route that returns exact counts. It exits with status 0 when the artifact is `complete` and every switched engine returns to its starting role, and 1 otherwise.
 
@@ -124,7 +124,7 @@ A group is one directed pair at one input length, sampled `--samples` times. Swe
 
 A device slot is an engine's [`shared_device.group`](../configuration/01-Fleet-Schema.md#shared-device-allocation), or the engine itself without one. In a round, each device slot produces at most once and consumes at most once, so `n` engines on separate slots that permit every pair need `n - 1` rounds per input length. On SGLang, calibration splits the pairs into phases that keep each engine in one role, runs every sweep within one phase before the next, and gives each device slot one leg per round. Round numbers continue across phases.
 
-Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or fewer when the paired engines' live context limit leaves less room, and completes when it generates a token.
+Three timers bound each attempt. Prompt sizing and the wait from decode start to first output each get `--observation-timeout-s`, and the whole attempt gets `serving.request_timeout_s`. On SGLang, the first-output wait is at most 30 seconds, and the first-token time includes the prefill. An attempt asks for four output tokens, or as few as two when the paired engines' live context limit leaves less room, and completes when it generates a token.
 
 With `--calibration-base`, calibration reuses a base group that completed every sample when both its engines keep their URL and process generation. An engine listed in the base's `changed_generations` or `generation_errors` counts as changed. Calibration measures the other groups, and each reused group's output line ends with `, reused`.
 
@@ -147,7 +147,7 @@ The artifact at `--calibration-out` holds these fields:
 | `attempts` | Every attempt, with its `attempt` sweep number, its `round` (`null` in sweep 1), timings, and `status` |
 | `candidate_deadline_s` | The largest group candidate |
 
-A group's candidate deadline is the larger of its maximum and 1.2 times its p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
+A group's candidate deadline is the larger of its maximum and 1.2 times its nearest-rank p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
 
 The artifact is `complete` when all of these hold:
 
@@ -171,7 +171,7 @@ The `calibration` gate reads the artifact at `engine.first_token_calibration_pat
 
 It then compares each running engine's [process generation](../configuration/01-Fleet-Schema.md#attestation) with `generations`.
 
-An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start also matches and `reused` when it differs. A restarted engine keeps its calibration only when its sidecar reports launch evidence.
+An engine whose generation differs fails with `<iid> process differs from first-token calibration`. An engine with the same generation is `measured` when its process start matches the one in `process_starts`, and `reused` when its process start differs.
 
 | Status | Condition | Output |
 | --- | --- | --- |

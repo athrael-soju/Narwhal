@@ -1,10 +1,10 @@
 ---
-description: Run vLLM, SGLang or TensorRT-LLM engines in Narwhal dev on one NVIDIA GPU under Ubuntu or WSL2, with attestation, measured profiles and KV transfer evidence.
+description: Run vLLM, SGLang or TensorRT-LLM engines in Narwhal dev on one NVIDIA GPU, or one GPU per engine, under Ubuntu or WSL2, with attestation, measured profiles and KV transfer evidence.
 ---
 
 # vLLM, SGLang and TensorRT-LLM engines in Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, with engine attestation, measured profiles and KV transfer evidence. The [`narwhal dev` reference](cli/Dev.md) lists every subcommand and option.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, or [each on its own GPU](#running-each-engine-on-its-own-gpu), with engine attestation, measured profiles and KV transfer evidence. The [`narwhal dev` reference](cli/Dev.md) lists every subcommand and option.
 
 An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 
@@ -17,7 +17,7 @@ A template selects the backend, model, runtime pins, engine count, and memory bu
 | `small-cuda-trtllm-v1.json` | TensorRT-LLM 1.4.0rc3 with UCX over TCP | Qwen3.5-0.8B checkpoint in bfloat16 | 2 |
 | `reference-v1.json` | vLLM 0.30.0 with NIXL over UCX | Qwen3.5-0.8B Q4_K_M GGUF | 4 |
 
-The three small templates start one prefill and one decode engine on an NVIDIA GPU and need free VRAM of about 7,680 MiB (vLLM), 10,240 MiB (SGLang) and 13,824 MiB (TensorRT-LLM). The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
+The three small templates start one prefill and one decode engine on an NVIDIA GPU. The [four-engine reference template](dev/RTX-5090-Reference.md) pins the RTX 5090.
 
 ## Preparing Ubuntu or WSL2
 
@@ -54,7 +54,7 @@ The three small templates state the memory in MiB. In the vLLM and SGLang templa
 
 The reference template states fractions: `allocation.gpu_memory_utilization` for each engine and `allocation.device_allowance` for all of them. `--gpu-memory-utilization` and `--device-allowance` set them. On a template that states MiB, pass both fraction options to size the engines as fractions, and on the reference template pass both MiB options to size them in MiB.
 
-A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first. A TensorRT-LLM engine receives it as `--free_gpu_memory_fraction`, and the launcher bounds its KV cache to that fraction of total VRAM, less the model weights and `runtime.memory_reserve_mib`, which is `3072` in the template.
+A vLLM engine receives its fraction as `--gpu-memory-utilization`, the share of total VRAM for the process, covering model weights, runtime overhead, and KV cache. An SGLang engine receives it as `--mem-fraction-static`, which SGLang applies to the VRAM that is free when the engine starts, so an engine on a GPU with other memory in use receives less than its MiB value, and the second engine receives a smaller budget than the first. A TensorRT-LLM engine receives it as `--free_gpu_memory_fraction`, and the launcher bounds its KV cache as [Launch settings for every backend](configuration/05-Engine-Launch.md#launch-settings-for-every-backend) describes. The template sets `runtime.memory_reserve_mib` to `3072`.
 
 Under WSL2, every SGLang engine receives the first engine's budget, so the engines can overcommit the GPU. Initialize a new `--instance` with a lower `--engine-memory-mib` until every engine starts.
 
@@ -94,22 +94,7 @@ narwhal dev verify
 narwhal dev status
 ```
 
-`init` runs these steps:
-
-1. Checks the model and tokenizer checksums.
-2. Selects a CUDA GPU by UUID and checks its free VRAM.
-3. Checks the runtime package versions, imports the engine runtime, and checks the GGUF plugin hashes that a vLLM template pins.
-4. Checks the network interface and ports.
-5. Writes the private instance.
-
-`up` runs these steps:
-
-1. Checks the model and tokenizer hashes, and the GGUF plugin hashes that a vLLM template pins.
-2. Checks that the ports are free.
-3. Checks and starts the engines.
-4. Captures attestations and starts the attestation sidecars.
-5. Profiles the engines. A template with neighbour load settings in `profile`, such as the vLLM templates, profiles every role split under that load. A template without them, such as the SGLang template, profiles only the opening split.
-6. Starts the router.
+[`narwhal dev`](cli/Dev.md#lifecycle) lists what `init` and `up` check, start and profile.
 
 `verify` runs these steps:
 
@@ -204,12 +189,11 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
       -v "$PWD:/work" -w /work nvcr.io/nvidia/tensorrt-llm/release:1.4.0rc3 bash
     ```
 
-    Replace `0` with the index of the GPU the engines use.
+    Replace `0` with the index of the GPU the engines use. For [engines on their own GPUs](#running-each-engine-on-its-own-gpu), list one index per engine, such as `'"device=0,1,2"'`.
 
-3. Inside the container, install `iproute2`, whose `ip` command `init` uses to read the interface address, and install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
+3. Inside the container, install Narwhal in a virtual environment that sees the container's TensorRT-LLM:
 
     ```bash
-    apt-get update && apt-get install -y iproute2
     python3 -m venv --system-site-packages .venv-trtllm
     source .venv-trtllm/bin/activate
     python -m pip install .
@@ -232,6 +216,84 @@ The installed `small-cuda-trtllm-v1.json` template runs one prefill and one deco
 
     On its first start, each engine compiles its kernels before it answers `/health`. The template's `runtime.ready_seconds` gives each engine 900 seconds to become healthy, in place of the default 180.
 
+## Running each engine on its own GPU
+
+On a host with several NVIDIA GPUs, `narwhal dev init --gpus` runs each engine on its own GPU, as [One GPU per engine](cli/Dev.md#one-gpu-per-engine) describes. The engines form no `shared_device` group, so an engine can leave the router and rejoin it while the fleet runs.
+
+1. Install the runtime and model for your template, as the sections above describe.
+2. List the GPUs:
+
+    ```bash
+    nvidia-smi --query-gpu=index,name,uuid,memory.total,memory.used --format=csv
+    ```
+
+3. Initialize, start and verify an instance with three engines on the first three GPUs:
+
+    ```bash
+    gpus=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 3 | paste -sd, -)
+    narwhal dev init --gpus "$gpus" --engine-count 3 \
+      --instance runs/dev-gpus --interface "$interface"
+    narwhal dev up --instance runs/dev-gpus
+    narwhal dev verify --instance runs/dev-gpus
+    ```
+
+    For the SGLang or TensorRT-LLM template, also pass the exported template with `--template`.
+
+The router refuses a removal that would leave fewer than `controller.min_prefill` plus `controller.min_decode` engines, 2 in the installed templates, so remove an engine only from a fleet of three or more.
+
+### Removing and rejoining an engine
+
+The engines of an instance are `n1` to `n<count>`, and the router listens at `http://127.0.0.1:18000` with the installed ports.
+
+1. Read the run directory from `status`, and choose the engine:
+
+    ```bash
+    instance=runs/dev-gpus
+    RUN_DIR=$(narwhal dev status --instance "$instance" \
+      | python3 -c 'import json, sys; print(json.load(sys.stdin)["run"])')
+    ROUTER_URL='http://127.0.0.1:18000'
+    IID='n3'
+    ```
+
+2. Save the engine's entry from the run's fleet file:
+
+    ```bash
+    python3 - "$RUN_DIR/fleet.json" "$IID" > "$RUN_DIR/$IID.json" <<'PY'
+    import json
+    import sys
+
+    fleet = json.load(open(sys.argv[1]))
+    print(json.dumps(next(e for e in fleet["engines"] if e["iid"] == sys.argv[2])))
+    PY
+    ```
+
+3. Remove the engine:
+
+    ```bash
+    curl -sS -X DELETE "$ROUTER_URL/narwhal/engines/$IID?deadline_s=300" \
+      -o "$RUN_DIR/leave-response.json" -w '%{http_code}\n'
+    ```
+
+    HTTP 200 means the engine left at once, and HTTP 202 that it is draining. To wait for a draining engine or read a refusal, follow [Drain and remove the engine](operate/08-Joining-and-Removing-Engines.md#drain-and-remove-the-engine). The engine keeps running, and the router sends it no requests. Keep it running to rejoin it. `narwhal dev down` stops it with the fleet.
+
+4. Rejoin the engine with its saved entry:
+
+    ```bash
+    curl -sS -X POST "$ROUTER_URL/narwhal/engines" \
+      -H 'content-type: application/json' -d @"$RUN_DIR/$IID.json" \
+      -o "$RUN_DIR/join-response.json" -w '%{http_code}\n'
+    ```
+
+    HTTP 200 means the engine joined. The run's profile store still holds the engine's profile for the same process, so the rejoin needs no profiling, store merge or fleet file change. On HTTP 409, `error` in the response names the refusal or the failed checks, as [Request the join](operate/08-Joining-and-Removing-Engines.md#request-the-join) describes.
+
+5. Check that `GET /narwhal/engines` lists the engine again:
+
+    ```bash
+    curl -fsS "$ROUTER_URL/narwhal/engines"
+    ```
+
+    After one removal and one rejoin, `generation` is `2`.
+
 ## Inspecting and stopping the instance
 
 The run directory that `status` prints holds:
@@ -246,7 +308,7 @@ The run directory that `status` prints holds:
 | Probe and fit outcomes | `profile-*.log` |
 | Runtime, profile, and transfer checks | `verify-*/preflight.log` |
 
-Stop the instance:
+Stop the instance. For an instance in another directory, such as `runs/dev-sglang` or `runs/dev-trtllm`, pass its `--instance` to both commands:
 
 ```bash
 narwhal dev down
@@ -275,6 +337,7 @@ Stages and default budgets:
 | --- | --- | --- |
 | `engine-<n>` | Runtime check for engine `n` | 300 seconds |
 | `native-start-shared` | Native shared startup | `runtime.ready_seconds` for each engine, 180 seconds by default |
+| `native-start` | Native startup of engines on their own GPUs | `runtime.ready_seconds` for each engine, 180 seconds by default |
 | `attest-<n>` | Attestation capture for engine `n` | 300 seconds |
 | `profile-<p>p<d>d` | Profiling a role split with `p` prefill and `d` decode engines | 300 seconds |
 | `profile-merge` | Merging the role-split profiles, when `up` profiles more than one split | 300 seconds |
@@ -289,7 +352,7 @@ NARWHAL_STAGE_PREFLIGHT_TIMEOUT_SECONDS=120 narwhal dev verify
 
 A stage budget covers the stage's work, helper imports, and subprocess startup. Each profiled role split gets a fresh stage budget.
 
-Native shared startup waits up to `runtime.ready_seconds` for each engine to answer `/health`: 180 seconds by default and 900 in the TensorRT-LLM template. Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
+Each HTTP health request times out after 2 seconds, and the routed verification request times out after 30 seconds.
 
 `narwhal dev` stops the stage's supervised processes when:
 

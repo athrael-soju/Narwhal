@@ -19,6 +19,8 @@ In `predictive` mode, the router returns HTTP 429 when a request fails the time 
 
 [Admission and refusal semantics](../http-api/02-Admission-and-Responses.md#admission-and-refusal-semantics) lists the error and `Retry-After` value for each predictive refusal.
 
+With `engine.control_connections` at `0`, the router sizes the control pool from the fleet file's engine count at startup. Joins and removals leave the pool size unchanged. A health probe that waits out the pool is [inconclusive](#connection-pool-and-health-timeouts). For a fleet that will grow through joins, set `engine.control_connections` to `max(4, 2 × engine count)` for the largest engine count you plan, and restart the router.
+
 Before raising `serving.max_connections`, measure the in-flight load the fleet sustains while healthy. [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps) gives the measurement procedure.
 
 #### In-flight limit
@@ -57,7 +59,7 @@ An engine seats its decode legs in placement order, up to its attested sequence 
 | Term           | Meaning                                                                               |
 | -------------- | ------------------------------------------------------------------------------------- |
 | Slot wait      | Time from the checked request's predicted prefill completion to the start of its slot. On SGLang, the request's own prefill runs after its slot starts, so the slot wait runs from when that prefill can start |
-| Slot-wait headroom | The 99th percentile of how much later than projected the first token arrived, over the latest 2,048 requests admitted with a slot wait in the last 60 seconds. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
+| Slot-wait headroom | The 99th percentile of the first token's delay past its projected arrival time, over the latest 2,048 requests admitted with a slot wait in the last 60 seconds. It is zero with fewer than 16 such requests, and at most half of `slo.ttft_s` |
 | Projected TTFT | Time since arrival plus the prefill placement price, including queueing               |
 | Request KV     | Key-value (KV) tokens for the prompt plus delivered and remaining output              |
 | Output cap     | `max_completion_tokens`, or `max_tokens` when `max_completion_tokens` is unset        |
@@ -125,7 +127,7 @@ With `serving.queue_capacity` above `0`, a request can wait at three stages. Eac
 | Wait           | The request waits while                                                                | The wait ends at                                                                                                      | Response when the bound ends the wait    |
 | -------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | Admission seat | Requests hold every seat under the [in-flight limit](#in-flight-limit)                 | `serving.queue_timeout_s`                                                                                             | HTTP `504`, error type `queue_expired`   |
-| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full | The part of `serving.queue_timeout_s` that the admission-seat wait and earlier prefill-seat waits of the request left | HTTP `504`, error type `expired`         |
+| Prefill seat   | Every engine that can take the prefill leg has its [prefill seats](#engine-seats) full | `serving.queue_timeout_s` minus the time the request already spent waiting for an admission seat and for earlier prefill seats | HTTP `504`, error type `expired`         |
 | Decode seat    | Every engine that can take the decode leg has its decode seats full                    | The producer's [KV handoff bound](#kv-handoff-bound)                                                                  | HTTP `504`, error type `handoff_expired` |
 
 The original request deadline also ends each wait, with HTTP `504` and error type `request_expired`. Under event-loop lag, reported as `narwhal_router_loop_lag_seconds`, a wait can run past its bound by about the lag, and a seat that frees in that time still serves the request. The journal records the bound that ended a wait as the [expiry reason](../telemetry/01-Journal.md#outcome-reasons): `queue_timeout`, `handoff` or `deadline`. A decode-seat wait that ends at the handoff bound with attempts left retries the request.
@@ -181,7 +183,7 @@ handoff bound = kv_lease_duration - kv_lease_duration // 6
 
 At the launcher's default lease of 30 seconds, the bound is 25 seconds. [`runtime.kv_lease_s`](05-Engine-Launch.md#runtime-launch-records-and-image-verification) sets the lease.
 
-The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). With `serving.queue_capacity` above 0, a wait for a decode seat also ends at the bound.
+The router counts handoff age from the moment it receives the producer's prefill response. When the age reaches the bound before decode dispatch, the attempt ends with a [handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry).
 
 When an engine's attestation records no `kv_lease_duration`, the router applies no handoff bound to that producer, and the original request deadline bounds its handoffs. `/narwhal/state` reports `null` for that engine's [`handoff`](../http-api/05-Live-State.md) fields.
 
@@ -404,13 +406,13 @@ These timeouts decide a probe's outcome:
 
 An inconclusive probe has this effect for each caller:
 
-| Caller                 | Inconclusive probe                      |
-| ---------------------- | --------------------------------------- |
-| Breaker verification   | Engine keeps its current health verdict |
-| Liveness probe         | Engine keeps its current health verdict |
-| Preflight reach        | Failed `/health` check                  |
-| Readmission probe      | Engine stays ejected                    |
-| Readmission validation | Failed `/health` check                  |
+| Caller                         | Inconclusive probe                      |
+| ------------------------------ | --------------------------------------- |
+| Breaker verification           | Engine keeps its current health verdict |
+| Liveness probe                 | Engine keeps its current health verdict |
+| Preflight reach                | Failed `/health` check                  |
+| Readmission probe              | Engine stays ejected                    |
+| Readmission or join validation | Failed `/health` check                  |
 
 
 ## Role control
@@ -463,11 +465,11 @@ Controller decision details call load "pressure", as in the `mixed_pressure` eli
 
 ### Role floors
 
-In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count. A one-engine fleet has both floors at `1`. Every role change keeps at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines. When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
+In a fleet of two or more engines, `controller.min_prefill` plus `controller.min_decode` is at most the engine count, and the router refuses a [removal](../http-api/08-Engine-Membership.md#delete-narwhalenginesiid) that would leave fewer engines. A one-engine fleet has both floors at `1`. Every role change keeps at least `controller.min_prefill` prefill engines and `controller.min_decode` decode engines. When pins, drains, quarantine, or health ejections leave too few movable engines for a floor, Narwhal reports a floor breach.
 
 Engine monitoring repairs a shortfall one engine per pass:
 
-- When live decode engines drop below `controller.min_decode`, it moves an eligible engine to decode.
+- When live decode engines drop below `controller.min_decode`, engine monitoring moves an eligible prefill engine to decode while prefill stays at or above `controller.min_prefill`.
 - When live prefill engines drop below `controller.min_prefill`, it moves an eligible decode engine to prefill while decode stays at or above `controller.min_decode`.
 
 Floor recoveries skip some move timers:
@@ -476,6 +478,8 @@ Floor recoveries skip some move timers:
 | ------------- | -------- | ---------------- |
 | Decode floor  | Skipped  | Applied          |
 | Prefill floor | Skipped  | Skipped          |
+
+A joined engine's dwell starts when it joins, so decode floor recovery waits `controller.thresholds.dwell_s` before it moves that engine.
 
 Both floor recoveries:
 
@@ -553,7 +557,7 @@ Ordinary consolidation, the `source_shrink` rule, requires both:
 If prefill demand spikes, engines can move from decode to prefill under `source_shrink` even if decode load is higher than usual (up to `controller.thresholds.expand`). This requires:
 
 - projected prefill load exceeds `controller.thresholds.expand` during the window or confirmation span
-- no engine is currently moving to prefill
+- no departure toward prefill is open
 - no first-token timeouts have occurred within the [arrival-evidence window](#evidence-gating-for-decode-to-prefill-consolidation)
 
 Triggering this move cancels any pending moves to decode.
@@ -633,7 +637,7 @@ The `steady_demand` rule moves one engine under steady demand when both hold:
 
 Projected-TTFT recovery evaluations leave the settled run, `steady_demand_s`, and an open departure unchanged.
 
-With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one. A refusal schedules an evaluation only while `controller.thresholds.cooldown_s` has elapsed since the last move to decode or the cooldown bypass is armed, and not while every live unpinned prefill engine changed role within the last `controller.thresholds.dwell_s`. Refusals share one evaluation, and early decode recovery evaluations start at least `controller.reactive.step_s` apart. A regular evaluation and a pending projected-TTFT recovery evaluation run first, and the early decode recovery evaluation runs at the next wake. As it starts, the evaluation checks the same cooldown and dwell conditions, and that a slot-wait refusal falls within the last `controller.reactive.step_s`. When either check fails, the role controller drops the evaluation without a decision.
+With `controller.reactive.decode_recovery` set to `true`, a request that admission refuses for its decode slot wait schedules an early decode recovery evaluation ahead of the next regular one. A refusal schedules an evaluation only while `controller.thresholds.cooldown_s` has elapsed since the last move to decode or the cooldown bypass is armed, and not while every live unpinned prefill engine changed role within the last `controller.thresholds.dwell_s`. Refusals share one evaluation, and early decode recovery evaluations start at least `controller.reactive.step_s` apart. A regular evaluation and a pending projected-TTFT recovery evaluation run first, and the early decode recovery evaluation runs at the next wake. When the evaluation starts, the role controller checks the cooldown and dwell conditions again and confirms that the latest slot-wait refusal came within the last `controller.reactive.step_s`. If either check fails, the controller drops the evaluation.
 
 The early decode recovery evaluation scores only the split with one more decode engine, on window demand. It moves the engine with one confirmation when all of these hold:
 
@@ -648,7 +652,7 @@ Pins, `controller.thresholds.cooldown_s`, and `controller.thresholds.dwell_s` ap
 
 For one confirmation span after an early decode recovery move, a `source_shrink` move to prefill holds, unless it is the move for a prefill demand spike described for `source_shrink` above. Moves to prefill under other rules, including projected-TTFT recovery, proceed.
 
-A held early decode recovery evaluation leaves the settled run, `steady_demand_s`, an open departure, the confirmation sequence, and an approved move to decode unchanged. An early decode recovery move restarts the settled run, as any attempted move does. It leaves `steady_demand_s`, an open departure, and the confirmation sequence of another proposed split unchanged.
+An early decode recovery evaluation leaves `steady_demand_s`, an open departure and the confirmation sequence of another proposed split as they are. A held evaluation also leaves the settled run, the confirmation sequence and an approved move to decode as they are.
 
 A standby router or a lifecycle hold pauses role control and restarts the settled run and `steady_demand_s`.
 

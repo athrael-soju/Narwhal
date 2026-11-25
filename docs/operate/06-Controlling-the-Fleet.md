@@ -6,7 +6,7 @@ description: Run engine actions, configuration overlays, and AIPerf load jobs fr
 
 The fleet control service runs operator test actions against a running Narwhal fleet from a browser console:
 
-- engine pause, resume, stop, start, drain and readmit
+- engine pause, resume, stop, start, drain, readmit, join and leave
 - configuration overlays
 - cold restarts and baseline restores
 - AIPerf load jobs
@@ -15,7 +15,7 @@ The service runs on the router host, listens on loopback and authenticates API r
 
 All work happens in a session. Starting a session validates the baseline fleet configuration and copies it. Ending a session stops a running load job and closes the session's record, and the fleet keeps the session's changes. Select **Restore baseline** before you end the session to undo them. The service writes each action, with its time and effect, to the session's private run record.
 
-Engine pause, resume, stop and start, overlays and cold restarts run hooks: commands you define in the private configuration, such as one that stops an engine or restarts the router. Drains and readmits call the router's lifecycle API.
+Engine pause, resume, stop and start, overlays and cold restarts run hooks: commands you define in the private configuration, such as one that stops an engine or restarts the router. Drains and readmits call the router's lifecycle API, and joins and leaves call its engine membership API.
 
 ## Walkthrough
 

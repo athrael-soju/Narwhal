@@ -692,6 +692,32 @@ dialog ul:empty { display: none; }
       <aside id="engine-drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
     </div>
     <div id="last-action" class="inset last-action" hidden></div>
+    <div id="available" class="overlay-field" hidden>
+      <span class="k">Available engines</span>
+      <span id="available-help" class="lbl">Baseline engines outside the router's membership. Join sends an engine's baseline entry to the router.</span>
+      <div class="scroll">
+        <table class="tbl" aria-describedby="available-help">
+          <thead><tr>
+            <th scope="col">Engine</th><th scope="col">Engine API</th><th scope="col">Sidecar</th><th scope="col" class="end">Actions</th>
+          </tr></thead>
+          <tbody id="available-engines"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="overlay-field">
+      <label for="join-engine" class="k">Join engine</label>
+      <span id="join-help" class="lbl">One engine entry as the fleet file holds it. The router validates the engine against the fleet's contract, profiles and calibration before it joins.</span>
+      <textarea id="join-engine" spellcheck="false" rows="4" aria-describedby="join-help">{
+  "iid": "",
+  "url": "",
+  "role": "decode",
+  "attestation_url": ""
+}</textarea>
+    </div>
+    <div class="fill-row config-actions">
+      <button id="join-apply" class="btn btn-primary" type="button">Join engine</button>
+    </div>
+    <p id="fb-join" class="feedback" hidden></p>
   </section>
 
   <div class="board-col benchmark">
@@ -815,6 +841,8 @@ const ROUTES = {
   sessionEnd: ["POST", "/api/session/end"],
   engines: ["GET", "/api/engines"],
   engineAction: ["POST", "/api/engines/{iid}/{action}"],
+  engineJoin: ["POST", "/api/engines/join"],
+  engineBaselineJoin: ["POST", "/api/engines/{iid}/join"],
   workloads: ["GET", "/api/workloads"],
   jobStart: ["POST", "/api/jobs"],
   jobCurrent: ["GET", "/api/jobs/current"],
@@ -825,9 +853,9 @@ const ROUTES = {
   coldRestart: ["POST", "/api/config/cold-restart"],
   restore: ["POST", "/api/config/restore"],
 };
-const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit"];
+const ENGINE_ACTIONS = ["pause", "resume", "stop", "start", "drain", "readmit", "leave"];
 const HOOK_ACTIONS = { pause: "engine_pause", resume: "engine_resume", stop: "engine_stop", start: "engine_start" };
-const CONFIRMED_ACTIONS = ["pause", "stop", "drain"];
+const CONFIRMED_ACTIONS = ["pause", "stop", "drain", "leave"];
 const LIFECYCLE_TONES = { draining: "warn", drained: "warn", deadline_exceeded: "orange", validating: "magenta", blocked: "bad" };
 const SHORT_NAMES = {
   "config.overlay": "overlay",
@@ -903,6 +931,8 @@ const state = {
   reachable: true,
   engines: null,
   enginesError: "",
+  // Baseline engines outside the membership, or null without a membership route.
+  available: null,
   fleet: null,
   workloads: {},
   live: null,
@@ -1154,7 +1184,7 @@ function sessionGate() {
 
 function busyGate() {
   if (state.health && state.health.in_progress) return shortName(state.health.in_progress) + " is in progress.";
-  if (state.pending.has("session") || state.pending.has("config")) return "Wait for the running action to finish.";
+  if (state.pending.has("session") || state.pending.has("config") || state.pending.has("join")) return "Wait for the running action to finish.";
   return "";
 }
 
@@ -1217,6 +1247,7 @@ async function refreshEngines() {
     const reply = await call("engines", {});
     if (reply.status === 200 && reply.body) {
       state.engines = reply.body.engines;
+      state.available = reply.body.available || null;
       state.enginesError = "";
     } else {
       state.enginesError = text(reply.body && reply.body.detail);
@@ -1390,6 +1421,9 @@ function engineGate(iid, action, slice, process, others) {
     if (lifecycle === "active" && slice.ejected) return ejectedReason(iid, slice);
     if (restartPending(iid, slice)) return iid + " must restart before readmission: stop and start it, or restart the engine wave.";
     if (lifecycle !== "drained" && lifecycle !== "blocked") return "Readmit needs a drained or blocked engine; " + iid + " is " + lifecycle.replace("_", " ") + ".";
+  } else if (action === "leave") {
+    if (!lifecycle) return "The router state is unavailable.";
+    if (others) return others + "; the router runs one lifecycle action at a time.";
   } else if (action === "pause") {
     if (paused) return iid + " is paused; resume it first.";
     if (stopped) return iid + " is stopped; start it first.";
@@ -1525,6 +1559,8 @@ function changeList() {
   if (!changes) return [];
   const list = changes.configuration ? ["configuration differs from the baseline"] : [];
   for (const [iid, change] of Object.entries(changes.engines || {})) list.push(iid + " " + [].concat(change).join(" and "));
+  for (const iid of changes.joined || []) list.push(iid + " joined");
+  for (const iid of Object.keys(changes.left || {})) list.push(iid + " left");
   return list;
 }
 
@@ -1785,6 +1821,56 @@ function renderEngines() {
   renderEngineDrawer(context, entries);
   if (menuFor) renderMenu();
   renderLastAction(context);
+  renderAvailable();
+}
+
+// Why an available engine's Join is disabled, or "" when it is enabled. `gate` is the session
+// gate and `routerError` the reason the router's membership cannot be read.
+function availableGate(engine, routerError, gate) {
+  if (gate) return gate;
+  if (routerError) return "The router cannot be read: " + routerError;
+  if (engine.error) return engine.error;
+  if (engine.starting) return "The engine is starting.";
+  if (!engine.engine && !engine.sidecar) return "The engine and its attestation sidecar do not respond.";
+  if (!engine.engine) return "The engine does not respond.";
+  if (!engine.sidecar) return "The attestation sidecar does not respond.";
+  return "";
+}
+
+function renderAvailable() {
+  const listed = state.available;
+  $("available").hidden = !listed;
+  if (!listed) return;
+  const routerError = state.enginesError || listed.error || "";
+  const gate = sessionGate();
+  const responds = (value, starting) => (value ? toned("ok", "responds")
+    : toned("muted", starting ? "starting" : "no response"));
+  update("available", $("available-engines"), () => {
+    const reasons = listed.engines.map((engine) => availableGate(engine, routerError, gate));
+    const children = listed.engines.map((engine, index) => {
+      const reason = reasons[index];
+      const button = el("button", { class: "btn btn-sm" + (reason ? "" : " btn-primary"), type: "button" }, "Join");
+      setControl(button, reason);
+      button.setAttribute("aria-label", "Join " + engine.iid + (reason ? " (unavailable: " + reason + ")" : ""));
+      button.setAttribute("aria-busy", String(state.pending.has("join")));
+      button.addEventListener("click", () => joinAvailable(engine.iid));
+      return el("tr", {}, el("td", { class: "mono" }, engine.iid), el("td", {}, responds(engine.engine, engine.starting)),
+        el("td", {}, responds(engine.sidecar, engine.starting)), el("td", { class: "end" }, button));
+    });
+    if (!children.length) {
+      const message = routerError ? "The router cannot be read." : "Every baseline engine is a member.";
+      children.push(el("tr", {}, el("td", { colSpan: 4, class: "empty" }, message)));
+    }
+    return [JSON.stringify([listed, reasons, state.pending.has("join")]), children];
+  });
+}
+
+async function joinAvailable(iid) {
+  const confirmed = await confirmAction("Join engine " + iid + "?",
+    "The service sends " + iid + "'s baseline entry to the router. The router checks the engine's health, process identity, attestation, profile and a KV handoff with a live peer, then places requests on it.",
+    [], "Join " + iid);
+  if (!confirmed) return;
+  await act("join", "Join " + iid, "engineBaselineJoin", { iid });
 }
 
 function renderLastAction(context) {
@@ -1899,13 +1985,17 @@ async function engineAction(iid, action) {
   const deadline = drainDeadline();
   // Zero, negative or unreadable deadlines leave the router's default.
   const seconds = Number(deadline);
-  if (action === "drain" && deadline !== "" && Number.isFinite(seconds) && seconds > 0) body.deadline_s = seconds;
+  if ((action === "drain" || action === "leave") && deadline !== "" && Number.isFinite(seconds) && seconds > 0) body.deadline_s = seconds;
   const effects = {
     pause: "Runs the engine_pause hook for " + iid + ". The router ejects an engine that stops answering, so it leaves service until it resumes.",
     stop: "Runs the engine_stop hook for " + iid + ". The router ejects the engine once it stops answering. "
       + "Start runs the engine_start hook and waits until the router returns the engine to service.",
     drain: "The router stops placing new requests on " + iid + " and waits for its resident requests to finish"
       + (body.deadline_s ? ", for at most " + body.deadline_s + " s." : ", until the router's default deadline. Set Drain deadline in the session strip to limit it."),
+    leave: "The router drains " + iid + " and removes it from the fleet once its resident requests finish"
+      + (body.deadline_s ? ", waiting at most " + body.deadline_s + " s for the drain." : ".")
+      + " The engine process keeps running. When the baseline fleet configures " + iid + ", Restore baseline joins it again,"
+      + " running the engine_start hook first when one is configured.",
   };
   if (effects[action]) {
     const confirmed = await confirmAction(capital(action) + " engine " + iid + "?", effects[action], [], capital(action) + " " + iid);
@@ -2286,6 +2376,8 @@ function renderConfiguration() {
     || (hookConfigured("cold_restart") ? "" : "No cold_restart hook is configured."));
   setControl($("restore"), state.pending.has("config") ? "A configuration action is running." : sessionGate());
   renderFeedback($("fb-config"), "config");
+  setControl($("join-apply"), state.pending.has("join") ? "A join is running." : sessionGate());
+  renderFeedback($("fb-join"), "join");
 }
 
 function renderCheck() {
@@ -2604,9 +2696,28 @@ $("cold-restart").addEventListener("click", async () => {
   if (!confirmed) return;
   await act("config", "Cold restart", "coldRestart");
 });
+$("join-apply").addEventListener("click", async () => {
+  let entry;
+  try {
+    entry = JSON.parse($("join-engine").value);
+  } catch (error) {
+    entry = null;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    state.feedback.set("join", { kind: "refused", label: "Join refused", detail: "The engine entry is not a JSON object.", at: new Date().toISOString() });
+    render();
+    return;
+  }
+  const iid = String(entry.iid || "");
+  const confirmed = await confirmAction("Join engine " + iid + "?",
+    "The router checks the engine's health, process identity, attestation, profile and a KV handoff with a live peer, then places requests on it.",
+    [], "Join " + iid);
+  if (!confirmed) return;
+  await act("join", "Join " + iid, "engineJoin", {}, entry);
+});
 $("restore").addEventListener("click", async () => {
   const confirmed = await confirmAction("Restore the baseline?",
-    "The service undoes the session's changes. A changed configuration restarts the router with the baseline; each changed engine is resumed, started or readmitted.",
+    "The service undoes the session's changes. A changed configuration restarts the router with the baseline; each changed engine is resumed, started or readmitted; an engine that left is started and joined again, and an engine that joined leaves.",
     changeList().length ? changeList() : ["The session changed nothing."], "Restore baseline");
   if (!confirmed) return;
   await act("config", "Restore baseline", "restore");

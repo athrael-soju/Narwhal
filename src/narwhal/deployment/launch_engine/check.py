@@ -11,9 +11,11 @@ from .backend import plan_launcher
 from .docker import docker
 from .plan import (
     append_private,
+    check_model_files,
     container_options,
     env_file_name,
     kv_events_directory,
+    model_file_changed,
     option,
     read_env,
     requires_remote_code,
@@ -86,11 +88,15 @@ def check(run: Path, plan: dict) -> None:
         model_path = Path(plan["model_path"])
         if not model_path.exists():
             raise ValueError(f"native model path is missing: {model_path}")
-        if plan.get("model_sha256") and digest(model_path) != plan["model_sha256"]:
+        if model_file_changed(plan):
             raise ValueError("native model file changed after launch preparation")
+        check_model_files(plan)
         arguments = engine.runtime_probe(context)
         output = run_native_check(run, plan, log, arguments, context.environment)
     else:
+        if model_file_changed(plan):
+            raise ValueError("model file changed after launch preparation")
+        check_model_files(plan)
         arguments = engine.runtime_probe(context)
         inspection = inspect_image(run, plan, log)
         output = docker(

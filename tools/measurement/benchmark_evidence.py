@@ -95,6 +95,7 @@ def metric_values(content: str) -> dict[str, float]:
         "narwhal_failed_total",
         "narwhal_refused_total",
         "narwhal_rejected_total",
+        "narwhal_standby_refusals_total",
         "narwhal_expired_total",
         "narwhal_invalid_requests_total",
         "narwhal_cancelled_total",
@@ -178,7 +179,10 @@ def reconcile(
     sample_interval: float,
 ) -> dict:
     diagnostics = []
-    terminal = [row for row in journal_rows if "terminal" in row]
+    ended = [row for row in journal_rows if "terminal" in row]
+    # A standby's refusal is an attempt the load balancer retried on its primary, whose row
+    # ends the client request.
+    terminal = [row for row in ended if not row.get("standby_refusal")]
     client_sent = [row for row in client_rows if row.get("sent", True)]
     client_ids = [row.get("client_rid") for row in client_sent]
     journal_ids = [row.get("client_rid") for row in terminal]
@@ -224,7 +228,7 @@ def reconcile(
     deltas, counter_diagnostics = counter_deltas(samples)
     diagnostics.extend(counter_diagnostics)
     journal_by_run = defaultdict(list)
-    for row in terminal:
+    for row in ended:
         journal_by_run[row.get("run", "unknown")].append(row)
     metric_for_terminal = {
         "completed": "narwhal_served_total",
@@ -239,10 +243,13 @@ def reconcile(
         if run not in deltas:
             diagnostics.append({"kind": "missing_run_metrics", "point": point_id, "run": run})
             continue
-        expected = Counter(row["terminal"] for row in rows)
-        expected_metrics = {"narwhal_offered_total": len(rows)}
+        attempts = sum(bool(row.get("standby_refusal")) for row in rows)
+        expected = Counter(row["terminal"] for row in rows if not row.get("standby_refusal"))
+        expected_metrics = {"narwhal_offered_total": len(rows) - attempts}
         for terminal_class, metric in metric_for_terminal.items():
             expected_metrics[metric] = expected[terminal_class]
+        if attempts or "narwhal_standby_refusals_total" in deltas[run]:
+            expected_metrics["narwhal_standby_refusals_total"] = attempts
         for metric, count in expected_metrics.items():
             observed = deltas[run].get(metric)
             if observed is None or observed != count:

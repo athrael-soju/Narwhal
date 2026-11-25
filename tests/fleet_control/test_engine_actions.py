@@ -7,6 +7,7 @@ import dataclasses
 import json
 import sys
 import tempfile
+import time
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,8 +16,10 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from narwhal.runtime.lifecycle import leave as leave_module
 from narwhal.runtime.lifecycle.records import ValidationOutcome
 from narwhal.serving import app as serving_app
+from narwhal.types import Request
 from tests.fixtures import fleet
 from tools.fleet_control.app import create_app
 from tools.fleet_control.config import (
@@ -171,6 +174,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         for name in ("engine_pause", "engine_resume", "engine_stop", "engine_start")
     }
     router_timeout_s = 5.0
+    router_class: ClassVar[type[FakeRouter]] = FakeRouter
 
     async def asyncSetUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
@@ -178,7 +182,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         self.runs = Path(folder.name) / "runs"
         self.stopped = stopped = Path(folder.name) / "stopped"
         stopped.mkdir()
-        self.router = FakeRouter(stopped)
+        self.router = self.router_class(stopped)
         config = ControlConfig(
             FLEET,
             dict(self.hooks),
@@ -188,7 +192,7 @@ class EngineCase(unittest.IsolatedAsyncioTestCase):
         env = {"PATH": "/usr/bin:/bin", "NARWHAL_CONTROL_TOKEN": TOKEN, "STOPPED": str(stopped)}
         self.service = ControlService(config, env=env, now=lambda: NOW)
         transport = httpx.MockTransport(self.router.handle)
-        actions = EngineActions(self.service, transport, 0.02)
+        self.actions = actions = EngineActions(self.service, transport, 0.02)
         overlays = Overlays(self.service, engines=actions, transport=transport)
         app = create_app(
             self.service, TOKEN, routers=[engine_routes(actions), overlay_routes(overlays)]
@@ -264,9 +268,11 @@ class HookActionTests(EngineCase):
         self.assertTrue(result["before"]["ejected"])
         self.assertFalse(result["after"]["ejected"])
         self.assertTrue(result["service"]["in_service"])
+        # Each action reads the router's membership before the engine's state.
         self.assertEqual(
             [path for method, path, _ in self.router.requests],
-            ["/narwhal/state"] * 5,
+            ["/narwhal/engines", *["/narwhal/state"] * 2, "/narwhal/engines"]
+            + ["/narwhal/state"] * 3,
         )
 
 
@@ -483,9 +489,11 @@ class LifecycleActionTests(EngineCase):
         self.assertEqual(
             [(method, path) for method, path, _ in self.router.requests],
             [
+                ("GET", "/narwhal/engines"),
                 ("GET", "/narwhal/state"),
                 ("POST", "/narwhal/lifecycle/drain"),
                 ("GET", "/narwhal/state"),
+                ("GET", "/narwhal/engines"),
                 ("GET", "/narwhal/state"),
                 ("POST", "/narwhal/lifecycle/readmit"),
                 ("GET", "/narwhal/state"),
@@ -499,7 +507,7 @@ class LifecycleActionTests(EngineCase):
     async def test_drain_uses_the_router_default_deadline_unless_one_is_given(self) -> None:
         await self.start_session()
         await self.client.post("/api/engines/e0/drain")
-        self.assertEqual(self.router.requests[1][2], {"engines": ["e0"]})
+        self.assertEqual(self.router.requests[2][2], {"engines": ["e0"]})
 
     async def test_a_router_refusal_is_a_failed_action_with_its_state(self) -> None:
         await self.start_session()
@@ -523,11 +531,9 @@ class LifecycleActionTests(EngineCase):
         self.router.down = True
         response = await self.client.post("/api/engines/e0/drain")
         self.assertEqual(response.status_code, 502)
-        self.assertIn("router /narwhal/lifecycle/drain failed: ConnectError", response.text)
-        result = self.last_action()["result"]
+        # The engine lookup reads the router's membership first.
+        self.assertIn("router /narwhal/engines failed: ConnectError", response.text)
         self.assertEqual(self.last_action()["outcome"], "failed")
-        for side in ("before", "after"):
-            self.assertIn("router state unavailable: ConnectError", result[side]["error"])
 
     async def test_an_invalid_deadline_or_parameter_is_refused(self) -> None:
         await self.start_session()
@@ -573,7 +579,8 @@ class RefusalTests(EngineCase):
                     (entry["action"], entry["outcome"], entry["params"]),
                     (f"engine.{action}", "refused", {"engine": "e99"}),
                 )
-        self.assertEqual(self.router.requests, [])
+        # A router without the membership route leaves the baseline as the engine list.
+        self.assertEqual({path for _, path, _ in self.router.requests}, {"/narwhal/engines"})
 
     async def test_an_unknown_action_has_no_route(self) -> None:
         await self.start_session()
@@ -610,7 +617,10 @@ class FleetStateTests(EngineCase):
         response = await self.client.get("/api/engines")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(sorted(response.json()["engines"]), sorted(self.router.roles))
-        self.assertEqual(self.router.requests, [("GET", "/narwhal/state", None)])
+        self.assertEqual(
+            self.router.requests,
+            [("GET", "/narwhal/engines", None), ("GET", "/narwhal/state", None)],
+        )
         self.assertFalse((self.runs / "actions.jsonl").exists())
 
     async def test_outside_a_session_an_unreadable_fleet_file_is_reported(self) -> None:
@@ -736,7 +746,7 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(readmitted.result["after"]["process_start"], 101)
         self.assertTrue(readmitted.result["after"]["lifecycle"]["accepts_new"])
 
-    async def test_a_baseline_engine_the_router_lacks_is_reported_unknown(self) -> None:
+    async def test_a_baseline_engine_outside_the_router_membership_is_refused(self) -> None:
         assert self.service.session is not None
         state = await self.actions.fleet_state(list(baseline_engines(self.service.session)))
         self.assertEqual(state["e2"]["known"], False)
@@ -744,8 +754,187 @@ class NarwhalRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["e3"]["role"], "decode")
         with self.assertRaises(ActionError) as caught:
             await self.actions.act("e2", "drain", {})
+        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(str(caught.exception), "engine 'e2' is not in the router's membership")
+
+    async def test_join_and_leave_relay_the_real_router_refusals(self) -> None:
+        entry = {"iid": "e9", "url": "http://engine-9.invalid:8000", "color": 1}
+        with self.assertRaises(ActionError) as caught:
+            await self.actions.join(entry)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("unknown engine key 'color'", str(caught.exception))
+        # The engine's process identity is unreadable, so the router keeps it out of placement.
+        with self.assertRaises(ActionError) as caught:
+            await self.actions.leave("e3", {"deadline_s": 1})
+        self.assertEqual(caught.exception.status, 503)
+        self.assertIn("router refused leave of e3 with HTTP 503: ", str(caught.exception))
+        assert caught.exception.result is not None
+        self.assertTrue(caught.exception.result["router"]["error"])
+
+
+class Balancer(httpx.AsyncBaseTransport):
+    """Route the first `standby_answers` requests to a standby router, the rest to the active one.
+
+    This is the router pair behind a load balancer during a takeover, while the balancer still
+    routes to a router that was restarted as a standby.
+    """
+
+    def __init__(
+        self,
+        standby: Any,
+        active: Any,
+        standby_answers: int,
+        standby_after: tuple[str, str] | None = None,
+    ) -> None:
+        self.standby = httpx.ASGITransport(app=standby)
+        self.active = httpx.ASGITransport(app=active)
+        self.left = standby_answers
+        # Once the active router answers this method and path, the standby answers the rest.
+        self.standby_after = standby_after
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        name, target = ("standby", self.standby) if self.left > 0 else ("active", self.active)
+        self.left -= 1
+        if self.standby_after == (request.method, request.url.path):
+            self.left = 10_000
+        self.calls.append((name, request.method, request.url.path))
+        return await target.handle_async_request(request)
+
+
+class StandbyRouterTests(unittest.IsolatedAsyncioTestCase):
+    """Reads that reach a standby repeat until the active router answers, within the timeout."""
+
+    async def asyncSetUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.routers = []
+        for name in ("active", "standby"):
+            cfg = fleet(self.root / name, engines=("e0", "e1", "e3"))
+            cfg.state_path = self.root / name / "handoff.json"
+            app = serving_app.create_app(cfg)
+            self.addAsyncCleanup(app.state.router.engines.aclose)
+            self.routers.append(app)
+        self.active, self.standby = self.routers
+        self.standby.state.router.standby = True
+        # The active router serves generation 1 without e3; the standby still holds the fleet
+        # file's generation 0.
+        router = self.active.state.router
+        router.apply_membership(router.membership.left("e3"))
+
+    async def actions(
+        self,
+        standby_answers: int,
+        timeout_s: float = 5.0,
+        standby_after: tuple[str, str] | None = None,
+    ) -> EngineActions:
+        config = ControlConfig(
+            FLEET,
+            {"restore": hook("restore", "print('restored')")},
+            runs_dir=self.root / "runs",
+            router=RouterEndpoint(ROUTER, timeout_s),
+        )
+        service = ControlService(config, env={"PATH": "/usr/bin:/bin"}, now=lambda: NOW)
+        self.balancer = Balancer(self.standby, self.active, standby_answers, standby_after)
+        actions = EngineActions(service, self.balancer, read_retry_s=0.01)
+        await service.start_session()
+        return actions
+
+    async def test_a_membership_read_repeats_until_the_active_router_answers(self) -> None:
+        actions = await self.actions(standby_answers=3)
+        async with actions._client() as client:
+            current = await actions.membership(client)
+        assert current is not None
+        self.assertEqual((current["generation"], sorted(current["engines"])), (1, ["e0", "e1"]))
+        self.assertEqual([name for name, _, _ in self.balancer.calls], ["standby"] * 3 + ["active"])
+
+    async def test_an_action_after_a_standby_answer_acts_on_the_active_router(self) -> None:
+        actions = await self.actions(standby_answers=2)
+        with patch.object(
+            serving_app,
+            "capture_process_identities",
+            new=AsyncMock(return_value=({"e0": 100}, {})),
+        ):
+            drained = await actions.act("e0", "drain", {"deadline_s": 60})
+        assert drained.result is not None
+        self.assertEqual(drained.result["after"]["lifecycle"]["state"], "drained")
+        self.assertNotIn("error", drained.result["before"])
+        self.assertEqual(self.active.state.router.lifecycle.records["e0"].state, "drained")
+
+    async def test_an_action_fails_with_the_standby_reason_once_the_timeout_passes(self) -> None:
+        actions = await self.actions(standby_answers=10_000, timeout_s=0.2)
+        with self.assertRaises(ActionError) as caught:
+            await actions.act("e0", "drain", {})
         self.assertEqual(caught.exception.status, 502)
-        self.assertIn("HTTP 409", str(caught.exception))
+        self.assertEqual(
+            str(caught.exception),
+            "router /narwhal/engines answered HTTP 503: "
+            "this router does not control the fleet (shadowing)",
+        )
+        self.assertEqual(
+            {(method, path) for _, method, path in self.balancer.calls},
+            {("GET", "/narwhal/engines")},
+        )
+        self.assertGreater(len(self.balancer.calls), 1)
+        self.assertEqual(self.standby.state.router.lifecycle.records, {})
+
+    async def test_the_console_engine_list_reads_within_one_deadline(self) -> None:
+        actions = await self.actions(standby_answers=10_000, timeout_s=1.0)
+        app = create_app(actions.service, TOKEN, routers=[engine_routes(actions)])
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://control",
+            headers={"authorization": f"Bearer {TOKEN}"},
+        ) as client:
+            started = time.monotonic()
+            response = await client.get("/api/engines")
+            elapsed = time.monotonic() - started
+        self.assertEqual(response.status_code, 502, response.text)
+        self.assertIn("(shadowing)", response.text)
+        # The membership read and the state read share one second, not one second each.
+        self.assertLess(elapsed, 1.5)
+        paths = {path for _, _, path in self.balancer.calls}
+        self.assertEqual(paths, {"/narwhal/engines", "/narwhal/state"})
+
+    async def test_a_removal_wait_ends_within_its_limit_when_a_standby_answers(self) -> None:
+        router = self.active.state.router
+        router.apply_membership(
+            router.membership.joined(self.standby.state.router.membership.spec("e3"))
+        )
+        router.monitor.dispatched("e3", Request("resident", 64))
+        actions = await self.actions(
+            standby_answers=0, timeout_s=1.0, standby_after=("DELETE", "/narwhal/engines/e3")
+        )
+        capture = AsyncMock(
+            side_effect=lambda cfg, engines, **kwargs: (dict.fromkeys(engines, 100.0), {})
+        )
+        with patch.object(leave_module, "capture_process_identities", capture):
+            started = time.monotonic()
+            with self.assertRaises(ActionError) as caught:
+                await actions.leave("e3", {"deadline_s": 0.1})
+            elapsed = time.monotonic() - started
+        self.assertEqual(caught.exception.status, 504)
+        self.assertIn("did not remove e3 within 1.1s", str(caught.exception))
+        # Each poll's reads end with the 1.1 s limit; reads with their own timeout would not.
+        self.assertLess(elapsed, 1.6)
+        after = self.balancer.calls.index(("active", "DELETE", "/narwhal/engines/e3"))
+        self.assertEqual({name for name, _, _ in self.balancer.calls[after + 1 :]}, {"standby"})
+
+    async def test_a_state_read_names_the_standby_reason(self) -> None:
+        actions = await self.actions(standby_answers=10_000, timeout_s=0.1)
+        async with actions._client() as client:
+            state = await actions.engine_state(client, "e0")
+        self.assertEqual(
+            state,
+            {
+                "error": "router state unavailable: HTTP 503: "
+                "this router does not control the fleet (shadowing)"
+            },
+        )
+        with self.assertRaises(ActionError) as caught:
+            await actions.fleet_state(["e0"])
+        self.assertIn("(shadowing)", str(caught.exception))
 
 
 class RouterConfigTests(unittest.TestCase):

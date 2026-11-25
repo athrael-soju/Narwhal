@@ -75,5 +75,6 @@ The engines publish `llamacpp:` series on `/metrics`. The router reads `llamacpp
 ## Limits
 
 - Engine attestation, the profiling sweep of `narwhal-profile` and KV transfer evidence apply to vLLM, SGLang and TensorRT-LLM fleets.
+- A llama.cpp fleet has no engine contract, so its router refuses to [join or remove an engine](../operate/08-Joining-and-Removing-Engines.md) at runtime.
 - `narwhal-engine` and the [deployment stages](../Deploy.md) launch vLLM, SGLang and TensorRT-LLM engines.
 - The backend runs on x86-64 Linux and under WSL2, with every engine of a fleet on one host.

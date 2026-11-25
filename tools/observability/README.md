@@ -10,7 +10,7 @@ Follow [Setting up observability](../../docs/Observability.md) to select listene
 
 **Narwhal Orchestrator** joins the selected router's metrics with engine scrapes by `iid`.
 
-The shipped scrape configuration binds one router to each Prometheus data source and discovers the engines from that router's `/narwhal/targets`.
+The shipped scrape configuration scrapes each router of one deployment, a single router or a router pair, and discovers the engines from `/narwhal/targets` at the single router or at the load balancer in front of the pair.
 
 The dashboard expects these label contracts:
 
@@ -30,9 +30,11 @@ To chart GPU sensor metrics, add a scrape job for your GPU exporter to `promethe
 
 ### Metric boundaries
 
-The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval. **Latency** divides each router configuration's p95 by that configuration's SLO and shows the largest share.
+The headline **Requests** and **Latency** tables sum `increase()` over the displayed interval and over the selected routers. **Latency** divides each SLO configuration's p95 by that SLO and shows the largest share.
 
-**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `instance`, `slo` and `le`. **Request waiting time** uses the same `instance`, `slo` and `le` grouping to calculate seat-time p95, and one queue-wait p95 for each `stage` it selects. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies each router's configured TTFT and TPOT lines.
+**Time to first token** and **Time per output token** calculate p50, p95 and p99 from bucket rates grouped by `slo` and `le`, which adds the buckets of a router pair. **Request waiting time** uses the same `slo` and `le` grouping to calculate seat-time p95, and one queue-wait p95 for each `stage` it selects. Each restart begins a fresh histogram. `narwhal_slo_seconds` supplies the configured TTFT and TPOT lines, one per SLO configuration.
+
+Panels that show router state, such as pools, admission, queues and retry credits, read the active router: the selected router that answered its last scrape and reports ready, or else the scraped router with the highest `narwhal_router_lease_epoch`.
 
 Each `iid` identifies one logical engine replica. Role changes affect new placements; resident requests remain assigned until completion. A router scrape failure withdraws the role, resident-request, pool and router-reported engine-state series. Deployment client samples establish end-to-end SLO attainment over offered requests.
 

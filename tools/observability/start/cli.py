@@ -16,7 +16,13 @@ from tools.observability.artifacts import (
     stage_artifacts,
     tool_target,
 )
-from tools.observability.make_targets import TargetContract, load_contract
+from tools.observability.make_targets import (
+    ROUTER_URL_ENV,
+    TARGETS_URL_ENV,
+    TargetContract,
+    load_contract,
+    router_urls,
+)
 
 from .listeners import check_listeners
 from .readiness import DEFAULT_READY_TIMEOUT_S, HttpGet, http_get, wait_collection, wait_ready
@@ -45,7 +51,8 @@ def start(
     stack.up()
     launched = wait_ready(services, stack, get=get, timeout_s=timeout_s)
     prometheus = next(service for service in services if service.name == "prometheus")
-    wait_collection(prometheus, contract, get=get, timeout_s=timeout_s)
+    for warning in wait_collection(prometheus, contract, get=get, timeout_s=timeout_s):
+        print(f"warning: {warning}", file=sys.stderr)
     for service in services:
         container = launched[service.name]
         print(
@@ -66,16 +73,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--router-url",
-        default=os.environ.get("NARWHAL_ROUTER_URL"),
-        help="router HTTP origin scraped by Prometheus (default: NARWHAL_ROUTER_URL)",
+        action="append",
+        help=(
+            "router HTTP origin scraped by Prometheus; repeat it for each router of a pair "
+            f"(default: {ROUTER_URL_ENV}, with commas between the origins of a pair)"
+        ),
+    )
+    parser.add_argument(
+        "--targets-url",
+        default=os.environ.get(TARGETS_URL_ENV),
+        help=(
+            "origin Prometheus reads the engine targets from, required for a router pair: "
+            f"the load balancer that reaches the active router (default: {TARGETS_URL_ENV}, "
+            "else the router)"
+        ),
     )
     args = parser.parse_args(argv)
     if args.ready_timeout <= 0:
         parser.error("--ready-timeout must be positive")
-    if args.router_url is None:
-        parser.error("--router-url or NARWHAL_ROUTER_URL is required")
+    routers = args.router_url or [os.environ.get(ROUTER_URL_ENV, "")]
+    if not router_urls(routers):
+        parser.error(f"--router-url or {ROUTER_URL_ENV} is required")
     try:
-        contract = load_contract(args.router_url)
+        contract = load_contract(routers, args.targets_url)
         start(os.environ, ComposeStack(env=os.environ), contract, timeout_s=args.ready_timeout)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()

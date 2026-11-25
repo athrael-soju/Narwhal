@@ -27,7 +27,7 @@ mkdir -p "$RUN_DIR"
 
 ## Restart one engine
 
-This procedure applies when `recovery.engine_restart_policy` is `individual`.
+This procedure applies when `recovery.engine_restart_policy` is `individual`. On an SGLang fleet, a replacement that changes the engine's [process generation](../Core-Concepts.md#terms) also needs a spare engine outside the fleet for its profiles, as [Refresh profiles](#refresh-profiles) describes. Without one, or when the recorded measurement recipe uses `--colocated`, use [Restart an engine wave](#restart-an-engine-wave).
 
 ### Drain the engine
 
@@ -62,6 +62,8 @@ Stop the engine when the check passes.
 
 ### Replace the process
 
+Restart the engine from the checkpoint the other members serve, because readmission refuses a different one. To change the checkpoint, drain, restart and readmit every engine as one wave, as in [Restart an engine wave](#restart-an-engine-wave).
+
 1. Restart the engine and its attestation sidecar through their configured process manager.
 2. Check that the engine's `/health` returns HTTP 200.
 3. Check that `/v1/models` lists the configured model and that the engine identity describes the replacement process: `/version` and `process_start_time_seconds` in `/metrics` on vLLM, `/server_info` and the attestation sidecar's `/v1/process` on SGLang, or `/version` and the attestation sidecar's `/v1/process` on TensorRT-LLM.
@@ -80,17 +82,7 @@ curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
   > "$RUN_DIR/individual-readmitted.json"
 ```
 
-Readmission runs these checks in order, each named by its `checks` entry:
-
-1. The engine and each required peer pass four checks:
-    - `health`: `/health` returns HTTP 200.
-    - `attestation <fingerprint>`: attestation matches the live process and the `engine_contract`.
-    - `profile generation`: every loaded profile variant is bound to the engine's live process generation.
-    - `model`: `/v1/models` lists the configured model.
-2. The replacement engine passes `new process identity`: its process start is newer than its recorded drain identity. On vLLM and TensorRT-LLM, it also passes `generation`: a direct completion probe returns a choice. On SGLang, the fabric handoff in step 3 tests generation.
-3. Each role-permitted engine pair completes a fabric validation KV handoff, recorded as `fabric produce to <peer>` and `fabric consume from <peer>`. On an SGLang fleet, the router pairs the replacement engine with the first live engine in the other role. With the `mooncake` connector, the router switches the replacement engine to its router role before the handoff.
-4. The replacement engine passes `final health`: its `/health` returns HTTP 200.
-5. The identities, attestation, and profile bindings of all participants match step 1.
+Readmission runs the [readmission checks](../http-api/07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit), and `checks` lists each check that passed.
 
 When every check passes, readmission returns HTTP 200 with `accepts_new: true`, and the engine `state` becomes `active`. A failed check returns HTTP 409, and fenced router control during validation returns HTTP 503. Both leave the engine `blocked`.
 
@@ -335,6 +327,59 @@ For a warm standby router:
 ### Refresh profiles
 
 [Re-profile the replaced engines and merge their rows into the current store](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) with the recorded measurement recipe.
+
+On an SGLang fleet, the sweep also switches a peer of each replaced engine, chosen as [SGLang pairs](../cli/Profile.md#sglang-pairs) describes, and the router must hold both engines or have neither in its fleet, as [Router drain check](../cli/Profile.md#router-drain-check) describes. After [Restart an engine wave](#restart-an-engine-wave), the router holds every engine, so profile with `--router-url "$ROUTER_URL"` and the fleet file. After [Restart one engine](#restart-one-engine), the router holds only the replaced engine and refuses to drain a second one, so pair the replaced engine with a spare engine outside the fleet. A recipe recorded with `--colocated` takes the peers from the replaced engine's own `shared_device` group, where no spare can stand in, so it needs the whole-wave route. Otherwise:
+
+1. Start a spare engine and its attestation sidecar under the fleet's engine contract, as in [Start the engine](08-Joining-and-Removing-Engines.md#start-the-engine). The spare must reach `e0` over the KV fabric, as a member does.
+2. Write the spare's entry, with the spare's URLs:
+
+    ```bash
+    cat > "$RUN_DIR/spare.json" <<'JSON'
+    {
+      "iid": "spare",
+      "url": "http://spare:8000",
+      "attestation_url": "http://spare:8010/v1/attestation",
+      "role": "decode"
+    }
+    JSON
+    ```
+
+3. Write a profiling fleet file that lists the spare right after `e0`, and a limits file that adds the spare's `runtime.max_sequences`, here `256`:
+
+    ```bash
+    python3 - runs/deployment/fleet.json runs/deployment/profiling-limits.json e0 \
+      "$RUN_DIR/spare.json" 256 "$RUN_DIR" <<'PY'
+    import json
+    import sys
+
+    fleet, limits = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+    spare = json.load(open(sys.argv[4]))
+    ids = [engine["iid"] for engine in fleet["engines"]]
+    fleet["engines"].insert(ids.index(sys.argv[3]) + 1, spare)
+    limits["engines"][spare["iid"]] = int(sys.argv[5])
+    for name, document in (("profile-fleet.json", fleet), ("profiling-limits.json", limits)):
+        with open(f"{sys.argv[6]}/{name}", "w") as out:
+            json.dump(document, out, indent=2)
+            out.write("\n")
+    PY
+    .venv/bin/narwhal config validate --fleet "$RUN_DIR/profile-fleet.json"
+    ```
+
+4. Profile `e0` with the recorded sweep options:
+
+    ```bash
+    .venv/bin/narwhal-profile --fleet "$RUN_DIR/profile-fleet.json" \
+      --limits "$RUN_DIR/profiling-limits.json" \
+      --prefill-lens 256,700,1300,2300,4096,4300,8300,12300 \
+      --decode-input-lens 512,4096,8192 \
+      --only e0 --router-url "$ROUTER_URL" --out "$RUN_DIR/profiles-e0.json"
+    ```
+
+    The profiler prints `router <url> has no member with the ID or URL of: spare`.
+
+5. Merge `$RUN_DIR/profiles-e0.json` into the current store with `runs/deployment/fleet.json`, as [Reusing or repeating profiles](../deploy/06-Profile-and-Preflight.md#reusing-or-repeating-profiles) describes, and stop the spare engine and its sidecar.
+
+Without a spare engine, or with a `--colocated` recipe, replace the engine through [Restart an engine wave](#restart-an-engine-wave) instead. The router refuses a whole-wave drain while it holds one engine, so choose the wave before you drain.
 
 ### Prepare the activation configuration
 

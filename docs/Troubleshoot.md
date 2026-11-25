@@ -6,7 +6,7 @@ description: Capture diagnostic bundles and recover a Narwhal fleet from router,
 
 ## Capturing router and engine state
 
-Collect one bundle per incident router, with a fresh output path, that router's fleet configuration and that router's run directory:
+For each router in the incident, collect one bundle with that router's fleet configuration and run directory. `--out` names a new directory in an existing parent:
 
 ```bash
 mkdir -p runs/diagnostics
@@ -96,7 +96,7 @@ Match the largest counts to a class:
 | ----------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `narwhal_rejected_total{reason="inflight_limit"}`                                                           | `rejected`         | HTTP 429, message `router in-flight limit reached` | [In-flight limit](#in-flight-limit-rejections)                                                                                                          |
 | `narwhal_rejected_total{reason="saturated"}`                                                                | `rejected`         | HTTP 429, message starting `router saturated`      | [Router saturation](#router-saturation-rejections)                                                                                                      |
-| `narwhal_rejected_total{reason="not_ready"}`                                                                | `rejected`         | HTTP 503 `standby` or `backend_unavailable`        | Router readiness, not overload. Read `readiness_reason` and follow [Router, admission, and lifecycle signals](#router-admission-and-lifecycle-signals). |
+| `narwhal_rejected_total{reason="not_ready"}`                                                                | `rejected`         | HTTP 503 `standby` or `backend_unavailable`, unless the load balancer retried it on the other router | Router readiness, not overload. Read `readiness_reason` and follow [Router, admission, and lifecycle signals](#router-admission-and-lifecycle-signals). |
 | `narwhal_refused_total{cause="queue"}` or `{cause="prompt"}`                                                | `refused`          | HTTP 429                                           | [TTFT refusals](#ttft-refusals)                                                                                                                         |
 | `narwhal_refused_total{cause="aggregate_unpriced"}`                                                         | `refused`          | HTTP 429                                           | [TTFT refusals](#ttft-refusals)                                                                                                                         |
 | `narwhal_refused_total{cause="slot_wait"}`, `{cause="kv_capacity"}`, or `{cause="tpot"}`                    | `refused`          | HTTP 429                                           | [Decode capacity refusals](#decode-capacity-refusals)                                                                                                   |
@@ -114,7 +114,7 @@ Check: `narwhal_http_retained` reaches `narwhal_http_retained_limit`, which is t
 
 Cause: requests arrive faster than admitted requests release their seats. The router rejects each arrival before it reads the body.
 
-Action: reduce ingress traffic, or add engines that passed deployment validation. Before raising the limit, run the open-admission sweep in [In-flight limit and decode gaps](operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps): read `narwhal_admission_inflight` when the first `saturated` rejection appears, and set the limit at or below that count. `narwhal-serve --max-concurrent` accepts values up to `serving.max_connections`.
+Action: reduce ingress traffic, or add engines that passed deployment validation. Before raising the limit, choose it with the open-admission sweep in [In-flight limit and decode gaps](operate/07-Admission-Queue-and-Retry-Settings.md#in-flight-limit-and-decode-gaps).
 
 #### Router saturation rejections
 
@@ -130,7 +130,7 @@ Check: read `admission_price` on the refused journal rows. Its [parts](telemetry
 
 | `cause`              | Cause                                                                                                                                                                                                                         | Action                                                                                                                                                                                                              |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `queue`              | Prefill work resident on the cheapest prefill engine, `backlog_s`, the time the request already waited, `elapsed_s`, and the wait for the first decode token after prefill, `handoff_s`, push `price_s` past the TTFT budget. | Reduce the offered rate. Add prefill capacity when `backlog_s` dominates, or decode capacity when `handoff_s` dominates. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
+| `queue`              | `backlog_s` (prefill work resident on the cheapest prefill engine), `elapsed_s` (time the request already waited) and `handoff_s` (wait for the first decode token after prefill) push `price_s` past the TTFT budget. | Reduce the offered rate. Add prefill capacity when `backlog_s` dominates, or decode capacity when `handoff_s` dominates. Clients can retry after `Retry-After`, which excludes the time the request already waited. |
 | `prompt`             | The prompt's own prefill, `own_prefill_s`, exceeds the TTFT budget.                                                                                                                                                           | Shorten the prompt, or raise `slo.ttft_s`. Draining the prefill backlog does not clear this cause.                                                                                                                  |
 | `aggregate_unpriced` | Zero prefill engines are live, and every candidate engine carries decode work.                                                                                                                                                | Check `pools.prefill` and `ejected` in `/narwhal/state`, then restore a live prefill engine. `controller.min_prefill` sets the [prefill role floor](configuration/02-Serving-and-Role-Control.md#role-floors).      |
 
@@ -166,11 +166,7 @@ Action: reduce the offered rate, or add decode capacity. With `serving.max_attem
 
 Check: read `narwhal_attempt_failures_total` by `phase` and `reason`, and each journal row's `attempt_failures`. Each entry's `retry_reason` records why the router retried the attempt or ended the request. `shared_budget` with a rising `narwhal_retry_denied_total` means the retry credits ran out.
 
-| `reason`            | Meaning                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------ |
-| `engine_overloaded` | The engine returned HTTP 408 or 429.                                                       |
-| `engine_timeout`    | The engine returned HTTP 504, or a prefill, first-token, or between-token timeout expired. |
-| `local_pool`        | A wait for a router data connection to the engine reached `engine.pool_timeout_s`.         |
+[Outcome reasons](telemetry/01-Journal.md#outcome-reasons) gives the condition behind `engine_overloaded`, `engine_timeout` and `local_pool`.
 
 Cause: engines receive more work than they finish before their timeouts. This happens in `open` admission mode, which skips the predictive checks, or when prefill and decode seats fill faster than engines finish requests.
 

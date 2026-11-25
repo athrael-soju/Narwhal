@@ -50,7 +50,10 @@ def _main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--input-tokens",
-        help="comma-separated input lengths, including the longest admitted input",
+        help=(
+            "comma-separated input lengths, each leaving room for two output tokens "
+            "within the engines' live context limits"
+        ),
     )
     ap.add_argument(
         "--samples",

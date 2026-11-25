@@ -100,6 +100,14 @@ class GlobalScheduler:
             on_floor_event,
         )
 
+    def forget(self, iid: str) -> None:
+        """Drop the scheduling state of an engine that left the fleet."""
+        self.switch_holds.pop(iid, None)
+        self.roles.forget(iid)
+        if self.health is not None:
+            self.health.evicted(iid)
+        self.availability.forget(iid)
+
     def _notify_eject(self, iid: str) -> None:
         if self.on_eject is not None:
             self.on_eject(iid)

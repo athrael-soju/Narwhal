@@ -10,7 +10,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 from ...contracts import LIFECYCLE, versioned
-from .records import DrainRecord, LifecycleError, ValidationOutcome
+from .records import DrainRecord, LifecycleError, MembershipCounts, ValidationOutcome
 
 if TYPE_CHECKING:
     from ...serving.router.routing import NarwhalRouter
@@ -28,13 +28,14 @@ class LifecycleManager:
         self._wave_stop_ready_emitted = False
         self.process_starts: dict[str, float] = {}
         self.identities_ready = router.cfg.engine_contract is None
+        self.membership_counts = MembershipCounts()
 
     def begin(self, engines: list[str], *, wave: bool, deadline_s: float) -> bool:
         """Start a drain, retry identity capture, or extend holds to a whole wave."""
         ids = list(dict.fromkeys(engines))
         if self.router.cfg.engine_restart_policy == "whole_wave" and not wave:
             raise LifecycleError("engine_restart_policy requires a whole-wave drain")
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         unknown = sorted(set(ids) - configured)
         if unknown:
             raise LifecycleError(f"unknown engine(s): {', '.join(unknown)}")
@@ -71,6 +72,7 @@ class LifecycleManager:
                 else None
             )
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="draining",
@@ -87,6 +89,18 @@ class LifecycleManager:
             self._emit("wave_started", engines=sorted(ids), wave_id=wave_id)
         self.refresh()
         return True
+
+    def _end_leave(self, iid: str) -> None:
+        """End the engine's leave, if any, without removing it, and count the cancellation."""
+        record = self.records.get(iid)
+        if record is not None and record.leaving:
+            record.leaving = False
+            self.membership_counts.leaves["cancelled"] += 1
+
+    def forget(self, iid: str) -> None:
+        """Drop the record and process identity of an engine that left the fleet."""
+        self.records.pop(iid, None)
+        self.process_starts.pop(iid, None)
 
     def record_old_identity(self, iid: str, process_start: float | None, error: str = "") -> None:
         """Bind a drain to the process the supervisor is allowed to stop."""
@@ -140,7 +154,7 @@ class LifecycleManager:
                 and name not in engines
             )
         }
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         if wave and set(engines) != configured:
             raise LifecycleError("whole-wave recovery must name every configured engine")
         if not wave and len(engines) != 1:
@@ -151,6 +165,7 @@ class LifecycleManager:
         wave_id = f"wave-{uuid.uuid4().hex[:12]}" if wave else ""
         for iid in engines:
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="validating",
@@ -172,8 +187,9 @@ class LifecycleManager:
             return
         now = time.time()
         self.wave_id = f"wave-{uuid.uuid4().hex[:12]}"
-        for iid in self.router.monitor.instances:
+        for iid in self.router.membership.ids:
             self.router.scheduler.drain(iid)
+            self._end_leave(iid)
             self.records[iid] = DrainRecord(
                 iid=iid,
                 state="blocked",
@@ -199,6 +215,8 @@ class LifecycleManager:
         for iid in engines:
             record = self.records[iid]
             record.state = "validating"
+            # Readmitting a leaving engine cancels its leave.
+            self._end_leave(iid)
             record.error = ""
             record.checks = []
             self._emit("validation_started", iid=iid, wave_id=record.wave_id)
@@ -221,9 +239,13 @@ class LifecycleManager:
 
     def readmitted(self, engines: list[str], outcome: ValidationOutcome) -> None:
         """Return a fully validated set to placement as one mutation."""
+        # An engine that left the fleet during validation has nothing to return.
+        engines = [iid for iid in engines if iid in self.records and iid in self.router.membership]
         for iid in engines:
             record = self.records[iid]
             record.state = "active"
+            # Readmission returns a leaving engine to service and ends its leave.
+            self._end_leave(iid)
             record.new_process_start = outcome.starts[iid]
             self.process_starts[iid] = outcome.starts[iid]
             record.checks = list(outcome.checks.get(iid, []))
@@ -297,11 +319,14 @@ class LifecycleManager:
             prefill = len(instance.prefill)
             decode = len(instance.decode)
             state = record.state if record is not None else "active"
+            pending = self.router.monitor.pending_handoffs(iid)
+            # A decode leg still pulling KV from the engine keeps it running.
             ready_to_stop = bool(
                 record is not None
                 and record.old_process_start is not None
                 and state == "drained"
                 and (not record.wave_id or wave_ready)
+                and not pending
             )
             engines[iid] = {
                 "state": state,
@@ -309,8 +334,10 @@ class LifecycleManager:
                 "accepts_new": iid in eligible,
                 "ready_to_stop": ready_to_stop,
                 "resident": {"prefill": prefill, "decode": decode},
+                "pending_handoffs": pending,
                 "deadline_at": record.deadline_at if record is not None else None,
                 "restart_required": record.restart_required if record is not None else False,
+                "leaving": record.leaving if record is not None else False,
                 "wave_id": record.wave_id if record is not None else "",
                 "old_process_start": record.old_process_start if record is not None else None,
                 "new_process_start": record.new_process_start if record is not None else None,
@@ -338,7 +365,11 @@ class LifecycleManager:
         self.refresh()
         return {
             "wave_id": self.wave_id,
-            "records": [asdict(record) for _, record in sorted(self.records.items())],
+            # `leaving` is written only when set, so an older release reads other records.
+            "records": [
+                {key: value for key, value in asdict(record).items() if key != "leaving" or value}
+                for _, record in sorted(self.records.items())
+            ],
             "events": list(self.events),
             "engine_restart_policy": self.router.cfg.engine_restart_policy,
             "process_starts": dict(self.process_starts),
@@ -353,7 +384,7 @@ class LifecycleManager:
             raise LifecycleError("handoff engine restart policy does not match this fleet")
         starts = payload.get("process_starts")
         if not isinstance(starts, dict) or any(
-            iid not in self.router.monitor.instances
+            iid not in self.router.membership
             or isinstance(start, bool)
             or not isinstance(start, int | float)
             or not math.isfinite(start)
@@ -367,7 +398,7 @@ class LifecycleManager:
         if not isinstance(records, list):
             raise LifecycleError("handoff lifecycle records must be a list")
         restored: dict[str, DrainRecord] = {}
-        configured = set(self.router.monitor.instances)
+        configured = set(self.router.membership.ids)
         for raw in records:
             if not isinstance(raw, dict):
                 raise LifecycleError("handoff lifecycle record must be an object")
@@ -406,6 +437,8 @@ class LifecycleManager:
                 raise LifecycleError("lifecycle wave_id and error must be strings")
             if not isinstance(record.restart_required, bool):
                 raise LifecycleError("lifecycle restart_required must be a boolean")
+            if not isinstance(record.leaving, bool):
+                raise LifecycleError("lifecycle leaving must be a boolean")
             if not isinstance(record.checks, list) or not all(
                 isinstance(check, str) for check in record.checks
             ):

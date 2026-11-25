@@ -10,7 +10,7 @@ description: Hand off router state and drain or readmit engines through the Narw
 
 Returns the `narwhal.handoff` schema version `1` document.
 
-The high-availability (HA) standby router polls this route before takeover.
+The high-availability (HA) standby router polls this route before takeover. A router that does not control the fleet returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead.
 
 ### Handoff fields
 
@@ -25,7 +25,8 @@ The handoff document carries these fields:
 | `model`             | Configured served model                                                               |
 | `epoch`             | Lease epoch, zero with HA fencing off                                                 |
 | `holder`            | Unique lease-holder token, empty with HA fencing off                                  |
-| `engines`           | Sorted configured engine IDs                                                          |
+| `engines`           | Sorted engine IDs of the membership snapshot                                          |
+| `membership`        | Snapshot `generation` and `engines`, each engine entry as the fleet file holds it      |
 | `roles`             | Engine ID mapped to `prefill` or `decode`                                             |
 | `ejected`           | Breaker-excluded engines                                                              |
 | `inference_sources` | Suspect engine ID mapped to its inference-probe producer IDs, `""` for a local probe  |
@@ -48,9 +49,10 @@ A new router process applies each handoff field as follows:
 
 | State                                                                                    | New router process                                       |
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `membership`                                                                             | Replaces the engine set and generation                   |
 | `roles`                                                                                  | Restored for unpinned engines                            |
 | `ejected`                                                                                | Restored, with a readmission probe due at once           |
-| `inference_sources` suspect whose placed roles stay placeable through other live engines | Ejected, with a readmission probe due at once            |
+| `inference_sources` suspect whose placed roles other live engines can still serve       | Ejected, with a readmission probe due at once            |
 | Other `inference_sources` suspect outside `ejected`                                      | Kept live, with an inference probe due at once           |
 | `counters`, `outcome_reasons`, `lifecycle`                                               | Restored                                                 |
 | `demand_risk`                                                                            | Restored, with its age measured on the new process clock |
@@ -69,11 +71,26 @@ The new process resets:
 
 After a process restart, `narwhal-serve --resume` reads the state handoff from `recovery.state_path`, written by the running router. A warm standby takeover uses the latest polled, lease-validated state handoff.
 
+### Membership in the handoff
+
+A resumed restart and a standby takeover adopt a saved `membership` whose `generation` is `1` or higher in place of the fleet file's engines. An engine that the router's own fleet file names keeps its fleet-file entry, and the router logs a warning when the saved entry differs. An engine outside the fleet file takes its saved entry. The router refuses the handoff when:
+
+- `membership` names different engines from `engines`
+- its `generation` is below the router's own
+- it adds, removes or changes an engine that sets `shared_device`
+- the store at `profiles.path` lacks a profile for a saved engine
+
+Profiles for engines outside the saved membership are allowed. After a resumed restart adopts the membership, the router checks profiles and first-token calibration against the adopted engines. A standby takeover that adopts the membership checks first-token calibration against the adopted engines that are not ejected or draining. A rejected check blocks the failover, and the standby's `/ready` names the problems in `reason`.
+
+A handoff without `membership`, or with `membership` at generation `0`, applies only when its `engines` match the fleet file, and the engines keep their fleet-file entries. The router ignores keys it does not know in `membership` and in its engine entries.
+
+A router from a release without engine membership ignores `membership` and refuses a handoff whose `engines` differ from its fleet file.
+
 ## Lifecycle API
 
 ### `GET /narwhal/lifecycle`
 
-`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document.
+`GET /narwhal/lifecycle`, `POST /narwhal/lifecycle/drain`, and `POST /narwhal/lifecycle/readmit` return the `narwhal.lifecycle` schema version `1` document. On a router that does not control the fleet, `GET /narwhal/lifecycle` returns the HTTP `503` [fleet-state refusal](04-Inspection.md#fleet-state-reads-on-a-router-without-the-lease) instead, and the two actions return HTTP `503` with the lifecycle document.
 
 | Field                   | Meaning                                                                                   |
 | ----------------------- | ----------------------------------------------------------------------------------------- |
@@ -95,10 +112,12 @@ Engine record fields:
 | `state`             | `active`, `draining`, `drained`, `deadline_exceeded`, `blocked`, or `validating`                                         |
 | `draining`          | `true` while a lifecycle action holds the engine out of placement                                                        |
 | `accepts_new`       | `true` when the engine is eligible for placement                                                                         |
-| `ready_to_stop`     | `true` when the engine has drained with its process identity recorded and, for a wave member, the whole wave has drained |
+| `ready_to_stop`     | `true` when the engine has drained with its process identity recorded, no decode leg still reads KV from it and, for a wave member, the whole wave has drained |
 | `resident`          | Resident `prefill` and `decode` request counts                                                                           |
+| `pending_handoffs`  | Decode legs on other engines that may still read KV from the engine                                                      |
 | `deadline_at`       | Unix time when the drain deadline expires, `null` until the engine has a lifecycle record                                |
 | `restart_required`  | `true` when lifecycle readmission requires a process start newer than the drain record                                   |
+| `leaving`           | `true` while a [removal](08-Engine-Membership.md#delete-narwhalenginesiid) drains the engine                              |
 | `wave_id`           | Whole-wave ID, or empty                                                                                                  |
 | `old_process_start` | Process-start timestamp recorded at drain                                                                                |
 | `new_process_start` | Process-start timestamp accepted at lifecycle readmission                                                                |
@@ -109,18 +128,18 @@ Engine record fields:
 
 ### `POST /narwhal/lifecycle/drain`
 
-Drains one engine, or every configured engine as a whole wave.
+Drains one engine, or every member engine as a whole wave.
 
 | Field        | Type                | Default | Meaning                                   |
 | ------------ | ------------------- | ------- | ----------------------------------------- |
 | `engines`    | Array of engine IDs | `[]`    | Engines to drain                          |
-| `wave`       | Boolean             | `false` | Drain every configured engine as one wave |
+| `wave`       | Boolean             | `false` | Drain every member engine as one wave     |
 | `deadline_s` | Number of seconds   | `300`   | Drain deadline, positive and finite       |
 
 A drain request follows these rules:
 
 - With `wave: false`, name one engine while at least one other engine is eligible for placement.
-- With `wave: true`, name every configured engine, or send an empty `engines` list.
+- With `wave: true`, name every member engine, or send an empty `engines` list.
 - Under `recovery.engine_restart_policy: whole_wave`, every drain must be a whole-wave drain.
 
 ```json
@@ -160,7 +179,7 @@ Lifecycle readmission requires a complete `engine_contract`.
 A readmission request follows these rules:
 
 - With `wave: false`, name one engine.
-- With `wave: true`, the request readmits the active whole wave as one set, and an empty `engines` list names every configured engine.
+- With `wave: true`, the request readmits the active whole wave as one set, and an empty `engines` list names every member engine.
 - During an active whole wave, send `wave: true` with the wave's complete engine set.
 
 Readmission checks:
@@ -169,12 +188,15 @@ Readmission checks:
 2. `attestation <fingerprint>`: process-bound attestation matches the engine contract.
 3. `profile generation`: every loaded profile variant's generation matches the verified live process generation.
 4. `model`: the engine serves the configured model.
-5. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
-6. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 7 tests generation.
-7. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
-8. `final health`: the engine health endpoint answers after KV transfer validation.
+5. `model identity`: the engine attests the same model files as the router last verified for every other member that is not ejected or draining. The check compares `launch.model_config_sha256`, the SHA-256 of the checkpoint's `config.json`, `launch.model_tree_sha256`, the digest of every model file the launch reads, and `launch.model_sha256` when the launch names a model file. `launch.model_revision` is a label outside the comparison, so engines that load the same files under a commit and a `sha256:` revision match. In a whole-wave readmission, the wave members attest the same values. A single-engine fleet skips this check.
+6. `new process identity`, or `process identity` when `restart_required` is `false`: the engine process identity.
+7. `generation`: a direct completion probe returns a completion. SGLang engines skip this probe, and the fabric handoff in check 8 tests generation.
+8. `fabric produce to <peer>` and `fabric consume from <peer>`: role-compatible KV transfer.
+9. `final health`: the engine health endpoint answers after KV transfer validation.
 
-Checks 1 to 4 cover the candidate and its role-permitted peers.
+Checks 1 to 4 cover the candidate and its role-permitted peers. On an SGLang fleet, the router pairs the candidate with the first live engine in the other role for check 8. With the `mooncake` connector, the router switches the candidate to the role the router assigns it before check 8. After check 9, the router confirms that the identity, attestation, and profile bindings of every participant still match checks 1 to 4.
+
+`checks` lists the checks that passed, in this order. The failed checks appear in the engine's `error`, or in `join.failures` for a [join](08-Engine-Membership.md#post-narwhalengines). A `model identity` failure does not stop checks 6 and 7, so a refused engine can list `process identity` or `new process identity`, and `generation`, in `checks`. Checks 8 and 9 run only after checks 1 to 7 pass for every engine.
 
 Missing profiles, missing generation evidence, or a digest mismatch fail readmission with an error naming the engine to reprofile. For an engine the breaker ejected transiently, readmission accepts its current process.
 

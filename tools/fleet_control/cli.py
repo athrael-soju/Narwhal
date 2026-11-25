@@ -52,7 +52,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         console_routes(config, token),
         engine_routes(engines),
         overlay_routes(Overlays(service, engines=engines)),
-        signal_routes(FleetSignals(service)),
+        signal_routes(FleetSignals(service, engines=engines)),
     ]
     if config.load is not None:
         routers.append(workload_routes(config.load))

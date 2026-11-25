@@ -50,6 +50,8 @@ make observe
 
 The command waits until Prometheus scrapes the router, then prints one line for each service: `<service> ready at <URL> (<container ID>, <image>)`. Retain those lines.
 
+For a router pair, set both router origins and the load balancer origin as in [Monitoring a router pair](../observability/01-Start-and-Verify.md#monitoring-a-router-pair).
+
 ## Tunnelling router, Prometheus, and Grafana to the workstation
 
 1. On the workstation, open a terminal in the checkout with `.env` loaded.

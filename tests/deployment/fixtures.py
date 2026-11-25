@@ -18,6 +18,7 @@ from narwhal.deployment.engine_launch import selected_launch
 from narwhal.deployment.launch_engine import check as launch_check
 from narwhal.deployment.launch_engine import docker as launch_docker
 from narwhal.deployment.launch_engine import start as launch_start
+from narwhal.deployment.launch_engine.plan import model_files
 from narwhal.deployment.launch_engine.runtime import digest
 
 VLLM_HOOK = load_backend("vllm").launcher().cache_hook
@@ -35,7 +36,9 @@ def patched_docker(**kwargs):
 
 
 # Stdout of the vLLM runtime check script in narwhal.backends.vllm.check.
-def vllm_check_output(plan, *, packages=None, prefix_caching=True, api_version="0.29.0", ucx=None):
+def vllm_check_output(
+    plan, *, packages=None, prefix_caching=True, api_version="0.29.0", ucx=None, plugin=None
+):
     events = plan.get("kv_events")
     settings = {
         "prefix_caching": prefix_caching,
@@ -45,6 +48,7 @@ def vllm_check_output(plan, *, packages=None, prefix_caching=True, api_version="
     }
     return (
         ("" if packages is None else json.dumps(packages) + "\n")
+        + ("" if plugin is None else "NARWHAL_GGUF_PLUGIN=" + json.dumps(plugin) + "\n")
         + "NARWHAL_TOKENIZER_READY=1\nNARWHAL_CACHE_SETTINGS="
         + json.dumps(settings)
         + "\nNARWHAL_IMAGE_RUNTIME="
@@ -147,6 +151,12 @@ def process_group_with_worker():
                 while True:
                     os.waitpid(-leader.pid, 0)
         libc.prctl(36, previous.value, 0, 0, 0)
+
+
+def model_file_fields(plan):
+    """Return the model file digests that `prepare` records for `plan`."""
+    files = model_files(plan)
+    return {"model_tree_sha256": files.tree, "model_status_sha256": files.status}
 
 
 def launch_document():

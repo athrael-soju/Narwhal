@@ -53,6 +53,8 @@ class AdmissionOut(BaseModel):
     saturation_threshold_s: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
     rejected: int
     refused: int
+    # Requests refused as a standby while its primary controlled the fleet, by reason.
+    standby_refusals: dict[str, int] = Field(default_factory=dict)
     # Engine-authentication mode: boundary or engine-credential.
     engine_auth: str = "boundary"
     # `serving.admission` and `serving.admission_margin`.
@@ -365,10 +367,19 @@ class BelowFloorOut(BaseModel):
     cumulative_s: float = 0.0
 
 
+class MembershipStateOut(BaseModel):
+    """The membership generation and the join and leave outcomes since process start."""
+
+    generation: int = 0
+    joins: dict[str, int] = Field(default_factory=dict)
+    leaves: dict[str, int] = Field(default_factory=dict)
+
+
 class HAOut(BaseModel):
     """Router lease and readiness state."""
 
     ready: bool
+    role: Literal["active", "standby", "fenced"]
     standby: bool
     epoch: int
     holder: str
@@ -381,6 +392,64 @@ class DrainIn(BaseModel):
     engines: list[str] = Field(default_factory=list)
     wave: bool = False
     deadline_s: float = 300.0
+
+
+class SharedDeviceIn(BaseModel):
+    """A shared-device allocation as the fleet file holds it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group: str
+    gpu_uuid: str
+    device_allowance: float
+    gpu_memory_utilization: float
+
+
+class EngineSpecIn(BaseModel):
+    """One engine entry as the fleet file holds it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    iid: str
+    url: str
+    role: Literal["prefill", "decode"] = "decode"
+    pin: bool = False
+    attestation_url: str = ""
+    shared_device: SharedDeviceIn | None = None
+
+
+class EngineSpecOut(BaseModel):
+    """One member's engine entry."""
+
+    iid: str
+    url: str
+    role: Literal["prefill", "decode"]
+    pin: bool = False
+    attestation_url: str = ""
+    shared_device: SharedDeviceIn | None = None
+
+
+class JoinOut(BaseModel):
+    """The result of one join request."""
+
+    iid: str
+    joined: bool
+    checks: list[str]
+    failures: list[str]
+
+
+class MembershipOut(BaseModel):
+    """The router's engine membership snapshot."""
+
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    schema_id: Literal["narwhal.membership"] = Field(alias="schema")
+    schema_version: Literal[1]
+    generation: int
+    engines: list[EngineSpecOut]
+    leaving: list[str]
+    error: str = ""
+    join: JoinOut | None = None
 
 
 class ReadmitIn(BaseModel):
@@ -413,8 +482,10 @@ class LifecycleEngineOut(BaseModel):
     accepts_new: bool
     ready_to_stop: bool
     resident: ResidentOut
+    pending_handoffs: int = 0
     deadline_at: float | None
     restart_required: bool
+    leaving: bool = False
     wave_id: str
     old_process_start: float | None
     new_process_start: float | None
@@ -600,6 +671,7 @@ class StateOut(BaseModel):
     monitoring: MonitoringOut = Field(default_factory=lambda: MonitoringOut())
     ha: HAOut
     lifecycle: LifecycleViewOut
+    membership: MembershipStateOut = Field(default_factory=MembershipStateOut)
     admission: AdmissionOut
     # Failed, refused, rejected and expired counts by reason.
     outcome_reasons: dict[str, dict[str, int]] = Field(default_factory=dict)

@@ -13,7 +13,7 @@ Every engine in a fleet meets the same contract:
 - Sends KV to every peer eligible to receive it.
 - Has measured prefill and decode performance profiles.
 - Passes preflight validation before taking traffic.
-- Passes readmission checks after a hold, drain, failure, or maintenance event.
+- Passes readmission checks after a hold, drain, failure, or maintenance event, and before it joins a running fleet.
 
 The fleet's `engine_contract` lists the [compatibility fields](../configuration/01-Fleet-Schema.md#engine-shape-and-compatibility-contract) that every engine must match.
 
@@ -23,7 +23,11 @@ A vLLM engine with the effective `kv_both` role transfers KV across the configur
 
 ### KV transfer for SGLang engines
 
-An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. Both legs of a request carry the producer's bootstrap host and port from its attestation, and the decode leg waits at most 30 seconds for its first token.
+An SGLang engine transfers KV through the Mooncake connector, as its [runtime fields](../configuration/05-Engine-Launch.md#sglang-runtime-fields) set. It starts as prefill and changes roles at runtime. Both legs of a request carry the producer's bootstrap host and port from its attestation. The router gives the decode leg up to 30 seconds to return its first token.
+
+## Engine membership
+
+The router serves the engines in its membership snapshot, and each snapshot has a generation. Generation 0 holds the fleet file's `engines`. Each [join or removal](../operate/08-Joining-and-Removing-Engines.md) replaces the snapshot with the next generation. A joined engine starts in the `role` its join request sets, `decode` by default, and a removed engine leaves once it has drained. A resumed restart and a standby takeover adopt the snapshot from the [state handoff](../http-api/07-Handoff-and-Lifecycle.md#membership-in-the-handoff). A router started with resume off begins again at generation 0. `--resume` or `recovery.resume` turns resume on.
 
 ## Request execution
 
@@ -33,7 +37,7 @@ A completion request passes through these stages:
 2. The router prices each eligible prefill engine from its profile over the prompt and its resident prefill requests, with [prefix-cache pricing](../configuration/02-Serving-and-Role-Control.md#prefix-cache-pricing) for cached prefixes.
 3. With the default `serving.admission` of `predictive`, the router rejects a request that fails the projected time to first token (TTFT) check on the cheapest available prefill path or the [decode admission check](../configuration/02-Serving-and-Role-Control.md#decode-admission-check).
 4. On vLLM, the chosen prefill engine holds the prompt KV as the producer and returns a typed KV handoff. On SGLang, the router also places the decode leg and sends both legs together.
-5. The router places the decode leg on a decode engine that serves it within the time per output token (TPOT) target: the one with the fewest resident prefill tokens, then the smallest share of its decode capacity in use with the leg. Decode capacity is the KV tokens the engine's profile, corrected by live decode timing, serves within the target. That engine consumes the handoff and runs decode.
+5. The router places the decode leg on a decode engine that serves it within the time per output token (TPOT) target: the one with the fewest resident prefill tokens, then the smallest share of its decode capacity in use with the leg. Decode capacity is the number of KV tokens an engine can serve within the TPOT target, estimated from the engine's profile and corrected by live decode timing. That engine consumes the handoff and runs decode.
 6. Tokens stream to the client.
 7. The request journal records admission, placement, retries, transfers, timing, and the final outcome.
 

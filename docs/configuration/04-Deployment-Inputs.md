@@ -55,7 +55,7 @@ python3 tools/deployment/prepare_host_env.py --role engine --node <n> --fleet <f
 
 | Remote file                                   | Contents                                                                                                                                                                       | Source                                                                                                                                                                                                   |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runs/deployment/.env.router`                 | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine credential, and optional router and monitoring stack settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
+| `runs/deployment/.env.router`                 | Revision, `NARWHAL_FLEET=runs/deployment/fleet.json`, referenced engine and attestation URLs, configured engine credential, and optional router and monitoring stack settings. | `NARWHAL_DEPLOYMENT_REVISION`, variables referenced by fleet endpoint fields and `engine.engine_api_key_env`, `NARWHAL_ROUTER_URL`, `NARWHAL_TARGETS_URL`, `NARWHAL_GRAFANA_BIND_ADDRESS`, `NARWHAL_PROMETHEUS_LISTEN_ADDRESS`. |
 | `runs/deployment/.env.engine-<n>`             | Revision, launch and artifact fields, selected node URLs, fabric peer addresses, and configured engine credential.                                                             | Shared engine fields, optional `NARWHAL_NODE_<n>_<field>` overrides, derived service URLs and fabric addresses, and configured engine credential.                                                        |
 | `config/engine-launch.engine-<n>.json`        | GPU allocation, TP size, device mappings, resolved UCX selection, and generated launch arguments.                                                                              | The engine role in workstation `NARWHAL_LAUNCH_CONFIG`.                                                                                                                                                  |
 | `runs/deployment-tools/fabric_budget.py`      | Standalone fabric calculator snapshot, with its path and SHA-256 in `.env.engine-<n>`.                                                                                         | Management-checkout `tools/deployment/fabric_budget.py`.                                                                                                                                                 |
@@ -72,6 +72,7 @@ NARWHAL_ENGINE_MODEL_NAME
 NARWHAL_MODEL_DIR
 NARWHAL_RUN_DIR
 NARWHAL_MODEL_CONFIG_SHA256
+NARWHAL_MODEL_TREE_SHA256
 NARWHAL_FABRIC_INTERFACE
 NARWHAL_ENGINE_PORT
 NARWHAL_ATTEST_PORT
@@ -80,6 +81,8 @@ NARWHAL_KV_SIDE_CHANNEL_PORT
 ```
 
 With `engine.engine_api_key_env` set, engine export requires the variable it names.
+
+For a [GGUF model](../deploy/01-Discover.md#staging-a-gguf-model-on-vllm), engine export also carries `NARWHAL_MODEL_PATH` and `NARWHAL_MODEL_SHA256`, and fails when only one of them is set.
 
 Each `.env.engine-<n>` sets `NARWHAL_ENGINE_LAUNCH_CONFIG=config/engine-launch.engine-<n>.json`.
 
@@ -201,6 +204,6 @@ Each remote run at `~/Narwhal-deploy/<run-id>/` holds:
 
 `<run-id>` is a random 32-hex ID that `prepare` records in the manifest.
 
-A repeated `install` on a host reuses each file with the manifest SHA-256 and a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
+A repeated `install` on a host reuses files that match their manifest SHA-256. It also reuses a `checkout/` at the approved revision. With an `installed` marker at the approved revision, it reuses the virtual environment. A changed file, or a checkout or marker at another revision, stops the install at that host.
 
 The run's private `logs/` directory holds one log per host with executed scripts, exit status, and host output.
