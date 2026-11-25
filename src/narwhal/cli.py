@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import math
 import socket
@@ -206,12 +207,26 @@ def serve(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Time for requests that reached the router before it stopped accepting to pass admission.
+ADMISSION_SETTLE_S = 0.1
+
+
 class YieldingServer(uvicorn.Server):
     """Hand router control to the standby before uvicorn drains open connections."""
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
         yield_control = getattr(getattr(self.config.app, "state", None), "yield_control", None)
         if yield_control is not None:
+            # Stop accepting and close idle connections first, so that every request this
+            # router receives is admitted while it still holds the lease. A request answered
+            # after the yield would get a standby 503 that the load balancer cannot retry.
+            for server in self.servers:
+                server.close()
+            for sock in sockets or []:
+                sock.close()
+            for connection in list(self.server_state.connections):
+                connection.shutdown()
+            await asyncio.sleep(ADMISSION_SETTLE_S)
             yield_control()
         await super().shutdown(sockets=sockets)
 
