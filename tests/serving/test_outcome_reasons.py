@@ -34,7 +34,7 @@ class Lease:
 
 
 class StandbyRefusalTests(HttpHarness):
-    """A router without the lease counts its refusals apart from client outcomes."""
+    """Only a standby shadowing a live primary counts its refusals apart from client outcomes."""
 
     async def counters(self, client) -> dict[str, float]:
         text = (await client.get("/metrics")).text
@@ -48,63 +48,65 @@ class StandbyRefusalTests(HttpHarness):
         self.assertEqual(counters["narwhal_offered_total"], offered)
         self.assertEqual(counters['narwhal_rejected_total{reason="not_ready"}'], rejected)
 
-    async def test_a_router_without_the_lease_counts_its_refusals_apart(self):
-        for case, standby, lease, blocked in (
-            ("standby", True, None, ""),
-            ("standby with a lease file", True, Lease(False), ""),
-            ("fenced", False, Lease(True), "lease renewal failed"),
-            ("releasing at shutdown", False, Lease(False), "shutting down"),
-        ):
-            with self.subTest(case=case):
-                client = self.client()
-                router = self.router
-                router.standby, router.lease, router.failover_blocked = standby, lease, blocked
-                counters = await self.counters(client)
-                for reason in OUTCOME_REASONS["rejected"]:
-                    self.assertEqual(
-                        counters[f'narwhal_standby_refusals_total{{reason="{reason}"}}'], 0
-                    )
-                for _ in range(2):
-                    self.assertEqual((await self.post(client)).status_code, 503)
-                counters = await self.counters(client)
-                self.assertEqual(counters['narwhal_standby_refusals_total{reason="not_ready"}'], 2)
-                self.assert_client_outcomes(counters, offered=0, rejected=0)
-                self.assertEqual(
-                    (router.offered, router.rejected, router.unsized_offered), (0, 0, 0)
-                )
-                # The journal keeps one row for each refusal, as before.
-                rows = self.terminal_rows()[-2:]
-                self.assertEqual(
-                    [(row["terminal"], row["reason"], row["status"]) for row in rows],
-                    [("rejected", "not_ready", 503)] * 2,
-                )
-                self.assert_released()
+    async def test_a_standby_shadowing_a_live_primary_counts_its_refusals_apart(self):
+        client = self.client()
+        router = self.router
+        router.standby, router.lease, router.primary_seen = True, Lease(False), True
+        counters = await self.counters(client)
+        for reason in OUTCOME_REASONS["rejected"]:
+            self.assertEqual(counters[f'narwhal_standby_refusals_total{{reason="{reason}"}}'], 0)
+        for _ in range(2):
+            self.assertEqual((await self.post(client)).status_code, 503)
+        counters = await self.counters(client)
+        self.assertEqual(counters['narwhal_standby_refusals_total{reason="not_ready"}'], 2)
+        self.assert_client_outcomes(counters, offered=0, rejected=0)
+        self.assertEqual((router.offered, router.rejected, router.unsized_offered), (0, 0, 0))
+        # The journal keeps one row for each refusal and marks it.
+        rows = self.terminal_rows()[-2:]
+        self.assertEqual(
+            [
+                (row["terminal"], row["reason"], row["status"], row["standby_refusal"])
+                for row in rows
+            ],
+            [("rejected", "not_ready", 503, True)] * 2,
+        )
+        self.assert_released()
 
-    async def test_a_lease_holder_counts_its_own_not_ready_refusals(self):
-        for case, lease, hold in (
-            ("lease holder awaiting engine identities", Lease(True), "identities"),
-            ("lease holder in a whole-wave hold", Lease(True), "wave"),
-            ("single router shutting down", None, "shutdown"),
+    async def test_a_router_without_a_live_holder_to_retry_on_counts_its_refusals(self):
+        for case, standby, lease, blocked in (
+            # The active router was killed, and the standby waits for its lease to expire.
+            ("standby after a missed probe", True, Lease(False), ""),
+            # The active router released its lease at SIGTERM before the standby claimed it.
+            ("router releasing at shutdown", False, Lease(False), "shutting down"),
+            # Shared storage is lost, so the holder fences itself and the standby cannot probe.
+            ("fenced holder", True, Lease(False), "lease renewal failed"),
+            ("standby without the lease", True, Lease(False), "lease unavailable: storage"),
+            # A single router run with a lease path fences itself and refuses every request.
+            ("single router fenced", True, Lease(False), "lease renewal failed"),
+            ("lease holder awaiting engine identities", False, Lease(True), "identities"),
+            ("lease holder in a whole-wave hold", False, Lease(True), "wave"),
+            ("single router shutting down", False, None, "shutting down"),
         ):
             with self.subTest(case=case):
                 client = self.client()
                 router = self.router
-                router.lease = lease
-                if hold == "identities":
+                router.standby, router.lease = standby, lease
+                if blocked == "identities":
                     router.lifecycle.identities_ready = False
-                elif hold == "wave":
+                elif blocked == "wave":
                     router.lifecycle_blocked = "whole-wave drain wave-test"
                 else:
-                    router.failover_blocked = "shutting down"
+                    router.failover_blocked = blocked
                 self.assertEqual((await self.post(client)).status_code, 503)
                 counters = await self.counters(client)
                 self.assert_client_outcomes(counters, offered=1, rejected=1)
                 self.assertEqual(counters['narwhal_standby_refusals_total{reason="not_ready"}'], 0)
+                self.assertNotIn("standby_refusal", self.terminal_rows()[-1])
 
     async def test_a_request_that_arrives_before_a_takeover_counts_as_offered_when_it_ends(self):
         client = self.client()
         router = self.router
-        router.standby = True
+        router.standby, router.primary_seen = True, True
         state = RequestLifecycle.offered(router, {})
         self.assertEqual(router.offered, 0)
         router.standby = False

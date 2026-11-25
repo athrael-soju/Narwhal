@@ -54,14 +54,14 @@ def lease_role(router: NarwhalRouter) -> str:
     return "standby" if router.standby else "active"
 
 
-def counts_outcomes(router: NarwhalRouter) -> bool:
-    """Return whether this router counts a request it refuses as a client outcome.
+def refusals_retried(router: NarwhalRouter) -> bool:
+    """Return whether the load balancer can retry this router's refusals on a live lease holder.
 
-    A router that runs without a lease, or that holds an active lease, answers the client. A
-    standby, a fenced router or one releasing its lease at shutdown refuses an attempt that the
-    load balancer can retry on the lease holder.
+    Only a standby whose last probe found its primary controlling the fleet knows of one. Every
+    other router counts a request it refuses as a client outcome, because no other router may
+    take the retry.
     """
-    return (router.lease is None and not router.standby) or lease_role(router) == "active"
+    return router.standby and router.primary_seen
 
 
 def ready(router: NarwhalRouter) -> bool:
@@ -183,8 +183,10 @@ async def standby_loop(
                 raise
             except (httpx.HTTPError, LeaseError, ValueError):
                 misses += 1
+                router.primary_seen = False
             else:
                 doc, misses = fresh, 0
+                router.primary_seen = True
                 last_good = time.monotonic()
                 if router.failover_blocked == transient:
                     # Shadowing resumed, so the standby can take over again.

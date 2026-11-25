@@ -268,7 +268,7 @@ def render_refusals(state: dict) -> list[str]:
     )
     out += metric_lines(
         "narwhal_standby_refusals_total",
-        "Requests a router without the lease refused, which the load balancer can retry",
+        "Requests a standby refused while its primary controlled the fleet, for retry there",
         "counter",
         [
             ({"reason": reason}, count)

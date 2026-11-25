@@ -109,10 +109,16 @@ class StandbyRoleTests(FleetCase):
         try:
             await until(lambda: router.failover_blocked == "no fresh handoff")
             self.assertEqual(lease_role(router), "fenced")
+            self.assertFalse(router.primary_seen)
             answering = True
             await until(lambda: router.failover_blocked == "")
             self.assertEqual(lease_role(router), "standby")
             self.assertTrue(router.standby)
+            # A probe that finds the primary controlling the fleet marks it live, and the next
+            # probe that does not, such as after the primary is killed, clears the mark.
+            self.assertTrue(router.primary_seen)
+            answering = False
+            await until(lambda: not router.primary_seen)
         finally:
             loop.cancel()
             with contextlib.suppress(asyncio.CancelledError):

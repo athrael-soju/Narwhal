@@ -90,6 +90,8 @@ class NarwhalRouter:
             )
         # Standby takeover clears this flag after applying the primary's handoff.
         self.standby = False
+        # Whether the standby's last probe found its primary controlling the fleet.
+        self.primary_seen = False
         self.takeover_gap_s: float | None = None
         self.lease: FileLease | None = None
         self.lease_epoch = 0
@@ -227,7 +229,7 @@ class NarwhalRouter:
         }
         # The share of these totals that state handoffs carried in, which /metrics leaves out.
         self.adopted = AdoptedCounts(exported=OUTCOME_REASONS)
-        # Requests refused while this process did not hold the lease, by reason.
+        # Requests refused as a standby while its primary controlled the fleet, by reason.
         self.standby_refusals: Counter[str] = Counter()
         # Attempt failures by request phase and failure reason.
         self.attempt_failures: Counter[tuple[str, str]] = Counter()

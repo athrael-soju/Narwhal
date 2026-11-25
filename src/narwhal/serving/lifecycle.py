@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from ..runtime.standby import counts_outcomes
+from ..runtime.standby import refusals_retried
 from ..types import Instance, Phase, Request
 from .outcomes import DEADLINE_MESSAGE, RequestExpired, failure_reason
 from .retry import transient
@@ -73,7 +73,8 @@ class RequestLifecycle:
         self.demand_observation: ArrivalObservation | None = None
         self.decode_tokens_observed = 0
         self.upstream_seconds = {"prefill": 0.0, "decode": 0.0}
-        # Whether `offered` counts the request; a router without the lease counts it at finish.
+        # Whether `offered` counts the request; a standby shadowing a live primary counts it
+        # at finish unless it refuses it.
         self.counted = False
 
     @classmethod
@@ -88,7 +89,7 @@ class RequestLifecycle:
             seen,
             client_rid=headers.get("x-request-id"),
         )
-        if counts_outcomes(router):
+        if not refusals_retried(router):
             state.counted = True
             router.offered += 1
         router.controller.demand.unsized_pending += 1
@@ -247,9 +248,9 @@ class RequestLifecycle:
         router = self.router
         req = self.request
         self.release_retry_credit()
-        # A router without the lease counts its refusals apart from client outcomes, because
-        # the load balancer retries them on the lease holder, which counts the request once.
-        attempt = not self.counted and terminal == "rejected" and not counts_outcomes(router)
+        # A standby shadowing a live primary counts its refusals apart from client outcomes,
+        # because the load balancer retries them on the primary, which counts the request once.
+        attempt = not self.counted and terminal == "rejected" and refusals_retried(router)
         if not self.counted and not attempt:
             self.counted = True
             router.offered += 1
@@ -274,6 +275,7 @@ class RequestLifecycle:
         if attempt:
             reason = reason or "unclassified"
             router.standby_refusals[reason] += 1
+            extra = {**(extra or {}), "standby_refusal": True}
         else:
             setattr(router, counter, getattr(router, counter) + 1)
             if terminal in router.outcome_reasons:

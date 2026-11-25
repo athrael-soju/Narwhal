@@ -42,7 +42,10 @@ class Phase:
     # Requests served, and requests refused as not ready, in each scrape interval.
     served: int = 0
     refused: int = 0
-    # Attempts refused without the lease, which the load balancer retries on the lease holder.
+    # Requests that expired at their deadline in each scrape interval.
+    expired: int = 0
+    # Attempts a standby refused while shadowing a live primary, which the load balancer
+    # retries on the primary.
     standby_refused: int = 0
     # A new process starts its counters at these values: 0, or adopted totals before metrics 3.
     restart: tuple[int, int] | None = None
@@ -67,11 +70,11 @@ class Router:
             key = name + "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "}"
             self.series.setdefault(key, ["_"] * SLOTS)[slot] = str(value)
 
-        rejected = attempts = 0
+        rejected = attempts = expired = 0
         for phase in self.phases:
             if phase.restart is not None:
                 self.offered, self.served = phase.restart
-                rejected = attempts = 0
+                rejected = attempts = expired = 0
             for slot in range(phase.start // STEP, min(phase.end, LENGTH) // STEP):
                 put("up", self.labels, slot, 0 if phase.role == "down" else 1)
                 if phase.role == "down":
@@ -84,7 +87,8 @@ class Router:
                         ):
                             cells[slot] = "stale"
                     continue
-                self.offered += phase.served + phase.refused
+                self.offered += phase.served + phase.refused + phase.expired
+                expired += phase.expired
                 self.served += phase.served
                 rejected += phase.refused
                 attempts += phase.standby_refused
@@ -96,7 +100,7 @@ class Router:
                 # The other outcomes stay at 0, as a router exports them from start.
                 put("narwhal_refused_total", {**self.labels, "cause": "queue"}, slot, 0)
                 put("narwhal_failed_total", {**self.labels, "reason": "engine_error"}, slot, 0)
-                put("narwhal_expired_total", {**self.labels, "reason": "deadline"}, slot, 0)
+                put("narwhal_expired_total", {**self.labels, "reason": "deadline"}, slot, expired)
                 put("narwhal_cancelled_total", self.labels, slot, 0)
                 put("narwhal_router_ready", self.labels, slot, phase.ready)
                 put("narwhal_router_lease_epoch", self.labels, slot, phase.epoch)
@@ -545,6 +549,38 @@ class RouterAlertTests(PromtoolCase):
         tests = ["    alert_rule_test:"]
         tests += alert_test(590, "NarwhalEngineEjected", [])
         tests += alert_test(690, "NarwhalEngineEjected", [ejected], "1")
+        self.run_promtool(routers, tests)
+
+    def test_a_standby_waiting_for_a_killed_primary_s_lease_counts_rejected_requests(self):
+        """With no live primary, the standby's 503s reach the client and count as rejected."""
+        routers = [
+            Router(
+                A,
+                [
+                    Phase(0, 600, "active", ready=1, epoch=7, served=10),
+                    Phase(600, LENGTH, "down"),
+                ],
+            ),
+            Router(
+                B,
+                [
+                    Phase(0, 600, "standby"),
+                    # The lease TTL runs out 30 s after the kill; until then every request fails.
+                    Phase(600, 630, "standby", refused=10),
+                    Phase(630, LENGTH, "active", ready=1, epoch=8, served=10),
+                ],
+            ),
+        ]
+        rules = (artifacts.BASE / "prometheus-alerts.yml").read_text()
+        rule = re.search(r"alert: NarwhalRejectedRising\n\s+expr: (.+)\n", rules)[1]
+        rejected = panel_query("panel-105", "G", "5m")
+        dropped = panel_query("panel-105", "E", "5m")
+        tests = ["    promql_expr_test:"]
+        # 6 scrape intervals of 10 refusals, with increase() extrapolating to the window.
+        tests += expr_test(within(rejected, 55, 70), 700, 1)
+        tests += expr_test(within(dropped, 0.05, 1), 700, 1)
+        tests += samples_test(within(rule, 0.01, 1), 700, {'{job="narwhal-router"}': 1})
+        tests += expr_test('sum(narwhal_standby_refusals_total{reason="not_ready"})', 700, 0)
         self.run_promtool(routers, tests)
 
     def test_the_standby_refusals_raise_no_rejected_alert(self):

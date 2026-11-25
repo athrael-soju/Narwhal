@@ -255,7 +255,7 @@ When the router readmits an engine after a relaunch, `engines` reports `reused` 
 | `saturation_threshold_s` | Value of `loop_lag_s` or `sizing_delay_s` at which the router answers a saturation 429, a quarter of `slo.ttft_s`                                    |
 | `rejected`               | HTTP `429` in-flight-limit and saturation rejections, and HTTP `503` router-readiness rejections                                                     |
 | `refused`                | Requests refused by global predictive admission                                                                                                      |
-| `standby_refusals`       | Requests refused while this router did not hold the lease, by `rejected` reason, counted apart from `rejected` and `offered`                         |
+| `standby_refusals`       | Requests refused by this standby while its last probe found its primary controlling the fleet, by `rejected` reason, apart from `rejected`           |
 | `engine_auth`            | `boundary` or `engine-credential`                                                                                                                    |
 | `mode`                   | `serving.admission`: `predictive` or `open`                                                                                                          |
 | `margin`                 | `serving.admission_margin`                                                                                                                           |

@@ -12,9 +12,9 @@ A new router process starts every counter and histogram at `0`, and `narwhal_ret
 
 Each counter counts what that router process observed. On resume and standby takeover, the router adopts the request totals behind these counters from the state handoff: `narwhal_offered_total`, `narwhal_unsized_offered_total`, `narwhal_served_total`, `narwhal_slo_met_total`, `narwhal_expired_total`, `narwhal_invalid_requests_total`, `narwhal_failed_total`, `narwhal_unserved_total`, `narwhal_refused_total`, `narwhal_rejected_total` and `narwhal_cancelled_total`, and the risk-event counts behind `narwhal_demand_evidence_risk_events_total`. [`GET /narwhal/state`](../http-api/05-Live-State.md) and the next handoff include the adopted totals, and `/metrics` leaves them out. Each counter therefore rises only with the process's own requests, and returns to `0` only when the process restarts, which Prometheus treats as a counter reset. To count the requests of a router pair, sum each counter over its routers.
 
-A router that does not hold the lease, such as a standby, a fenced router or one releasing its lease at shutdown, counts each request it refuses in `narwhal_standby_refusals_total` only. The load balancer retries those attempts on the lease holder, which counts each request once, so they stay out of `narwhal_offered_total`, `narwhal_unsized_offered_total` and `narwhal_rejected_total`. The journal keeps a row for each refusal. A request that reaches a router without the lease and ends another way, after the router takes over, counts as offered when it ends. A router that holds the lease, or runs without one, counts its own refusals as rejected requests, such as during a whole-wave hold or with no live engines.
+A standby whose most recent probe of its primary found the primary controlling the fleet counts each request it refuses in `narwhal_standby_refusals_total` only. The load balancer retries those attempts on the primary, which counts each request once, so they stay out of `narwhal_offered_total`, `narwhal_unsized_offered_total` and `narwhal_rejected_total`. Every other router counts the requests it refuses as rejected requests, because no live lease holder can take the retry. That covers a standby whose last probe failed, such as while it waits for a killed primary's lease to expire, a router releasing its lease at shutdown, a fenced router, a single router, and a lease holder during a whole-wave hold or with no live engines. A request that reaches the standby and ends another way, after the standby takes over, counts as offered when it ends.
 
-Compare a router's counters with the journal rows of its process's `run`.
+Compare a router's counters with the journal rows of its process's `run`. Rows with `standby_refusal` set match `narwhal_standby_refusals_total`, and the other rows match the outcome counters.
 
 ### Metric families
 
@@ -65,7 +65,7 @@ These series split request outcomes and failed attempts by their [journal reason
 | `narwhal_failed_total` | counter | `reason` | Requests that ended in an error. |
 | `narwhal_refused_total` | counter | `cause` | Predictive refusals: `queue`, `prompt`, `aggregate_unpriced`, `slot_wait`, `kv_capacity`, or `tpot`. |
 | `narwhal_rejected_total` | counter | `reason` | Capacity and router-readiness rejections. |
-| `narwhal_standby_refusals_total` | counter | `reason` | Requests refused while the router did not hold the lease, with the `narwhal_rejected_total` reasons. |
+| `narwhal_standby_refusals_total` | counter | `reason` | Requests a standby refused while its last probe found its primary controlling the fleet, with the `narwhal_rejected_total` reasons. |
 | `narwhal_expired_total` | counter | `reason` | Expiries: `deadline`, `queue_timeout`, or `handoff` for a [KV handoff expiry](../http-api/03-Backend-and-Failures.md#kv-handoff-expiry). |
 | `narwhal_attempt_failures_total` | counter | `phase`, `reason` | Entries added to journal `attempt_failures`, present after the first failure. |
 
