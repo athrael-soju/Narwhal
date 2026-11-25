@@ -4,7 +4,7 @@ description: Options, exit codes and run directories for narwhal dev on one work
 
 # `narwhal dev`
 
-`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM, SGLang or TensorRT-LLM engines, their attestation sidecars and a router. The engines share one NVIDIA CUDA GPU, or each runs [on its own GPU](#one-gpu-per-engine). To set up the host for those, follow [Narwhal dev](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of four installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
+`narwhal dev` runs a development fleet on one workstation, on Linux natively or under WSL2. With `setup`, the fleet holds llama.cpp engines and a router, on a GPU or on the CPU, and [the quick start](../dev/Quick-Start.md) covers that path. With `init`, the fleet holds native vLLM, SGLang or TensorRT-LLM engines, their attestation sidecars and a router. The engines share one NVIDIA CUDA GPU, or each runs [on its own GPU](#one-gpu-per-engine). To set up the host for those, follow [vLLM, SGLang and TensorRT-LLM engines](../Dev-Runtime.md). A template pins the model, the runtime, the memory budget and the ports. `init` takes one of four installed templates, and `setup` one of the two [llama.cpp templates](../dev/Llama-Cpp-Engines.md#templates):
 
 | Template | Engine | Engines | Model input |
 | --- | --- | --- | --- |

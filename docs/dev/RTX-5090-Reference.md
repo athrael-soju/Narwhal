@@ -8,7 +8,7 @@ Four Qwen3.5-0.8B GGUF engines run on one RTX 5090, on Ubuntu or Ubuntu under WS
 
 Prerequisites:
 
-1. Complete the host setup in [Narwhal dev](../Dev-Runtime.md).
+1. Complete the host setup in [vLLM, SGLang and TensorRT-LLM engines](../Dev-Runtime.md).
 2. Complete the shared [CUDA runtime and model installation](CUDA-Runtime.md).
 
 The reference runs with these settings:
@@ -65,7 +65,7 @@ Default ports:
 | Attestation | 18201 and up |
 | NIXL side channel | 5701 and up |
 
-[`narwhal dev init --port-base` and `--instance`](../Dev-Runtime.md#initializing-and-verifying-an-instance) select another port layout or instance.
+[`narwhal dev init --port-base` and `--instance`](../cli/Dev.md#options) select another port layout or instance.
 
 Send a routed chat completion:
 

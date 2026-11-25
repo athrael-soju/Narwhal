@@ -1,10 +1,10 @@
 ---
-description: Narwhal dev runs several vLLM, SGLang, TensorRT-LLM or llama.cpp engines with prefill and decode role swaps on one workstation under Ubuntu or WSL2.
+description: Run vLLM, SGLang or TensorRT-LLM engines in Narwhal dev on one NVIDIA GPU, or one GPU per engine, under Ubuntu or WSL2, with attestation, measured profiles and KV transfer evidence.
 ---
 
-# Narwhal dev
+# vLLM, SGLang and TensorRT-LLM engines in Narwhal dev
 
-Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, or [each on its own GPU](#running-each-engine-on-its-own-gpu), with engine attestation, measured profiles and KV transfer evidence.
+Narwhal dev runs two to eight independent engines and a router on one workstation, on Ubuntu natively or under WSL2. The [quick start](dev/Quick-Start.md) runs llama.cpp engines on a GPU or the CPU. This page runs vLLM, SGLang or TensorRT-LLM engines on one NVIDIA CUDA GPU, or [each on its own GPU](#running-each-engine-on-its-own-gpu), with engine attestation, measured profiles and KV transfer evidence. The [`narwhal dev` reference](cli/Dev.md) lists every subcommand and option.
 
 An instance directory, `runs/dev` by default, holds the model choice, runtime, GPU allocation, ports, profiles, and process identities. Model files come from the Hugging Face cache or from paths given to `narwhal dev init`.
 

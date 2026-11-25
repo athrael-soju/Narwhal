@@ -38,11 +38,12 @@ def _gpu_list(value: str) -> list[str]:
 def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="narwhal",
-        description="Manage a local development fleet",
+        description="Run a local development fleet, inspect fleet files and collect diagnostics",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Documentation: https://athrael-soju.github.io/Narwhal/CLI-Reference/\n\n"
             "Installed commands:\n"
-            "  narwhal          Initialize, launch, verify and stop a local development fleet\n"
+            "  narwhal          Run a dev fleet, inspect fleet files and collect diagnostics\n"
             "  narwhal-engine   Prepare and launch checked engine processes\n"
             "  narwhal-check    Run deployment preflight gates\n"
             "  narwhal-attest   Serve engine identity and attestation for one engine\n"
@@ -60,10 +61,12 @@ def _main(argv: list[str]) -> int:
     bundle.add_commands(commands)
     dev = commands.add_parser(
         "dev",
-        help="Run independent engines on one local NVIDIA GPU, or one GPU per engine",
-        description="Use the native Linux/WSL2 runtime: init writes checked instance inputs, "
-        "up reports launched after engine profiling and router startup, and verify reports "
-        "ready after directed KV checks and a routed request.",
+        help="Run a development fleet on one Linux or WSL2 workstation",
+        description="Run a development fleet on one Linux or WSL2 workstation. setup prepares "
+        "engines that start directly, on a GPU or the CPU, and init prepares attested engines "
+        "on one NVIDIA GPU or one GPU per engine. up starts the fleet, verify checks it, ask "
+        "and watch exercise it, status reports it and down stops it.",
+        epilog="Documentation: https://athrael-soju.github.io/Narwhal/cli/Dev/",
     )
     actions = dev.add_subparsers(dest="action", required=True)
     descriptions = {

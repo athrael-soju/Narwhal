@@ -68,8 +68,9 @@ nav:
   - Narwhal dev:
       - Quick start: dev/Quick-Start.md
       - Reading the live view: dev/Live-View.md
+      - Command reference: cli/Dev.md
       - llama.cpp engines: dev/Llama-Cpp-Engines.md
-      - Overview and vLLM or SGLang engines: Dev-Runtime.md
+      - vLLM, SGLang and TensorRT-LLM engines: Dev-Runtime.md
       - Installing the CUDA runtime: dev/CUDA-Runtime.md
       - RTX 5090 reference: dev/RTX-5090-Reference.md
       - Recovery and qualification: dev/Recovery-and-Qualification.md

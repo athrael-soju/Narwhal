@@ -64,7 +64,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
     <tr>
       <td>Development mode</td>
       <td>Runs two to eight engines on one workstation under Ubuntu or WSL2, on a GPU or the CPU</td>
-      <td><a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-Narwhal%20dev-0f766e" alt="Narwhal dev documentation"></a></td>
+      <td><a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Narwhal%20dev-0f766e" alt="Narwhal dev documentation"></a></td>
     </tr>
   </tbody>
 </table>
@@ -115,7 +115,8 @@ To run vLLM, SGLang or TensorRT-LLM engines on one NVIDIA GPU instead, use `narw
 
 <p align="center">
   <a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Quick%20start-0f766e" alt="Quick start documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-vLLM%20and%20SGLang%20templates-0f766e" alt="vLLM and SGLang template documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Dev/"><img src="https://img.shields.io/badge/docs-narwhal%20dev%20commands-0f766e" alt="narwhal dev command reference"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-vLLM%2C%20SGLang%20and%20TensorRT--LLM%20engines-0f766e" alt="vLLM, SGLang and TensorRT-LLM engine documentation"></a>
   <a href="https://athrael-soju.github.io/Narwhal/dev/RTX-5090-Reference/"><img src="https://img.shields.io/badge/docs-RTX%205090%20reference-0f766e" alt="RTX 5090 reference documentation"></a>
 </p>
 
