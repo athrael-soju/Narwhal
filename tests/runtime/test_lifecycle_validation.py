@@ -511,6 +511,27 @@ class LifecycleValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("e3", self.router.scheduler.ejected)
         self.router.engines.prefill.assert_not_awaited()
 
+    async def test_a_drain_without_restart_readmits_the_same_process(self):
+        self.manager.records.clear()
+        self.router.scheduler.draining.clear()
+        self.starts["e0"] = 100
+        self.bind_profiles()
+        self.manager.begin(["e0"], wave=False, deadline_s=30, restart=False)
+        self.assertFalse(self.manager.records["e0"].restart_required)
+        self.assertIn("e0", self.router.scheduler.draining)
+        outcome = await self.validate()
+        self.assertTrue(outcome.passed, outcome.failures)
+        self.assertIn("process identity", outcome.checks["e0"])
+        self.assertNotIn("new process identity", outcome.checks["e0"])
+        self.manager.readmitted(["e0"], outcome)
+        self.assertEqual(self.manager.records["e0"].state, "active")
+
+    def test_a_whole_wave_drain_requires_a_restart(self):
+        self.manager.records.clear()
+        self.router.scheduler.draining.clear()
+        with self.assertRaisesRegex(LifecycleError, "restart must be true"):
+            self.manager.begin(["e0", "e3"], wave=True, deadline_s=30, restart=False)
+
     async def test_readmission_health_identity_and_missing_attestation_fail_closed(self):
         self.router.engines.healthy.return_value = False
         outcome = await self.validate()

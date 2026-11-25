@@ -400,7 +400,12 @@ def create_app(
         engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             try:
-                router.lifecycle.begin(engines, wave=action.wave, deadline_s=action.deadline_s)
+                router.lifecycle.begin(
+                    engines,
+                    wave=action.wave,
+                    deadline_s=action.deadline_s,
+                    restart=action.restart,
+                )
             except LifecycleError as exc:
                 return _lifecycle_error(router, 409, str(exc))
             capture = [

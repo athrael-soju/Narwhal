@@ -421,6 +421,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
         base=None,
         digests=(),
         activity=None,
+        **options,
     ):
         output = Path(self.folder.name) / name
         client.slots = {spec.url: device_key(spec) for spec in self.cfg.engines}
@@ -456,6 +457,7 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
                 out=output,
                 base=base,
                 activity=activity,
+                **options,
             )
         return code, json.loads(output.read_text())
 
@@ -977,6 +979,67 @@ class CalibrationTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_pairs_with_measures_one_engines_groups_and_a_later_run_completes(self):
+        self._four_engines()
+        engines = list(self.cfg.engines)
+        self.cfg.engines = engines[:3]
+        _, _, path = await self._base(RecordingClient())
+        self.cfg.engines = engines
+        new = {
+            (src, dst, 8) for src, dst in validation_pairs(engines, mesh=True) if "e4" in (src, dst)
+        }
+        client = RecordingClient()
+        with redirect_stdout(io.StringIO()) as printed:
+            code, partial = await self._run_recorded(
+                client, samples=100, name="partial.json", base=path, pairs_with="e1"
+            )
+        self.assertEqual((code, partial["status"]), (1, "incomplete"))
+        with_e1 = {group for group in new if "e1" in group[:2]}
+        self.assertEqual(self._decoded(client), with_e1)
+        self.assertEqual({tuple(group) for group in partial["unmeasured_groups"]}, new - with_e1)
+        self.assertIn("pass this artifact as --calibration-base", printed.getvalue())
+        client = RecordingClient()
+        code, document = await self._run_recorded(
+            client, samples=100, name="rest.json", base=Path(self.folder.name) / "partial.json"
+        )
+        self.assertEqual((code, document["status"]), (0, "complete"))
+        self.assertEqual(self._decoded(client), new - with_e1)
+        self.assertEqual(document["unmeasured_groups"], [])
+        self.cfg.first_token_timeout_s = document["candidate_deadline_s"] + 0.5
+        self.assertEqual(calibration.evidence_problems(self.cfg, document), [])
+
+    async def test_pairs_with_refuses_an_engine_outside_the_fleet(self):
+        with self.assertRaisesRegex(ValueError, "--pairs-with names e9"):
+            await self._run_recorded(RecordingClient(), samples=100, pairs_with="e9")
+
+    async def test_router_url_refuses_engines_the_router_has_not_drained(self):
+        self._four_engines()
+        engines = list(self.cfg.engines)
+        self.cfg.engines = engines[:3]
+        _, _, path = await self._base(RecordingClient())
+        self.cfg.engines = engines
+        refuse = AsyncMock(side_effect=RuntimeError("refusing to measure engines"))
+        client = RecordingClient()
+        with (
+            patch.object(calibration, "refuse_undrained", new=refuse),
+            self.assertRaisesRegex(RuntimeError, "refusing to measure"),
+        ):
+            await self._run_recorded(
+                client,
+                samples=100,
+                name="refused.json",
+                base=path,
+                pairs_with="e1",
+                router_url="http://router",
+            )
+        # The check covers the engines the run would measure, before any probe.
+        args = refuse.call_args
+        self.assertEqual(args.args[0], "http://router")
+        self.assertEqual([spec.iid for spec in args.args[1]], ["e1", "e4"])
+        self.assertEqual(args.kwargs["action"], "measure")
+        self.assertEqual(client.calls, [])
+        self.assertFalse((Path(self.folder.name) / "refused.json").exists())
+
     def test_reuses_a_version_1_base_at_its_capture_time(self):
         self._four_engines()
         generations = {spec.iid: "g" for spec in self.cfg.engines}
@@ -1045,10 +1108,45 @@ class CalibrationCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(calibrate.call_args.kwargs["base"], Path("runs/base.json"))
 
+    def test_pairs_with_and_router_url_reach_calibration(self):
+        calibrate = AsyncMock(return_value=0)
+        with (
+            patch.object(check_cli.FleetConfig, "load"),
+            patch.object(check_cli, "calibrate", new=calibrate),
+        ):
+            code = check_cli.main(
+                [
+                    "--fleet",
+                    "fleet.json",
+                    "--calibrate-first-token",
+                    "--input-tokens",
+                    "8",
+                    "--observation-timeout-s",
+                    "10",
+                    "--calibration-out",
+                    "runs/new.json",
+                    "--pairs-with",
+                    "e1",
+                    "--router-url",
+                    "http://router:8000",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(calibrate.call_args.kwargs["pairs_with"], "e1")
+        self.assertEqual(calibrate.call_args.kwargs["router_url"], "http://router:8000")
+
     def test_calibration_base_requires_calibration(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
             check_cli.main(["--fleet", "fleet.json", "--calibration-base", "runs/base.json"])
         self.assertEqual(raised.exception.code, 2)
+        for option in (["--pairs-with", "e1"], ["--router-url", "http://router"]):
+            with (
+                self.subTest(option=option[0]),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                check_cli.main(["--fleet", "fleet.json", *option])
+            self.assertEqual(raised.exception.code, 2)
 
 
 class CalibrationRoundTests(unittest.TestCase):

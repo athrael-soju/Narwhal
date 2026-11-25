@@ -78,6 +78,17 @@ def _main(argv: list[str]) -> int:
         "and reuse the rest",
     )
     ap.add_argument(
+        "--pairs-with",
+        metavar="IID",
+        help="measure only the calibration groups that include this engine; the artifact lists "
+        "the rest as unmeasured for a later run with it as --calibration-base",
+    )
+    ap.add_argument(
+        "--router-url",
+        help="active router that must report every engine the calibration measures as drained "
+        "or outside its fleet, so the probes meet no client traffic",
+    )
+    ap.add_argument(
         "--repeats",
         type=int,
         default=1,
@@ -142,10 +153,14 @@ def _main(argv: list[str]) -> int:
             ap.error("calibration is exclusive with directed KV evidence modes")
         if args.ring or args.no_kv or args.repeats != 1:
             ap.error("calibration always probes the full directed mesh with --samples")
+        if args.router_url is not None and not args.router_url.startswith(("http://", "https://")):
+            ap.error("--router-url takes an http:// or https:// URL")
     elif (
         args.input_tokens is not None
         or args.calibration_out is not None
         or args.calibration_base is not None
+        or args.pairs_with is not None
+        or args.router_url is not None
         or args.observation_timeout_s is not None
         or args.samples != 100
     ):
@@ -191,6 +206,8 @@ def _main(argv: list[str]) -> int:
                         out=calibration_out,
                         base=args.calibration_base,
                         activity=activity,
+                        router_url=args.router_url,
+                        pairs_with=args.pairs_with,
                     )
                 )
         if args.verify_evidence is not None:

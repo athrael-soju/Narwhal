@@ -82,7 +82,8 @@
     "samples_per_group": 1,
     "schema": "narwhal.first-token-calibration",
     "schema_version": 1,
-    "status": "incomplete"
+    "status": "incomplete",
+    "unmeasured_groups": []
   },
   "exit_code": 1,
   "requests": [

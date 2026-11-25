@@ -152,7 +152,46 @@ When `engine.first_token_calibration_path` is set, the join requires a calibrati
 
 Use the `--input-tokens` and `--samples` that the current artifact records in `input_tokens` and `samples_per_group`. When a recorded length leaves room for fewer than two output tokens, run the command without `--calibration-base`, with `--input-tokens` chosen as in [Calibrating the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). Set `--observation-timeout-s` above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`.
 
-With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches each measured pair's engines into the roles its probes need. It does this on the engines themselves, outside the router's role control, and returns every engine to its starting role at the end. Run it while the members carry no client traffic. The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
+With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches each measured pair's engines into the roles its probes need. It does this on the engines themselves, outside the router's role control, and returns each engine it measured to its starting role at the end. Run it while the members carry no client traffic, or calibrate one member at a time as in [Calibrate under client traffic](#calibrate-under-client-traffic). The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
+
+#### Calibrate under client traffic
+
+To keep the fleet serving, calibrate the new engine against one member at a time. The router holds that member out of placement while the run measures it, and the other members serve client requests. The remaining members must carry the client load, and the fleet must keep a live prefill and decode engine without the held member. Under `recovery.engine_restart_policy: whole_wave` the router drains only whole waves, so calibrate with the fleet idle instead.
+
+For each member:
+
+1. Drain it without a restart, and wait until the router reports it `ready_to_stop`.
+2. Measure the pairs between it and the new engine, with the previous artifact as the base. `--router-url` stops the run before its first probe when the router has not drained the member.
+3. Readmit it. The readmission accepts the same engine process.
+
+Replace the member IDs with those of the current fleet:
+
+```bash
+BASE=runs/deployment/first-token-calibration.json
+for MEMBER in e0 e1 e2; do
+  curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/drain" \
+    -H 'content-type: application/json' \
+    -d "{\"engines\": [\"$MEMBER\"], \"restart\": false}" > /dev/null
+  until curl -fsS "$ROUTER_URL/narwhal/lifecycle" | python3 -c \
+    'import json, sys; sys.exit(not json.load(sys.stdin)["engines"][sys.argv[1]]["ready_to_stop"])' \
+    "$MEMBER"; do sleep 2; done
+  .venv/bin/narwhal-check --fleet "$RUN_DIR/fleet-with-$IID.json" \
+    --calibrate-first-token --input-tokens 256,8192,16382 \
+    --samples 100 --observation-timeout-s 20 \
+    --pairs-with "$MEMBER" --router-url "$ROUTER_URL" \
+    --calibration-base "$BASE" \
+    --calibration-out "$RUN_DIR/first-token-calibration-$MEMBER.json"
+  curl -fsS -X POST "$ROUTER_URL/narwhal/lifecycle/readmit" \
+    -H 'content-type: application/json' \
+    -d "{\"engines\": [\"$MEMBER\"]}" > /dev/null
+  BASE="$RUN_DIR/first-token-calibration-$MEMBER.json"
+done
+cp "$BASE" "$RUN_DIR/first-token-calibration.json"
+```
+
+Each run but the last exits 1 and writes an `incomplete` artifact, because `unmeasured_groups` lists the pairs of the members still to come. The last run reuses every earlier group and writes a `complete` artifact when every group passed. A pair between two members whose URL or process generation changed needs both members drained, so the run that reaches it stops with the router drain check's message. When a readmission fails, fix the cause that `GET /narwhal/lifecycle` reports and readmit the member again before you continue.
+
+Check and install `$RUN_DIR/first-token-calibration.json` as below.
 
 When the command exits 0 and the artifact's `candidate_deadline_s` is below `engine.first_token_timeout_s`, keep a copy of the current artifact and install the new one:
 
