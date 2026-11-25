@@ -118,7 +118,7 @@ async def join_engine(
     The checks are the readmission checks: health, process identity, attestation against the
     engine contract, profile generation, the served model, the model identity of every member
     that is not ejected or draining, one generation and a KV pair handoff with a live peer. The
-    reloaded profile store must hold a profile for exactly the proposed engine set, and a
+    reloaded profile store must hold a profile for every engine in the proposed set, and a
     configured first-token calibration must cover every pair the new engine forms. The caller
     holds `router.lifecycle.lock`.
     """

@@ -20,8 +20,11 @@ from narwhal.engines.attestation import (
 )
 from narwhal.engines.stream import parse_event
 from narwhal.profiling import generation
-from narwhal.runtime.lifecycle import identity, readmission
+from narwhal.profiling.store import ProfileStore
+from narwhal.runtime import standby, state
+from narwhal.runtime.lifecycle import identity, leave, readmission
 from narwhal.runtime.lifecycle.join import join_engine
+from narwhal.runtime.lifecycle.leave import begin_leave
 from narwhal.runtime.lifecycle.records import DrainRecord
 from narwhal.runtime.role_switch import RoleSwitcher
 from narwhal.serving.app import create_app
@@ -33,6 +36,12 @@ NEW = EngineSpec(
     "http://engine-6.invalid:8000",
     role=Role.DECODE,
     attestation_url="http://engine-6.invalid:8000/v1/attestation",
+)
+LATER = EngineSpec(
+    "e7",
+    "http://engine-7.invalid:8000",
+    role=Role.DECODE,
+    attestation_url="http://engine-7.invalid:8000/v1/attestation",
 )
 
 
@@ -84,7 +93,7 @@ class JoinHarness(unittest.IsolatedAsyncioTestCase):
         yield [parse_event('data: {"choices":[{"token_ids":[1,2],"text":"ok"}]}')]
 
     def http(self, request):
-        for spec in (*self.cfg.engines, NEW):
+        for spec in (*self.cfg.engines, NEW, LATER):
             if str(request.url) == spec.attestation_url:
                 iid, route, default = spec.iid, "attestation", self.attestation(spec.iid)
                 break
@@ -374,6 +383,95 @@ class JoinTests(JoinHarness):
         self.router.engines.healthy.assert_not_awaited()
         self.assertEqual(self.requests, [])
         self.assertEqual(self.router.membership.generation, 0)
+
+
+class JoinAfterLeaveTests(JoinHarness):
+    """A leave keeps the departed engine's rows in the profile store."""
+
+    def setUp(self):
+        super().setUp()
+        self.starts["e7"] = 300.0
+        patcher = patch.object(leave, "capture_process_identities", self.captured)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def captured(self, cfg, engines, *, specs, transport=None):
+        return {iid: self.starts[iid] for iid in engines}, {}
+
+    async def join_and_leave(self):
+        self.assertTrue((await self.join()).joined)
+        async with self.manager.lock:
+            record = await begin_leave(self.router, "e6", deadline_s=60.0)
+        self.assertTrue(record.leaving)
+        self.assertNotIn("e6", self.router.membership)
+        self.assertEqual(self.router.membership.generation, 2)
+        # The store at profiles.path still holds the departed engine's row.
+        self.assertIsNotNone(ProfileStore(self.cfg.profiles_path).get("e6"))
+
+    async def test_an_engine_joins_while_the_store_holds_a_departed_engines_row(self):
+        await self.join_and_leave()
+        self.bind_profile("e7")
+        outcome = await self.join(LATER)
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertEqual(outcome.generation, 3)
+        self.assertEqual(list(self.router.membership.ids), ["e0", "e3", "e7"])
+
+    async def test_a_departed_engine_rejoins_with_its_stored_profile(self):
+        await self.join_and_leave()
+        outcome = await self.join()
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertEqual(outcome.generation, 3)
+        self.assertIn("e6", self.router.membership)
+        self.assertTrue(any("profile generation" in item for item in outcome.checks))
+
+    async def test_a_relaunched_departed_engine_needs_a_new_profile(self):
+        await self.join_and_leave()
+        self.starts["e6"] = 400.0
+        outcome = await self.join()
+        self.assertFalse(outcome.joined)
+        self.assertIn("e6 profile generation differs from the live engine", outcome.error)
+        self.assertNotIn("e6", self.router.membership)
+
+    async def test_an_engine_without_a_profile_is_still_refused(self):
+        await self.join_and_leave()
+        outcome = await self.join(LATER)
+        self.assertFalse(outcome.joined)
+        self.assertIn("no profile for e7", outcome.error)
+        self.assertNotIn("stale", outcome.error)
+        self.assertEqual(self.router.membership.generation, 2)
+
+    async def test_a_departed_engines_mismatched_row_is_not_checked(self):
+        await self.join_and_leave()
+        self.router.profiles.put(profile("e6", generation_digest="sha256:" + "0" * 64))
+        self.bind_profile("e7")
+        self.requests.clear()
+        outcome = await self.join(LATER)
+        self.assertTrue(outcome.joined, outcome.error)
+        self.assertNotIn("e6", {iid for iid, _ in self.requests})
+
+    async def test_a_resume_and_a_takeover_adopt_a_store_with_a_departed_engines_rows(self):
+        await self.join_and_leave()
+        self.bind_profile("e7")
+        self.assertTrue((await self.join(LATER)).joined)
+        doc = state.snapshot(self.router)
+        state.write(self.cfg.state_path, doc)
+        self.assertIsNotNone(ProfileStore(self.cfg.profiles_path).get("e6"))
+        app = create_app(replace(self.cfg, resume=True), lifecycle_transport=self.transport)
+        resumed = app.state.router
+        self.addAsyncCleanup(resumed.engines.aclose)
+        async with app.router.lifespan_context(app):
+            self.assertEqual(resumed.membership.generation, 3)
+            self.assertEqual(list(resumed.membership.ids), ["e0", "e3", "e7"])
+            self.assertIsNotNone(resumed.profiles.get("e6"))
+        # A standby whose startup check allowed extra rows checks the adopted set again.
+        router = create_app(self.cfg, lifecycle_transport=self.transport).state.router
+        self.addAsyncCleanup(router.engines.aclose)
+        report = state.apply(router, doc)
+        self.assertTrue(report.applied, report.why)
+        self.assertTrue(report.membership_adopted)
+        router.checked_engines, router.checked_exact = ("e0", "e3"), False
+        self.assertEqual(await standby._takeover_problem(router, report), "")
+        self.assertEqual(router.checked_engines, ("e0", "e3", "e7"))
 
 
 if __name__ == "__main__":

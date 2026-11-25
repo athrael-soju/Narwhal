@@ -97,7 +97,7 @@ The router refuses a valid entry before it contacts any engine when:
 Otherwise the router runs these checks with the engine out of placement:
 
 1. It reads the new engine's attestation and checks it against `engine_contract`.
-2. It reads `profiles.path` again. The store must hold a profile for exactly the members and the new engine, and each profile must match the process generation of its live engine.
+2. It reads `profiles.path` again. The store must hold a profile for each member and the new engine, and each of these profiles must match the process generation of its live engine. Rows for other engines, such as an engine that left, are not checked.
 3. When `engine.first_token_calibration_path` is set, it reads that artifact again. The artifact must cover every directed pair of the members and the new engine, and match the process generation of each live engine.
 4. It runs the [readmission checks](07-Handoff-and-Lifecycle.md#post-narwhallifecyclereadmit) on the new engine in its requested role, with `process identity` in place of `new process identity`. The `model identity` check requires the new engine to attest the model file digests of every member that is not ejected or draining.
 
