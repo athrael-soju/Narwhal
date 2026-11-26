@@ -449,3 +449,58 @@ class LlamacppDirectTests(unittest.TestCase):
         for reply in ({}, {"timings": {**timings, "prompt_per_token_ms": 0}}, {"timings": []}):
             with self.assertRaisesRegex(ValueError, "no positive timings"):
                 self.start.figures(reply, self.runtime)
+
+
+class CpuQuotaTests(unittest.TestCase):
+    """Engine threads follow the CPUs a container's quota allows, not the host's."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.cgroups = self.root / "cgroup"
+        self.membership = self.root / "membership"
+
+    def write(self, relative: str, text: str) -> None:
+        path = self.cgroups / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def quota(self):
+        return direct._cgroup_quota(self.cgroups, self.membership)
+
+    def test_v2_takes_the_tightest_limit_along_the_cgroup_path(self):
+        self.membership.write_text("0::/pod/app\n")
+        self.write("cpu.max", "max 100000\n")
+        self.write("pod/cpu.max", "400000 100000\n")
+        self.write("pod/app/cpu.max", "250000 100000\n")
+        self.assertEqual(self.quota(), 2.5)
+        with patch.object(direct.os, "sched_getaffinity", return_value=set(range(16))):
+            self.assertEqual(direct.usable_cpus(self.cgroups, self.membership), 3)
+            self.assertEqual(direct._threads(4, 3), 1)
+
+    def test_v2_without_a_limit_or_files_leaves_the_affinity(self):
+        self.membership.write_text("0::/\n")
+        self.assertIsNone(self.quota())
+        self.write("cpu.max", "max 100000\n")
+        self.assertIsNone(self.quota())
+        with patch.object(direct.os, "sched_getaffinity", return_value=set(range(6))):
+            self.assertEqual(direct.usable_cpus(self.cgroups, self.membership), 6)
+
+    def test_v1_reads_the_cfs_quota_and_ignores_an_unlimited_one(self):
+        self.membership.write_text("12:memory:/docker/x\n4:cpu,cpuacct:/docker/x\n")
+        self.write("cpu,cpuacct/cpu.cfs_quota_us", "150000\n")
+        self.write("cpu,cpuacct/cpu.cfs_period_us", "100000\n")
+        self.assertEqual(self.quota(), 1.5)
+        self.write("cpu,cpuacct/cpu.cfs_quota_us", "-1\n")
+        self.assertIsNone(self.quota())
+
+    def test_an_unreadable_membership_or_a_quota_below_one_cpu(self):
+        self.assertIsNone(self.quota())
+        self.membership.write_text("0::/\n")
+        self.write("cpu.max", "50000 100000\n")
+        with patch.object(direct.os, "sched_getaffinity", return_value=set(range(8))):
+            self.assertEqual(direct.usable_cpus(self.cgroups, self.membership), 1)
+        self.assertEqual(direct._threads(4, 1), 1)
+        self.assertEqual(direct._threads(4, 17), 4)
+        self.assertEqual(direct._threads(2, 64), direct.MAX_THREADS)
