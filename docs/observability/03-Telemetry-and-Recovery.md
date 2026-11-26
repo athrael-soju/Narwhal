@@ -41,7 +41,7 @@ After a fix, rerun `make observe`. It returns once the [readiness contract](01-S
 
 Every Compose command for `tools/observability/compose.yml` requires `NARWHAL_RENDERER_TOKEN`, which `make observe` stores in `runs/observability/renderer-token`.
 
-Load the token in the deployed checkout on the router host, then query the services:
+Load the token in the router host's [tools checkout](../deploy/02-Install.md#installing-the-repository-tools-on-the-router-host), then query the services:
 
 ```bash
 export NARWHAL_RENDERER_TOKEN="$(cat runs/observability/renderer-token)"
@@ -52,7 +52,7 @@ docker compose -f tools/observability/compose.yml logs prometheus grafana
 ### Mount permission failures
 
 1. Confirm `tools/observability/start/` and `tools/observability/compose.yml` share one checkout.
-2. Rerun `make observe` from that deployed checkout.
+2. Rerun `make observe` from that tools checkout.
 3. Read the [staged mount permissions](01-Start-and-Verify.md#staged-monitoring-files) and container logs.
 4. Save the failure output in the private deployment record.
 

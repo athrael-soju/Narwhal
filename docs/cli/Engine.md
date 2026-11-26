@@ -26,7 +26,7 @@ A vLLM container engine can load a GGUF file in `NARWHAL_MODEL_DIR`. Set `NARWHA
 
 For a container launch, every file in the model directory must resolve inside it, because the container mounts only that directory. `prepare` refuses a symbolic link that points outside it, one with an absolute target, which the container would resolve under `/model`, and one whose relative target climbs above the directory, such as `../m2/weights` in a directory named `m2`, which names nothing under `/model`. A native launch follows all three kinds of link, as a Hugging Face cache snapshot needs.
 
-When `NARWHAL_MODEL_TREE_SHA256` is set, `prepare` refuses a model directory with another digest. The pin covers `NARWHAL_MODEL_DIR` alone, also for a native model path outside it. Engine export sets it from discovery. To compute it for another directory, run:
+When `NARWHAL_MODEL_TREE_SHA256` is set, `prepare` refuses a model directory with another digest. The pin covers `NARWHAL_MODEL_DIR` alone, also for a native model path outside it. Engine export copies it from the `NARWHAL_MODEL_TREE_SHA256` [deployment input](../configuration/04-Deployment-Inputs.md#deployment-inputs-and-generated-artifacts), which discovery checks against every engine's checkpoint. To compute it for another directory, run:
 
 ```bash
 echo '{"model_dir": "/path/to/model"}' | .venv/bin/python -m narwhal.deployment.launch_engine.checkpoint

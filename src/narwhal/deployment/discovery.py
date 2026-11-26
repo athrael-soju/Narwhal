@@ -1,29 +1,28 @@
+"""Derive private deployment records from the workstation environment and host inspection."""
+
 from __future__ import annotations
 
-import argparse
 import hashlib
 import inspect
 import ipaddress
 import json
-import os
 import posixpath
 import re
 import shlex
-import sys
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from narwhal.deployment.engine_launch import load_launches
-from narwhal.deployment.launch_engine import checkpoint as checkpoint_manifest
-from narwhal.deployment.launch_engine.backend import ModelFormats, engine_backend
-from narwhal.deployment.launch_engine.plan import conv_state_layers
-from narwhal.types import RoleModel
-from tools.deployment.host_access import SSH, Host, load_hosts, write_private
-from tools.deployment.prepare_host_env import select_values, write_environment
+from ..types import RoleModel
+from .engine_launch import load_launches
+from .hosts import SSH, Host, load_hosts, write_private
+from .launch_engine import checkpoint as checkpoint_manifest
+from .launch_engine.backend import ModelFormats, engine_backend
+from .launch_engine.plan import conv_state_layers
+from .role_env import select_values, write_environment
 
 # The remote probe applies the launcher's own convolutional-state rule.
 PROBE = (
@@ -172,11 +171,11 @@ print(
 )
 
 
-def value(env: dict[str, str], node: int, field: str, default: str = "") -> str:
+def value(env: Mapping[str, str], node: int, field: str, default: str = "") -> str:
     return env.get(f"NARWHAL_NODE_{node}_{field}", env.get(f"NARWHAL_{field}", default))
 
 
-def fabric_address(env: dict[str, str], node: int, interfaces: list[dict]) -> str:
+def fabric_address(env: Mapping[str, str], node: int, interfaces: list[dict]) -> str:
     name = f"NARWHAL_NODE_{node}_IP"
     candidates = set()
     for interface in interfaces:
@@ -204,7 +203,7 @@ def fabric_address(env: dict[str, str], node: int, interfaces: list[dict]) -> st
     return candidates.pop()
 
 
-def service_url(env: dict[str, str], node: int, field: str) -> str:
+def service_url(env: Mapping[str, str], node: int, field: str) -> str:
     name = f"NARWHAL_NODE_{node}_{field}"
     supplied = env.get(name, "")
     suffix = "/v1/attestation" if field == "ATTESTATION_URL" else ""
@@ -243,7 +242,7 @@ def service_url(env: dict[str, str], node: int, field: str) -> str:
     return f"http://{host}:{port_value}{suffix}"
 
 
-def model_file(env: dict[str, str], node: int, model_dir: str) -> str | None:
+def model_file(env: Mapping[str, str], node: int, model_dir: str) -> str | None:
     """Return the path of NARWHAL_MODEL_PATH relative to NARWHAL_MODEL_DIR, when it is set."""
     path = value(env, node, "MODEL_PATH")
     if not path:
@@ -256,7 +255,7 @@ def model_file(env: dict[str, str], node: int, model_dir: str) -> str | None:
     return relative
 
 
-def derive_hosts(env: dict[str, str]) -> list[Host]:
+def derive_hosts(env: Mapping[str, str]) -> list[Host]:
     nodes = sorted(
         int(match[1])
         for name in env
@@ -288,9 +287,15 @@ def derive_hosts(env: dict[str, str]) -> list[Host]:
     return list(groups.values())
 
 
-def build_records(hosts: list[Host], env: dict[str, str], observations: dict, out: Path):
-    launches, engines, sources, derived, shapes = {}, [], {}, {}, set()
-    model_files = set()
+def build_records(
+    hosts: list[Host], env: Mapping[str, str], observations: dict, out: Path
+) -> tuple[dict, dict, dict, dict[str, str]]:
+    launches: dict[str, dict] = {}
+    engines: list[dict] = []
+    sources: dict[str, dict] = {}
+    derived: dict[str, str] = {}
+    shapes: set[tuple[str, int, int]] = set()
+    model_files: set[str | None] = set()
     backend = engine_backend(env.get("NARWHAL_ENGINE_BACKEND"))
     connector = env.get("NARWHAL_ENGINE_CONNECTOR") or backend.default_connector
     backend.connector(connector)
@@ -366,7 +371,6 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
                 ("ENGINE_IMAGE", observed["image_id"]),
                 ("MODEL_CONFIG_SHA256", observed["model_sha256"]),
                 ("MODEL_SHA256", file_digest),
-                ("MODEL_TREE_SHA256", observed["model_tree_sha256"]),
             ):
                 if content:
                     derived[f"NARWHAL_NODE_{node}_{field}"] = content
@@ -435,7 +439,19 @@ def build_records(hosts: list[Host], env: dict[str, str], observations: dict, ou
     )
 
 
-def discover(env: dict[str, str], out: Path) -> Path:
+def expected_tree(env: Mapping[str, str], node: int) -> str:
+    """Return the checkpoint tree digest that engine `node` must serve."""
+    expected = value(env, node, "MODEL_TREE_SHA256")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError(
+            f"engine-{node}: set NARWHAL_MODEL_TREE_SHA256 to the checkpoint's "
+            "model_tree_sha256, 64 lowercase hex digits"
+        )
+    return expected
+
+
+def discover(env: Mapping[str, str], out: Path) -> Path:
+    """Inspect every host and write the generated configuration; return deployment.env."""
     hosts = derive_hosts(env)
     engine = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).engine_launcher()
     paths = {
@@ -444,34 +460,37 @@ def discover(env: dict[str, str], out: Path) -> Path:
             ("NARWHAL_HOSTS", "config/hosts.local.json"),
             ("NARWHAL_FLEET", "config/fleet.json"),
             ("NARWHAL_LAUNCH_CONFIG", "config/engine-launch.local.json"),
-            ("NARWHAL_SSH_KNOWN_HOSTS", "config/ssh.known_hosts"),
         )
     }
+    trust = Path(env.get("NARWHAL_SSH_KNOWN_HOSTS", ""))
+    if not env.get("NARWHAL_SSH_KNOWN_HOSTS") or not trust.is_file():
+        raise ValueError(
+            "Set NARWHAL_SSH_KNOWN_HOSTS to the known-hosts file with every host's verified key"
+        )
     source_path = paths["NARWHAL_LAUNCH_CONFIG"].with_name("engine-launch.sources.json")
     derived_path = paths["NARWHAL_FLEET"].with_name("deployment.env")
-    outputs = [paths[n] for n in paths if n != "NARWHAL_SSH_KNOWN_HOSTS"] + [
-        source_path,
-        derived_path,
-    ]
-    if len({p.resolve() for p in [*outputs, paths["NARWHAL_SSH_KNOWN_HOSTS"]]}) != 6:
+    outputs = [*paths.values(), source_path, derived_path]
+    if len({p.resolve() for p in [*outputs, trust]}) != 6:
         raise ValueError("Select distinct private configuration output paths")
     if out.exists() or any(p.exists() for p in outputs):
         raise ValueError(
             "Archive previous generated configuration and choose a fresh discovery directory"
         )
+    trees = {
+        role: expected_tree(env, int(role.split("-")[1]))
+        for host in hosts
+        for role in host.roles
+        if role != "router"
+    }
     env = {**env, **{name: str(path) for name, path in paths.items()}}
     out.mkdir(mode=0o700, parents=True)
-    trust = paths["NARWHAL_SSH_KNOWN_HOSTS"]
-    trust.parent.mkdir(parents=True, exist_ok=True)
-    if not trust.exists():
-        write_private(trust, b"")
-    ssh = SSH(env, out / "logs", enroll_hosts=True)
+    ssh = SSH(env, out / "logs")
     observations = {}
-    checkpoint_jobs = {}
+    checkpoint_jobs: dict[tuple[str, str], tuple[Host, Path, list[str]]] = {}
     model_files = {}
     for host in hosts:
-        ssh.run(host, "enroll management host", "hostname")
-        print(f"{host.id}: authenticated; SSH host key recorded", flush=True)
+        ssh.run(host, "access", "management access", "hostname")
+        print(f"{host.id}: host key matched the known-hosts file; SSH login verified", flush=True)
         for role in host.roles:
             if role == "router":
                 continue
@@ -482,15 +501,15 @@ def discover(env: dict[str, str], out: Path) -> Path:
                 "run_dir": "RUN_DIR",
                 "interface": "FABRIC_INTERFACE",
             }
-            inputs = {name: value(env, node, field) for name, field in fields.items()}
-            if not all(inputs.values()):
+            selected = {name: value(env, node, field) for name, field in fields.items()}
+            if not all(selected.values()):
                 raise ValueError(
                     f"{role}: set image, model, run directory and fabric interface in .env"
                 )
-            if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", inputs["image"]):
+            if not re.fullmatch(r"(?:sha256:|[^\s]+@sha256:)[0-9a-f]{64}", selected["image"]):
                 raise ValueError(f"{role}: pin ENGINE_IMAGE to an image ID or registry digest")
             packages = engine.image_packages
-            model_files[role] = model_file(env, node, inputs["model_dir"])
+            model_files[role] = model_file(env, node, selected["model_dir"])
             if model_files[role] is not None:
                 if not isinstance(engine, ModelFormats):
                     label = engine_backend(env.get("NARWHAL_ENGINE_BACKEND")).label
@@ -499,40 +518,44 @@ def discover(env: dict[str, str], out: Path) -> Path:
                     )
                 if engine.model_file_packages:
                     packages += "|" + engine.model_file_packages
-            inputs.update(
-                environment_prefixes=engine.environment_prefixes,
-                managed_environment=sorted(engine.managed_environment),
-                packages=packages,
-            )
+            inputs = {
+                **selected,
+                "environment_prefixes": engine.environment_prefixes,
+                "managed_environment": sorted(engine.managed_environment),
+                "packages": packages,
+            }
             payload = out / f"{role}-inputs.json"
             write_private(payload, json.dumps(inputs).encode())
             observed = json.loads(
                 ssh.run(
                     host,
+                    "discover",
                     "inspect GPU and image",
                     "python3 -c " + shlex.quote(PROBE),
                     payload=payload,
                 )
             )
             observations[role] = observed
-            key = (host.id, inputs["model_dir"])
+            key = (host.id, selected["model_dir"])
             if key not in checkpoint_jobs:
                 checkpoint_jobs[key] = (host, payload, [])
             checkpoint_jobs[key][2].append(role)
             print(f"{role}: GPU devices, image packages and model inspected", flush=True)
     checkpoint_script = Path(checkpoint_manifest.__file__).read_text()
 
-    def inspect_checkpoint(job):
+    def inspect_checkpoint(job: tuple[Host, Path, list[str]]) -> dict:
         host, payload, _ = job
-        return json.loads(
+        manifest: dict = json.loads(
             ssh.run(
                 host,
+                "discover",
                 "hash checkpoint files",
                 "python3 -c " + shlex.quote(checkpoint_script),
                 payload=payload,
                 reason=checkpoint_manifest.FAILURE,
             )
         )
+        return manifest
 
     checkpoints = {}
     jobs = list(checkpoint_jobs.values())
@@ -575,6 +598,12 @@ def discover(env: dict[str, str], out: Path) -> Path:
             f"{role}: checkpoint file {differing} differs from {baseline_role}; "
             "inspect the private per-engine checkpoint manifests"
         )
+    for role, checkpoint in checkpoints.items():
+        if checkpoint["model_tree_sha256"] != trees[role]:
+            raise ValueError(
+                f"{role}: checkpoint tree digest {checkpoint['model_tree_sha256']} differs from "
+                f"NARWHAL_MODEL_TREE_SHA256; inspect {out / f'{role}-checkpoint.json'}"
+            )
     fleet, launches, sources, derived = build_records(hosts, env, observations, out)
     derived.update({name: str(path) for name, path in paths.items()})
     role_env = {
@@ -606,24 +635,3 @@ def discover(env: dict[str, str], out: Path) -> Path:
     }
     write_private(out / "manifest.json", json.dumps(manifest, indent=2).encode())
     return derived_path
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Derive private deployment records from the loaded environment and remote "
-        "inspection."
-    )
-    parser.add_argument("--out", required=True, type=Path)
-    args = parser.parse_args(argv)
-    try:
-        derived_path = discover(dict(os.environ), args.out)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        if type(error) is ValueError:
-            parser.exit(1, f"{error}\n")
-        parser.exit(1, "Discovery failed; inspect its private logs and the named .env fields.\n")
-    print(f"Generated private configuration. Load {derived_path} before preparation.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

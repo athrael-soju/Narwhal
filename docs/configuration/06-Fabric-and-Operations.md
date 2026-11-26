@@ -6,11 +6,11 @@ description: Fabric qualification, CLI precedence, request journal and configura
 
 ## Fabric workload qualification
 
-`deploy_hosts.py prepare` copies a snapshot of the fabric helper, `tools/deployment/fabric_budget.py`, for every engine host. The prepared manifest and `NARWHAL_FABRIC_BUDGET_SHA256` hold the snapshot's SHA-256.
+`narwhal deploy package` copies a snapshot of the fabric helper, `narwhal/deployment/fabric_budget.py` from the packaged wheel, for every engine host. On an SGLang fleet it also copies the KV handoff measurement tool, `narwhal/backends/sglang/transfer_measure.py`. The package manifest and `NARWHAL_FABRIC_BUDGET_SHA256` and `NARWHAL_TRANSFER_MEASURE_SHA256` hold each snapshot's SHA-256.
 
-`deploy_hosts.py install` verifies the installed snapshot at `runs/deployment-tools/fabric_budget.py`, and `NARWHAL_FABRIC_BUDGET_TOOL` holds its path.
+`narwhal deploy install` verifies the installed snapshots under `runs/deployment-tools/`, and `NARWHAL_FABRIC_BUDGET_TOOL` and `NARWHAL_TRANSFER_MEASURE_TOOL` hold their paths. Both run with the engine host's `python3` and the standard library only.
 
-If the helper changes, start a new preparation directory.
+If a helper changes, build a new package.
 
 ### Calculating the workload budget
 
@@ -23,7 +23,7 @@ Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#derivi
 | `--model-config PATH`             | required         | Model configuration file, whose hash must match a runtime layout.                                         |
 | `--launch-config PATH`            | required         | Engine launch record that supplies the tensor parallel (TP) size, whose hash must match a runtime layout. |
 | `--runtime-layout PATH`           | one cache source | Captured `cache-layout.json`.                                                                             |
-| `--transfer-metrics BEFORE AFTER` | one cache source | SGLang prefill `/metrics` saved by `measure-transfer` before and after its handoffs.                      |
+| `--transfer-record PATH`          | one cache source | `transfer.json` that the SGLang transfer measurement tool writes.                                         |
 | `--prompt-tokens N`               | required         | Prompt length, in tokens.                                                                                 |
 | `--handoffs-per-s RATE`           | required         | Peak remote KV handoff rate, in handoffs per second.                                                      |
 | `--burst N`                       | required         | Number of KV handoffs in a burst.                                                                         |
@@ -31,9 +31,9 @@ Engines in one [cache-equivalence group](../deploy/03-Validate-Engines.md#derivi
 | `--headroom FACTOR`               | required         | Multiplier of at least 1 applied to the required rate.                                                    |
 | `--out PATH`                      | required         | Fresh private output path for the budget.                                                                 |
 
-Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--uniform-cache`, or `--bytes-per-token`.
+Give `calculate` one cache source: `--runtime-layout`, `--transfer-record`, `--uniform-cache`, or `--bytes-per-token`. `calculate` checks the `--prompt-tokens` of a transfer record against its own.
 
-`measure-transfer` puts the decode engine in the decode role, switching it out and back first when it already serves decode. It then sends handoffs and returns the decode engine to the role it found. `measure-transfer` accepts these options:
+The SGLang transfer measurement tool, `"$NARWHAL_TRANSFER_MEASURE_TOOL"`, puts the decode engine in the decode role, switching it out and back first when it already serves decode. It then sends handoffs and returns the decode engine to the role it found. It accepts these options:
 
 | Option                  | Default                  | Description                                                                                                     |
 | ----------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
@@ -46,7 +46,9 @@ Give `calculate` one cache source: `--runtime-layout`, `--transfer-metrics`, `--
 | `--prompt-tokens N`     | required                 | Prompt length of each handoff, the same as the budget's `--prompt-tokens`.                                      |
 | `--handoffs N`          | 8                        | Number of handoffs.                                                                                             |
 | `--api-key-env NAME`    | `NARWHAL_ENGINE_API_KEY` | Environment variable whose value, when set, goes to both engines as a bearer token.                             |
-| `--out-dir PATH`        | required                 | New directory for `before.prom` and `after.prom`.                                                               |
+| `--out-dir PATH`        | required                 | New directory for `before.prom`, `after.prom` and `transfer.json`.                                              |
+
+`transfer.json`, schema `narwhal.kv-transfer-measurement` version 1, holds the metric series, the prompt length, the mean payload bytes per handoff, the handoff count, and the SHA-256 of `before.prom` and `after.prom`. The tool writes all three files at mode 0600.
 
 ### Retained budget evidence
 
@@ -54,7 +56,7 @@ Budget file: `runs/fabric-*/budget.json`, mode 0600, on the representative engin
 
 The budget file holds:
 
-- the model and launch hashes, and the runtime-layout or transfer-metrics hashes
+- the model and launch hashes, and the runtime-layout hash, or the transfer record's hash with those of its metric snapshots
 - the TP size, and from a runtime layout the image identity and launch-plan hash
 - the prompt length
 - the payload per handoff, a padded-page bound or a measured mean
@@ -69,7 +71,7 @@ The captured layout holds per-layer page bytes for each TP rank, the token block
 
 ### Uniform-cache options
 
-Deployments use `--runtime-layout` on vLLM and TensorRT-LLM, and `--transfer-metrics` on SGLang, for every model.
+Deployments use `--runtime-layout` on vLLM and TensorRT-LLM, and `--transfer-record` on SGLang, for every model.
 
 Offline estimates use `--uniform-cache` for an analytical attention or multi-head latent attention (MLA) estimate, or `--bytes-per-token N` for a measured override. Both options require `--element-bytes` of `1`, `2` or `4`, and `--block-tokens`.
 
@@ -91,7 +93,6 @@ These `fabric_budget.py` commands compare a link sample with a budget:
 
 | Command       | Result                                                                                                              |
 | ------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `compare`     | Compares one sample, from `--iperf` or `--gbps`, with a budget.                                                     |
 | `record-edge` | Records whether the sample rate meets the source budget for the link fingerprint.                                   |
 | `reuse-edge`  | Writes a new private comparison of the retained sample against a corrected budget, for a matching link fingerprint. |
 

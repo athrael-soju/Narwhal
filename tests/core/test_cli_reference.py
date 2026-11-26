@@ -76,6 +76,7 @@ class CliReferenceTests(unittest.TestCase):
                 if command == "narwhal":
                     reference += (ROOT / "docs/Config-Inspection.md").read_text()
                     reference += (ROOT / "docs/Diagnostic-Bundles.md").read_text()
+                    reference += (ROOT / "docs/cli/Deploy.md").read_text()
                 documented = set(re.findall(r"^\|\s*`(--[\w-]+)[ `]", reference, re.MULTILINE))
                 self.assertEqual(options, documented - {"--version"}, command)
                 if "--version" in parser._option_string_actions:

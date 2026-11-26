@@ -8,9 +8,9 @@ from pathlib import Path
 from narwhal.backends import load
 from narwhal.deployment.launch_engine.plan import build, option, side_channel_port
 from narwhal.deployment.launch_engine.settings import KV_SIDE_CHANNEL_PORT_ENV, NAMES
+from narwhal.deployment.role_env import ENGINE_FIELDS, select_values
 from tests.backends.contract import fixtures, launch_record, with_launcher
 from tests.deployment.fixtures import launcher_inputs
-from tools.deployment.prepare_host_env import ENGINE_FIELDS, select_values
 
 NEUTRAL = {
     "context_length": 2048,
@@ -111,24 +111,13 @@ class NeutralSettingsTests(unittest.TestCase):
         self.assertEqual(side_channel_port({KV_SIDE_CHANNEL_PORT_ENV: "5700"}), 5700)
         with self.assertRaises(KeyError):
             side_channel_port({"NARWHAL_SGLANG_BOOTSTRAP_PORT": "5600"})
-        base = {"NARWHAL_DEPLOYMENT_REVISION": "a" * 40}
-        base.update({f"NARWHAL_{field}": "synthetic" for field in ENGINE_FIELDS})
+        base = {f"NARWHAL_{field}": "synthetic" for field in ENGINE_FIELDS}
         fleet = {"engines": [], "engine": {}}
         values = select_values("engine", 1, fleet, {**base, KV_SIDE_CHANNEL_PORT_ENV: "5700"})
         self.assertEqual(values[KV_SIDE_CHANNEL_PORT_ENV], "5700")
         del base[KV_SIDE_CHANNEL_PORT_ENV]
         with self.assertRaisesRegex(ValueError, f"^{KV_SIDE_CHANNEL_PORT_ENV} is unset"):
             select_values("engine", 1, fleet, base)
-        for old, new in (
-            ("NARWHAL_NIXL_SIDE_CHANNEL_PORT", KV_SIDE_CHANNEL_PORT_ENV),
-            ("NARWHAL_NODE_2_SGLANG_BOOTSTRAP_PORT", "NARWHAL_NODE_2_KV_SIDE_CHANNEL_PORT"),
-        ):
-            env = {**base, KV_SIDE_CHANNEL_PORT_ENV: "5700", old: "5601"}
-            with (
-                self.subTest(old=old),
-                self.assertRaisesRegex(ValueError, f"^rename {old} to {new}$"),
-            ):
-                select_values("engine", 1, fleet, env)
 
 
 if __name__ == "__main__":

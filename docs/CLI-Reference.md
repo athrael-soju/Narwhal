@@ -30,6 +30,12 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
     Set up, launch, verify, exercise and stop a local development fleet.
 
+-   [`narwhal deploy`](cli/Deploy.md)
+
+    ---
+
+    Discover SSH hosts, then package and install Narwhal on them.
+
 -   [`narwhal-engine`](cli/Engine.md)
 
     ---
@@ -64,12 +70,12 @@ description: Reference for the narwhal command and the five narwhal-* commands i
 
 ## Text-mode exit codes
 
-`narwhal config`, `narwhal dev`, `narwhal-engine`, `narwhal-attest`, `narwhal-serve`, `narwhal-profile`, and `narwhal-check` use these codes in text mode:
+`narwhal config`, `narwhal dev`, `narwhal deploy`, `narwhal-engine`, `narwhal-attest`, `narwhal-serve`, `narwhal-profile`, and `narwhal-check` use these codes in text mode:
 
 | Exit code | Outcome                                                                                               |
 | :-------: | ----------------------------------------------------------------------------------------------------- |
 |       `0` | Success.                                                                                              |
-|       `1` | Operation failure: engine HTTP request, runtime inspection, listener bind, verification, or teardown. |
+|       `1` | Operation failure: engine HTTP request, remote host command, runtime inspection, listener bind, verification, or teardown. |
 |       `2` | Invalid arguments or configuration inputs.                                                            |
 
 These commands add exit codes for specific cases:
@@ -78,6 +84,8 @@ These commands add exit codes for specific cases:
 | --- | :--: | --- | --- |
 | `narwhal dev` | `1` | The instance reports `degraded`. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
 | `narwhal dev setup`, `narwhal dev init` | `2` | A download or an initialization check fails. | [narwhal dev output and exit codes](cli/Dev.md#output-and-exit-codes) |
+| `narwhal deploy` | `2` | An output directory already exists. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
+| `narwhal deploy tunnel` | `130` | Ctrl+C closes the tunnel. | [narwhal deploy output and exit codes](cli/Deploy.md#output-and-exit-codes) |
 | `narwhal-engine prepare` | `2` | Preparation fails. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-engine` | `1` | An output artifact already exists. | [narwhal-engine actions](cli/Engine.md#actions) |
 | `narwhal-check` | `1` | `narwhal-check` skips a gate with `--evidence-out`. | [narwhal-check exit codes](cli/Check.md#exit-codes) |
@@ -92,4 +100,4 @@ These commands add exit codes for specific cases:
 
 ## JSON command results
 
-`narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check` accept `--format json`. With it, the command prints a [versioned command result](Command-Results.md) and sets its exit code from the result `status`.
+`narwhal config`, `narwhal diagnostics`, `narwhal dev`, `narwhal-engine`, `narwhal-profile`, and `narwhal-check` accept `--format json`, and so do `narwhal deploy discover`, `access`, `package` and `install`. With it, the command prints a [versioned command result](Command-Results.md) and sets its exit code from the result `status`.

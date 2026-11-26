@@ -10,9 +10,9 @@ Deploy one model per fleet. Its engines need a compatible KV layout, KV transfer
 
 | Host | Responsibilities | Required software and inputs |
 | --- | --- | --- |
-| Management workstation | Generate private configuration, inspect hosts, package and install the approved revision, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH, your site's access tools, and `sshpass` for password authentication. The private `.env`, approved revision, engine image, model paths, fabric interface, run directory, ports, and credentials. |
-| Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv`, Git, Make, curl, Docker Engine, and Compose. The verified bundle and revision, engine and attestation URLs, API credential, model settings, and SLOs. |
-| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv`, Git, Make, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
+| Management workstation | Generate private configuration, inspect hosts, package and install the Narwhal wheel, run trials, and retain evidence. | Git, Bash, Python 3.11+ with `venv`, Make, OpenSSH, your site's access tools, and `sshpass` for password authentication. The private `.env`, the wheel and its SHA-256, the known-hosts file, engine image, model paths and tree digest, fabric interface, run directory, ports, and credentials. |
+| Router and observability host | Run the router and checks, and host Prometheus and Grafana. | Python 3.11+ with `venv` and access to a Python package index, Git, Make, curl, Docker Engine, and Compose. The verified package, engine and attestation URLs, API credential, model settings, and SLOs. |
+| Engine host | Run vLLM, SGLang or TensorRT-LLM and the attestation sidecar, and capture cache and transfer evidence. | Python 3.11+ with `venv` and access to a Python package index, curl, accelerator driver, container runtime, and transfer devices. The accelerator allocation, TP shape, pinned image, checkpoint, launch policy, and fabric addresses and ports. |
 
 ### Concurrency
 
@@ -26,7 +26,7 @@ Per-engine and per-host rules:
 
 ### Deployment record
 
-Create a private deployment record before the first command. For every stage, retain the host or stable host alias, source revision, starting state, executed commands, exit status, and generated artifacts.
+Create a private deployment record before the first command. For every stage, retain the host or stable host alias, the wheel's SHA-256, starting state, executed commands, exit status, and generated artifacts.
 
 On failure, record the state before changing it, retain the failed evidence, and remove only files and processes from that attempt. Replace private addresses, paths, and credentials with stable aliases before exporting evidence.
 
@@ -42,11 +42,11 @@ Record each gate's result before the next gate.
 
     Freeze inputs and discover the deployment.
 
--   [Install the approved revision](deploy/02-Install.md)
+-   [Install Narwhal on the hosts](deploy/02-Install.md)
 
     ---
 
-    Package and install the approved revision.
+    Package and install the Narwhal wheel.
 
 -   [Validate and start engines](deploy/03-Validate-Engines.md)
 
@@ -100,8 +100,8 @@ Record these inputs and artifacts in the private deployment record:
 
 | Stage | Inputs | Evidence to retain |
 | --- | --- | --- |
-| Discovery and access | `.env`, installed image and model, GPU inspection utilities, launch policy, SSH route and key | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
-| Package and install | Approved commit, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
+| Discovery and access | `.env`, installed image and model, the checkpoint tree digest, GPU inspection utilities, launch policy, SSH route and key, the known-hosts file | `.env`, the files discovery writes under `config/`, `runs/discovery/<run>/`, `runs/access-<id>/` |
+| Package and install | The wheel and its SHA-256, role mapping, per-engine allocation, host prerequisites | `runs/deployment-env/<run>/`, the remote `~/Narwhal-deploy/<id>/` directory |
 | Host and engine validation | PCI accelerator identity, visible devices, allocation, TP size, image identity, checkpoint tree digest, paths, and ports | Engine role env, each engine's `ENGINE_RUN` directory, the discovery checkpoint manifests |
 | Fabric | Peer addresses, transport, representative process, live cache layout, workload budget | `budget.json`, `cache-layout.json`, and the `<edge>.*` files of every directed edge |
 | Attestation | Checked live process, model dimensions, and sidecar endpoint, with the vLLM protocol version, cache layout, transfer mode, and handshake policy | `engine-attestation.json` and `startup.log` in each `ENGINE_RUN` directory, `runs/deployment/fleet.json`, `runs/fleet.before-attestation-<id>.json` |

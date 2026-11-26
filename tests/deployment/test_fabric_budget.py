@@ -1,21 +1,19 @@
 """Check replica-wide cache sizing, workload bounds and receiver throughput units."""
 
 import contextlib
+import hashlib
 import io
 import json
-import math
 import tempfile
-import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from tools.deployment.fabric_budget import (
+from narwhal.deployment.fabric_budget import (
+    TRANSFER_SCHEMA,
     cache_shape,
     calculate,
     main,
     received_gbps,
-    transfer_payload,
 )
 
 
@@ -201,7 +199,7 @@ class FabricBudgetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             calculate(1000, 128, 128, 1, 1, 1, 0.9)
 
-    def test_comparison_uses_received_bytes_and_rejects_iperf_errors(self):
+    def test_tcp_rate_uses_received_bytes_and_rejects_iperf_errors(self):
         sample = {
             "start": {"test_start": {"protocol": "TCP"}},
             "end": {
@@ -210,16 +208,6 @@ class FabricBudgetTests(unittest.TestCase):
             },
         }
         self.assertEqual(received_gbps(sample), 2)
-        with tempfile.TemporaryDirectory() as folder:
-            budget = Path(folder) / "budget.json"
-            data = Path(folder) / "sample.json"
-            budget.write_text(json.dumps({"required_gbps": 2.5}))
-            data.write_text(json.dumps(sample))
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(
-                    main(["compare", "--budget", str(budget), "--iperf", str(data)]), 1
-                )
-                self.assertEqual(main(["compare", "--budget", str(budget), "--gbps", "2.5"]), 0)
         sample["error"] = "synthetic connection error"
         with self.assertRaisesRegex(ValueError, "iperf3 reported"):
             received_gbps(sample)
@@ -266,56 +254,32 @@ class FabricBudgetTests(unittest.TestCase):
                     main(args)
                 self.assertEqual(out.read_bytes(), initial)
 
-    def test_measured_sglang_transfers_sum_each_rank_mean(self):
-        def metrics(rank0: tuple[float, int], rank1: tuple[float, int]) -> str:
-            lines = ["# TYPE sglang:kv_transfer_total_mb histogram"]
-            for rank, (mib, count) in enumerate((rank0, rank1)):
-                labels = f'{{engine_type="dynamic",tp_rank="{rank}"}}'
-                lines += [
-                    f'sglang:kv_transfer_total_mb_bucket{{le="1.0",tp_rank="{rank}"}} {count}',
-                    f"sglang:kv_transfer_total_mb_sum{labels} {mib}",
-                    f"sglang:kv_transfer_total_mb_count{labels} {count}",
-                ]
-            return "\n".join(lines) + "\n"
-
-        before = metrics((1.0, 1), (1.0, 1))
-        after = metrics((7.0, 5), (5.0, 5))
-        self.assertEqual(transfer_payload(before, after), (math.ceil(2.5 * 1024 * 1024), 4))
-        self.assertEqual(transfer_payload("", metrics((3.0, 2), (3.0, 2)))[1], 2)
-        for start, end in (
-            (before, "sglang:num_running_reqs 0\n"),
-            (before, before),
-            (before, metrics((7.0, 5), (5.0, 4))),
-        ):
-            with self.subTest(end=end), self.assertRaises(ValueError):
-                transfer_payload(start, end)
-
-    def test_cli_sizes_the_budget_from_measured_transfers(self):
+    def test_cli_sizes_the_budget_from_a_transfer_record(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            model, launch, before, after, out = (
+            model, launch, record, out = (
                 root / name
-                for name in ("model.json", "launch.json", "before", "after", "budget.json")
+                for name in ("model.json", "launch.json", "transfer.json", "budget.json")
             )
             model.write_text(json.dumps({"layer_types": ["linear_attention", "full_attention"]}))
             launch.write_text(json.dumps({"tensor_parallel_size": 1}))
-            before.write_text(
-                "sglang:kv_transfer_total_mb_sum 0.0\nsglang:kv_transfer_total_mb_count 0.0\n"
-            )
-            after.write_text(
-                "sglang:kv_transfer_total_mb_sum 20.0\nsglang:kv_transfer_total_mb_count 4.0\n"
-            )
+            measurement = {
+                "schema": TRANSFER_SCHEMA,
+                "schema_version": 1,
+                "series": "synthetic:kv_transfer_total_mb",
+                "prompt_tokens": 1024,
+                "payload_bytes_per_handoff": 5 * 1024 * 1024,
+                "handoffs": 4,
+                "metrics_sha256": {"before.prom": "a" * 64, "after.prom": "b" * 64},
+            }
             args = [
                 "calculate",
-                "--transfer-metrics",
-                str(before),
-                str(after),
+                "--transfer-record",
+                str(record),
                 "--model-config",
                 str(model),
                 "--launch-config",
                 str(launch),
-                "--prompt-tokens",
-                "1024",
                 "--handoffs-per-s",
                 "1",
                 "--burst",
@@ -327,116 +291,34 @@ class FabricBudgetTests(unittest.TestCase):
                 "--out",
                 str(out),
             ]
+            for change, message in (
+                ({"prompt_tokens": 512}, "measured another --prompt-tokens"),
+                ({"schema_version": 2}, "unsupported KV transfer measurement record"),
+                ({"metrics_sha256": {"before.prom": "a" * 64}}, "SHA-256 of both metric"),
+                ({"payload_bytes_per_handoff": 0}, "positive integer payload_bytes_per_handoff"),
+            ):
+                with self.subTest(change=change):
+                    record.write_text(json.dumps({**measurement, **change}))
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as exit:
+                        main([*args, "--prompt-tokens", "1024"])
+                    self.assertEqual(exit.exception.code, 2)
+                    self.assertIn(message, stderr.getvalue())
+                    self.assertFalse(out.exists())
+            record.write_text(json.dumps(measurement))
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit:
-                main([*args, "--block-tokens", "64"])
+                main([*args, "--prompt-tokens", "1024", "--block-tokens", "64"])
             self.assertEqual(exit.exception.code, 2)
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(main(args), 0)
+                self.assertEqual(main([*args, "--prompt-tokens", "1024"]), 0)
             budget = json.loads(out.read_text())
             self.assertEqual(budget["payload_bytes_per_handoff"], 5 * 1024 * 1024)
             self.assertEqual(budget["layout"], "measured_transfer")
             self.assertEqual(budget["measured_handoffs"], 4)
+            self.assertEqual(budget["measured_series"], "synthetic:kv_transfer_total_mb")
+            self.assertEqual(budget["transfer_metrics_sha256"], ["a" * 64, "b" * 64])
+            self.assertEqual(
+                budget["transfer_record_sha256"], hashlib.sha256(record.read_bytes()).hexdigest()
+            )
             self.assertEqual(budget["prompt_tokens"], 1024)
             self.assertAlmostEqual(budget["required_gbps"], 8 * 5 * 1024 * 1024 * 1.25 / 1e9)
-
-    def test_measure_transfer_sends_cold_paired_legs_and_saves_the_snapshots(self):
-        for found, switches in (
-            ("prefill", [("decode", 4.0), ("prefill", None)]),
-            ("decode", [("prefill", None), ("decode", 2.5)]),
-        ):
-            with self.subTest(found=found):
-                self._measure_transfer(found, switches)
-
-    def _measure_transfer(self, found: str, switches: list) -> None:
-        bodies: dict[str, list[dict]] = {"prefill": [], "decode": []}
-        modes = {"prefill": "prefill", "decode": found}
-        switched: list[tuple[str, float | None]] = []
-
-        def engine(role: str) -> ThreadingHTTPServer:
-            class Handler(BaseHTTPRequestHandler):
-                def do_GET(self):
-                    if self.path == "/server_info":
-                        state = {"disaggregation_mode": modes[role]}
-                        if modes[role] == "decode":
-                            state["decode_cuda_graph_memory_gb"] = 2.5
-                        self._reply(json.dumps({"internal_states": [state]}).encode())
-                        return
-                    count = len(bodies["prefill"])
-                    text = (
-                        f'sglang:kv_transfer_total_mb_sum{{tp_rank="0"}} {2.0 * count}\n'
-                        f'sglang:kv_transfer_total_mb_count{{tp_rank="0"}} {count}\n'
-                    )
-                    self._reply(text.encode())
-
-                def do_POST(self):
-                    length = int(self.headers["Content-Length"])
-                    body = json.loads(self.rfile.read(length))
-                    if self.path == "/pd_role_switch":
-                        switched.append((body["new_role"], body.get("decode_cuda_graph_memory_gb")))
-                        modes[role] = body["new_role"]
-                        self._reply(b'{"success": true}')
-                        return
-                    bodies[role].append(body)
-                    self._reply(b"{}")
-
-                def _reply(self, data: bytes) -> None:
-                    self.send_response(200)
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-
-                def log_message(self, *args):
-                    pass
-
-            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            self.addCleanup(server.server_close)
-            self.addCleanup(server.shutdown)
-            return server
-
-        prefill, decode = engine("prefill"), engine("decode")
-        with tempfile.TemporaryDirectory() as folder:
-            out = Path(folder) / "transfer"
-            launch = Path(folder) / "launch.json"
-            launch.write_text(json.dumps({"runtime": {"decode_cuda_graph_memory_gb": 4.0}}))
-            args = [
-                "measure-transfer",
-                "--prefill",
-                f"http://127.0.0.1:{prefill.server_port}",
-                "--decode",
-                f"http://127.0.0.1:{decode.server_port}",
-                "--bootstrap-host",
-                "prefill.invalid",
-                "--bootstrap-port",
-                "8998",
-                "--model",
-                "model",
-                "--launch-config",
-                str(launch),
-                "--prompt-tokens",
-                "300",
-                "--handoffs",
-                "3",
-                "--out-dir",
-                str(out),
-            ]
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
-                self.assertEqual(main(args), 0)
-            self.assertEqual(
-                json.loads(stdout.getvalue()),
-                {"payload_bytes_per_handoff": 2 * 1024 * 1024, "handoffs": 3},
-            )
-            self.assertEqual(
-                sorted(path.name for path in out.iterdir()), ["after.prom", "before.prom"]
-            )
-        self.assertEqual(switched, switches)
-        self.assertEqual(modes["decode"], found)
-        self.assertEqual(bodies["prefill"], bodies["decode"])
-        self.assertEqual(len({body["bootstrap_room"] for body in bodies["prefill"]}), 3)
-        for body in bodies["prefill"]:
-            self.assertEqual(len(body["prompt"]), 300)
-            self.assertEqual(
-                (body["bootstrap_host"], body["bootstrap_port"]), ("prefill.invalid", 8998)
-            )
-            self.assertEqual(body["max_tokens"], 1)

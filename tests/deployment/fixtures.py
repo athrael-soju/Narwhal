@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -236,3 +237,25 @@ def launcher_inputs(root):
         "NARWHAL_NODE_1_SSH_PASSWORD": "management-only-secret",
     }
     return record, env
+
+
+# The engine-host helpers that a deployment package takes from the wheel.
+WHEEL_HELPERS = (
+    "deployment/fabric_budget.py",
+    "backends/vllm/cache_capture_hook.py",
+    "backends/trtllm/cache_capture_hook.py",
+    "backends/sglang/transfer_measure.py",
+)
+
+
+def synthetic_wheel(root, version="0.13.0"):
+    """Write a stand-in Narwhal wheel with the helper modules and return its deployment inputs."""
+    wheel = Path(root) / f"narwhal_inference-{version}-py3-none-any.whl"
+    package = Path(launch_start.__file__).resolve().parents[2]
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name in WHEEL_HELPERS:
+            archive.writestr(f"narwhal/{name}", (package / name).read_bytes())
+    return {
+        "NARWHAL_WHEEL": str(wheel),
+        "NARWHAL_WHEEL_SHA256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+    }

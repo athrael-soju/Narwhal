@@ -12,10 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from narwhal.backends.sglang import discovery as sglang_discovery
-from narwhal.deployment.engine_launch import load_launches
-from narwhal.deployment.launch_engine.plan import build, conv_state_layers
-from tools.deployment.deploy_hosts import prepare
-from tools.deployment.discover_deployment import (
+from narwhal.deployment.discovery import (
     PROBE,
     build_records,
     derive_hosts,
@@ -24,10 +21,14 @@ from tools.deployment.discover_deployment import (
     model_file,
     service_url,
 )
-from tools.deployment.host_access import SSH, load_hosts
-from tools.deployment.prepare_host_env import select_values
+from narwhal.deployment.engine_launch import load_launches
+from narwhal.deployment.hosts import load_hosts
+from narwhal.deployment.install import package
+from narwhal.deployment.launch_engine.plan import build, conv_state_layers
+from narwhal.deployment.role_env import select_values
+from tests.deployment.fixtures import synthetic_wheel
 
-ROOT = Path(__file__).resolve().parents[2]
+KNOWN_HOSTS = "host1.invalid ssh-ed25519 synthetic-public-key\n"
 
 
 def observation(runtime="rocm", address="10.0.0.1"):
@@ -80,7 +81,7 @@ def environment(root):
         "NARWHAL_HOSTS": str(root / "config/hosts.local.json"),
         "NARWHAL_LAUNCH_CONFIG": str(root / "config/engine-launch.local.json"),
         "NARWHAL_FLEET": str(root / "config/fleet.json"),
-        "NARWHAL_SSH_KNOWN_HOSTS": str(root / "config/ssh.known_hosts"),
+        "NARWHAL_SSH_KNOWN_HOSTS": str(root / "known_hosts"),
         "NARWHAL_ENGINE_IMAGE": "sha256:" + "a" * 64,
         "NARWHAL_ENGINE_MODEL_NAME": "synthetic-model",
         "NARWHAL_MODEL_DIR": "/models/synthetic-model",
@@ -90,10 +91,10 @@ def environment(root):
         "NARWHAL_ATTEST_PORT": "8010",
         "NARWHAL_KV_SIDE_CHANNEL_PORT": "5557",
         "NARWHAL_UCX_TCP_PORT_RANGE": "20000-21000",
-        "NARWHAL_DEPLOYMENT_REVISION": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-        ).strip(),
+        "NARWHAL_MODEL_TREE_SHA256": "c" * 64,
     }
+    if root.is_dir():
+        Path(env["NARWHAL_SSH_KNOWN_HOSTS"]).write_text(KNOWN_HOSTS)
     for node in (1, 2):
         env.update(
             {
@@ -104,16 +105,33 @@ def environment(root):
     return env
 
 
-class FakeInspectionSSH:
-    def __init__(self, env, logs, *, enroll_hosts=False):
-        assert enroll_hosts
-        self.calls = []
-        self.trust = Path(env["NARWHAL_SSH_KNOWN_HOSTS"])
+def environment_file(path):
+    """Return the variables that a role environment file exports."""
+    values = {}
+    for line in path.read_text().splitlines():
+        name, quoted = line.removeprefix("export ").split("=", 1)
+        values[name] = shlex.split(quoted)[0]
+    return values
 
-    def run(self, host, gate, script, payload=None, reason=None):
-        self.calls.append((host.id, gate))
+
+# The stage whose time limit bounds each remote discovery operation.
+STAGES = {
+    "management access": "access",
+    "inspect GPU and image": "discover",
+    "hash checkpoint files": "discover",
+}
+
+
+class FakeInspectionSSH:
+    def __init__(self, env, logs):
+        self.calls = []
+        assert Path(env["NARWHAL_SSH_KNOWN_HOSTS"]).read_text() == KNOWN_HOSTS
+
+    def run(self, host, stage, operation, script, payload=None, reason=None):
+        assert STAGES[operation] == stage
+        self.calls.append((host.id, operation))
         if payload:
-            if gate == "hash checkpoint files":
+            if operation == "hash checkpoint files":
                 return json.dumps(
                     {
                         "model_tree_sha256": "c" * 64,
@@ -123,8 +141,6 @@ class FakeInspectionSSH:
                     }
                 )
             return json.dumps(observation(address="10.0.0." + host.id.split("-")[-1]))
-        with self.trust.open("a") as f:
-            f.write(f"{host.id} ssh-ed25519 synthetic-public-key\n")
         return "synthetic-host"
 
 
@@ -141,13 +157,13 @@ def gguf_environment(env):
 class GgufInspectionSSH(FakeInspectionSSH):
     """Inspects a model directory with a GGUF file and an image with the GGUF plugin."""
 
-    def run(self, host, gate, script, payload=None, reason=None):
-        result = super().run(host, gate, script, payload)
-        if gate == "hash checkpoint files":
+    def run(self, host, stage, operation, script, payload=None, reason=None):
+        result = super().run(host, stage, operation, script, payload)
+        if operation == "hash checkpoint files":
             record = json.loads(result)
             record["files"].append({"path": "weights.gguf", "size": 4, "sha256": GGUF_SHA256})
             return json.dumps(record)
-        if gate == "inspect GPU and image":
+        if operation == "inspect GPU and image":
             pattern = re.compile(json.loads(payload.read_text())["packages"])
             observed = json.loads(result)
             observed["multimodal"] = True
@@ -176,7 +192,7 @@ class DiscoveryTests(unittest.TestCase):
             env["NARWHAL_MODEL_PATH"] = env["NARWHAL_MODEL_DIR"] + "/weights.gguf"
             out = root / "discovery"
             with (
-                patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                patch("narwhal.deployment.discovery.SSH", GgufInspectionSSH),
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, out)
@@ -208,6 +224,7 @@ class DiscoveryTests(unittest.TestCase):
                 )
                 self.assertEqual({name: serving[name] for name in PLUGIN_PINS}, PLUGIN_PINS)
                 role_env = select_values("engine", node, fleet, env)
+                role_env["NARWHAL_DEPLOYMENT_REVISION"] = "f" * 64
                 self.assertEqual(role_env["NARWHAL_MODEL_PATH"], env["NARWHAL_MODEL_PATH"])
                 self.assertEqual(role_env["NARWHAL_MODEL_SHA256"], GGUF_SHA256)
                 records = load_launches(
@@ -233,7 +250,7 @@ class DiscoveryTests(unittest.TestCase):
                 env = environment(root)
                 env["NARWHAL_MODEL_PATH"] = path
                 with (
-                    patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                    patch("narwhal.deployment.discovery.SSH", GgufInspectionSSH),
                     redirect_stdout(io.StringIO()),
                     self.assertRaisesRegex(ValueError, message),
                 ):
@@ -250,7 +267,7 @@ class DiscoveryTests(unittest.TestCase):
                     NARWHAL_MODEL_PATH=env["NARWHAL_MODEL_DIR"] + "/weights.gguf",
                 )
                 with (
-                    patch("tools.deployment.discover_deployment.SSH", GgufInspectionSSH),
+                    patch("narwhal.deployment.discovery.SSH", GgufInspectionSSH),
                     redirect_stdout(io.StringIO()),
                     self.assertRaisesRegex(ValueError, f"{label} serves a model directory"),
                 ):
@@ -379,7 +396,7 @@ class DiscoveryTests(unittest.TestCase):
             out = root / "discovery"
             self.assertFalse((root / "config").exists())
             with (
-                patch("tools.deployment.discover_deployment.SSH", FakeInspectionSSH),
+                patch("narwhal.deployment.discovery.SSH", FakeInspectionSSH),
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, out)
@@ -404,13 +421,15 @@ class DiscoveryTests(unittest.TestCase):
             self.assertTrue((out / "engine-1-checkpoint.json").is_file())
             self.assertNotIn("engine_contract", fleet)
             self.assertFalse((root / "runs/profiles.json").exists())
-            run = root / "prepared"
-            prepare(hosts, env, run, ROOT)
+            env.update(synthetic_wheel(root))
+            run = root / "packaged"
+            package(hosts, env, run)
             for node in (1, 2):
                 role = f"engine-{node}"
-                role_env = select_values("engine", node, fleet, env)
-                # prepare checks the checkpoint against the digest discovery recorded.
+                role_env = environment_file(run / f"node-{node}/.env.{role}")
+                # prepare checks the checkpoint against the digest that discovery verified.
                 self.assertEqual(role_env["NARWHAL_MODEL_TREE_SHA256"], "c" * 64)
+                self.assertNotIn(f"NARWHAL_NODE_{node}_MODEL_TREE_SHA256", env)
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
                 )
@@ -422,7 +441,7 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(file.stat().st_mode & 0o777, 0o600)
                 self.assertNotIn("private-test-password", file.read_text())
             old = Path(env["NARWHAL_FLEET"]).read_bytes()
-            with patch("tools.deployment.discover_deployment.SSH") as ssh:
+            with patch("narwhal.deployment.discovery.SSH") as ssh:
                 with self.assertRaisesRegex(ValueError, "Archive previous"):
                     discover(env, root / "another-discovery")
                 ssh.assert_not_called()
@@ -430,9 +449,9 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_sglang_discovery_feeds_real_preparation_and_launcher(self):
         class SglangInspectionSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None, reason=None):
-                result = super().run(host, gate, script, payload)
-                if gate == "inspect GPU and image":
+            def run(self, host, stage, operation, script, payload=None, reason=None):
+                result = super().run(host, stage, operation, script, payload)
+                if operation == "inspect GPU and image":
                     return json.dumps(sglang_observation("10.0.0." + host.id.split("-")[-1]))
                 return result
 
@@ -440,7 +459,7 @@ class DiscoveryTests(unittest.TestCase):
             root = Path(folder)
             env = sglang_environment(root)
             with (
-                patch("tools.deployment.discover_deployment.SSH", SglangInspectionSSH),
+                patch("narwhal.deployment.discovery.SSH", SglangInspectionSSH),
                 redirect_stdout(io.StringIO()),
             ):
                 discover(env, root / "discovery")
@@ -462,17 +481,20 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(serving["extra_args"], [])
             self.assertEqual(serving["context_length"], 16384)
             hosts = load_hosts(Path(env["NARWHAL_HOSTS"]), env)
-            run = root / "prepared"
-            prepare(hosts, env, run, ROOT)
+            env.update(synthetic_wheel(root))
+            run = root / "packaged"
+            package(hosts, env, run)
             limits = json.loads((run / "node-1/profiling-limits.json").read_text())
             self.assertEqual(limits["engines"], {"n1": 256, "n2": 256})
-            # SGLang has no cache capture, so its engines receive no capture hook.
+            # SGLang has no cache capture, so its engines receive the transfer measurement tool
+            # and no capture hook.
             self.assertFalse((run / "node-1/cache_capture_hook.py").exists())
             manifest = json.loads((run / "manifest.json").read_text())
             self.assertNotIn("node-1/cache_capture_hook.py", manifest["hashes"])
+            self.assertIn("node-1/transfer_measure.py", manifest["hashes"])
             for node in (1, 2):
                 role = f"engine-{node}"
-                role_env = select_values("engine", node, fleet, env)
+                role_env = environment_file(run / f"node-{node}/.env.{role}")
                 self.assertEqual(role_env["NARWHAL_KV_SIDE_CHANNEL_PORT"], "5557")
                 records = load_launches(
                     Path(env["NARWHAL_LAUNCH_CONFIG"]), [role], {role: role_env}
@@ -589,9 +611,9 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_discovery_rejects_checkpoint_file_mismatch_before_writing_fleet(self):
         class DifferentCheckpointSSH(FakeInspectionSSH):
-            def run(self, host, gate, script, payload=None, reason=None):
-                result = super().run(host, gate, script, payload)
-                if gate == "hash checkpoint files" and host.id == "node-2":
+            def run(self, host, stage, operation, script, payload=None, reason=None):
+                result = super().run(host, stage, operation, script, payload)
+                if operation == "hash checkpoint files" and host.id == "node-2":
                     record = json.loads(result)
                     record["model_tree_sha256"] = "e" * 64
                     record["files"][0]["sha256"] = "f" * 64
@@ -602,7 +624,7 @@ class DiscoveryTests(unittest.TestCase):
             root = Path(folder)
             env = environment(root)
             with (
-                patch("tools.deployment.discover_deployment.SSH", DifferentCheckpointSSH),
+                patch("narwhal.deployment.discovery.SSH", DifferentCheckpointSSH),
                 redirect_stdout(io.StringIO()),
                 self.assertRaisesRegex(ValueError, "checkpoint file config.json differs"),
             ):
@@ -735,17 +757,62 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported runtime environment"):
             build_records(hosts, env, observations, Path("/synthetic"))
 
-    def test_ssh_enrollment_keeps_subsequent_connections_strict(self):
+    def test_discovery_trusts_only_the_supplied_known_hosts_file(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            trust = root / "known_hosts"
-            trust.write_text("existing-key\n")
-            env = {"NARWHAL_SSH_KNOWN_HOSTS": str(trust)}
-            enroll = SSH(env, root / "enrollment", enroll_hosts=True)
-            normal = SSH(env, root / "normal")
-            self.assertIn("StrictHostKeyChecking=accept-new", enroll.options)
-            self.assertIn("StrictHostKeyChecking=yes", normal.options)
-            self.assertEqual(trust.read_text(), "existing-key\n")
+            env = environment(root)
+            trust = Path(env["NARWHAL_SSH_KNOWN_HOSTS"])
+            for value in ("", str(root / "absent")):
+                with (
+                    self.subTest(value=value),
+                    patch.dict(env, {"NARWHAL_SSH_KNOWN_HOSTS": value}),
+                    patch("narwhal.deployment.discovery.SSH") as ssh,
+                    self.assertRaisesRegex(ValueError, "Set NARWHAL_SSH_KNOWN_HOSTS"),
+                ):
+                    discover(env, root / "discovery")
+                ssh.assert_not_called()
+                self.assertFalse((root / "discovery").exists())
+            with (
+                patch("narwhal.deployment.discovery.SSH", FakeInspectionSSH),
+                redirect_stdout(io.StringIO()),
+            ):
+                discover(env, root / "discovery")
+            self.assertEqual(trust.read_text(), KNOWN_HOSTS)
+            manifest = json.loads((root / "discovery/manifest.json").read_text())
+            self.assertIn(str(trust), manifest["files"])
+            self.assertNotIn(
+                "NARWHAL_SSH_KNOWN_HOSTS", (root / "config/deployment.env").read_text()
+            )
+
+    def test_discovery_checks_every_checkpoint_against_the_expected_tree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env = environment(root)
+            for name, value in (
+                ("NARWHAL_MODEL_TREE_SHA256", ""),
+                ("NARWHAL_MODEL_TREE_SHA256", "sha256:" + "c" * 64),
+                ("NARWHAL_NODE_2_MODEL_TREE_SHA256", "C" * 64),
+            ):
+                with (
+                    self.subTest(name=name, value=value),
+                    patch.dict(env, {name: value}),
+                    patch("narwhal.deployment.discovery.SSH") as ssh,
+                    self.assertRaisesRegex(ValueError, "set NARWHAL_MODEL_TREE_SHA256 to the"),
+                ):
+                    discover(env, root / "discovery")
+                ssh.assert_not_called()
+            env["NARWHAL_MODEL_TREE_SHA256"] = "e" * 64
+            with (
+                patch("narwhal.deployment.discovery.SSH", FakeInspectionSSH),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "^engine-1: checkpoint tree digest c{64} differs from "
+                    "NARWHAL_MODEL_TREE_SHA256; inspect .*engine-1-checkpoint.json$",
+                ),
+            ):
+                discover(env, root / "discovery")
+            self.assertFalse(Path(env["NARWHAL_FLEET"]).exists())
 
     def test_remote_probe_is_valid_standalone_python(self):
         compile(PROBE, "remote discovery probe", "exec")

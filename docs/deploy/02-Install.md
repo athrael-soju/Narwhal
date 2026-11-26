@@ -1,109 +1,143 @@
 ---
-description: Package an approved Narwhal revision and install it on the router and engine hosts.
+description: Package a checked Narwhal wheel with each host's role files and install it on the router and engine hosts.
 ---
 
-# Install the approved revision
+# Install Narwhal on the hosts
 
-Run these commands from the management checkout after discovery. `prepare` writes the package that `install` copies to each host.
+Run these commands from the management checkout after discovery. `narwhal deploy package` writes the package that `narwhal deploy install` copies to each host.
 
-## Building an immutable deployment package
+## Building the deployment package
+
+Each host installs Narwhal from one wheel. Build it from the approved commit with `python -m build --wheel`, or download a release's wheel from PyPI:
+
+```bash
+python -m pip download --no-deps --only-binary :all: --dest dist 'narwhal-inference==<version>'
+sha256sum dist/narwhal_inference-<version>-py3-none-any.whl
+```
+
+Keep the wheel's SHA-256 in the private record.
 
 In the management checkout:
 
 1. Load `.env` and `config/deployment.env` from deployment discovery.
-2. Set `NARWHAL_DEPLOYMENT_REVISION` to the full approved commit.
-3. Set management credentials in the workstation environment.
-4. Prepare the package into a new `--out` directory:
+2. Set `NARWHAL_WHEEL` to the path of the wheel, such as `dist/narwhal_inference-<version>-py3-none-any.whl`.
+3. Set `NARWHAL_WHEEL_SHA256` to the wheel's SHA-256 from the private record.
+4. Set management credentials in the workstation environment.
+5. Build the package into a new `--out` directory:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py prepare --out runs/deployment-env/first-deploy
+    narwhal deploy package --out runs/deployment-env/first-deploy
     ```
 
-On success the command prints:
+`package` refuses a wheel whose SHA-256 differs from `NARWHAL_WHEEL_SHA256`. On success it prints:
 
 ```text
-Prepared <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready
+Packaged <n> hosts in runs/deployment-env/first-deploy; private manifest and inputs ready
 ```
 
 Keep the `--out` directory until the deployment finishes.
 
-The prepared run holds these files at mode 0600:
+The package holds these files at mode 0600:
 
-| Path                                                                      | Content                                                                  |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `source.bundle`                                                           | Git bundle of the approved commit                                        |
-| `<host-id>/.env.<role>`                                                   | One role environment per role on the host                                |
-| `<host-id>/engine-launch.engine-<n>.json`                                 | The selected launch record for each engine role                          |
-| `<host-id>/fleet.local.json`                                              | The fleet configuration from discovery, on the router host               |
-| `<host-id>/profiling-limits.json`                                         | Profiling limits from each engine's sequence limit, on the router host   |
-| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`                     | Helper script copies for engine hosts, `cache_capture_hook.py` for vLLM and TensorRT-LLM  |
-| `manifest.json`                                                           | The private manifest                                                     |
+| Path | Content |
+| --- | --- |
+| `narwhal_inference-<version>-py3-none-any.whl` | A copy of the wheel that `NARWHAL_WHEEL` names |
+| `<host-id>/.env.<role>` | One role environment per role on the host |
+| `<host-id>/engine-launch.engine-<n>.json` | The selected launch record for each engine role |
+| `<host-id>/fleet.local.json` | The fleet configuration from discovery, on the router host |
+| `<host-id>/profiling-limits.json` | Profiling limits from each engine's sequence limit, on the router host |
+| `<host-id>/fabric_budget.py`, `cache_capture_hook.py`, `transfer_measure.py` | Helper snapshots for engine hosts |
+| `manifest.json` | The private manifest |
 
 The manifest records:
 
-- the approved revision
+- the wheel's file name and SHA-256
 - the role-to-host mapping
 - SHA-256 hashes of the SSH destinations
-- a unique install path under `~/Narwhal-deploy/`
-- SHA-256 hashes for the source bundle, helper snapshots, and role files
+- a unique deployment directory under `~/Narwhal-deploy/`
+- SHA-256 hashes for the wheel, the helper snapshots, and the role files
 
-Helper snapshots under `runs/deployment-tools/` on the engine hosts:
+Each role environment sets `NARWHAL_DEPLOYMENT_REVISION` to the wheel's SHA-256, so every launch plan and attestation records the wheel that the host runs.
 
-| Helper snapshot                                        | Path variable                | SHA-256 variable                    |
-| ------------------------------------------------------ | ---------------------------- | ----------------------------------- |
-| `tools/deployment/fabric_budget.py`                    | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256`      |
-| `src/narwhal/backends/<backend>/cache_capture_hook.py` | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
+Engine hosts receive these helper snapshots under `runs/deployment-tools/`. Each engine's role environment holds the path and the SHA-256 of every snapshot:
 
-Deployment includes the cache-capture hook of the fleet's `engine.backend` when it is `vllm`, the default, or `trtllm`.
+| Helper snapshot | Delivered for | Path variable | SHA-256 variable |
+| --- | --- | --- | --- |
+| `fabric_budget.py`, from `narwhal.deployment` | Every fleet | `NARWHAL_FABRIC_BUDGET_TOOL` | `NARWHAL_FABRIC_BUDGET_SHA256` |
+| `cache_capture_hook.py`, from `narwhal.backends.<backend>` | vLLM, the default, and TensorRT-LLM | `NARWHAL_CACHE_CAPTURE_HOOK` | `NARWHAL_CACHE_CAPTURE_HOOK_SHA256` |
+| `transfer_measure.py`, from `narwhal.backends.sglang` | SGLang | `NARWHAL_TRANSFER_MEASURE_TOOL` | `NARWHAL_TRANSFER_MEASURE_SHA256` |
+
+`package` takes the snapshots from the wheel, so engine hosts run the helpers of the release they install. The snapshots run with the engine host's `python3` and the standard library only. Check a snapshot's SHA-256 before running it, as [Qualify the transfer fabric](04-Qualify-Fabric.md) does.
 
 ## Installing engine 1 and the remaining hosts
+
+Each host needs Python 3.11 or later with `venv`, and access to a Python package index for the wheel's dependencies.
 
 1. Install the engine 1 host:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py install \
-      --run runs/deployment-env/first-deploy --role engine-1
+    narwhal deploy install --run runs/deployment-env/first-deploy --role engine-1
     ```
 
 2. Confirm that the installer prints `<host-id>: installation ready`.
 3. Install the remaining hosts:
 
     ```bash
-    python3 tools/deployment/deploy_hosts.py install --run runs/deployment-env/first-deploy
+    narwhal deploy install --run runs/deployment-env/first-deploy
     ```
 
-`install` reuses a finished installation or a matching transferred file. It stops at a host with a changed source checkout or a differing file. On a host with router and engine roles, it installs every role environment together.
+On each host, `install` copies the package into `~/Narwhal-deploy/<id>/package/`, checking each file's SHA-256 after the transfer. It then checks the wheel's SHA-256 again, creates `.venv` in the deployment directory `~/Narwhal-deploy/<id>/`, installs the wheel into it with `pip`, and checks that the installed `narwhal-inference` version matches the wheel. It copies each role file to its working path in the deployment directory.
+
+`install` reuses a finished installation or a matching transferred file. It stops at a host with a transferred file that differs from the manifest, a working file that differs from the package, or an installation of another wheel. On a host with router and engine roles, it installs every role environment together.
 
 ## Recovering a failed installation
 
-If transfer validation fails, compare the prepared hashes with the existing remote artifact before modifying it.
+If transfer validation fails, compare the packaged hashes with the existing remote file before modifying it.
 
-If revision validation fails, check that the bundle and role files came from the same prepared run.
+If the installed version differs from the wheel, check that `NARWHAL_WHEEL` named the intended release, then build a new package.
 
 If a dependency installation stops early, rerun the same `install --run` until the installed `narwhal-check --help` responds.
 
-If a `.install-lock` remains, remove it after the installer that created it has exited.
+If a `.install-lock` remains in the deployment directory, remove it after the installer that created it has exited.
 
 ## Opening installed role shells
 
 Open the router shell:
 
 ```bash
-python3 tools/deployment/deploy_hosts.py shell \
-  --run runs/deployment-env/first-deploy --role router
+narwhal deploy shell --run runs/deployment-env/first-deploy --role router
 ```
 
 Open the engine 1 shell:
 
 ```bash
-python3 tools/deployment/deploy_hosts.py shell \
-  --run runs/deployment-env/first-deploy --role engine-1
+narwhal deploy shell --run runs/deployment-env/first-deploy --role engine-1
 ```
 
 Each shell opens with:
 
-- the prepared remote checkout as working directory
+- the deployment directory `~/Narwhal-deploy/<id>/` as working directory
 - the role environment loaded
 - `.venv` active
+
+## Installing the repository tools on the router host
+
+The wheel holds the router, the engine launcher and the checks. The monitoring stack that `make observe` starts and the [fleet control service](../operate/06-Controlling-the-Fleet.md) live in the repository's `tools/` directory, which the wheel leaves out. Run them from a clone of the repository at the release of the installed wheel, with the deployment's virtual environment.
+
+In the router shell:
+
+1. Clone the repository at the wheel's release tag into a new directory beside the deployment directory, replacing `<version>` with the wheel's version:
+
+    ```bash
+    git clone --depth 1 --branch v<version> https://github.com/athrael-soju/Narwhal.git ../tools-<version>
+    ```
+
+2. Link the deployment's virtual environment into the clone, so its commands run on the installed wheel:
+
+    ```bash
+    ln -s "$VIRTUAL_ENV" ../tools-<version>/.venv
+    ```
+
+Later pages call this clone the tools checkout. Run `make observe` and the fleet control service from it, in the router shell.
 
 [Validate and start engines](03-Validate-Engines.md)

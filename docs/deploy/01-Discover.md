@@ -29,7 +29,9 @@ Set one `NARWHAL_NODE_<n>_SSH` destination for each engine `<n>`. Discovery requ
 
 A destination is `user@host` or an OpenSSH alias carrying the username, port, identity, and jump host. Roles that share a destination share one host entry and credential.
 
-For password authentication, set the destination variable with a `_PASSWORD` suffix, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Key authentication uses the configured identity or the SSH agent.
+For password authentication, set the destination variable with a `_PASSWORD` suffix, such as `NARWHAL_NODE_1_SSH_PASSWORD`. Key authentication uses the configured identity or the SSH agent, and never prompts: load a key that has a passphrase into the agent before discovery.
+
+Set `NARWHAL_SSH_KNOWN_HOSTS` to a known-hosts file that holds the key of every destination. Collect each key from a source you trust, such as the provider console, and check its fingerprint before you add it. Discovery and every later command check each host's key against this file before they log in, and never add or change a key in it.
 
 Default service URLs use the global address on `NARWHAL_FABRIC_INTERFACE`. The engine listens at `http://<address>:<NARWHAL_ENGINE_PORT>`, and the attestation service at `http://<address>:<NARWHAL_ATTEST_PORT>/v1/attestation`.
 
@@ -57,8 +59,15 @@ For an empty directory with a Hugging Face source:
     ```
 
 4. Record the repository ID and commit SHA in the private record.
+5. Compute the checkpoint's tree digest from the staged files, with a Narwhal environment on a host that holds them:
 
-Discovery compares the path, size, and SHA-256 of every regular file in the model directories across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. Discovery refuses a symbolic link that resolves outside the model directory, names an absolute path, or has a relative target that climbs above the directory, because the container mounts only that directory. A directory of links into a Hugging Face cache, such as a `snapshots/<revision>` directory, fails this check; stage the checkpoint with `hf download --local-dir` as above. A replica mismatch stops discovery with an error that names the first differing file.
+    ```bash
+    echo "{\"model_dir\": \"$NARWHAL_MODEL_DIR\"}" | python -m narwhal.deployment.launch_engine.checkpoint
+    ```
+
+6. Set `NARWHAL_MODEL_TREE_SHA256` in `.env` to the output's `model_tree_sha256`.
+
+Discovery hashes every regular file in each engine's model directory and refuses an engine whose tree digest differs from `NARWHAL_MODEL_TREE_SHA256`. It also compares the path, size, and SHA-256 of every file across replicas. The comparison excludes the root `README.md` and the `.cache/huggingface/` metadata. Discovery refuses a symbolic link that resolves outside the model directory, names an absolute path, or has a relative target that climbs above the directory, because the container mounts only that directory. A directory of links into a Hugging Face cache, such as a `snapshots/<revision>` directory, fails this check; stage the checkpoint with `hf download --local-dir` as above. A replica mismatch stops discovery with an error that names the first differing file. When the replicas match each other but not the expected digest, the error names the engine and the digest it found.
 
 ### Staging a GGUF model on vLLM
 
@@ -80,7 +89,7 @@ A vLLM fleet can serve a GGUF file from an engine image that includes `vllm-gguf
 4. Set `NARWHAL_MODEL_PATH` in `.env` to the absolute path of the GGUF file, `$NARWHAL_MODEL_DIR/<file>.gguf`.
 5. Record both repository IDs and commit SHAs in the private record.
 
-When an engine host keeps the model in another directory, set `NARWHAL_NODE_<n>_MODEL_DIR` and `NARWHAL_NODE_<n>_MODEL_PATH` for that engine `<n>`. Every engine's directory must hold the same files.
+When an engine host keeps the model in another directory, set `NARWHAL_NODE_<n>_MODEL_DIR` and `NARWHAL_NODE_<n>_MODEL_PATH` for that engine `<n>`. Every engine's directory must hold the same files, so `NARWHAL_MODEL_TREE_SHA256` covers them all.
 
 Discovery hashes the GGUF file with the rest of the directory and writes its SHA-256 to `NARWHAL_NODE_<n>_MODEL_SHA256` in `config/deployment.env`. To have discovery check the file against a known SHA-256, set `NARWHAL_MODEL_SHA256` in `.env`.
 
@@ -148,23 +157,20 @@ Each engine host needs:
 From the management checkout:
 
 ```bash
-python3 tools/deployment/discover_deployment.py --out runs/discovery/first-deploy
+narwhal deploy discover --out runs/discovery/first-deploy
 . config/deployment.env
-python3 tools/deployment/deploy_hosts.py plan
-python3 tools/deployment/deploy_hosts.py check-access
+narwhal deploy access
 ```
 
-Discovery prints `Generated private configuration. Load config/deployment.env before preparation.` `plan` prints each host ID and its roles. `check-access` logs in once per physical host with the pinned key and saves the `hostname` output under `runs/access-<id>/`.
+Discovery prints `Generated private configuration. Load config/deployment.env before packaging.` `access` checks the inventory, logs in once per physical host, prints each host ID with its roles, and saves the `hostname` output under `runs/access-<id>/`.
 
 Open a login shell on a role's host:
 
 ```bash
-python3 tools/deployment/deploy_hosts.py shell --role engine-1
+narwhal deploy shell --role engine-1
 ```
 
-`--role` accepts `router` or `engine-<n>`.
-
-The host-key store is `NARWHAL_SSH_KNOWN_HOSTS`, default `config/ssh.known_hosts`. Discovery records each new host key and matches stored keys. Other deployment commands match every host key against the store.
+`--role` accepts `router` or `engine-<n>`. [`narwhal deploy`](../cli/Deploy.md) lists every option, and the time limit of each remote command.
 
 ### Discovery output
 
@@ -175,11 +181,10 @@ Discovery writes the generated configuration at mode 0600:
 | File                                | Content                                                                                                            |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `config/hosts.local.json`           | Host IDs, SSH destination and password variable names, and the router and engine roles on each host                |
-| `config/ssh.known_hosts`            | Server public keys from authenticated management access                                                            |
 | `config/engine-launch.local.json`   | GPU allocation, image and model metadata, transfer devices, launch policy                                          |
 | `config/engine-launch.sources.json` | Inspection and policy records for each role                                                                        |
 | `config/fleet.json`                 | Model, measured hardware and TP shape, engine URL references, initial roles, initial latency targets, profile path |
-| `config/deployment.env`             | Generated paths, fabric addresses, engine and attestation URLs, per-engine image and hash values                   |
+| `config/deployment.env`             | Generated paths, fabric addresses, engine and attestation URLs, per-engine image and model-file hash values        |
 
 Keep the generated `config/` files together.
 
@@ -191,13 +196,13 @@ The discovery output directory, mode 0700:
 | `engine-<n>-checkpoint.json`                                 | Path, size, and SHA-256 of every checkpoint file, the exclusion policy, and `model_tree_sha256`                                                                                                                                                                               |
 | `logs/`                                                      | SSH command logs                                                                                                                                                                                                                                                              |
 | `engine-<n>-inputs.json`, `engine-launch.json`, `hosts.json` | Probe inputs and the candidate launch and host records                                                                                                                                                                                                                        |
-| `manifest.json`                                              | Hashes of the generated `config/` files, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                                                 |
+| `manifest.json`                                              | Hashes of the generated `config/` files and of `NARWHAL_SSH_KNOWN_HOSTS`, the engine roles, and the shared `model_tree_sha256`                                                                                                                                                |
 
 Reuse an inspected fleet:
 
 1. Reload `.env` and `config/deployment.env`.
 2. Verify access.
-3. Prepare a new deployment run.
+3. Build a new deployment package.
 
 Rerun discovery after a change to the hardware, model, image, checkpoint, launch policy, route, transport, or another discovery input:
 
@@ -224,7 +229,7 @@ Default serving policy:
 | Initial TPOT limit     | 0.125 s                                                        |
 | Initial prefill pool   | The lowest-numbered engine                                     |
 | Initial decode pool    | The remaining engines                                          |
-| Profile path           | `runs/profiles.json` in the installed checkout                 |
+| Profile path           | `runs/profiles.json` in the router's deployment directory      |
 
 Override the policy in `.env` before discovery:
 
@@ -253,15 +258,15 @@ Discovery writes the maximum context to `runtime.context_length` and `NARWHAL_EN
 
 ## Access failure handling
 
-A failed deployment command prints `<host-id>: blocked at <operation>; inspect its private command log`. When discovery cannot hash a model directory, the message names the reason after the operation, as in `<host-id>: blocked at hash checkpoint files: checkpoint entry resolves outside the model directory: <file>; inspect its private command log`. Record the first failing host and gate in the private record.
+A failed remote command prints `<host-id>: blocked at <operation>; inspect <log>`. When discovery cannot hash a model directory, the message names the reason after the operation, as in `<host-id>: blocked at hash checkpoint files: checkpoint entry resolves outside the model directory: <file>; inspect <log>`. A command that exceeds its stage's time limit prints `<host-id>: <operation> exceeded the <limit> <stage> time limit; inspect <log>`; [Host keys and time limits](../cli/Deploy.md#host-keys-and-time-limits) lists the limits and how to raise one. Record the first failing host and operation in the private record.
 
 If an access variable is missing, set the named `.env` field.
 
-If a host key is new or changed:
+If the message says that the host key differs from `NARWHAL_SSH_KNOWN_HOSTS` or is missing from it:
 
 1. Verify the destination and fingerprint independently, such as through the provider console.
-2. Replace the entry in `NARWHAL_SSH_KNOWN_HOSTS`.
+2. Add or replace the entry in `NARWHAL_SSH_KNOWN_HOSTS`.
 
 If authentication or the connection fails, check the username, credential, route, SSH port, and firewall.
 
-[Install the approved revision](02-Install.md)
+[Install Narwhal on the hosts](02-Install.md)

@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 from narwhal.backends import load
 from narwhal.backends.trtllm import captures
+from narwhal.deployment.fabric_budget import runtime_payload
 from narwhal.deployment.launch_engine.runtime import digest
 from tests.backends.contract import fixtures, prepared
-from tools.deployment.fabric_budget import runtime_payload
 
 HOOK = load("trtllm").launcher().cache_hook
 # The engine's attention bytes per token and recurrent state per sequence, as measured on a
