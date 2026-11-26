@@ -28,7 +28,7 @@ Narwhal is a disaggregated inference framework that automatically hot-swaps pref
 
 Eight llama.cpp engines on a machine with no GPU: start the fleet, ask one question, then run the demo load. Under long replies the router moves prefill engines to decode. When long prompts arrive, it moves them back to prefill. None of the demo's 757 requests failed or was turned away.
 
-## Trying it
+## Try it out
 
 <p align="center">
   <a href="https://codespaces.new/athrael-soju/Narwhal?quickstart=1"><img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces"></a>
