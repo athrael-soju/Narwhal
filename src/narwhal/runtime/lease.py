@@ -16,6 +16,10 @@ from typing import TextIO
 
 from ..contracts import LEASE, ContractVersionError, validate_document, versioned
 
+# Seconds between attempts on a held coordination lock. A blocking lock on a network file
+# system waits out the client's retry backoff instead, which can outlast the lease itself.
+LOCK_RETRY_S = 0.01
+
 
 class LeaseError(RuntimeError):
     """A shared lease read or update failed."""
@@ -43,6 +47,7 @@ class FileLease:
         safety_margin_s: float = 0.0,
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not holder:
             raise ValueError("lease holder must not be empty")
@@ -61,6 +66,7 @@ class FileLease:
         self.safety_margin_s = safety_margin_s
         self._wall_clock = wall_clock
         self._monotonic_clock = monotonic_clock
+        self._sleep = sleep
         self.epoch = 0
         self._valid_until = 0.0
         self._owned = False
@@ -113,7 +119,7 @@ class FileLease:
             return False
         valid_until = 0.0
         try:
-            with self._locked():
+            with self._locked(self._valid_until):
                 now = self._wall_clock()
                 valid_until = self._monotonic_clock() + self.ttl_s - self.safety_margin_s
                 current = self._read_unlocked()
@@ -151,14 +157,32 @@ class FileLease:
         self._valid_until = 0.0
 
     @contextlib.contextmanager
-    def _locked(self) -> Iterator[TextIO]:
+    def _locked(self, deadline: float | None = None) -> Iterator[TextIO]:
+        """Hold the coordination lock, waiting until the monotonic deadline at most.
+
+        The default deadline is one lease validity period from now. A renewal passes the
+        holder's own deadline, so a lock it cannot take in time fences the holder.
+        """
+        if deadline is None:
+            deadline = self._monotonic_clock() + self.ttl_s - self.safety_margin_s
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = self.lock_path.open("a+")
         try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            yield lock
+            while True:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if self._monotonic_clock() >= deadline:
+                        raise LeaseError(
+                            f"lock {self.lock_path} stayed held past the wait deadline"
+                        ) from None
+                    self._sleep(LOCK_RETRY_S)
+            try:
+                yield lock
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
     def _read_unlocked(self) -> LeaseRecord | None:

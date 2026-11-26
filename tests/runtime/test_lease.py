@@ -1,5 +1,6 @@
 """Check lease contention, clock boundaries and persisted fencing epochs."""
 
+import fcntl
 import json
 import tempfile
 import unittest
@@ -31,7 +32,23 @@ class LeaseTests(unittest.TestCase):
             safety_margin_s=2,
             wall_clock=lambda: self.wall,
             monotonic_clock=lambda: self.mono,
+            sleep=self.wait,
         )
+
+    def wait(self, seconds):
+        """Advance the monotonic clock, as a held lock makes a holder wait."""
+        self.mono += seconds
+        self.waits += 1
+        if self.waits == self.release_after:
+            self.holder_lock.close()
+
+    def hold_lock(self, release_after=None):
+        """Hold the coordination lock from another open file, as another router does."""
+        self.waits = 0
+        self.release_after = release_after
+        self.holder_lock = self.a.lock_path.open("a+")
+        self.addCleanup(self.holder_lock.close)
+        fcntl.flock(self.holder_lock.fileno(), fcntl.LOCK_EX)
 
     def test_constructor_checks_lease_parameters(self):
         """Holder, TTL and safety margin failures identify the invalid setting."""
@@ -50,6 +67,32 @@ class LeaseTests(unittest.TestCase):
                 ):
                     FileLease(self.path, "a", **options)
         self.assertEqual(list(self.path.parent.iterdir()), [])
+
+    def test_a_held_lock_delays_a_claim_until_it_is_released(self):
+        """Attempts repeat while another holder has the lock, then the claim proceeds."""
+        self.hold_lock(release_after=3)
+        self.assertTrue(self.b.claim())
+        self.assertEqual(self.waits, 3)
+        self.assertEqual(self.b.read().holder, "b")
+
+    def test_a_lock_held_past_the_wait_deadline_fails_the_claim(self):
+        """A claim waits one validity period at most and reports the held lock."""
+        self.hold_lock()
+        with self.assertRaisesRegex(LeaseError, "stayed held past the wait deadline"):
+            self.b.claim()
+        self.assertFalse(self.b.owned)
+        self.assertGreaterEqual(self.mono, 58)
+        self.assertLess(self.mono, 58.1)
+
+    def test_a_renewal_that_cannot_lock_before_its_deadline_fences(self):
+        """The holder's own deadline bounds the wait, so a stalled lock fences it in time."""
+        self.assertTrue(self.a.claim())
+        self.mono = 55
+        self.hold_lock()
+        self.assertFalse(self.a.renew())
+        self.assertFalse(self.a.valid())
+        self.assertGreaterEqual(self.mono, 58)
+        self.assertLess(self.mono, 58.1)
 
     def test_competing_holder_waits_until_expiry_and_advances_epoch(self):
         """Takeover at the expiry boundary fences renewal by the previous holder."""
