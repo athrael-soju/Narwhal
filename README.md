@@ -22,6 +22,43 @@
 
 Narwhal is a disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, without reloading model weights. It runs on a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) or across [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/demo/narwhal-dev.gif" alt="A terminal running narwhal dev up and narwhal dev ask, then narwhal dev watch while eight engines change roles: prefill engines move to decode under long replies, then decode engines move back to prefill under long prompts, shown on a role history per engine" width="100%">
+</p>
+
+Eight llama.cpp engines and a router on a machine with no GPU. Under long replies the router moves prefill engines to decode. When long prompts arrive, it moves them back to prefill. None of the 241 requests failed or was turned away.
+
+## Trying it
+
+<p align="center">
+  <a href="https://codespaces.new/athrael-soju/Narwhal?quickstart=1"><img src="https://github.com/codespaces/badge.svg" alt="Open in GitHub Codespaces"></a>
+</p>
+
+The button opens a codespace with Narwhal installed from this repository. Run the commands below in its terminal; the fleet runs on the CPU. On your own machine, [install Narwhal](#installing) first.
+
+Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.3 GB with the CPU build of the engine and 1.0 GB with the CUDA 12 build.
+
+```bash
+narwhal dev up
+narwhal dev ask "What is the capital of France?"
+narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
+narwhal dev watch
+narwhal dev down --remove
+```
+
+`up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch`, in a second terminal, shows each engine's role and load, and each role switch the router makes under the concurrent requests.
+
+To run vLLM, SGLang or TensorRT-LLM engines on one NVIDIA GPU instead, use `narwhal dev init`. That fleet goes through the same attestation, profiling and KV transfer checks as a deployed fleet.
+
+<p align="center">
+  <a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Quick%20start-0f766e" alt="Quick start documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/cli/Dev/"><img src="https://img.shields.io/badge/docs-narwhal%20dev%20commands-0f766e" alt="narwhal dev command reference"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-vLLM%2C%20SGLang%20and%20TensorRT--LLM%20engines-0f766e" alt="vLLM, SGLang and TensorRT-LLM engine documentation"></a>
+  <a href="https://athrael-soju.github.io/Narwhal/dev/RTX-5090-Reference/"><img src="https://img.shields.io/badge/docs-RTX%205090%20reference-0f766e" alt="RTX 5090 reference documentation"></a>
+</p>
+
+## What it does
+
 <table width="100%" align="center">
   <thead>
     <tr>
@@ -81,9 +118,16 @@ The role controller scores the current role split and each adjacent split, one e
 
 ## Evaluation
 
-<h3 align="center"><a href="https://athrael.net/posts/evaluating-narwhal/">Read the full evaluation: Evaluating Narwhal</a></h3>
+The [evaluation](https://athrael.net/posts/evaluating-narwhal/) ran Narwhal v0.1.0, Dynamo Planner and Ray Serve LLM on identical six-engine hardware, under two request schedules whose mix changes quickly. With prefix caching on, these are the shares of offered requests that met the SLO: a first token within 2.1 s, at most 45 ms per output token, and a natural finish.
 
-## Getting the commands
+| Workload | Narwhal | Dynamo Planner | Ray Serve LLM |
+| --- | --- | --- | --- |
+| Chat and documents | **76.2%** | 56.8% | 51.7% |
+| Mixed | **45.6%** | 21.7% | 37.1% |
+
+Each configuration ran once. On mixed traffic, Narwhal's 95th-percentile time to first token was 11.3 s against 1.2 s for Ray Serve LLM. The post covers the setup, every metric and the limits of the comparison.
+
+## Installing
 
 Install on Linux with Python 3.11 or newer:
 
@@ -96,29 +140,6 @@ narwhal --help
 ```
 
 The wheel installs `narwhal`, `narwhal-engine`, `narwhal-serve`, `narwhal-attest`, `narwhal-profile`, and `narwhal-check`. To verify the installation, follow [Installing from PyPI](https://athrael-soju.github.io/Narwhal/Install-from-PyPI/). For each command's options, use the [CLI reference](https://athrael-soju.github.io/Narwhal/CLI-Reference/).
-
-## Trying it on one workstation
-
-Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.3 GB with the CPU build of the engine and 1.0 GB with the CUDA 12 build.
-
-```bash
-narwhal dev up
-narwhal dev ask "What is the capital of France?"
-narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
-narwhal dev watch
-narwhal dev down --remove
-```
-
-`up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch` shows each engine's role and load, and each role switch the router makes under the concurrent requests.
-
-To run vLLM, SGLang or TensorRT-LLM engines on one NVIDIA GPU instead, use `narwhal dev init`. That fleet goes through the same attestation, profiling and KV transfer checks as a deployed fleet.
-
-<p align="center">
-  <a href="https://athrael-soju.github.io/Narwhal/dev/Quick-Start/"><img src="https://img.shields.io/badge/docs-Quick%20start-0f766e" alt="Quick start documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/cli/Dev/"><img src="https://img.shields.io/badge/docs-narwhal%20dev%20commands-0f766e" alt="narwhal dev command reference"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/Dev-Runtime/"><img src="https://img.shields.io/badge/docs-vLLM%2C%20SGLang%20and%20TensorRT--LLM%20engines-0f766e" alt="vLLM, SGLang and TensorRT-LLM engine documentation"></a>
-  <a href="https://athrael-soju.github.io/Narwhal/dev/RTX-5090-Reference/"><img src="https://img.shields.io/badge/docs-RTX%205090%20reference-0f766e" alt="RTX 5090 reference documentation"></a>
-</p>
 
 ## Bringing up a fleet
 

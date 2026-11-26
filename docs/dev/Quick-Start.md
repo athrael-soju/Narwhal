@@ -40,6 +40,8 @@ python -m pip install narwhal-inference
 
 Run every later command from this directory with the virtual environment active. The instance directory `runs/dev` is relative to it.
 
+To skip installing, [open a codespace](https://codespaces.new/athrael-soju/Narwhal?quickstart=1) on the repository. It installs Narwhal from the checkout into `.venv` and puts it on the terminal's `PATH`, so the commands on this page run as written from the repository root. A codespace has no GPU, so the engines run on the CPU. In the dev container on two CPU cores, four engines served 100 requests at a concurrency of 8 with no failures and a 95th-percentile time to first token of 3.4 s.
+
 ## Starting and removing in one command each
 
 ```bash
