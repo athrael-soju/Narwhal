@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import re
 import sys
@@ -14,8 +15,9 @@ from typing import Any, TextIO
 
 import httpx
 from rich import box
-from rich.console import Console, Group
+from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.live import Live
+from rich.measure import Measurement
 from rich.panel import Panel
 from rich.progress_bar import ProgressBar
 from rich.table import Table
@@ -36,11 +38,24 @@ SERVED, TOKENS, FAILED = (
 # Requests the router turned away or timed out before an engine failed them.
 UNSERVED = ("narwhal_refused_total", "narwhal_rejected_total", "narwhal_expired_total")
 COUNTERS = (SERVED, TOKENS, FAILED, *UNSERVED)
-# Frames of history behind each trend line.
-TREND_FRAMES = 60
+# Frames of history behind each trend line and role history, enough to fill a wide terminal.
+TREND_FRAMES = 240
 TICKS = "▁▂▃▄▅▆▇█"
 ROLE_STYLES = {"prefill": "cyan", "decode": "magenta"}
 STATE_STYLES = {"live": "green", "draining": "yellow", "ejected": "red", "quarantined": "red"}
+# The Narwhal logo in quadrant blocks: each row's characters and, per character, whether it
+# belongs to the tusk (t) or the body (b).
+LOGO = (
+    (" ▗▖", " tt"),
+    ("  ▝▐▖▖      ▄▖", "  tttt      bb"),
+    ("     ▀▐▌▄▟▛▀▀▀▜█▄", "     ttttbbbbbbbb"),
+    ("       ▘▜█▄▖ █  ▀█▄▖", "       ttttt b  bbbb"),
+    ("   ▗▄    ▗▖      ▐██▙", "   bb    bb      bbbb"),
+    (" ▝███▌   ▟▌    ▗▖▟█▀▀▘", " bbbbb   bb    bbbbbbb"),
+    ("    ▜▙▄▝▀▀   ▄▟██▛▘", "    bbbbbb   bbbbbb"),
+    ("      ▀▀██████▛▀▘", "      bbbbbbbbbbb"),
+)
+LOGO_STYLES = {"t": "bright_cyan", "b": "bright_white"}
 _SAMPLE = re.compile(r"^(narwhal_[a-z_]+)(?:\{([^}]*)\})?\s+(\S+)$")
 _LABEL = re.compile(r'(\w+)="([^"]*)"')
 Fetch = Callable[[str], tuple[dict[str, Any], str]]
@@ -166,8 +181,45 @@ def view(old: Sample | None, new: Sample) -> dict[str, Any]:
         "recent_switches": [
             {"iid": flip.get("iid"), "to": flip.get("to")} for flip in flips[-RECENT_SWITCHES:]
         ],
+        "controller": _decision(state),
         "window_s": None if old is None else new.at - old.at,
     }
+
+
+def _decision(state: dict[str, Any]) -> dict[str, Any] | None:
+    """The role controller's last decision: its result, the split it weighed and why."""
+    decision = (state.get("control") or {}).get("last_decision")
+    if not isinstance(decision, dict):
+        return None
+    return {
+        key: decision.get(key)
+        for key in ("result", "prefill", "decode", "current_prefill", "current_decode", "reason")
+    }
+
+
+def _split(prefill: Any, decode: Any) -> str:
+    return f"{prefill}P:{decode}D"
+
+
+def decision_text(decision: dict[str, Any] | None) -> str | None:
+    """One line for the controller's last decision, or None when it has made none."""
+    if not decision or not decision.get("result"):
+        return None
+    target = _split(decision.get("prefill"), decision.get("decode"))
+    current = (
+        None
+        if decision.get("current_prefill") is None or decision.get("current_decode") is None
+        else _split(decision["current_prefill"], decision["current_decode"])
+    )
+    result = decision["result"]
+    if result == "applied":
+        line = f"moved to {target}"
+    elif current is not None and current != target:
+        line = f"{result} at {current} instead of {target}"
+    else:
+        line = f"{result} at {target}"
+    reason = decision.get("reason")
+    return f"{line}: {reason}" if reason else line
 
 
 def _seconds(value: float | None) -> str:
@@ -211,6 +263,11 @@ def render(shown: dict[str, Any], router: str) -> str:
         f"refused, rejected or expired {shown['unserved']}",
         f"role switches {shown['role_switches']}"
         + "".join(f"   {flip['iid']} to {flip['to']}" for flip in shown["recent_switches"]),
+        *(
+            [f"controller  {line}"]
+            if (line := decision_text(shown.get("controller"))) is not None
+            else []
+        ),
     ]
     return "\n".join(lines) + "\n"
 
@@ -240,6 +297,70 @@ class Context:
     router: str
     model: str | None
     slots: int | None
+    # Seconds between frames, one cell of the role history.
+    interval: float = 1.0
+
+
+class Tail:
+    """A strip as wide as the layout gives it: the newest cells at the right, and an empty
+    track to their left until enough frames arrive to fill it.
+    """
+
+    def __init__(self, cells: list[tuple[str, str]], empty: tuple[str, str]) -> None:
+        self.cells = cells
+        self.empty = empty
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = max(0, options.max_width)
+        shown = self.cells[-width:] if width else []
+        track = [self.empty] * (width - len(shown))
+        yield Text.assemble(*track, *shown, no_wrap=True, overflow="crop")
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement(1, options.max_width)
+
+
+class HistoryHeading:
+    """The role history's heading, naming the seconds its width shows."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        seconds = min(options.max_width, TREND_FRAMES) * self.interval
+        yield Text(f"role, last {seconds:.0f} s", style="bold", no_wrap=True, overflow="crop")
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement(8, options.max_width)
+
+
+def logo() -> Text:
+    art = Text(no_wrap=True)
+    for row, (characters, parts) in enumerate(LOGO):
+        if row:
+            art.append("\n")
+        # One span per run of tusk or body, so each colour is set once.
+        for part, run in itertools.groupby(zip(characters, parts, strict=True), lambda c: c[1]):
+            art.append("".join(character for character, _ in run), LOGO_STYLES.get(part, ""))
+    return art
+
+
+def history_cells(roles: list[str | None]) -> list[tuple[str, str]]:
+    """One cell per frame in the engine's role colour; a bar where the role changed."""
+    cells = []
+    for at, role in enumerate(roles):
+        before = roles[at - 1] if at else None
+        if role is None:
+            cells.append((" ", ""))
+        elif before is not None and before != role:
+            cells.append(("┃", "bold white"))
+        else:
+            cells.append(("█", ROLE_STYLES.get(role, "dim")))
+    return cells
+
+
+def _ago(seconds: float | None) -> str:
+    return "" if seconds is None else f" {seconds:.0f} s ago"
 
 
 def _number(value: float | None, unit: str = "") -> str:
@@ -251,29 +372,37 @@ def panel(
     context: Context,
     history: list[dict[str, Any]],
     switched: set[str] | None = None,
+    ages: list[float | None] | None = None,
+    emblem: bool = False,
 ) -> Panel:
-    """The terminal view of one frame; `history` holds the earlier frames, oldest first."""
+    """The terminal view of one frame; `history` holds the earlier frames, oldest first, and
+    `ages` the seconds since each recent switch that this view saw happen. `emblem` puts the
+    Narwhal logo beside the heading.
+    """
     switched = switched or set()
     counts = {role: sum(e["role"] == role for e in shown["engines"]) for role in ROLE_STYLES}
     window = shown.get("window_s")
     heading = Text.assemble(
-        (str(context.instance), "bold"),
-        "   ",
+        *(((context.model, "bold"), "   ") if context.model else ()),
         (context.router, "blue"),
-        *(("   ", (context.model, "bold")) if context.model else ()),
+        "   ",
+        (str(context.instance), "dim"),
     )
     split = Text.assemble(
-        (f"{counts['prefill']} prefill", ROLE_STYLES["prefill"]),
-        "  ",
-        (f"{counts['decode']} decode", ROLE_STYLES["decode"]),
+        (f" {counts['prefill']} prefill ", f"bold black on {ROLE_STYLES['prefill']}"),
+        (f" {counts['decode']} decode ", f"bold black on {ROLE_STYLES['decode']}"),
         ("" if not context.slots else f"   {context.slots} slots per engine", "dim"),
         ("" if window is None else f"   figures cover the last {window:.0f} s", "dim"),
     )
+    for line in (heading, split):
+        line.no_wrap, line.overflow = True, "ellipsis"
+    frames = [*history, shown]
     # Bars share one scale, the larger of the slots and the busiest engine's requests.
     scale = max([context.slots or 1, *(engine["requests"] for engine in shown["engines"])])
-    engines = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    engines = Table(box=box.SIMPLE_HEAD, pad_edge=False, expand=True)
     for name in ("engine", "role", "requests", "state"):
-        engines.add_column(name)
+        engines.add_column(name, no_wrap=True)
+    engines.add_column(HistoryHeading(context.interval), ratio=1, no_wrap=True)
     for engine in shown["engines"]:
         role = engine["role"] or "-"
         style = ROLE_STYLES.get(role, "dim")
@@ -285,36 +414,44 @@ def panel(
             ProgressBar(
                 total=scale,
                 completed=engine["requests"],
-                width=16,
+                width=12,
                 complete_style=colour,
                 finished_style=colour,
             ),
             Text(str(engine["requests"]), justify="right"),
         )
+        roles = [
+            next((e["role"] for e in frame["engines"] if e["iid"] == engine["iid"]), None)
+            for frame in frames
+        ]
         engines.add_row(
             engine["iid"],
             Text(role, style=style),
             load,
             Text(engine["state"], style=STATE_STYLES.get(engine["state"], "")),
+            Tail(history_cells(roles), ("─", "bright_black")),
         )
-    frames = [*history, shown]
-    figures = Table(box=box.SIMPLE_HEAD, pad_edge=False)
-    figures.add_column("")
-    figures.add_column("median", justify="right")
-    figures.add_column("95th percentile", justify="right")
-    figures.add_column("trend", style="green")
+    figures = Table(box=box.SIMPLE_HEAD, pad_edge=False, expand=True)
+    figures.add_column("", no_wrap=True)
+    figures.add_column("median", justify="right", no_wrap=True)
+    figures.add_column("95th percentile", justify="right", no_wrap=True)
+    figures.add_column("trend", ratio=1, no_wrap=True)
+
+    def ticks(values: list[float | None]) -> Tail:
+        return Tail([(tick, "green") for tick in trend(values)], ("▁", "bright_black"))
+
     for label, key in (("time to first token", "ttft_s"), ("time per output token", "tpot_s")):
         figures.add_row(
             label,
             _seconds(shown[key]["p50"]).strip(),
             _seconds(shown[key]["p95"]).strip(),
-            trend([frame[key]["p50"] for frame in frames]),
+            ticks([frame[key]["p50"] for frame in frames]),
         )
     for label, key in (
         ("requests per second", "requests_per_second"),
         ("output tokens per second", "output_tokens_per_second"),
     ):
-        figures.add_row(label, _number(shown[key]), "", trend([frame[key] for frame in frames]))
+        figures.add_row(label, _number(shown[key]), "", ticks([frame[key] for frame in frames]))
     totals = Text.assemble(
         "served ",
         (f"{shown['served']:,}", "bold green"),
@@ -323,19 +460,38 @@ def panel(
         "   refused, rejected or expired ",
         (f"{shown['unserved']:,}", "bold yellow" if shown["unserved"] else "bold"),
     )
-    switches = Text.assemble("role switches ", (str(shown["role_switches"]), "bold"))
-    for flip in shown["recent_switches"]:
+    recent = shown["recent_switches"]
+    ages = ages or [None] * len(recent)
+    switches = Text.assemble(
+        "role switches ", (str(shown["role_switches"]), "bold"), no_wrap=True, overflow="ellipsis"
+    )
+    # Newest first, so the switch just made leads the line.
+    for flip, age in reversed(list(zip(recent, ages, strict=False))):
         switches.append("   ")
         switches.append(f"{flip['iid']} → {flip['to']}", style=ROLE_STYLES.get(flip["to"], ""))
+        switches.append(_ago(age), style="dim")
+    top: Any = Group(heading, split)
+    if emblem:
+        top = Table.grid(padding=(0, 3))
+        top.add_column(no_wrap=True)
+        top.add_column(vertical="middle")
+        top.add_row(logo(), Group(Text("Narwhal", style="bold bright_cyan"), heading, split))
+    lines: list[Any] = [top, engines, figures, totals, switches]
+    decision = decision_text(shown.get("controller"))
+    if decision is not None:
+        # One row, so a long reason never moves the frame.
+        lines.append(
+            Text.assemble(("controller  ", "dim"), decision, no_wrap=True, overflow="ellipsis")
+        )
     return Panel(
-        Group(heading, split, engines, figures, totals, switches),
+        Group(*lines),
         title="narwhal dev watch",
         subtitle="Ctrl+C to exit",
         border_style="blue",
     )
 
 
-def _context(root: Path, config: dict[str, Any]) -> Context:
+def _context(root: Path, config: dict[str, Any], interval: float = 1.0) -> Context:
     try:
         spec = lifecycle.read(root / "template.json")
     except (OSError, ValueError):
@@ -345,6 +501,7 @@ def _context(root: Path, config: dict[str, Any]) -> Context:
         router=config["router_url"],
         model=(spec.get("model") or {}).get("served_name"),
         slots=(spec.get("runtime") or {}).get("slots"),
+        interval=interval,
     )
 
 
@@ -389,7 +546,9 @@ def run(
         return view(None if restarted(first, second) else first, second)
     out = out or sys.stdout
     if out.isatty():
-        return _live(url, _context(root, config), interval, frames, fetch, out, clock, sleep)
+        return _live(
+            url, _context(root, config, interval), interval, frames, fetch, out, clock, sleep
+        )
     # A file or pipe takes the frames one after another.
     window: deque[Sample] = deque()
     shown: dict[str, Any] = {"status": "observed", "engines": []}
@@ -432,6 +591,9 @@ def _live(
     history: deque[dict[str, Any]] = deque(maxlen=TREND_FRAMES - 1)
     shown: dict[str, Any] = {"status": "observed", "engines": []}
     roles: dict[str, str | None] = {}
+    # When this view saw each switch it counted; switches from before it began have no time.
+    seen: deque[float] = deque(maxlen=RECENT_SWITCHES)
+    counted: int | None = None
     drawn = 0
     console = Console(file=out, force_terminal=True)
     # The alternate screen gives the terminal back as it was when the view closes.
@@ -443,6 +605,8 @@ def _live(
                     if window and restarted(window[-1], sample):
                         window.clear()
                         history.clear()
+                        seen.clear()
+                        counted = None
                         shown = {"status": "observed", "engines": []}
                     window.append(sample)
                     while len(window) > 2 and sample.at - window[0].at > WINDOW_S:
@@ -453,7 +617,18 @@ def _live(
                     now = {engine["iid"]: engine["role"] for engine in shown["engines"]}
                     switched = {iid for iid, role in now.items() if roles.get(iid, role) != role}
                     roles = now
-                    live.update(panel(shown, context, list(history), switched), refresh=True)
+                    total = shown["role_switches"]
+                    if counted is not None and total > counted:
+                        seen.extend([sample.at] * min(total - counted, RECENT_SWITCHES))
+                    counted = total
+                    recent = len(shown["recent_switches"])
+                    known = [sample.at - at for at in list(seen)[-recent:]] if recent else []
+                    ages: list[float | None] = [None] * (recent - len(known)) + list(known)
+                    frame = panel(shown, context, list(history), switched, ages, emblem=True)
+                    # The logo stays only while the whole frame fits the terminal's height.
+                    if len(console.render_lines(frame, pad=False)) > console.height:
+                        frame = panel(shown, context, list(history), switched, ages)
+                    live.update(frame, refresh=True)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     live.update(
                         Panel(
