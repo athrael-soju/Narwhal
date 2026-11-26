@@ -70,6 +70,7 @@ ERROR_RESPONSES = frozenset(
         (413, "request_too_large"),
         (429, "server_overloaded_error"),
         (503, "standby"),
+        (503, "not_ready"),
         (503, "backend_unavailable"),
         (503, "no_schedulable_engines"),
         (504, "queue_expired"),

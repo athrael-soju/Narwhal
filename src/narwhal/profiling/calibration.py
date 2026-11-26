@@ -31,6 +31,7 @@ from ..observability.tools import ToolActivity
 from ..runtime.role_switch import RoleSwitcher, current_roles, restore_roles
 from ..types import Role
 from .generation import read_generation
+from .probe.drain import refuse_undrained
 from .probe.engine import engine_context_limit, make_prompt
 from .probe.fleet import device_key
 from .tasks import cancel_tasks
@@ -648,7 +649,15 @@ async def calibrate(
     out: Path,
     base: Path | None = None,
     activity: ToolActivity | None = None,
+    router_url: str | None = None,
+    pairs_with: str | None = None,
 ) -> int:
+    """Measure the directed first-token groups that `base` does not supply and write `out`.
+
+    With `pairs_with`, measure only the groups that include that engine and leave the rest
+    for a later run, listed in `unmeasured_groups`. With `router_url`, refuse to measure an
+    engine that the active router has not drained, so the probes meet no client traffic.
+    """
     activity = activity or ToolActivity("calibration")
     if not input_tokens or any(value < 1 for value in input_tokens):
         raise ValueError("--input-tokens requires positive token counts")
@@ -680,6 +689,8 @@ async def calibrate(
         if src == source
     ]
     by_id = {spec.iid: spec for spec in cfg.engines}
+    if pairs_with is not None and pairs_with not in by_id:
+        raise ValueError(f"--pairs-with names {pairs_with}, which is not in the fleet file")
     dialect = load_backend(cfg.backend).dialect
     if dialect.tokenize_path is None:
         raise ValueError("first-token calibration requires an exact-count tokenizer route")
@@ -699,7 +710,9 @@ async def calibrate(
             cfg, base_document, groups, input_tokens, samples_per_group, generations
         )
     )
-    needed = {key for key in groups if key not in reused}
+    missing = [key for key in groups if key not in reused]
+    needed = {key for key in missing if pairs_with is None or pairs_with in key[:2]}
+    unmeasured = [key for key in missing if key not in needed]
     batches: dict[tuple[Pair, ...], list[int]] = {}
     for target in input_tokens:
         if batch := tuple(pair for pair in pairs if (*pair, target) in needed):
@@ -714,6 +727,14 @@ async def calibrate(
         for batch, targets in batches.items()
     ]
     used = {iid for src, dst, _ in needed for iid in (src, dst)}
+    if router_url is not None and used:
+        await refuse_undrained(
+            router_url,
+            [by_id[iid] for iid in sorted(used)],
+            used,
+            observation_timeout_s,
+            action="measure",
+        )
     activity.use(used)
     # Each lockstep step is one step: sweep 1 steps each group alone, later sweeps each round.
     activity.plan(
@@ -767,8 +788,12 @@ async def calibrate(
                     else {}
                 )
                 if switcher.engine_held:
+                    # Only the measured engines switch roles, so only they are restored; a
+                    # serving member keeps the role its router sets meanwhile.
                     roles = await current_roles(
-                        switcher, sizing, {spec.url: launches.get(spec.iid) for spec in cfg.engines}
+                        switcher,
+                        sizing,
+                        {by_id[iid].url: launches.get(iid) for iid in sorted(used)},
                     )
                 lockstep = _Lockstep(
                     cfg,
@@ -818,6 +843,8 @@ async def calibrate(
     rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     for src, dst, target in groups:
+        if (src, dst, target) in unmeasured:
+            continue
         kept = reused.get((src, dst, target))
         group_rows, group_captured = kept or (
             [measured[(src, dst, target, index)] for index in range(1, samples_per_group + 1)],
@@ -863,6 +890,7 @@ async def calibrate(
                 changed.append(spec.iid)
     complete = (
         samples_per_group >= 100
+        and not unmeasured
         and not changed
         and not generation_errors
         and all(row["failed"] == 0 and row["completed"] == samples_per_group for row in summaries)
@@ -891,6 +919,7 @@ async def calibrate(
         "configured_deadline_s": cfg.first_token_timeout_s,
         "candidate_deadline_s": max(candidates) if candidates else None,
         "groups": summaries,
+        "unmeasured_groups": [list(key) for key in unmeasured],
         "attempts": rows,
     }
     out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -905,5 +934,10 @@ async def calibrate(
         print(f"process generation changed during calibration: {', '.join(changed)}")
     for error in generation_errors:
         print(f"process generation check failed: {error}")
+    if unmeasured:
+        print(
+            f"left {len(unmeasured)} groups without {pairs_with} for a later run; pass this "
+            "artifact as --calibration-base"
+        )
     print(f"duration {duration_s:.0f}s")
     return 0 if complete and restore_error is None else 1

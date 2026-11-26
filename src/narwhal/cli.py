@@ -21,6 +21,11 @@ from .serving.app import create_app
 server_log = logging.getLogger("uvicorn.error")
 
 # Map uvicorn's trace level to logging's DEBUG.
+# Seconds a stopping router keeps serving after its readiness fails and before it stops
+# listening. The shipped HAProxy configuration checks every 0.2 s, so it takes the router out
+# of rotation before the router closes a connection HAProxy might open or reuse.
+SHUTDOWN_DRAIN_S = 0.5
+
 LOG_LEVELS = {
     "critical": "CRITICAL",
     "error": "ERROR",
@@ -63,6 +68,14 @@ def serve(argv: list[str] | None = None) -> int:
         default=None,
         help="nonnegative integer seconds for in-flight requests to finish on shutdown "
         "(default: the config's graceful_timeout_s)",
+    )
+    ap.add_argument(
+        "--shutdown-drain",
+        type=float,
+        default=SHUTDOWN_DRAIN_S,
+        help="finite nonnegative seconds a stopping router keeps serving after its readiness "
+        "fails and before it stops listening, longer than the load balancer's health-check "
+        f"interval (default {SHUTDOWN_DRAIN_S:g})",
     )
     ap.add_argument(
         "--standby-of",
@@ -133,6 +146,8 @@ def serve(argv: list[str] | None = None) -> int:
     # uvicorn counts this forward from SIGTERM.
     if args.graceful_timeout is not None and args.graceful_timeout < 0:
         ap.error(f"--graceful-timeout cannot be negative, got {args.graceful_timeout}")
+    if not (math.isfinite(args.shutdown_drain) and args.shutdown_drain >= 0):
+        ap.error(f"--shutdown-drain must be finite and nonnegative, got {args.shutdown_drain}")
 
     logging.basicConfig(
         level=LOG_LEVELS[args.log_level],
@@ -206,25 +221,38 @@ def serve(argv: list[str] | None = None) -> int:
             args.graceful_timeout if args.graceful_timeout is not None else cfg.graceful_timeout_s
         ),
     )
-    YieldingServer(config).run()
+    YieldingServer(config, drain_s=args.shutdown_drain).run()
     return 0
 
 
 class YieldingServer(uvicorn.Server):
     """Hand router control to the standby once the router stops accepting connections."""
 
+    def __init__(self, config: uvicorn.Config, *, drain_s: float = SHUTDOWN_DRAIN_S) -> None:
+        super().__init__(config)
+        self.drain_s = drain_s
+
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
         """Run uvicorn's shutdown, releasing the lease before the open requests drain.
 
-        The router stops accepting connections and closes its idle ones first, so a request
-        that reaches it is admitted while it still holds the lease. The steps follow
+        The router first fails its readiness and fleet-state reads, so the load balancer's next
+        check and the standby's probes fail, and serves every request for `drain_s` while the
+        load balancer takes it out of rotation. Only then does it stop listening and close its
+        idle connections. Closing either earlier resets a connection the load balancer has
+        just opened or reused, which the client receives as HTTP 502. A request that reaches
+        the router is admitted while it still holds the lease. The steps follow
         `uvicorn.Server.shutdown`.
         """
-        yield_control = getattr(getattr(self.config.app, "state", None), "yield_control", None)
+        state = getattr(self.config.app, "state", None)
+        yield_control = getattr(state, "yield_control", None)
         if yield_control is None:
             await super().shutdown(sockets=sockets)
             return
         server_log.info("Shutting down")
+        begin_shutdown = getattr(state, "begin_shutdown", None)
+        if begin_shutdown is not None:
+            begin_shutdown()
+        await asyncio.sleep(self.drain_s)
         for server in self.servers:
             server.close()
         for sock in sockets or []:

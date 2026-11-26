@@ -58,7 +58,7 @@ Returns HTTP `503` with `Retry-After: 1` otherwise.
 | Field           | Meaning                                                                                                  |
 | --------------- | -------------------------------------------------------------------------------------------------------- |
 | `status`        | `ready` or `not_ready`                                                                                   |
-| `control_ready` | `true` when this router controls the fleet and `/narwhal/state` reports `monitoring.degraded` as `false` |
+| `control_ready` | `true` when this router controls the fleet, is not shutting down, and `/narwhal/state` reports `monitoring.degraded` as `false` |
 | `epoch`         | Lease epoch                                                                                              |
 | `holder`        | Lease-holder token                                                                                       |
 | `reason`        | Cause of `not_ready`, empty when `status` is `ready`                                                     |
@@ -67,7 +67,7 @@ The earliest matching row sets `reason`:
 
 | Cause                               | `reason`                                                                                       |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Fencing, lease-storage failure or shutdown of the lease holder | Failover block, such as `lease renewal failed` or `shutting down` |
+| Fencing, lease-storage failure or shutdown of the lease holder | Failover block, such as `lease renewal failed`, or `shutting down` from the start of shutdown |
 | Whole-wave hold                     | `whole-wave drain <id>`, `whole-wave recovery <id>`, or `whole-wave restart required: <cause>` |
 | Engine-monitoring degradation       | `monitoring degraded: <stage> <class>`                                                         |
 | Standby state                       | `shadowing`                                                                                    |
@@ -91,7 +91,7 @@ With zero eligible engines, the response is:
 }
 ```
 
-During a [whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave), completion requests return HTTP `503` with error code `standby`.
+During a [whole-wave hold](../operate/03-Restart-Engines.md#restart-an-engine-wave), completion requests return HTTP `503` with error code `not_ready` and the hold as `reason`.
 
 ## `GET /metrics`
 
@@ -135,12 +135,13 @@ A router that does not control the fleet returns the [fleet-state refusal](#flee
 `reason` names why the router does not control the fleet. The first matching cause sets it:
 
 1. The failover block, when one is set, such as `lease renewal failed` on a fenced router, the cause of a blocked takeover, such as `no fresh handoff`, or `shutting down` once the lease holder releases its lease at shutdown.
-2. `shadowing` on a standby.
-3. `lease expired`.
+2. `shutting down` on a lease holder that started to stop and still holds the lease.
+3. `shadowing` on a standby.
+4. `lease expired`.
 
 `/ready` can name another cause for the same router, such as a whole-wave hold or degraded engine monitoring, because it checks those before `shadowing`.
 
-A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
+A router that holds the lease answers these routes even while its `/ready` returns HTTP `503` for another cause, unless it is shutting down. `/health`, `/ready`, `/metrics` and `/v1/models` answer on every router.
 
 A request to `GET /narwhal/state` or `GET /narwhal/lifecycle` with the header `X-Narwhal-Diagnostic: true` receives the router's own document, whether or not it controls the fleet. [Diagnostic bundles](../Diagnostic-Bundles.md) send it to keep a standby's or a fenced router's state. `GET /narwhal/engines`, `GET /narwhal/handoff` and `GET /narwhal/targets` return the refusal with or without the header.
 

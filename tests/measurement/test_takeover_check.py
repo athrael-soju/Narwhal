@@ -111,3 +111,12 @@ class ImmediateRestartTakeoverTests(unittest.TestCase):
         self.assertEqual((takeover["stopped"], takeover["holder"]), ("router-a", "router-b"))
         self.assertGreater(takeover["holder_ready_s"], 1.0)
         self.assertEqual(report["statuses"].get("503", 0), 0, report["errors"])
+
+    def test_two_routers_restarted_together_as_standbys_elect_one_holder(self):
+        # The active router is killed and the standby stopped; both restart as standbys of
+        # each other, and the first to claim the expired lease takes over.
+        report = self.run_check("--both", "--signal", "KILL", "--lease-ttl", "3", "--interval", "4")
+        (takeover,) = report["takeovers"]
+        self.assertIn(takeover["holder"], ("router-a", "router-b"))
+        self.assertEqual(report["both_ready"], [])
+        self.assertEqual(report["statuses"].get("503", 0), 0, report["errors"])

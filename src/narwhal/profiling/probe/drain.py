@@ -83,6 +83,7 @@ async def refuse_undrained(
     timeout_s: float,
     *,
     colocated: bool = False,
+    action: str = "switch",
 ) -> None:
     """Raise unless every engine in `engines` is drained or outside the router's fleet.
 
@@ -142,7 +143,7 @@ async def refuse_undrained(
             else ""
         )
         raise RuntimeError(
-            f"refusing to switch engines that the router at {base} has not drained: "
+            f"refusing to {action} engines that the router at {base} has not drained: "
             + ", ".join(serving)
             + ". Drain each one with POST /narwhal/lifecycle/drain and wait until "
             "GET /narwhal/lifecycle reports it ready_to_stop, as in Joining and removing engines."

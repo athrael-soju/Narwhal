@@ -392,6 +392,9 @@ class DrainIn(BaseModel):
     engines: list[str] = Field(default_factory=list)
     wave: bool = False
     deadline_s: float = 300.0
+    # False holds a running engine out of placement, such as for a calibration, and
+    # readmits the same process.
+    restart: bool = True
 
 
 class SharedDeviceIn(BaseModel):

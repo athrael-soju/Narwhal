@@ -284,9 +284,14 @@ class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
 
         app = App()
         app.state = type(
-            "State", (), {"yield_control": staticmethod(lambda: order.append("yield"))}
+            "State",
+            (),
+            {
+                "yield_control": staticmethod(lambda: order.append("yield")),
+                "begin_shutdown": staticmethod(lambda: order.append("begin")),
+            },
         )()
-        server = YieldingServer(uvicorn.Config(app, timeout_graceful_shutdown=0))
+        server = YieldingServer(uvicorn.Config(app, timeout_graceful_shutdown=0), drain_s=0)
 
         class Listener:
             def close(self):
@@ -304,5 +309,72 @@ class YieldingServerTests(unittest.IsolatedAsyncioTestCase):
             await server.shutdown()
         # Requests that reach the router before the yield are admitted under the lease, and
         # each shutdown step runs once.
-        self.assertEqual(order, ["close", "shutdown", "yield", "lifespan"])
+        self.assertEqual(order, ["begin", "close", "shutdown", "yield", "lifespan"])
         self.assertEqual(logs.output[0], "INFO:uvicorn.error:Shutting down")
+
+
+class ShutdownDrainTests(unittest.IsolatedAsyncioTestCase):
+    """A load balancer that reuses a keep-alive connection after SIGTERM gets a response."""
+
+    async def start(self, drain_s: float):
+        import uvicorn
+
+        from narwhal.cli import YieldingServer
+
+        events = []
+
+        async def app(scope, receive, send):
+            if scope["type"] == "lifespan":
+                while True:
+                    kind = (await receive())["type"]
+                    await send({"type": f"{kind}.complete"})
+                    if kind == "lifespan.shutdown":
+                        return
+            headers = [(b"content-length", b"2")]
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        app.state = type(
+            "State",
+            (),
+            {
+                "yield_control": staticmethod(lambda: events.append("yield")),
+                "begin_shutdown": staticmethod(lambda: events.append("begin")),
+            },
+        )()
+        config = uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning", timeout_graceful_shutdown=1
+        )
+        server = YieldingServer(config, drain_s=drain_s)
+        task = asyncio.create_task(server.serve())
+        while not server.started:
+            await asyncio.sleep(0.01)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        return server, task, port, events
+
+    async def request(self, reader, writer) -> bytes:
+        writer.write(b"GET / HTTP/1.1\r\nhost: router\r\n\r\n")
+        await writer.drain()
+        return await asyncio.wait_for(reader.readuntil(b"ok"), timeout=2)
+
+    async def test_a_reused_connection_is_served_during_the_drain(self):
+        server, task, port, events = await self.start(drain_s=0.5)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        self.assertIn(b"200 OK", await self.request(reader, writer))
+        server.should_exit = True
+        # uvicorn checks `should_exit` every 0.1 s, so shutdown has begun by now.
+        await asyncio.sleep(0.2)
+        # Readiness refuses, but the reused connection and a new one are still served.
+        self.assertEqual(events, ["begin"])
+        self.assertIn(b"200 OK", await self.request(reader, writer))
+        new_reader, new_writer = await asyncio.open_connection("127.0.0.1", port)
+        self.assertIn(b"200 OK", await self.request(new_reader, new_writer))
+        new_writer.close()
+        # Once the drain ends, the router stops listening, closes the idle connection, then
+        # yields control.
+        self.assertEqual(await asyncio.wait_for(reader.read(), timeout=2), b"")
+        with self.assertRaises(OSError):
+            await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await asyncio.wait_for(task, timeout=5)
+        self.assertEqual(events, ["begin", "yield"])

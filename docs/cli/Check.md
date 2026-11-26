@@ -45,6 +45,8 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | `--calibration-out PATH` | none, required | Raw samples and group summaries file. | A new JSON file |
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
 | `--calibration-base PATH` | none | Previous calibration artifact. Calibration reuses its complete groups and measures the rest. | An artifact with the same model, contract, `--input-tokens` and `--samples` |
+| `--pairs-with IID` | none | Measure only the groups that include this engine. The artifact lists the other groups it lacks in `unmeasured_groups`. | An engine in the fleet file |
+| `--router-url URL` | none | The active router. Before its first probe, the run stops unless this router reports each measured engine as drained or outside its fleet. | `http://` or `https://` URL |
 
 ## Preflight
 
@@ -128,6 +130,10 @@ Three timers bound each attempt. Prompt sizing and the wait from decode start to
 
 With `--calibration-base`, calibration reuses a base group that completed every sample when both its engines keep their URL and process generation. An engine listed in the base's `changed_generations` or `generation_errors` counts as changed. Calibration measures the other groups, and each reused group's output line ends with `, reused`.
 
+With `--pairs-with`, calibration measures only the groups it would otherwise measure that include the named engine. It leaves the rest out of `groups` and `attempts`, lists them in `unmeasured_groups` and writes an `incomplete` artifact. Pass that artifact as `--calibration-base` to the next run. A run that measures every remaining group writes a `complete` artifact.
+
+With `--router-url`, calibration reads the router's `/narwhal/engines` and `/narwhal/lifecycle` before its first probe. It stops with exit code 1 unless each engine it would measure is outside the router's fleet, or drained and `ready_to_stop`. The [router drain check](Profile.md#router-drain-check) of `narwhal-profile` applies the same condition. A run under client traffic uses it so that the probes and any role switches meet no client request.
+
 ### Calibration artifact
 
 The artifact at `--calibration-out` holds these fields:
@@ -146,12 +152,14 @@ The artifact at `--calibration-out` holds these fields:
 | `groups` | Per group: input token range, completed and failed counts, `p99_seconds`, `maximum_seconds`, `candidate_deadline_s` and `captured_at_unix` |
 | `attempts` | Every attempt, with its `attempt` sweep number, its `round` (`null` in sweep 1), timings, and `status` |
 | `candidate_deadline_s` | The largest group candidate |
+| `unmeasured_groups` | `[producer, consumer, input_tokens]` for each group that `--pairs-with` left for a later run, empty otherwise |
 
 A group's candidate deadline is the larger of its maximum and 1.2 times its nearest-rank p99, plus 0.5 seconds. An attempt's `status` is `completed`, `observation_expired`, `request_expired`, `failed_sizing`, `failed_prefill` or `failed_transfer`. `groups` follow the sweep 1 order, and `attempts` follow the group order and then sweep number.
 
 The artifact is `complete` when all of these hold:
 
 - Every group completed every sample with zero failures.
+- `unmeasured_groups` is empty.
 - `--samples` is at least 100.
 - No engine's process changed, and every final identity read succeeded.
 - The largest candidate is below `serving.request_timeout_s`.

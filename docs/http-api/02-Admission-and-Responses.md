@@ -33,9 +33,11 @@ Each row gives the HTTP status and error `type` that a completion route returns 
 | The peak KV tokens projected in decode during the request's decode hold exceed live decode capacity | `429` | `server_overloaded_error` | | `1` |
 | Decode load pushes the request past `slo.tpot_s` on every live decode engine | `429` | `server_overloaded_error` | | `1` |
 | Zero engines are live while the router holds its lease, with engine monitoring healthy and no lifecycle hold | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
-| Router is standby, fenced, in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring | `503` | `standby` | `standby` | `1` |
-| A whole-wave hold begins while the request waits for a seat or before its decode dispatch | `503` | `standby` | `standby` | `1` |
-| Degraded engine monitoring begins, or the router loses its lease, while the request waits for an admission or prefill seat | `503` | `standby` | `standby` | `1` |
+| Router is standby or fenced, including after it releases its lease at shutdown | `503` | `standby` | `standby` | `1` |
+| Router holds the lease but is in a whole-wave hold, awaiting engine identity validation, or in degraded engine monitoring | `503` | `not_ready` | `not_ready` | `1` |
+| A whole-wave hold begins while the request waits for a seat or before its decode dispatch | `503` | `not_ready` | `not_ready` | `1` |
+| Degraded engine monitoring begins while the request waits for an admission or prefill seat | `503` | `not_ready` | `not_ready` | `1` |
+| The router loses its lease while the request waits for an admission or prefill seat | `503` | `standby` | `standby` | `1` |
 | No engine can take a leg of the request before its first prefill dispatch | `503` | `no_schedulable_engines` | `no_schedulable_engines` | `1` |
 | After the first prefill dispatch, no engine outside the request's failed engines can take its decode leg or a retry's leg | `503` | `backend_unavailable` | `backend_unavailable` | `1` |
 | The admission-seat [wait](../configuration/02-Serving-and-Role-Control.md#queue-waits) reaches `serving.queue_timeout_s` before the original request deadline | `504` | `queue_expired` | | |
@@ -47,7 +49,20 @@ An engine fault before output starts returns HTTP `502` or `504` with the [reque
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
-`/ready` reports the reason for each `503` refusal.
+`/ready` reports the reason for each `503` refusal. A `standby` or `not_ready` refusal also carries the cause in the `reason` field of the error body. So does the `backend_unavailable` refusal when zero engines are live. The journal records the same value as `readiness_reason`. During a whole-wave hold, the lease holder answers:
+
+```json
+{
+  "error": {
+    "message": "Router is not ready",
+    "type": "not_ready",
+    "code": "not_ready",
+    "reason": "whole-wave drain <id>"
+  }
+}
+```
+
+A standby or fenced router answers with type `standby`, and with the reason `standby: the primary router is serving` while it shadows the primary. `not_ready` always comes from the lease holder, which serves again once the hold in `reason` ends.
 
 [`serving.admission`](../configuration/02-Serving-and-Role-Control.md#global-admission) selects the admission mode. `open` enforces the router saturation checks, the in-flight limit, and the queue and [engine seat](../configuration/02-Serving-and-Role-Control.md#engine-seats) limits. `predictive`, the default, adds the predictive TTFT, decode-capacity, and `slo.tpot_s` checks to every `open` check and limit. To choose a mode, queue setting and retry limit, follow [Choosing admission, queue and retry settings](../operate/07-Admission-Queue-and-Retry-Settings.md).
 

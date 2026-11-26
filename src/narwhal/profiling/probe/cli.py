@@ -17,7 +17,7 @@ from ...observability.tools import ToolActivity, serve_tool_metrics
 from ..fitting import cached_fit_possible
 from .fleet import run
 from .neighbours import ColocatedWorkload
-from .offline import merge_profiles, refit_saved_prefill
+from .offline import copy_profile, merge_profiles, refit_saved_prefill
 from .sweep import (
     CACHED_PREFIX_LENS,
     CACHED_SUFFIX_LENS,
@@ -73,6 +73,13 @@ def _main(argv: list[str]) -> int:
         "earlier profiles for the same engine variant. Rows for engines outside the fleet are "
         "dropped. Requires --out and full fleet coverage; cannot be combined with "
         "--refit-samples, --only, or --overwrite",
+    )
+    ap.add_argument(
+        "--copy-from",
+        metavar="IID",
+        help="copy this member's measured profile at profiles.path to the one engine --only "
+        "selects, after checking that the engine attests the same generation and reports the "
+        "same KV capacity; requires --out; cannot be combined with --merge or --refit-samples",
     )
     ap.add_argument(
         "--out",
@@ -203,7 +210,7 @@ def _main(argv: list[str]) -> int:
         "fit its live max_model_len; required with --colocated",
     )
     args = ap.parse_args(argv)
-    live = not args.merge and args.refit_samples is None
+    live = not args.merge and args.refit_samples is None and args.copy_from is None
     if args.observation_timeout_s is not None and (
         not math.isfinite(args.observation_timeout_s) or args.observation_timeout_s <= 0
     ):
@@ -231,7 +238,13 @@ def _main(argv: list[str]) -> int:
     if results.json_mode():
         results.protect_environment(cfg.engine_api_key_env)
         results.set_operation(
-            "merge" if args.merge else "refit" if args.refit_samples else "profile"
+            "merge"
+            if args.merge
+            else "refit"
+            if args.refit_samples
+            else "copy"
+            if args.copy_from
+            else "profile"
         )
         output_path = args.out or cfg.profiles_path
         results.add_artifact("profiles", output_path)
@@ -310,6 +323,12 @@ def _main(argv: list[str]) -> int:
             ap.error("neighbour load options require --colocated")
         colocated_workload = None
     try:
+        if args.copy_from is not None:
+            if args.merge or args.refit_samples is not None or args.overwrite:
+                ap.error("--copy-from cannot combine with --merge, --refit-samples or --overwrite")
+            if args.out is None or len(args.only) != 1:
+                ap.error("--copy-from requires --out and one --only engine")
+            return asyncio.run(copy_profile(cfg, args.copy_from, args.only[0], args.out))
         if args.merge:
             if args.refit_samples is not None or args.out is None or args.only or args.overwrite:
                 ap.error("--merge requires --out and cannot combine with refit, only, or overwrite")

@@ -30,8 +30,14 @@ class LifecycleManager:
         self.identities_ready = router.cfg.engine_contract is None
         self.membership_counts = MembershipCounts()
 
-    def begin(self, engines: list[str], *, wave: bool, deadline_s: float) -> bool:
-        """Start a drain, retry identity capture, or extend holds to a whole wave."""
+    def begin(
+        self, engines: list[str], *, wave: bool, deadline_s: float, restart: bool = True
+    ) -> bool:
+        """Start a drain, retry identity capture, or extend holds to a whole wave.
+
+        With `restart` false, the drain holds one running engine out of placement, and its
+        readmission accepts the same process.
+        """
         ids = list(dict.fromkeys(engines))
         if self.router.cfg.engine_restart_policy == "whole_wave" and not wave:
             raise LifecycleError("engine_restart_policy requires a whole-wave drain")
@@ -46,6 +52,8 @@ class LifecycleManager:
                 raise LifecycleError("a whole-wave drain must name every configured engine")
         elif len(ids) != 1:
             raise LifecycleError("a non-wave drain must name exactly one engine")
+        if wave and not restart:
+            raise LifecycleError("a whole-wave drain restarts its engines; restart must be true")
 
         held = {iid for iid, rec in self.records.items() if rec.state != "active"}
         if held:
@@ -68,7 +76,7 @@ class LifecycleManager:
             # pre-restart identity stays.
             old_start = (
                 self.records[iid].old_process_start
-                if iid in held and self.records[iid].restart_required
+                if iid in held and self.records[iid].restart_required and restart
                 else None
             )
             self.router.scheduler.drain(iid)
@@ -78,6 +86,7 @@ class LifecycleManager:
                 state="draining",
                 requested_at=now,
                 deadline_at=now + deadline_s,
+                restart_required=restart,
                 old_process_start=old_start,
                 wave_id=wave_id,
             )

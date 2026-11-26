@@ -10,7 +10,7 @@ from fastapi import Header
 from fastapi import Request as HTTPRequest
 from fastapi.responses import JSONResponse
 
-from ..runtime.standby import control_ready, controls_fleet
+from ..runtime.standby import control_ready, controls_fleet, lease_role
 from ..types import Request
 from .admission import PlacementRefused
 from .lifecycle import RequestLifecycle
@@ -77,7 +77,9 @@ def not_ready_response(
 ) -> JSONResponse:
     """Record and return a retryable refusal while control or backends are unavailable.
 
-    `reason` names the hold that ended a waiting or prefilled request.
+    `reason` names the hold that ended a waiting or prefilled request. The error code tells a
+    lease holder that is not ready (`not_ready`) from a standby or fenced router (`standby`),
+    and the body's `reason` names the hold, as `/ready` does.
     """
     backend_unavailable = (
         not reason
@@ -94,7 +96,10 @@ def not_ready_response(
         or ("no available engines" if backend_unavailable else "")
         or "standby: the primary router is serving"
     )
-    code = "backend_unavailable" if backend_unavailable else "standby"
+    if backend_unavailable:
+        code = "backend_unavailable"
+    else:
+        code = "not_ready" if lease_role(router) == "active" else "standby"
     if state is not None:
         state.finish(
             "rejected",
@@ -106,7 +111,9 @@ def not_ready_response(
             extra={"readiness_reason": reason},
         )
     message = "No engines are available" if backend_unavailable else "Router is not ready"
-    return error_response(503, code, message, headers={"retry-after": "1"}, code=code)
+    return error_response(
+        503, code, message, headers={"retry-after": "1"}, code=code, reason=reason
+    )
 
 
 class FleetNotControlled(Exception):
@@ -119,7 +126,10 @@ async def require_control(request: HTTPRequest) -> None:
     A standby or fenced router holds the fleet file's state, or state from before it lost the
     lease, so its answer would misdescribe the fleet.
     """
-    if not controls_fleet(request.app.state.router):
+    router = request.app.state.router
+    # A stopping router refuses, so the load balancer's fleet-state check takes it out of
+    # rotation before it stops listening.
+    if router.stopping or not controls_fleet(router):
         raise FleetNotControlled
 
 
@@ -142,10 +152,15 @@ async def require_control_or_diagnostic(
 def control_lost_reason(router: NarwhalRouter) -> str:
     """Name why the router does not control the fleet.
 
-    The failover block comes first, then `shadowing` on a standby, then `lease expired`. `/ready`
+    The failover block comes first, then `shutting down` on a router that has begun to stop,
+    then `shadowing` on a standby, then `lease expired`. `/ready`
     can name another cause first, such as a whole-wave hold or degraded monitoring.
     """
-    return router.failover_blocked or ("shadowing" if router.standby else "lease expired")
+    return (
+        router.failover_blocked
+        or ("shutting down" if router.stopping else "")
+        or ("shadowing" if router.standby else "lease expired")
+    )
 
 
 async def not_controlling_response(request: HTTPRequest, exc: Exception) -> JSONResponse:

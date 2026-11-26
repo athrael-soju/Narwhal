@@ -12,8 +12,6 @@ from narwhal.serving.seats import decode_seats
 from narwhal.types import Phase, Request, Role
 from tests.serving.test_http_accounting import HttpHarness
 
-STANDBY = {"type": "standby", "code": "standby"}
-
 
 class QueueWaitHarness(HttpHarness):
     """One prefill seat on the producer, so a second request waits for it."""
@@ -62,16 +60,19 @@ class QueueWaitHarness(HttpHarness):
     def row(self, rid):
         return next(row for row in self.terminal_rows() if row["rid"] == rid)
 
-    def assert_held_503(self, response, reason):
+    def assert_held_503(self, response, reason, code="not_ready"):
+        """Check a hold's 503: `not_ready` from the lease holder, `standby` without the lease."""
         self.assertEqual(response.status_code, 503, response.text)
         self.assertEqual(response.headers["retry-after"], "1")
-        self.assertEqual(response.json()["error"], {"message": "Router is not ready", **STANDBY})
+        self.assertEqual(
+            response.json()["error"],
+            {"message": "Router is not ready", "type": code, "code": code, "reason": reason},
+        )
         row = self.row(response.headers["x-request-id"])
         self.assertEqual(
             (row["terminal"], row["reason"], row["status"], row["error_type"]),
-            ("rejected", "not_ready", 503, "standby"),
+            ("rejected", "not_ready", 503, code),
         )
-        self.assertEqual(row["readiness_reason"], reason)
         self.assertEqual(row["readiness_reason"], reason)
 
 
@@ -381,7 +382,9 @@ class HoldTests(QueueWaitHarness):
         self.router.standby = True
         self.router.failover_blocked = "lease renewal failed"
         for task in (seat, admission):
-            self.assert_held_503(await asyncio.wait_for(task, timeout=2), "lease renewal failed")
+            self.assert_held_503(
+                await asyncio.wait_for(task, timeout=2), "lease renewal failed", code="standby"
+            )
         self.assertFalse(prefilled.done())
         release_decode(1)
         self.assertEqual((await asyncio.wait_for(prefilled, timeout=2)).status_code, 200)

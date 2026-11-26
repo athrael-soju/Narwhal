@@ -73,19 +73,76 @@ class StandbyRefusalTests(HttpHarness):
         self.assert_released()
 
     async def test_a_router_without_a_live_holder_to_retry_on_counts_its_refusals(self):
-        for case, standby, lease, blocked in (
+        for case, standby, lease, blocked, code, reason in (
             # The active router was killed, and the standby waits for its lease to expire.
-            ("standby after a missed probe", True, Lease(False), ""),
+            (
+                "standby after a missed probe",
+                True,
+                Lease(False),
+                "",
+                "standby",
+                "standby: the primary router is serving",
+            ),
             # The active router released its lease at SIGTERM before the standby claimed it.
-            ("router releasing at shutdown", False, Lease(False), "shutting down"),
+            (
+                "router releasing at shutdown",
+                False,
+                Lease(False),
+                "shutting down",
+                "standby",
+                "shutting down",
+            ),
             # Shared storage is lost, so the holder fences itself and the standby cannot probe.
-            ("fenced holder", True, Lease(False), "lease renewal failed"),
-            ("standby without the lease", True, Lease(False), "lease unavailable: storage"),
+            (
+                "fenced holder",
+                True,
+                Lease(False),
+                "lease renewal failed",
+                "standby",
+                "lease renewal failed",
+            ),
+            (
+                "standby without the lease",
+                True,
+                Lease(False),
+                "lease unavailable: storage",
+                "standby",
+                "lease unavailable: storage",
+            ),
             # A single router run with a lease path fences itself and refuses every request.
-            ("single router fenced", True, Lease(False), "lease renewal failed"),
-            ("lease holder awaiting engine identities", False, Lease(True), "identities"),
-            ("lease holder in a whole-wave hold", False, Lease(True), "wave"),
-            ("single router shutting down", False, None, "shutting down"),
+            (
+                "single router fenced",
+                True,
+                Lease(False),
+                "lease renewal failed",
+                "standby",
+                "lease renewal failed",
+            ),
+            # A lease holder that is not ready names its hold, so a client can tell it apart.
+            (
+                "lease holder awaiting engine identities",
+                False,
+                Lease(True),
+                "identities",
+                "not_ready",
+                "engine identity validation pending",
+            ),
+            (
+                "lease holder in a whole-wave hold",
+                False,
+                Lease(True),
+                "wave",
+                "not_ready",
+                "whole-wave drain wave-test",
+            ),
+            (
+                "single router shutting down",
+                False,
+                None,
+                "shutting down",
+                "standby",
+                "shutting down",
+            ),
         ):
             with self.subTest(case=case):
                 client = self.client()
@@ -97,7 +154,18 @@ class StandbyRefusalTests(HttpHarness):
                     router.lifecycle_blocked = "whole-wave drain wave-test"
                 else:
                     router.failover_blocked = blocked
-                self.assertEqual((await self.post(client)).status_code, 503)
+                response = await self.post(client)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(
+                    response.json()["error"],
+                    {
+                        "message": "Router is not ready",
+                        "type": code,
+                        "code": code,
+                        "reason": reason,
+                    },
+                )
+                self.assertEqual(self.terminal_rows()[-1]["error_type"], code)
                 counters = await self.counters(client)
                 self.assert_client_outcomes(counters, offered=1, rejected=1)
                 self.assertEqual(counters['narwhal_standby_refusals_total{reason="not_ready"}'], 0)
@@ -175,7 +243,7 @@ class OutcomeReasonTests(HttpHarness):
                 ("saturated", 429, "server_overloaded_error"),
                 ("inflight_limit", 429, "server_overloaded_error"),
                 ("inflight_limit", 429, "server_overloaded_error"),
-                ("not_ready", 503, "standby"),
+                ("not_ready", 503, "not_ready"),
             ],
         )
         self.assertEqual(rows[-1]["error_code"], not_ready.json()["error"]["code"])
@@ -522,3 +590,25 @@ class OutputFloorTests(HttpHarness):
         self.assertEqual((short.status_code, served.status_code), (400, 200))
         self.assertIn("at least 2", short.json()["error"]["message"])
         self.assertEqual([row["status"] for row in self.terminal_rows()], [400, 200])
+
+
+class ShutdownReadinessTests(HttpHarness):
+    async def test_a_stopping_router_refuses_ready_and_still_serves_open_connections(self):
+        client = self.client()
+        self.assertEqual((await client.get("/ready")).status_code, 200)
+        client._transport.app.state.begin_shutdown()
+        ready = await client.get("/ready")
+        self.assertEqual(ready.status_code, 503)
+        body = ready.json()
+        # The standby's probe counts a refusal without control as a miss.
+        self.assertEqual(
+            (body["status"], body["control_ready"], body["reason"]),
+            ("not_ready", False, "shutting down"),
+        )
+        # The load balancer's fleet-state check fails too.
+        targets = await client.get("/narwhal/targets")
+        self.assertEqual(targets.status_code, 503)
+        self.assertEqual(targets.json()["error"]["reason"], "shutting down")
+        # A request that still reaches the router is served under the lease.
+        self.assertEqual((await self.post(client)).status_code, 200)
+        self.assert_released()

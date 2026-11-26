@@ -275,9 +275,14 @@ def create_app(
         lease.release()
         log.info("released the lease at epoch %d for shutdown", router.lease_epoch)
 
+    def begin_shutdown() -> None:
+        """Refuse readiness and fleet-state reads from the start of shutdown, still serving."""
+        router.stopping = True
+
     app = FastAPI(title="narwhal", version=__version__, lifespan=lifespan)
     app.state.router = router
     app.state.yield_control = yield_control
+    app.state.begin_shutdown = begin_shutdown
     app.add_middleware(ServingIngress, router=router)
     app.add_exception_handler(FleetNotControlled, not_controlling_response)
     # Routes that describe the fleet answer only from the router that holds the lease.
@@ -321,12 +326,16 @@ def create_app(
 
     @app.get("/ready", summary="Active-router readiness for external load balancers")
     async def readiness() -> Response:
+        # A stopping router refuses at once, so the load balancer and the standby stop
+        # counting on it while it still serves its open connections.
+        serving = ready(router) and not router.stopping
         content = {
-            "status": "ready" if ready(router) else "not_ready",
-            "control_ready": control_ready(router),
+            "status": "ready" if serving else "not_ready",
+            "control_ready": control_ready(router) and not router.stopping,
             "epoch": router.lease_epoch,
             "holder": router.lease_holder,
             "reason": router.failover_blocked
+            or ("shutting down" if router.stopping else "")
             or router.lifecycle_blocked
             or monitoring_degraded_reason(router)
             or ("shadowing" if router.standby else "")
@@ -338,7 +347,7 @@ def create_app(
             )
             or ("no available engines" if not router.scheduler.live_instances() else ""),
         }
-        if ready(router):
+        if serving:
             return JSONResponse(content=content)
         return JSONResponse(status_code=503, content=content, headers={"retry-after": "1"})
 
@@ -391,7 +400,12 @@ def create_app(
         engines = action.engines or (sorted(router.membership.ids) if action.wave else [])
         async with router.lifecycle.lock:
             try:
-                router.lifecycle.begin(engines, wave=action.wave, deadline_s=action.deadline_s)
+                router.lifecycle.begin(
+                    engines,
+                    wave=action.wave,
+                    deadline_s=action.deadline_s,
+                    restart=action.restart,
+                )
             except LifecycleError as exc:
                 return _lifecycle_error(router, 409, str(exc))
             capture = [

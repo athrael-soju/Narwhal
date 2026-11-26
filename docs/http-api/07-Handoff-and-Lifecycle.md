@@ -116,7 +116,7 @@ Engine record fields:
 | `resident`          | Resident `prefill` and `decode` request counts                                                                           |
 | `pending_handoffs`  | Decode legs on other engines that may still read KV from the engine                                                      |
 | `deadline_at`       | Unix time when the drain deadline expires, `null` until the engine has a lifecycle record                                |
-| `restart_required`  | `true` when lifecycle readmission requires a process start newer than the drain record                                   |
+| `restart_required`  | `true` when lifecycle readmission requires a process start newer than the drain record, `false` after a drain with `restart: false` |
 | `leaving`           | `true` while a [removal](08-Engine-Membership.md#delete-narwhalenginesiid) drains the engine                              |
 | `wave_id`           | Whole-wave ID, or empty                                                                                                  |
 | `old_process_start` | Process-start timestamp recorded at drain                                                                                |
@@ -135,6 +135,7 @@ Drains one engine, or every member engine as a whole wave.
 | `engines`    | Array of engine IDs | `[]`    | Engines to drain                          |
 | `wave`       | Boolean             | `false` | Drain every member engine as one wave     |
 | `deadline_s` | Number of seconds   | `300`   | Drain deadline, positive and finite       |
+| `restart`    | Boolean             | `true`  | `false` holds a running engine out of placement and readmits the same process, as for a [calibration under client traffic](../operate/08-Joining-and-Removing-Engines.md#calibrate-the-first-token-deadline). A whole-wave drain requires `true`. |
 
 A drain request follows these rules:
 
