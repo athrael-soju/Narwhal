@@ -1386,6 +1386,25 @@ class DevTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tokenizer file config.json"):
             self.initialize()
 
+    def test_spawn_stops_a_child_whose_identity_cannot_be_read(self):
+        run = self.parent / "run"
+        run.mkdir()
+        state = {"run": str(run), "processes": []}
+        command = [sys.executable, "-c", "import time; time.sleep(60)"]
+        with (
+            patch.object(
+                lifecycle.native_engine, "process_identity", side_effect=ValueError("no identity")
+            ),
+            patch.dict(os.environ, {"NARWHAL_STAGE_CLEANUP_GRACE_SECONDS": "0.5"}),
+            self.assertRaisesRegex(ValueError, "no identity"),
+        ):
+            lifecycle._spawn_command(self.root, state, command, "sidecar-1", dict(os.environ))
+        record = lifecycle.read(run / "sidecar-1-spawn.stage.json")
+        self.assertEqual((record["stage"], record["status"]), ("sidecar-1", "cancelled"))
+        self.assertEqual(record["cleanup"]["surviving_processes"], {})
+        self.assertEqual(stages.active(record), {})
+        self.assertEqual(state["processes"], [])
+
 
 class FabricAddressTests(unittest.TestCase):
     def test_reads_the_loopback_address_without_an_ip_command(self):

@@ -381,3 +381,37 @@ class DockerStageTests(unittest.TestCase):
         report = caught.exception.context["docker_reconciliation"]
         self.assertEqual(report["status"], "inspection_required")
         self.assertIn("exhausted", report["error"])
+
+
+class StageCancelTests(unittest.TestCase):
+    def test_cancel_stops_the_child_and_its_descendants_and_records_them(self):
+        with tempfile.TemporaryDirectory() as root:
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import subprocess, sys, time; "
+                    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                    "time.sleep(60)",
+                ],
+                start_new_session=True,
+            )
+            time.sleep(0.3)
+            evidence = Path(root) / "sidecar-spawn.stage.json"
+            with patch.dict(os.environ, {"NARWHAL_STAGE_CLEANUP_GRACE_SECONDS": "0.5"}):
+                cleanup = stages.cancel(child, stage="sidecar", evidence=evidence)
+            record = json.loads(evidence.read_text())
+            self.assertEqual(record["status"], "cancelled")
+            self.assertEqual(record["pid"], child.pid)
+            self.assertEqual(len(record["processes"]), 2)
+            self.assertEqual(cleanup["surviving_processes"], {})
+            self.assertFalse(any(alive(int(pid)) for pid in record["processes"]))
+            self.assertEqual(stages.active(record), {})
+
+
+def alive(pid):
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return state not in {"Z", "X"}
