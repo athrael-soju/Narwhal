@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.12.0](https://github.com/athrael-soju/Narwhal/compare/v0.11.0...v0.12.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **serving:** A client that matched type `standby` during a hold on the lease holder now receives `not_ready`.
+* **lifecycle:** The router refuses an engine whose model files differ from the rest of the fleet. Engines from earlier releases do not report their model files, so they cannot share a fleet with 0.12.0 engines. Upgrading therefore takes the whole fleet out of service at once (docs/operate/04-Upgrade-and-Validate.md, "Upgrading to model file digests").
+* **profiling:** SGLang `narwhal-profile --only` sweeps require `--router-url`, or `--no-router` when no router serves the engines.
+* **serving:** A router without the lease answers `GET /narwhal/engines`, `/lifecycle`, `/state`, `/handoff` and `/targets` with HTTP 503 instead of its own snapshot. A request with `X-Narwhal-Diagnostic: true` still gets a standby's state and lifecycle.
+* **observability:** Metrics contract 3: each `/metrics` counter covers one router process and restarts at 0 when that process restarts, including on `--resume`. Deployment totals stay in `/narwhal/state`. `make observe` for a router pair requires `NARWHAL_TARGETS_URL`.
+
+### Features
+
+* **calibration:** `narwhal-check --calibrate-first-token --pairs-with MEMBER --router-url URL` calibrates a joining engine one member at a time while the other members serve clients. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **deployment:** The deploy path can deploy a vLLM fleet from a GGUF model file. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **dev:** `narwhal dev init --gpus` runs each engine on its own GPU, so a dev fleet can join and remove engines. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **fleet-control:** Join and Leave actions. Restore baseline returns engines that left and removes engines that joined. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **lifecycle:** A drain with `restart: false` holds a running engine out of placement and readmits the same process. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **lifecycle:** Join, readmission, `finalize-fleet` and preflight refuse an engine whose model files differ from the fleet's. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **observability:** Request outcomes draws not-ready refusals as `rejected (not ready)`, apart from `rejected (capacity)`. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **observability:** The router exports the membership generation and join and leave outcomes. The dashboard marks membership changes and keeps a departed engine's history. `make observe` scrapes both routers of a pair. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **profiling:** `narwhal-profile --copy-from MEMBER --only NEW` gives a new engine the measured profile of a member without a sweep, when the engine's launch, model files and KV capacity match the member's. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **serving:** A lease holder that is not ready answers HTTP 503 with type and code `not_ready` and the cause in `reason`. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **serving:** The router adds and removes engines while it runs, through `GET`, `POST` and `DELETE /narwhal/engines`. A joining engine receives work only after it passes the contract, profile, calibration and readmission checks. A leaving engine drains before the router removes it. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **sglang:** On SGLang 0.5.23 and later, engines launch with the overlap scheduler and FlashInfer decode attention. ([#440](https://github.com/athrael-soju/Narwhal/issues/440)) ([5af93bc](https://github.com/athrael-soju/Narwhal/commit/5af93bcab9d76e7d2b54acb7610ed319e18a816f))
+
+
+### Fixes
+
+* **calibration:** First-token calibration asks for at least two output tokens per request, so it completes at the longest input length. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **dev:** `narwhal dev init` reads the interface address without the `ip` command, so the TensorRT-LLM container no longer needs `iproute2`. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **ha:** A lease holder stopped with SIGTERM keeps serving for `--shutdown-drain` seconds, 0.5 by default, after its readiness fails, so HAProxy no longer returns 502 during a takeover. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **ha:** The shipped HAProxy configuration holds requests through a router takeover instead of returning 503, also when the stopped router restarts at once as standby. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* **profiling:** An SGLang profiling sweep refuses to run until the router confirms that the peer it switches is out of service. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+
+
+### Documentation
+
+* **deploy:** Fabric qualification shows how to send KV between engines of one host over their HCAs. ([#475](https://github.com/athrael-soju/Narwhal/issues/475)) ([0b29dfc](https://github.com/athrael-soju/Narwhal/commit/0b29dfc4c897fe9ce3e7526f6836ae21425b1a8a))
+* **membership:** New pages for the engine membership HTTP API and for joining and removing engines. ([#454](https://github.com/athrael-soju/Narwhal/issues/454)) ([b9712fe](https://github.com/athrael-soju/Narwhal/commit/b9712fe55fb6c70029c0485c05e9ce973338e952))
+* The `narwhal dev` command reference is linked from the dev pages and `narwhal dev --help`. ([#443](https://github.com/athrael-soju/Narwhal/issues/443)) ([c9ff72f](https://github.com/athrael-soju/Narwhal/commit/c9ff72f55a188d98a641af9f82d76fba45b1a375))
+
 ## [0.11.0](https://github.com/athrael-soju/Narwhal/compare/v0.10.0...v0.11.0) (2026-11-22)
 
 
