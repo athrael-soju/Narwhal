@@ -56,7 +56,7 @@ A malformed profile stops the operation with an error that names the file, engin
 profiles.json: profile n4: tpot_slope must be nonnegative
 ```
 
-When the router starts from the fleet file, the profile store must have profiles for exactly the fleet's engines. A join needs a profile for each engine in the new fleet, and the router ignores profiles for other engines, such as an engine that left. A new engine can take a copy of a member's measured profile when its generation digest and KV capacity match the member's row, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes. A standby router starts even when the store has profiles for engines outside the fleet, and logs a warning. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
+When the router starts from the fleet file, the profile store must have profiles for exactly the fleet's engines. A join needs a profile for each engine in the new fleet, and the router ignores profiles for other engines, such as an engine that left. A new engine can take a copy of the measured profile of a member. Its launch evidence and KV capacity must match the row of the member, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes. A standby router starts even when the store has profiles for engines outside the fleet, and logs a warning. Combine rows from separate `narwhal-profile --only` runs with [`narwhal-profile --merge`](../cli/Profile.md#selection-refitting-and-output).
 
 ### Profile fields
 

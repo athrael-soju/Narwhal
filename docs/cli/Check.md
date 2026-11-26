@@ -46,7 +46,7 @@ Options for first-token calibration. `--calibrate-first-token` requires `--input
 | `--samples N` | 100 | Fresh handoffs per pair and input length. | At least 100 for valid evidence |
 | `--calibration-base PATH` | none | Previous calibration artifact. Calibration reuses its complete groups and measures the rest. | An artifact with the same model, contract, `--input-tokens` and `--samples` |
 | `--pairs-with IID` | none | Measure only the groups that include this engine. The artifact lists the other groups it lacks in `unmeasured_groups`. | An engine in the fleet file |
-| `--router-url URL` | none | Active router that must report every engine the run measures as drained or outside its fleet. The run stops before its first probe otherwise. | `http://` or `https://` URL |
+| `--router-url URL` | none | The active router. Before its first probe, the run stops unless this router reports each measured engine as drained or outside its fleet. | `http://` or `https://` URL |
 
 ## Preflight
 
@@ -132,7 +132,7 @@ With `--calibration-base`, calibration reuses a base group that completed every 
 
 With `--pairs-with`, calibration measures only the groups it would otherwise measure that include the named engine. It leaves the rest out of `groups` and `attempts`, lists them in `unmeasured_groups` and writes an `incomplete` artifact. Pass that artifact as `--calibration-base` to the next run. A run that measures every remaining group writes a `complete` artifact.
 
-With `--router-url`, calibration reads the router's `/narwhal/engines` and `/narwhal/lifecycle` before its first probe. It stops with exit code 1 unless every engine it would measure is outside the router's fleet, or drained and `ready_to_stop`, as the [router drain check](Profile.md#router-drain-check) of `narwhal-profile` does. A run under client traffic uses it so that the probes and any role switches meet no client request.
+With `--router-url`, calibration reads the router's `/narwhal/engines` and `/narwhal/lifecycle` before its first probe. It stops with exit code 1 unless each engine it would measure is outside the router's fleet, or drained and `ready_to_stop`. The [router drain check](Profile.md#router-drain-check) of `narwhal-profile` applies the same condition. A run under client traffic uses it so that the probes and any role switches meet no client request.
 
 ### Calibration artifact
 

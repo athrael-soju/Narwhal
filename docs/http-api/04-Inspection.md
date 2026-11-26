@@ -135,7 +135,7 @@ A router that does not control the fleet returns the [fleet-state refusal](#flee
 `reason` names why the router does not control the fleet. The first matching cause sets it:
 
 1. The failover block, when one is set, such as `lease renewal failed` on a fenced router, the cause of a blocked takeover, such as `no fresh handoff`, or `shutting down` once the lease holder releases its lease at shutdown.
-2. `shutting down` on a lease holder that has begun to stop and still holds the lease.
+2. `shutting down` on a lease holder that started to stop and still holds the lease.
 3. `shadowing` on a standby.
 4. `lease expired`.
 

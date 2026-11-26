@@ -76,14 +76,19 @@ PY
 
 The join requires a store with a profile for each member and the new engine. A removal leaves the engine's rows in the store. A merge whose `--fleet` file omits the engine drops them, as the [store update after a removal](#update-the-fleet-file-and-the-profile-store) does, and as step 6 below does for another engine's join once the fleet file omits it. An engine that rejoins while the store still holds its rows, with the [process generation](../configuration/01-Fleet-Schema.md#attestation) of its stored profile, needs no new profile, so skip this section.
 
-When the new engine runs the same launch and model files as a member, on the same GPU type, copy that member's profile in place of steps 1 to 4. Replace `e0` with the member:
+Copy the profile of a member in place of steps 1 to 4 when the new engine meets two conditions:
+
+- It runs the same launch and model files as the member.
+- It runs on the same GPU type as the member.
+
+Replace `e0` with the member:
 
 ```bash
 .venv/bin/narwhal-profile --fleet "$RUN_DIR/fleet-with-$IID.json" \
   --copy-from e0 --only "$IID" --out "runs/profiles-$IID-$STAMP.json"
 ```
 
-The copy needs no drained peer. It refuses an engine whose launch evidence or KV capacity differs from the member's profile, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes; profile that engine with steps 1 to 4. Then continue at step 5.
+The copy needs no drained peer. It refuses an engine whose launch evidence or KV capacity differs from the member's profile, as [Copying a member's profile](../cli/Profile.md#copying-a-members-profile) describes. Profile that engine with steps 1 to 4. Then continue at step 5.
 
 1. The profiler requires the limits file to name exactly the candidate fleet's engines. Add the new engine's sequence limit to a copy, replacing `256` with its `runtime.max_sequences`, as [Profiling idle engines](../deploy/06-Profile-and-Preflight.md#profiling-idle-engines) describes:
 
@@ -152,7 +157,7 @@ When `engine.first_token_calibration_path` is set, the join requires a calibrati
 
 Use the `--input-tokens` and `--samples` that the current artifact records in `input_tokens` and `samples_per_group`. When a recorded length leaves room for fewer than two output tokens, run the command without `--calibration-base`, with `--input-tokens` chosen as in [Calibrating the first-token deadline](../deploy/06-Profile-and-Preflight.md#calibrating-the-first-token-deadline). Set `--observation-timeout-s` above `engine.first_token_timeout_s` and at most `serving.request_timeout_s`.
 
-With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches each measured pair's engines into the roles its probes need. It does this on the engines themselves, outside the router's role control, and returns each engine it measured to its starting role at the end. Run it while the members carry no client traffic, or calibrate one member at a time as in [Calibrate under client traffic](#calibrate-under-client-traffic). The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
+With `--calibration-base`, the run reuses each complete group of the current artifact whose two engines keep their URL and process generation. It measures the rest: every directed pair that includes the new engine, and the pairs of any member whose URL or process generation changed. On SGLang, the run switches each measured pair's engines into the roles its probes need. It does this on the engines themselves, outside the router's role control, and returns each engine it measured to its starting role at the end. Run it while the members carry no client traffic. Alternatively, calibrate one member at a time, as [Calibrate under client traffic](#calibrate-under-client-traffic) describes. The pairs that include the new engine run one at a time on SGLang and at most two at a time on other backends, so the run's length grows with the number of members and input lengths.
 
 #### Calibrate under client traffic
 
@@ -189,7 +194,7 @@ done
 cp "$BASE" "$RUN_DIR/first-token-calibration.json"
 ```
 
-Each run but the last exits 1 and writes an `incomplete` artifact, because `unmeasured_groups` lists the pairs of the members still to come. The last run reuses every earlier group and writes a `complete` artifact when every group passed. A pair between two members whose URL or process generation changed needs both members drained, so the run that reaches it stops with the router drain check's message. When a readmission fails, fix the cause that `GET /narwhal/lifecycle` reports and readmit the member again before you continue.
+Each run but the last exits 1 and writes an `incomplete` artifact, because `unmeasured_groups` lists the pairs of the members still to come. The last run reuses every earlier group and writes a `complete` artifact when every group passed. A pair between two members whose URL or process generation changed needs both members drained. The run that reaches such a pair stops with the message of the router drain check. When a readmission fails, fix the cause that `GET /narwhal/lifecycle` reports and readmit the member again before you continue.
 
 Check and install `$RUN_DIR/first-token-calibration.json` as below.
 

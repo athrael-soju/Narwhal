@@ -49,7 +49,7 @@ An engine fault before output starts returns HTTP `502` or `504` with the [reque
 
 Shorten the prompt or raise `slo.ttft_s` to clear a 429 for an oversized prompt.
 
-`/ready` reports the reason for each `503` refusal. A `standby` or `not_ready` refusal, and the `backend_unavailable` refusal when zero engines are live, also carry the cause in the error body's `reason`, the value the journal records as `readiness_reason`. During a whole-wave hold the lease holder answers:
+`/ready` reports the reason for each `503` refusal. A `standby` or `not_ready` refusal also carries the cause in the `reason` field of the error body. So does the `backend_unavailable` refusal when zero engines are live. The journal records the same value as `readiness_reason`. During a whole-wave hold, the lease holder answers:
 
 ```json
 {
