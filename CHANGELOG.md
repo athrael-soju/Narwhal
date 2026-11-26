@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.13.0](https://github.com/athrael-soju/Narwhal/compare/v0.12.0...v0.13.0) (2026-11-26)
+
+
+### Features
+
+* **dev:** `narwhal dev demo` starts the fleet when it is not up, then sends long replies and long prompts for 30 seconds each while the live view shows the engines change roles, and reports the requests, role switches and final split. ([#480](https://github.com/athrael-soju/Narwhal/issues/480)) ([3afd653](https://github.com/athrael-soju/Narwhal/commit/3afd6536cf587ef07288e8a34af730fe14a6f05b))
+* **dev:** `narwhal dev watch` draws each engine's role history across the terminal's width with a mark at each role switch, shows the Narwhal logo when the terminal is tall enough, and names the role controller's last decision and its reason. The `--once` frame gains a `controller` field. ([#476](https://github.com/athrael-soju/Narwhal/issues/476)) ([6c92325](https://github.com/athrael-soju/Narwhal/commit/6c923253dd93c7be3435d88a140eb4a5445b9d4d))
+
+
+### Fixes
+
+* **dev:** `narwhal dev ask` with one prompt decodes greedily unless the template sets a temperature, so the same prompt gets the same reply. ([#480](https://github.com/athrael-soju/Narwhal/issues/480)) ([3afd653](https://github.com/athrael-soju/Narwhal/commit/3afd6536cf587ef07288e8a34af730fe14a6f05b))
+* **dev:** `narwhal dev` sizes llama.cpp engine threads by a container's CPU quota, so engines under `docker run --cpus` or a Kubernetes CPU limit no longer oversubscribe it. ([#479](https://github.com/athrael-soju/Narwhal/issues/479)) ([c5c64a0](https://github.com/athrael-soju/Narwhal/commit/c5c64a031e181bcf37ca455f127b2368c1f2711d))
+
+
+### Documentation
+
+* The README opens with a recording of `narwhal dev`, an "Open in GitHub Codespaces" button and the evaluation's results. The repository's dev container runs `make setup`, so a codespace runs `narwhal dev` on the CPU without installing anything. ([#477](https://github.com/athrael-soju/Narwhal/issues/477)) ([32b33c3](https://github.com/athrael-soju/Narwhal/commit/32b33c357cf75274ac60125c6dc32bdf531d05a5))
+* The README's recording and "Trying it" commands go step by step: `up`, `ask`, then `demo`. ([#480](https://github.com/athrael-soju/Narwhal/issues/480)) ([3afd653](https://github.com/athrael-soju/Narwhal/commit/3afd6536cf587ef07288e8a34af730fe14a6f05b))
+
 ## [0.12.0](https://github.com/athrael-soju/Narwhal/compare/v0.11.0...v0.12.0) (2026-11-26)
 
 
