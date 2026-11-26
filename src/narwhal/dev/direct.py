@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import shutil
 import sys
@@ -72,9 +73,56 @@ def _runtime(spec: dict) -> dict:
     return runtime
 
 
-def _threads(count: int) -> int:
+def _cgroup_quota(cgroups: Path, membership: Path) -> float | None:
+    """CPUs the process's cgroup quota allows, the tightest along its path; None if unlimited.
+
+    Reads cgroup v2 `cpu.max`, or cgroup v1 `cpu.cfs_quota_us` and `cpu.cfs_period_us`.
+    """
+    try:
+        lines = membership.read_text().splitlines()
+    except OSError:
+        return None
+    limits: list[float] = []
+    for line in lines:
+        _, controllers, path = line.split(":", 2)
+        if controllers == "":
+            # v2: one hierarchy; a limit may sit on any ancestor.
+            here = cgroups / path.lstrip("/")
+            for directory in (here, *here.parents):
+                if not directory.is_relative_to(cgroups):
+                    break
+                try:
+                    quota, period = (directory / "cpu.max").read_text().split()
+                except (OSError, ValueError):
+                    continue
+                if quota != "max":
+                    limits.append(int(quota) / int(period))
+        elif "cpu" in controllers.split(","):
+            for name in ("cpu", "cpu,cpuacct", "cpuacct,cpu"):
+                directory = cgroups / name
+                try:
+                    quota_us = int((directory / "cpu.cfs_quota_us").read_text())
+                    period_us = int((directory / "cpu.cfs_period_us").read_text())
+                except (OSError, ValueError):
+                    continue
+                if quota_us > 0 and period_us > 0:
+                    limits.append(quota_us / period_us)
+                break
+    return min(limits) if limits else None
+
+
+def usable_cpus(
+    cgroups: Path = Path("/sys/fs/cgroup"), membership: Path = Path("/proc/self/cgroup")
+) -> int:
+    """CPUs this process can use: its affinity, capped by a container's CPU quota."""
+    cpus = len(os.sched_getaffinity(0))
+    quota = _cgroup_quota(cgroups, membership)
+    return cpus if quota is None else max(1, min(cpus, math.ceil(quota)))
+
+
+def _threads(count: int, cpus: int | None = None) -> int:
     # One CPU stays with the router, which polls every engine.
-    usable = len(os.sched_getaffinity(0)) - 1
+    usable = (usable_cpus() if cpus is None else cpus) - 1
     return max(1, min(MAX_THREADS, usable // count))
 
 
