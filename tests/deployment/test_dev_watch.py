@@ -245,6 +245,122 @@ class WatchTests(DirectInstance):
         self.assertEqual(watch.trend([None, 3.0, 3.0]), " ▄▄")
         self.assertEqual(watch.trend([1.0, 2.0, 3.0]), "▁▅█")
 
+    def test_the_role_history_fills_the_width_and_marks_each_switch(self):
+        def frame(n1: str) -> dict:
+            return {
+                "engines": [
+                    {"iid": "n1", "role": n1, "requests": 0, "state": "live"},
+                    {"iid": "n2", "role": "decode", "requests": 1, "state": "live"},
+                ],
+                "ttft_s": {"p50": 0.05, "p95": 0.2},
+                "tpot_s": {"p50": 0.02, "p95": 0.03},
+                "requests_per_second": 2.0,
+                "output_tokens_per_second": 80.0,
+                "served": 10,
+                "failed": 0,
+                "unserved": 0,
+                "role_switches": 1,
+                "recent_switches": [{"iid": "n1", "to": "decode"}],
+                "controller": {
+                    "result": "applied",
+                    "prefill": 0,
+                    "decode": 2,
+                    "current_prefill": 1,
+                    "current_decode": 1,
+                    "reason": "decode backlog",
+                },
+                "window_s": 30.0,
+            }
+
+        history = [frame("prefill")] * 3
+        context = watch.Context(Path("runs/dev"), "http://127.0.0.1:18000", None, 2, 2.0)
+        console = watch.Console(width=100, record=True, file=io.StringIO())
+        console.print(watch.panel(frame("decode"), context, history, {"n1"}, [12.0]))
+        text = console.export_text()
+        n1 = next(line for line in text.splitlines() if " n1 " in line)
+        # Four frames so far: an empty track to their left fills the column from the start.
+        self.assertIn("──███┃", n1)
+        self.assertTrue(n1.rstrip(" │").endswith("███┃"))
+        heading = next(line for line in text.splitlines() if "role, last" in line)
+        cells = len(n1.rstrip(" │")) - n1.index("─")
+        self.assertIn(f"role, last {cells * 2} s", heading)
+        ttft = next(line for line in text.splitlines() if "time to first token" in line)
+        # A steady figure draws middle ticks after the empty track.
+        self.assertTrue(ttft.rstrip(" │").endswith("▁▄▄▄▄"))
+        self.assertIn("n1 → decode 12 s ago", text)
+        self.assertIn("controller  moved to 0P:2D: decode backlog", text)
+
+        # More frames than the column holds: the newest fill it, with the switch at the right.
+        long = [frame("prefill")] * 200
+        console = watch.Console(width=100, record=True, file=io.StringIO())
+        console.print(watch.panel(frame("decode"), context, long))
+        n1 = next(line for line in console.export_text().splitlines() if " n1 " in line)
+        self.assertTrue(n1.rstrip(" │").endswith("█┃"))
+        self.assertLessEqual(len(n1), 100)
+
+    def test_the_controller_line_names_the_split_kept_or_moved_to(self):
+        decision = {"prefill": 2, "decode": 2, "current_prefill": 3, "current_decode": 1}
+        self.assertIsNone(watch.decision_text(None))
+        self.assertEqual(
+            watch.decision_text({**decision, "result": "held", "reason": "prefill pressure"}),
+            "held at 3P:1D instead of 2P:2D: prefill pressure",
+        )
+        self.assertEqual(
+            watch.decision_text({**decision, "result": "applied", "reason": None}),
+            "moved to 2P:2D",
+        )
+        self.assertEqual(
+            watch.decision_text({"result": "blocked", "prefill": 1, "decode": 3}),
+            "blocked at 1P:3D",
+        )
+        state = {**STATE, "control": {"last_decision": {"result": "held", "at": 1.0}}}
+        self.readings = [(state, metrics(10, 400, (4, 10, 10)))] * 2
+        shown = watch.run(self.root, once=True, fetch=self.fetch, sleep=lambda seconds: None)
+        self.assertEqual(shown["controller"]["result"], "held")
+        self.assertNotIn("at", shown["controller"])
+
+    def test_the_live_view_times_the_switches_it_sees(self):
+        class Terminal(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        later = {
+            **STATE,
+            "flips": [*STATE["flips"], {"iid": "n1", "to": "prefill"}],
+            "control": {"flips": {"reactive:decode": 4, "reactive:prefill": 4}},
+        }
+        self.readings = [
+            (STATE, metrics(10, 400, (4, 10, 10))),
+            (later, metrics(20, 800, (4, 20, 20))),
+            (later, metrics(30, 1200, (4, 30, 30))),
+        ]
+        clock = itertools.count(0.0, 5.0)
+        out = Terminal()
+        watch.run(
+            self.root,
+            frames=3,
+            fetch=self.fetch,
+            out=out,
+            clock=lambda: next(clock),
+            sleep=lambda seconds: None,
+        )
+        drawn = out.getvalue()
+        self.assertIn("5 s ago", drawn)
+        # A switch from before the view began has no time.
+        self.assertNotIn("n2 → decode 1", drawn)
+
+    def test_the_logo_shows_while_the_frame_fits_the_terminal(self):
+        class Terminal(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        for lines, shown in (("60", True), ("24", False)):
+            self.readings = [(STATE, metrics(10, 400, (4, 10, 10)))]
+            out = Terminal()
+            with patch.dict("os.environ", {"LINES": lines, "COLUMNS": "100"}):
+                watch.run(self.root, frames=1, fetch=self.fetch, out=out, sleep=lambda s: None)
+            self.assertEqual("▝███▌" in out.getvalue(), shown, lines)
+
     def test_watch_needs_a_launched_instance_and_a_positive_interval(self):
         for interval in (0, -1, math.inf, math.nan):
             with self.assertRaisesRegex(ValueError, "--interval must be a positive number"):
