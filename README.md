@@ -119,7 +119,7 @@ The role controller scores the current role split and each adjacent split, one e
 
 The [evaluation](https://athrael.net/posts/evaluating-narwhal/) ran Narwhal v0.1.0, Dynamo Planner and Ray Serve LLM on identical six-engine hardware, under two request schedules whose mix changes quickly. With prefix caching on, these are the shares of offered requests that met the SLO: a first token within 2.1 s, at most 45 ms per output token, and a natural finish.
 
-| Workload | Narwhal | Dynamo Planner | Ray Serve LLM |
+| Workload<img width="174" height="1" alt=""> | Narwhal<img width="106" height="1" alt=""> | Dynamo Planner<img width="51" height="1" alt=""> | Ray Serve LLM<img width="64" height="1" alt=""> |
 | --- | --- | --- | --- |
 | Chat and documents | **76.2%** | 56.8% | 51.7% |
 | Mixed | **45.6%** | 21.7% | 37.1% |
