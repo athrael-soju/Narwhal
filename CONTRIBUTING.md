@@ -14,6 +14,8 @@ git switch -c describe-your-change upstream/main
 
 Run all `make` commands from the repository root. `make help` lists the contributor commands and their overrides.
 
+A codespace or the repository's dev container runs `make setup` when it is created and puts `.venv/bin` on the terminal's `PATH`.
+
 `make setup` creates `.venv` when it is missing and installs the package with its development dependencies, pinned by `constraints-dev.txt`:
 
 ```bash
