@@ -69,6 +69,8 @@ The second line states the window the latency and throughput cover, which grows 
 
 ## Sending concurrent requests
 
+`narwhal dev demo` sends long replies and then long prompts under the live view, which titles itself `narwhal dev demo` and adds a `load` line naming the phase and its seconds left. To drive the fleet yourself, run `watch` in one shell and `ask` in another.
+
 `narwhal dev ask --repeat N` sends N prompts from a built-in set of twelve questions. `--concurrency` sets how many are in flight, and `--max-tokens` bounds each reply. The [`narwhal dev` reference](../cli/Dev.md#options) lists the options of `ask` and `watch`.
 
 To load the decode engines, ask for long replies:

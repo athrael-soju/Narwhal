@@ -219,6 +219,10 @@ def run(
         prompts = [prompt or ""]
     else:
         prompts = [prompt or PROMPTS[i % len(PROMPTS)] for i in range(repeat)]
+    if repeat is None:
+        # One prompt is read by a person: decode greedily, so the same prompt gets the same
+        # reply, unless the template sets its own sampling.
+        extra = {"temperature": 0, **extra}
     bodies = [_body(model, text, max_tokens, extra) for text in prompts]
     answers, seconds = asyncio.run(_many(url, bodies, concurrency, transport))
     if repeat is None:
