@@ -23,10 +23,10 @@
 Narwhal is a disaggregated inference framework that automatically hot-swaps prefill and decode roles as demand changes, without reloading model weights. It runs on a [single GPU](https://athrael-soju.github.io/Narwhal/Dev-Runtime/) or across [multi-node deployments](https://athrael-soju.github.io/Narwhal/Deploy/).
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/demo/narwhal-dev.gif" alt="A terminal running narwhal dev up and narwhal dev ask, then narwhal dev watch while eight engines change roles: prefill engines move to decode under long replies, then decode engines move back to prefill under long prompts, shown on a role history per engine" width="100%">
+  <img src="https://raw.githubusercontent.com/athrael-soju/Narwhal/main/docs/assets/demo/narwhal-dev.gif" alt="A terminal running narwhal dev demo: eight engines change roles in the live view, prefill engines moving to decode under long replies and back to prefill under long prompts, shown on a role history per engine" width="100%">
 </p>
 
-Eight llama.cpp engines and a router on a machine with no GPU. Under long replies the router moves prefill engines to decode. When long prompts arrive, it moves them back to prefill. None of the 241 requests failed or was turned away.
+`narwhal dev demo` with eight llama.cpp engines (`--engine-count 8`) on a machine with no GPU. Under long replies the router moves prefill engines to decode. When long prompts arrive, it moves them back to prefill. None of the 745 requests failed or was turned away.
 
 ## Trying it
 
@@ -39,14 +39,12 @@ The button opens a codespace with Narwhal installed from this repository. Run th
 Narwhal dev runs four llama.cpp engines and a router on one Linux or WSL2 machine, on an NVIDIA GPU or on the CPU alone. Setup downloads the engine and a model under one billion parameters, 0.3 GB with the CPU build of the engine and 1.0 GB with the CUDA 12 build.
 
 ```bash
-narwhal dev up
+narwhal dev demo
 narwhal dev ask "What is the capital of France?"
-narwhal dev ask --repeat 2000 --concurrency 8 --max-tokens 200
-narwhal dev watch
 narwhal dev down --remove
 ```
 
-`up` downloads the engine and the model on its first run, then starts the fleet. `down --remove` stops it and deletes the downloads. `ask` prints the reply and the engines that served its prefill and decode. `watch`, in a second terminal, shows each engine's role and load, and each role switch the router makes under the concurrent requests.
+`demo` downloads the engine and the model on its first run and starts the fleet. It then sends long replies and long prompts for 30 seconds each while the live view shows the engines change roles, as in the recording above. `ask` prints a reply and the engines that served its prefill and decode. `down --remove` stops the fleet and deletes the downloads. To drive the fleet yourself, run `narwhal dev watch` in one terminal and `narwhal dev ask --repeat 200 --concurrency 8` in another.
 
 To run vLLM, SGLang or TensorRT-LLM engines on one NVIDIA GPU instead, use `narwhal dev init`. That fleet goes through the same attestation, profiling and KV transfer checks as a deployed fleet.
 

@@ -56,6 +56,32 @@ narwhal dev down --remove
 
 `down --remove` stops the fleet and deletes `runs/dev` with its downloads and logs. `python -m pip uninstall narwhal-inference` then removes Narwhal itself.
 
+## Watching roles change in one command
+
+```bash
+narwhal dev demo
+```
+
+`demo` starts the fleet when it is not up, setting up the instance first on its first run. It then sends long replies for 30 seconds and long prompts for 30 seconds, eight requests at a time, while the live view shows the engines move to decode and back to prefill. When the load ends, it prints what each phase sent and the roles it left. This run used eight engines on a CPU-only machine:
+
+```json
+{
+  "status": "completed",
+  "concurrency": 8,
+  "phase_seconds": 30.0,
+  "phases": [
+    {"name": "long replies", "requests": 134, "failed": 0},
+    {"name": "long prompts", "requests": 355, "failed": 0}
+  ],
+  "requests": 489,
+  "failed": 0,
+  "role_switches": 10,
+  "split": {"prefill": 6, "decode": 2}
+}
+```
+
+The fleet keeps running afterwards. `--phase-seconds` and `--concurrency` change the load, and [Reading the live view](Live-View.md) explains each figure.
+
 ## Setting up the instance
 
 ```bash

@@ -374,10 +374,12 @@ def panel(
     switched: set[str] | None = None,
     ages: list[float | None] | None = None,
     emblem: bool = False,
+    note: str | None = None,
+    title: str = "narwhal dev watch",
 ) -> Panel:
     """The terminal view of one frame; `history` holds the earlier frames, oldest first, and
     `ages` the seconds since each recent switch that this view saw happen. `emblem` puts the
-    Narwhal logo beside the heading.
+    Narwhal logo beside the heading, and `note` adds a line about the load driving the fleet.
     """
     switched = switched or set()
     counts = {role: sum(e["role"] == role for e in shown["engines"]) for role in ROLE_STYLES}
@@ -483,9 +485,11 @@ def panel(
         lines.append(
             Text.assemble(("controller  ", "dim"), decision, no_wrap=True, overflow="ellipsis")
         )
+    if note:
+        lines.append(Text.assemble(("load        ", "dim"), (note, "bold yellow"), no_wrap=True))
     return Panel(
         Group(*lines),
-        title="narwhal dev watch",
+        title=title,
         subtitle="Ctrl+C to exit",
         border_style="blue",
     )
@@ -586,7 +590,14 @@ def _live(
     out: TextIO,
     clock: Callable[[], float],
     sleep: Callable[[float], None],
+    *,
+    stop: Callable[[], bool] | None = None,
+    note: Callable[[], str | None] | None = None,
 ) -> dict:
+    """Redraw until `frames` are drawn, `stop` returns true or the user interrupts; `note`
+    supplies a line about the load, and its presence titles the view as the demo.
+    """
+    title = "narwhal dev demo" if note else "narwhal dev watch"
     window: deque[Sample] = deque()
     history: deque[dict[str, Any]] = deque(maxlen=TREND_FRAMES - 1)
     shown: dict[str, Any] = {"status": "observed", "engines": []}
@@ -599,7 +610,7 @@ def _live(
     # The alternate screen gives the terminal back as it was when the view closes.
     with Live(console=console, screen=True, auto_refresh=False) as live:
         try:
-            while frames is None or drawn < frames:
+            while (frames is None or drawn < frames) and not (stop and stop()):
                 try:
                     sample = parse(clock(), *fetch(url))
                     if window and restarted(window[-1], sample):
@@ -624,10 +635,13 @@ def _live(
                     recent = len(shown["recent_switches"])
                     known = [sample.at - at for at in list(seen)[-recent:]] if recent else []
                     ages: list[float | None] = [None] * (recent - len(known)) + list(known)
-                    frame = panel(shown, context, list(history), switched, ages, emblem=True)
+                    line = note() if note else None
+                    frame = panel(shown, context, list(history), switched, ages, True, line, title)
                     # The logo stays only while the whole frame fits the terminal's height.
                     if len(console.render_lines(frame, pad=False)) > console.height:
-                        frame = panel(shown, context, list(history), switched, ages)
+                        frame = panel(
+                            shown, context, list(history), switched, ages, False, line, title
+                        )
                     live.update(frame, refresh=True)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     live.update(

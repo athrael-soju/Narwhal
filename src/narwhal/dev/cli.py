@@ -13,7 +13,7 @@ import httpx
 from .. import command_results as results
 from ..cli_errors import failure
 from ..cli_support import add_version_argument
-from . import ask, lifecycle, setup, template, watch
+from . import ask, demo, lifecycle, setup, template, watch
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,7 +65,8 @@ def _main(argv: list[str]) -> int:
         description="Run a development fleet on one Linux or WSL2 workstation. setup prepares "
         "engines that start directly, on a GPU or the CPU, and init prepares attested engines "
         "on one NVIDIA GPU or one GPU per engine. up starts the fleet, verify checks it, ask "
-        "and watch exercise it, status reports it and down stops it.",
+        "and watch exercise it, demo shows roles change under load, status reports it and down "
+        "stops it.",
         epilog="Documentation: https://athrael-soju.github.io/Narwhal/cli/Dev/",
     )
     actions = dev.add_subparsers(dest="action", required=True)
@@ -91,6 +92,10 @@ def _main(argv: list[str]) -> int:
         "watch": "Redraw each engine's role and requests in flight, the time to first token and "
         "time per output token at the median and the 95th percentile, the throughput and the "
         "role switches of a launched instance, from the router's state and metrics.",
+        "demo": "Start the fleet when it is not up, then send long replies and then long prompts "
+        "at --concurrency for --phase-seconds each while the live view shows the engines change "
+        "roles; reports the requests each phase sent and failed, the role switches and the "
+        "final split.",
         "down": "Stop an instance's recorded native process groups after validating their "
         "identities; retain logs and measurements and report stopped, or with --remove delete "
         "the instance directory and report removed.",
@@ -111,13 +116,27 @@ def _main(argv: list[str]) -> int:
                 help="start this fleet while another instance's fleet is up; each fleet takes "
                 "its own memory",
             )
-        if name == "watch":
+        if name == "demo":
+            action.add_argument(
+                "--concurrency",
+                type=int,
+                default=demo.CONCURRENCY,
+                help="requests in flight at once (default: %(default)s)",
+            )
+            action.add_argument(
+                "--phase-seconds",
+                type=float,
+                default=demo.PHASE_SECONDS,
+                help="seconds of long replies, then of long prompts (default: %(default)s)",
+            )
+        if name in ("watch", "demo"):
             action.add_argument(
                 "--interval",
                 type=float,
                 default=1.0,
                 help="seconds between redraws (default: %(default)s)",
             )
+        if name == "watch":
             action.add_argument(
                 "--once", action="store_true", help="print one frame as the result and exit"
             )
@@ -147,7 +166,7 @@ def _main(argv: list[str]) -> int:
                 action="store_true",
                 help="after stopping, delete the instance directory with its downloads and logs",
             )
-        if name in ("setup", "up"):
+        if name in ("setup", "up", "demo"):
             action.add_argument(
                 "--model-name",
                 help="served name of the model, among the installed templates that start "
@@ -256,9 +275,14 @@ def _main(argv: list[str]) -> int:
                 help="keep the model on the CPU, for a template that starts its engines directly",
             )
     args = parser.parse_args(argv)
-    watching = args.command == "dev" and args.action == "watch"
+    watching = args.command == "dev" and args.action in ("watch", "demo")
     if watching and not (math.isfinite(args.interval) and args.interval > 0):
         parser.error("--interval must be a positive number")
+    demoing = args.command == "dev" and args.action == "demo"
+    if demoing and not (
+        args.concurrency >= 1 and math.isfinite(args.phase_seconds) and args.phase_seconds > 0
+    ):
+        parser.error("--concurrency and --phase-seconds must be positive")
     if args.command == "dev" and args.action == "ask":
         if args.prompt is None and args.repeat is None:
             parser.error("dev ask takes a prompt, --repeat for the built-in prompts, or both")
@@ -275,7 +299,7 @@ def _main(argv: list[str]) -> int:
         results.add_artifact(name.removesuffix(".json"), root / name)
     context = f"dev {args.action} {root}"
     # up sets up an instance that does not exist yet, or one whose settings it names.
-    setting_up = args.action == "up" and (
+    setting_up = args.action in ("up", "demo") and (
         not (root / "instance.json").exists()
         or any(
             value is not None
@@ -330,6 +354,8 @@ def _main(argv: list[str]) -> int:
                 result = lifecycle.up(root, alongside=args.alongside)
                 result["setup"] = prepared["status"]
                 result["downloaded"] = prepared.get("downloaded", [])
+            if args.action == "demo":
+                result = _demo(root, args)
         elif args.action == "watch":
             # A result document describes one frame, so a JSON result takes a single reading.
             once = args.once or results.json_mode()
@@ -346,6 +372,8 @@ def _main(argv: list[str]) -> int:
                 concurrency=args.concurrency,
                 max_tokens=args.max_tokens,
             )
+        elif args.action == "demo":
+            result = _demo(root, args)
         elif args.action == "up":
             result = lifecycle.up(root, alongside=args.alongside)
         elif args.action == "down" and args.remove:
@@ -361,7 +389,7 @@ def _main(argv: list[str]) -> int:
         if result["status"] == "degraded":
             results.set_status("degraded")
             results.record_error("instance_degraded", "Development instance requires recovery")
-        failed = args.action == "ask" and result.get("failed")
+        failed = args.action in ("ask", "demo") and result.get("failed")
         if failed:
             results.set_status("failed_gate")
             results.record_error("gate_failed", f"{failed} of {result['requests']} requests failed")
@@ -393,6 +421,17 @@ def _main(argv: list[str]) -> int:
         if results.json_mode():
             raise
         return failure("narwhal", context, exc, 2 if args.action in ("init", "setup") else 1)
+
+
+def _demo(root: Path, args: argparse.Namespace) -> dict:
+    """Start the fleet unless it is up, then run the demo load under the live view."""
+    phase = (lifecycle._read_state(root) if (root / "lifecycle.json").exists() else {}).get("phase")
+    if phase not in ask.PHASES:
+        print("starting the fleet ...", file=sys.stderr, flush=True)
+        lifecycle.up(root)
+    return demo.run(
+        root, seconds=args.phase_seconds, concurrency=args.concurrency, interval=args.interval
+    )
 
 
 if __name__ == "__main__":
