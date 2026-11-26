@@ -150,18 +150,18 @@ narwhal dev ask "What is the capital of France?"
 ```json
 {
   "status": "answered",
-  "reply": "The capital of France is Paris. \n\nFrance is known for its rich culture, historical landmarks, and vibrant culture. Paris is the economic, cultural, and political center of France.",
-  "ttft_s": 0.033,
-  "output_tokens": 41,
-  "tokens_per_second": 292.2,
+  "reply": "The capital of France is Paris.",
+  "ttft_s": 0.0697,
+  "output_tokens": 8,
+  "tokens_per_second": 116.6,
   "engines": {
-    "prefill": "n1",
+    "prefill": "n2",
     "decode": "n3"
   }
 }
 ```
 
-`engines` names the engine that computed the prompt and the engine that generated the reply from the handed-over KV cache. Both models have fewer than one billion parameters. Their replies are fluent, and their answers to simple factual questions are sometimes wrong.
+`engines` names the engine that computed the prompt and the engine that generated the reply from the handed-over KV cache. This reply came from four engines on the CPU. `ask` decodes a single prompt greedily, with temperature 0, so the same prompt gets the same reply. Both models have fewer than one billion parameters. Their replies are fluent, and their answers to simple factual questions are sometimes wrong.
 
 The router serves the OpenAI completion and chat routes, so most OpenAI clients that use those routes work against it:
 

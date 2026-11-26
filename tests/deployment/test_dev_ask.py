@@ -45,6 +45,16 @@ class AskTests(DirectInstance):
     def ask(self, **settings) -> dict:
         return ask.run(self.root, transport=httpx.MockTransport(self.handle), **settings)
 
+    def test_one_prompt_decodes_greedily_and_repeated_prompts_sample(self):
+        self.ask(prompt="What is the capital of France?")
+        self.assertEqual(self.bodies[-1]["temperature"], 0)
+        self.ask(repeat=2)
+        self.assertNotIn("temperature", self.bodies[-1])
+        template = lifecycle.read(self.root / "template.json")
+        lifecycle.write(self.root / "template.json", {**template, "request": {"temperature": 0.7}})
+        self.ask(prompt="What is the capital of France?")
+        self.assertEqual(self.bodies[-1]["temperature"], 0.7)
+
     def test_one_prompt_reports_the_reply_its_timing_and_the_engines_of_each_leg(self):
         rows = [
             {"event": "controller_decision"},
@@ -65,6 +75,7 @@ class AskTests(DirectInstance):
         self.assertEqual(
             body,
             {
+                "temperature": 0,
                 "chat_template_kwargs": {"enable_thinking": False},
                 "model": "served",
                 "messages": [{"role": "user", "content": "What is the capital of Japan?"}],
