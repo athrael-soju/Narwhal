@@ -102,7 +102,7 @@ class Unavailable(KubernetesError):
 
 
 class OutcomeUnknown(Unavailable):
-    """A write met a 5xx without Retry-After, or lost its reply: it may have taken effect.
+    """A write met a 5xx or lost its reply: it may have taken effect.
 
     The write is not repeated, since a repeat could report the write's own success as a 409 or
     as already gone. Read the object again before deciding. A Lease holder treats its renewal
@@ -334,14 +334,12 @@ def _retry_error(request: httpx.Request, exc: httpx.TransportError) -> bool:
 
 
 def _retry_status(request: httpx.Request, response: httpx.Response) -> bool:
-    """Retry a 429 always: priority and fairness rejects it before it runs.
+    """Retry a 429 always: priority and fairness rejects it before it runs. A read retries a 5xx.
 
-    A read retries any 5xx. A write retries a 5xx only with Retry-After, the server's word that
-    it did not run the write, as client-go does.
+    A write never retries a 5xx, even with Retry-After: the API server sends a 504 with
+    Retry-After when etcd times out, after the write may have landed.
     """
-    if response.status_code == 429 or request.method == "GET":
-        return True
-    return _retry_after(response) is not None
+    return response.status_code == 429 or request.method == "GET"
 
 
 def _unknown(request: httpx.Request, cause: str) -> OutcomeUnknown:
@@ -999,15 +997,23 @@ class Informer:
                 timer.join()
 
     def _resync_loop(self, stop: threading.Event, interval_s: float) -> None:
+        failures = 0
         while True:
             with self._lock:
                 due = self._last_resync + interval_s - self._clock()
-            if stop.wait(max(due, 0.01) if self._synced else interval_s):
+            wait = max(due, 0.01) if self._synced else interval_s
+            if failures:
+                # A failed resync stays due; back off as run() does, but at most one interval.
+                wait = min(interval_s, self._backoff.delay(failures - 1, rng=self._rng))
+            if stop.wait(wait):
                 return
             try:
                 self.resync()
             except Exception:
+                failures += 1
                 log.exception("%s resync failed", self.kind.plural)
+            else:
+                failures = 0
 
     def resync(self) -> bool:
         """Replay every cached object as `SYNC` if `resync_s` has passed since the last time."""

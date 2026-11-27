@@ -299,6 +299,26 @@ class InformerTests(unittest.TestCase):
         self.assertEqual(len(self.rig.requests), requests)
         self.assertFalse(informer.resync())
 
+    def test_a_resync_that_a_handler_fails_stays_due(self):
+        informer = self.informer(
+            ScriptedApi([listed("10", job("a", "9"))], [stream()]), resync_s=60
+        )
+        informer.pump()
+        failures = iter([True])
+
+        def handler(event):
+            self.heard.append(event.type)
+            if next(failures, False):
+                raise RuntimeError("handler failed")
+
+        informer._handler = handler
+        self.now = 60.0
+        with self.assertRaises(RuntimeError):
+            informer.resync()
+        self.assertTrue(informer.resync())
+        self.assertFalse(informer.resync())
+        self.assertEqual(self.heard[-2:], ["SYNC", "SYNC"])
+
     def test_the_cache_hands_out_copies(self):
         informer = self.informer(ScriptedApi([listed("10", job("a", "9"))], [stream()]))
         informer.pump()
@@ -424,6 +444,42 @@ class InformerTests(unittest.TestCase):
                     runner.join(10)
                 self.assertFalse(runner.is_alive())
 
+    def test_a_resync_that_always_fails_backs_off_instead_of_spinning(self):
+        stop = threading.Event()
+        syncs = []
+
+        class Source:
+            def list(self, kind, **options):
+                return k.Listing([job("a", "9")], "10")
+
+            def watch(self, kind, **options):
+                stop.wait(10)
+                return iter([])
+
+        def handler(event):
+            if event.type == "SYNC":
+                syncs.append(event)
+                raise RuntimeError("handler failed")
+
+        informer = k.Informer(
+            Source(),
+            k.JOB,
+            handler=handler,
+            resync_s=0.2,
+            backoff=k.Backoff(base_s=0.05, cap_s=10.0, jitter=0.0),
+        )
+        runner = threading.Thread(target=informer.run, args=(stop,))
+        with self.assertLogs("narwhal.kubernetes_api", "ERROR"):
+            runner.start()
+            stop.wait(1.0)
+            stop.set()
+            runner.join(10)
+
+        self.assertFalse(runner.is_alive())
+        # Due at 0.2 s, then 0.05, 0.1 and 0.2 s apart: about 7 replays in a second.
+        self.assertGreaterEqual(len(syncs), 2)
+        self.assertLessEqual(len(syncs), 10)
+
     def test_run_backs_off_after_a_failure_and_stops_when_told(self):
         stop = threading.Event()
         calls = []
@@ -492,23 +548,27 @@ class RetryTests(unittest.TestCase):
         rig.client.patch(k.JOB, "a", operations)
         self.assertEqual(len(rig.requests), 2)
 
-    def test_a_write_retries_a_5xx_only_with_retry_after(self):
+    def test_a_write_retries_a_429_but_never_a_5xx(self):
         writes = {
             "create": lambda c: c.create(k.LEASE, lease("a")),
             "replace": lambda c: c.replace(k.LEASE, lease("a", "1")),
             "delete": lambda c: c.delete(k.JOB, "gate-1"),
             "apply": lambda c: c.apply(k.JOB, {"metadata": {"name": "a"}}),
         }
+        # An etcd timeout is a 504 with Retry-After, after the write may have landed.
+        failures = (httpx.Response(500), httpx.Response(504, headers={"Retry-After": "1"}))
         for name, write in writes.items():
-            with self.subTest(name):
-                rig = Rig(lambda request: httpx.Response(500))
-                with self.assertRaises(k.OutcomeUnknown):
-                    write(rig.client)
-                self.assertEqual(len(rig.requests), 1)
+            for failure in failures:
+                with self.subTest(name, status=failure.status_code):
+                    rig = Rig(lambda request, failure=failure: failure)
+                    with self.assertRaises(k.OutcomeUnknown):
+                        write(rig.client)
+                    self.assertEqual(len(rig.requests), 1)
 
+            with self.subTest(name, status=429):
                 replies = iter(
                     [
-                        httpx.Response(503, headers={"Retry-After": "1"}),
+                        httpx.Response(429, headers={"Retry-After": "1"}),
                         httpx.Response(200, json=lease("a", "2")),
                     ]
                 )
@@ -1069,6 +1129,16 @@ class NameTests(unittest.TestCase):
                     call()
         self.assertEqual(rig.requests, [])
 
+    def test_a_name_may_have_253_characters_and_no_more(self):
+        rig = Rig(lambda request: status(404, "NotFound"))
+        longest = ".".join(["a" * 63] * 4)[:253].rstrip(".")
+        longest += "a" * (253 - len(longest))
+        self.assertEqual(len(longest), 253)
+        self.assertIsNone(rig.client.get(k.CONFIG_MAP, longest))
+        with self.assertRaises(ValueError):
+            rig.client.get(k.CONFIG_MAP, longest + "a")
+        self.assertEqual(len(rig.requests), 1)
+
     def test_dotted_names_are_allowed(self):
         rig = Rig(lambda request: status(404, "NotFound"))
         self.assertIsNone(rig.client.get(k.CONFIG_MAP, "engine-0.hooks"))
@@ -1091,6 +1161,20 @@ class LogTests(unittest.TestCase):
         with self.assertRaises(k.LogTooLarge):
             rig.client.log("pod-a", limit_bytes=10)
         self.assertEqual(rig.requests[1].url.params["limitBytes"], "11")
+
+    def test_the_bound_is_enforced_while_the_log_streams(self):
+        pulled = []
+
+        class Endless(httpx.SyncByteStream):
+            def __iter__(self):
+                for _ in range(10_000):
+                    pulled.append(4)
+                    yield b"xxxx"
+
+        rig = Rig(lambda request: httpx.Response(200, stream=Endless()))
+        with self.assertRaises(k.LogTooLarge):
+            rig.client.log("pod-a", limit_bytes=10)
+        self.assertEqual(len(pulled), 3)
 
     def test_a_missing_pod_raises_not_found(self):
         rig = Rig(lambda request: status(404, "NotFound"))
