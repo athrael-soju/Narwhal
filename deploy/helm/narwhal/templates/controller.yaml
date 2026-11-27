@@ -10,6 +10,7 @@ itself; the controller container alone mounts a projected one.
   "release" .Release.Name
   "stateClaim" (include "narwhal.stateClaim" .)
   "engineServiceAccount" (include "narwhal.engineAccount" .)
+  "sidecarUser" .Values.sidecarUser
   "modelVolumeSources" .Values.modelVolumeSources
   "modelHostPathPrefixes" .Values.modelHostPathPrefixes
   "modelNfsServers" .Values.modelNfsServers

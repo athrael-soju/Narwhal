@@ -392,6 +392,10 @@ class ChartTests(Rendering, unittest.TestCase):
         values = copy.deepcopy(self.values)
         values["controller"] = {"runAsUser": 0, "runAsGroup": 0}
         self.assertIn("/controller/runAsUser", self.helm(values).stderr)
+        # The engines' attestation sidecars run as a non-root user of their own.
+        values = copy.deepcopy(self.values)
+        values["sidecarUser"] = 0
+        self.assertIn("/sidecarUser", self.helm(values).stderr)
 
     def test_only_the_controller_container_mounts_a_token(self):
         for kind, name in self.kinds():
@@ -452,6 +456,7 @@ class ChartTests(Rendering, unittest.TestCase):
                 "release": "fleet",
                 "stateClaim": "fleet-state",
                 "engineServiceAccount": ENGINE_ACCOUNT,
+                "sidecarUser": 10002,
                 **policy,
                 "runtimeClassNames": ["nvidia"],
                 "admissionPolicy": f"{chart_fixtures.NAMESPACE}-narwhal",

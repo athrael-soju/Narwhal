@@ -17,6 +17,10 @@ controller:
   nodeSelector: {}
   tolerations: []
 
+# The non-root user each engine pod's attestation sidecar runs as. The engine runs as root
+# with only IPC_LOCK, so it can neither read the sidecar's token nor rewrite its evidence.
+sidecarUser: 10002
+
 # The NarwhalFleet the chart installs, as its spec; `kubectl explain narwhalfleet.spec` describes
 # each field. Leave it out to apply the fleet with narwhal deploy or a GitOps tool.
 # fleet: {}

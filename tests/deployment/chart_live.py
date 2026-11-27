@@ -321,6 +321,11 @@ def admitted(
             found[f"replicaset of {key}"] = made_by(made, "Deployment", name)
             kind, name = "ReplicaSet", made["metadata"]["name"]
         found[f"pod of {key}"] = made_by(pod_of(made, f"{name}-pod"), kind, name)
+    if engines is not None:
+        [statefulset] = [c.document for c in found.values() if c.document["kind"] == "StatefulSet"]
+        found["an engine pod with a non-root sidecar"] = made_by(
+            hardened(pod_of(statefulset, "engine-2")), "StatefulSet", "engine"
+        )
     # The router pair, as the controller applies it.
     router = _workload("StatefulSet", "chart-live-router", objects.labels(ROUTER), _plain())
     found["a router StatefulSet"] = Case(router, user=sender)
@@ -340,6 +345,33 @@ def admitted(
         "engine",
     )
     return found
+
+
+def hardened(pod: Mapping[str, Any], sidecar_user: int = 10002) -> dict:
+    """An engine pod whose attestation sidecar runs as `sidecar_user`, whose engine steps keep
+    only IPC_LOCK, and whose checkpoint step runs as root with the runtime's default
+    capabilities, to hand the pod's evidence directory to the sidecar."""
+    pod = copy.deepcopy(dict(pod))
+    spec = pod["spec"]
+    for container in [*spec["initContainers"], *spec["containers"]]:
+        if container["name"] == "attestation":
+            container["securityContext"] = {
+                "runAsUser": sidecar_user,
+                "runAsGroup": sidecar_user,
+                "runAsNonRoot": True,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+                **RUNTIME_DEFAULT,
+            }
+        elif container["name"] == "checkpoint":
+            container["securityContext"] = {"allowPrivilegeEscalation": False, **RUNTIME_DEFAULT}
+        else:
+            container["securityContext"] = {
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"], "add": ["IPC_LOCK"]},
+                **RUNTIME_DEFAULT,
+            }
+    return pod
 
 
 def _set_container(**fields: Any) -> Callable[[dict], object]:

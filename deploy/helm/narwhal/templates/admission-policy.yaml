@@ -19,6 +19,9 @@ IPC_LOCK:
   runs the RuntimeDefault or a Localhost seccomp profile; an engine pod may run unconfined, as
   the ROCm launch does.
 - Every image is named by registry digest.
+- The policy does not set a pod's user, so an engine pod's attestation sidecar runs as
+  sidecarUser, and its checkpoint step runs as root with the runtime's default capabilities to
+  hand the evidence directory to the sidecar. Only adding a capability is refused.
 - The model volume follows the cluster admin's allow-lists, as the controller's
   check_model_volume does, and is mounted read-only. Every other volume is a ConfigMap, Secret,
   emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a

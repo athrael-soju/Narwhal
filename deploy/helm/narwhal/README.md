@@ -43,6 +43,7 @@ The admission policy `<namespace>-narwhal` and its binding apply to every pod, J
 - No pod is privileged, shares the host's process or IPC namespace, binds a host port, unmasks `/proc`, runs a Windows host process, or sets an SELinux user, role or a type outside the container types, an unconfined AppArmor profile, a sysctl outside the baseline's safe list, or a RuntimeClass outside `runtimeClassNames`.
 - Every pod but an engine pod runs the `RuntimeDefault` or a `Localhost` seccomp profile. An engine pod may run unconfined, as the ROCm launch does.
 - Every image is named by registry digest.
+- The policy does not set which user a pod runs as, so the attestation sidecar runs as `sidecarUser`, and an engine pod's checkpoint step runs as root with the runtime's default capabilities to hand the pod's evidence directory to the sidecar. A pod still adds no capability beyond `IPC_LOCK`.
 - The volume named `model` follows the allow-lists below, as the controller's own check does, and every container mounts it read-only. Every other volume is a ConfigMap, Secret, emptyDir, projected, downward API or PersistentVolumeClaim volume, so no other pod mounts a host path.
 
 The policy trusts the engine, router, gate and HAProxy labels only on an object whose sender it trusts: a workload the controller's ServiceAccount sends, a ReplicaSet the Deployment controller makes, and a pod the Job, StatefulSet or ReplicaSet controller makes for its owner. Anyone else who sends a pod or workload with those labels is refused, and nobody can add them to an existing pod. A pod's spec cannot change after it is created, so an update to a pod is checked only for its images and ephemeral containers.
@@ -88,6 +89,7 @@ Keep a filled values file in the ignored `config/helm/` directory. `values.schem
 | `haproxy.clusterDomain` | The cluster's DNS domain, default `cluster.local` |
 | `credentials.engineApiKey` | `{"env", "secretName", "key"}`: the Secret key the routers read into the variable the fleet file's `engine.engine_api_key_env` names |
 | `modelVolumeSources`, `modelHostPathPrefixes`, `modelNfsServers`, `modelCsiDrivers` | The model volume allow-lists, under [Who may write the fleet](#who-may-write-the-fleet) |
+| `sidecarUser` | The non-root user each engine pod's attestation sidecar runs as, 10002 by default. The controller passes it to the engine pods |
 | `runtimeClassNames` | The RuntimeClasses a pod in the namespace may name, such as `["nvidia"]`. Empty by default, which allows only the default runtime |
 | `networkPolicy.enabled` | Admit connections to the routers only from HAProxy, the gate Jobs, the other router and Prometheus, default `true` |
 | `networkPolicy.monitoring` | More NetworkPolicy peers that may reach the routers, such as a cluster Prometheus's namespace |
