@@ -794,9 +794,10 @@ def without_release(document: dict) -> dict:
     """An object without what differs by design, as `spec_only`, and without the release in
     the routers' spread constraint.
 
-    The chart at ad38650c ran the routers with no security context; the builder hardens them
-    on purpose. This drops the security contexts and the scratch volume, which
-    `test_each_router_runs_unprivileged_on_a_read_only_root` checks instead.
+    The chart at ad38650c ran the routers with no security context and no volume check; the
+    builder adds both on purpose. This drops the security contexts, the scratch volume and the
+    start script, which `test_each_router_runs_unprivileged_on_a_read_only_root` and
+    `test_the_router_pair_matches_the_chart` check instead.
     """
     document = spec_only(document)
     pod = document["spec"].get("template", {}).get("spec", {})
@@ -807,6 +808,7 @@ def without_release(document: dict) -> dict:
         pod["volumes"] = [v for v in pod["volumes"] if v["name"] != objects.TMP_VOLUME]
         for container in pod["containers"]:
             container.pop("securityContext", None)
+            container["command"][3] = "<router start>"
             container["volumeMounts"] = [
                 m for m in container["volumeMounts"] if m["name"] != objects.TMP_VOLUME
             ]
@@ -824,9 +826,16 @@ class RouterTests(unittest.TestCase):
         for key, document in rendered.items():
             with self.subTest(kind=key[0], name=key[1]):
                 self.assertEqual(without_release(built[key]), without_release(document))
-        # The script is the chart's files/router-start.py, byte for byte.
+        # The script is the chart's files/router-start.py with the router volume check added.
         [container] = template(rendered[("StatefulSet", "router")])["containers"]
-        self.assertEqual(container["command"][3], objects.ROUTER_START)
+        chart = container["command"][3]
+        self.assertIn("import sys\n\nname = ", chart)
+        self.assertEqual(
+            objects.ROUTER_START,
+            chart.replace("import sys\n\n", "import sys\n\n" + objects.ROUTER_VOLUME_CHECK, 1),
+        )
+        [built_container] = template(router_set())["containers"]
+        self.assertEqual(built_container["command"][3], objects.ROUTER_START)
 
     def test_the_routers_names_agree_with_haproxy_the_target_and_the_chart(self):
         statefulset = router_set()
@@ -885,6 +894,7 @@ class RouterTests(unittest.TestCase):
                 environment = {**variables, "NARWHAL_POD_NAME": name}
                 with (
                     patch.dict(os.environ, environment),
+                    patch("os.getcwd", return_value=str(folder)),
                     patch.object(sys, "argv", ["-c", *argv[4:]]),
                     patch.object(sys, "executable", "python3"),
                     patch("os.execv", lambda path, args, found=executed: found.append(args)),
@@ -1094,7 +1104,96 @@ class RouterTests(unittest.TestCase):
         ):
             with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, reserved):
                 router_settings(args=(argument, "x"))
-        router_settings(args=("--lease-ttl", "6", "--lease-safety-margin", "1", "--", "-x"))
+        # Whatever ends option parsing, exits, or stops the router at start.
+        for arguments in (
+            ("--",),
+            ("--lease-ttl", "6", "--", "-x"),
+            ("--help",),
+            ("--he",),
+            ("-h",),
+            ("--version",),
+            ("--vers",),
+            ("--log",),
+            ("--lease-tl", "6"),
+            ("-x",),
+            ("--log-level", "-v"),
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                self.assertRaisesRegex(ValueError, "no option the pair takes|the pair's own"),
+            ):
+                router_settings(args=arguments)
+        router_settings(
+            args=(
+                "--lease-ttl",
+                "6",
+                "--lease-safety-margin=1",
+                "--standby-max-handoff-age",
+                "30",
+                "--resume",
+                "--shutdown-drain",
+                "-0.5",
+            )
+        )
+
+    def test_the_options_the_pair_takes_or_sets_are_every_narwhal_serve_option(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from narwhal.cli import serve
+
+        output = StringIO()
+        # Wide enough that no option name wraps.
+        with (
+            patch.dict(os.environ, {"COLUMNS": "10000"}),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit),
+        ):
+            serve(["--help"])
+        offered = set(re.findall(r"(?<![\w-])(--[a-z][a-z-]*[a-z])", output.getvalue()))
+        self.assertEqual(
+            offered,
+            {*objects.ROUTER_OPTIONS, *objects.ROUTER_SERVE_OPTIONS, "--help", "--version"},
+        )
+        self.assertFalse(set(objects.ROUTER_OPTIONS) & set(objects.ROUTER_SERVE_OPTIONS))
+
+    def test_a_router_whose_volume_it_cannot_write_stops_with_the_fix(self):
+        [container] = template(router_set())["containers"]
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        missing = Path(scratch.name) / "router-state"
+        with (
+            patch("os.getcwd", return_value=str(missing)),
+            patch.dict(os.environ, {"NARWHAL_POD_NAME": "router-0"}),
+            patch("os.execv") as execv,
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            exec(container["command"][3], {"__name__": "__main__"})
+        execv.assert_not_called()
+        message = str(stopped.exception.code)
+        self.assertIn(f"the router volume {missing} is not writable by UID {os.getuid()}", message)
+        self.assertIn("Delete this router's router-state PVC", message)
+        if os.getuid() != 0:
+            locked = Path(scratch.name) / "locked"
+            locked.mkdir(mode=0o555)
+            self.addCleanup(locked.chmod, 0o755)
+            with (
+                patch("os.getcwd", return_value=str(locked)),
+                patch("os.execv") as execv,
+                self.assertRaises(SystemExit),
+            ):
+                exec(container["command"][3], {"__name__": "__main__"})
+            execv.assert_not_called()
+            self.assertEqual(list(locked.iterdir()), [])
+
+    def test_the_image_user_is_the_uid_the_routers_run_as(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn("groupadd --system --gid 10001 narwhal", dockerfile)
+        self.assertIn("useradd --system --uid 10001 --gid 10001 --create-home narwhal", dockerfile)
+        # A numeric user lets the kubelet check runAsNonRoot without the pod's runAsUser.
+        self.assertIn("\nUSER 10001:10001\n", dockerfile)
+        defaults = fleet()
+        self.assertEqual((defaults.run_as_user, defaults.run_as_group), (10001, 10001))
 
     def test_stopping_deletes_the_routers_and_keeps_their_volumes(self):
         live = [

@@ -872,6 +872,39 @@ ROUTER_OPTIONS = (
     "--standby-of",
     "--first-start-primary",
 )
+# The narwhal-serve options a fleet may add, each whole or as --name=value. Anything else that
+# starts with a dash is refused: --help, --version and -h exit, -- ends option parsing, and an
+# abbreviation or an unknown option stops the router at start.
+ROUTER_SERVE_OPTIONS = (
+    "--log-level",
+    "--max-concurrent",
+    "--graceful-timeout",
+    "--shutdown-drain",
+    "--standby-probe-interval",
+    "--standby-takeover-after",
+    "--standby-max-handoff-age",
+    "--lease-ttl",
+    "--lease-renew-interval",
+    "--lease-safety-margin",
+    "--deployment-status",
+    "--resume",
+)
+NEGATIVE_NUMBER = re.compile(r"-[0-9.]+")
+
+# Refuses to start a router whose own volume, its working directory, it cannot write: one an
+# image with another UID wrote, on a hostPath volume where fsGroup changes nothing.
+ROUTER_VOLUME_CHECK = """\
+home = os.getcwd()
+probe = os.path.join(home, f".narwhal-write-check-{os.getpid()}")
+try:
+    os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    os.unlink(probe)
+except OSError as error:
+    sys.exit(
+        f"narwhal: the router volume {home} is not writable by UID {os.getuid()}: {error}. "
+        "Delete this router's router-state PVC if an earlier image wrote it."
+    )
+"""
 
 # The router container's command: python3 -I -c ROUTER_START <narwhal-serve arguments>.
 ROUTER_START = """\
@@ -884,6 +917,7 @@ import json
 import os
 import sys
 
+{check}
 name = os.environ["NARWHAL_POD_NAME"]
 base, _, index = name.rpartition("-")
 peer = f"http://{base}-{1 - int(index)}.{os.environ['NARWHAL_ROUTERS_DOMAIN']}:8000"
@@ -896,19 +930,21 @@ if index == "0" and not saved:
     standby.append("--first-start-primary")
 argv = [sys.executable, "-I", "-m", "narwhal.cli", *arguments, "--router-id", name, *standby]
 os.execv(sys.executable, argv)  # noqa: S606 - the router replaces this process
-"""
+""".replace("{check}\n", ROUTER_VOLUME_CHECK)
 
 
-def _reserved(argument: str) -> str | None:
-    """The option of ROUTER_OPTIONS an argument sets, also as `--name=value` or as a prefix
-    argparse would expand."""
-    if not argument.startswith("--") or argument == "--":
-        return None
+def _option_problem(argument: str) -> str:
+    """Why a fleet may not add this narwhal-serve argument, or "" for an option of
+    ROUTER_SERVE_OPTIONS or a value."""
+    if not argument.startswith("-") or NEGATIVE_NUMBER.fullmatch(argument):
+        return ""
     option = argument.split("=", 1)[0]
+    if option in ROUTER_SERVE_OPTIONS:
+        return ""
     for reserved in ROUTER_OPTIONS:
-        if reserved.startswith(option):
-            return reserved
-    return None
+        if option.startswith("--") and reserved.startswith(option):
+            return f"sets {reserved}, the pair's own"
+    return f"is no option the pair takes; it takes {', '.join(ROUTER_SERVE_OPTIONS)}"
 
 
 @dataclass(frozen=True)
@@ -939,9 +975,8 @@ class Routers:
                 or CONTROL.search(argument)
             ):
                 raise ValueError(f"the router option {argument!r} is not a printable string")
-            reserved = _reserved(argument)
-            if reserved is not None:
-                raise ValueError(f"the router option {argument} sets {reserved}, the pair's own")
+            if problem := _option_problem(argument):
+                raise ValueError(f"the router option {argument} {problem}")
 
     @classmethod
     def of(cls, spec: Mapping[str, Any], fleet_file: str) -> Routers:

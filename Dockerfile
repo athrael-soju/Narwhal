@@ -6,8 +6,9 @@
 #     -v "$PWD/runs:/home/narwhal/runs" narwhal \
 #     narwhal-serve --fleet /config/fleet.json --host 0.0.0.0 --port 8000
 #
-# Profiles must be reachable at the config's profiles.path. The narwhal user
-# needs write access to the journal and state paths in the runs mount.
+# Profiles must be reachable at the config's profiles.path. The narwhal user,
+# UID and GID 10001, needs write access to the journal and state paths in the
+# runs mount. The Helm chart's pods run as the same IDs.
 
 FROM python:3.12-slim AS build
 WORKDIR /src
@@ -15,10 +16,11 @@ COPY . .
 RUN pip install --no-cache-dir build && python -m build --wheel
 
 FROM python:3.12-slim
-RUN useradd --system --create-home narwhal
+RUN groupadd --system --gid 10001 narwhal \
+ && useradd --system --uid 10001 --gid 10001 --create-home narwhal
 COPY --from=build /src/dist/*.whl /tmp/
 RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
-USER narwhal
+USER 10001:10001
 WORKDIR /home/narwhal
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \

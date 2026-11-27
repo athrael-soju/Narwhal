@@ -43,6 +43,8 @@ A standby router started with `--standby-of URL` polls the primary every `--stan
 - The last handoff the standby received is at most `--standby-max-handoff-age` seconds old.
 - The lease has expired, or the standby saw its holder release it.
 
+A standby with no handoff that fresh starts the pair cold instead, as after both routers stopped together. Once `--standby-takeover-after` polls have failed, it claims the lease when no lease exists, or when the lease expired more than `--standby-max-handoff-age` seconds ago, and serves its configured engine set without a handoff. A Kubernetes Lease's expiry counts from when the standby first saw the Lease unchanged, so a standby claims a dead holder's Lease the Lease duration plus `--standby-max-handoff-age` after it starts watching. The claim is the same conditional update as a takeover, so only one router wins, and the other shadows it.
+
 Give both routers the same lease: `--lease-path` set to one file in the pair's [lease domain](../operate/01-Start-Routers.md#starting-a-router-pair), or on Kubernetes `--kubernetes-lease` set to one Lease name, as in [Electing the primary on Kubernetes](../operate/01-Start-Routers.md#electing-the-primary-on-kubernetes).
 
 | Option | Default | Description | Valid values |
