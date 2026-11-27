@@ -464,6 +464,22 @@ class KubernetesLaunchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pod's model files differ from the launch plan"):
             self.check(run, plan, engine)
 
+    def test_the_check_records_the_status_of_the_hashed_model_files(self):
+        run, plan, engine = self.started()
+        record = json.loads((engine.state / pod.CHECKPOINT_RECORD).read_text())
+        self.check(run, plan, engine)
+        self.assertEqual(read_checked(run)["model_status_sha256"], record["status_sha256"])
+        # A pod whose checkpoint step records no status gives the sidecar nothing to compare.
+        run, plan = self.prepared("earlier")
+        engine = self.pod(run, "earlier-pod")
+        engine.start(self.fixtures.check_output(plan))
+        path = engine.state / pod.CHECKPOINT_RECORD
+        record = json.loads(path.read_text())
+        del record["status_sha256"]
+        path.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, "checkpoint record holds no model file status"):
+            self.check(run, plan, engine)
+
     def test_a_failed_or_stalled_probe_fails_its_init_container_and_the_check(self):
         run, plan = self.prepared()
         engine = self.pod(run)

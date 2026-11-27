@@ -191,6 +191,17 @@ def attestation_home(run: Path, plan: dict, pod_evidence: Path | None) -> Path:
     return engine_home(pod_evidence, live_pod(checked).identity.container_id)
 
 
+def require_home(home: Path, attempt: Path) -> None:
+    """Require a pod attempt to attest the engine container whose directory holds it; the
+    container can start again while the attempt captures."""
+    bound = read_json(attempt / IDENTITY_RECORD).get("container_id")
+    if bound != home.name:
+        raise ValueError(
+            f"the attempt attests engine container {bound}, not container {home.name} whose "
+            "directory holds it; the engine container started again during the capture"
+        )
+
+
 def require_pod_evidence(plan: dict, pod_evidence: Path | None) -> bool:
     """Return whether the plan keeps its attestation in its engine pod's directory, which
     `pod_evidence` must name exactly for a Kubernetes plan."""
@@ -268,12 +279,18 @@ def capture(
     A Kubernetes plan's capture runs in the engine pod's attestation container, with
     `pod_evidence` naming the pod's directory.
     """
+    # A wrong --pod-evidence is refused before the launch directory's check is read.
+    require_pod_evidence(read_json(run / "launch.json"), pod_evidence)
     plan, _, _ = checked_plan(run)
     home = attestation_home(run, plan, pod_evidence)
     refuse_published(home)
     attempt = new_attempt(home)
     try:
         steps = captures(run, attempt, representative_layout)
+        if pod_evidence is not None:
+            steps.append(
+                Capture("pod-container", IDENTITY_RECORD, lambda: require_home(home, attempt))
+            )
     except BaseException:
         # Nothing was captured: a refused input leaves no attempt behind.
         attempt.rmdir()

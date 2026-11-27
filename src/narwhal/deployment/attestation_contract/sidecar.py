@@ -85,16 +85,21 @@ def require_live_process_start(run: Path, plan: dict, process_start: float) -> N
         )
 
 
-def hca_arguments(run: Path, plan: dict) -> list[str]:
+def hca_arguments(run: Path, plan: dict, engine: PodEngine | None = None) -> list[str]:
     """Return `--hca` when the plan sends KV through its one HCA port, even on its own host.
 
     UCX then has no shared-memory device and no CUDA IPC, so KV between engines on one host
-    crosses their HCAs, and preflight checks that through the port's transmit counter.
+    crosses their HCAs, and preflight checks that through the port's transmit counter. A
+    Kubernetes engine sends through the HCA its pod was allocated, `engine`'s.
     """
     path = run / env_file_name(plan)
     if digest(path) != plan.get("env_sha256"):
         raise ValueError(f"{path.name} differs from the serving plan; prepare a fresh launch")
     env = read_env(path)
+    if plan.get("backend") == "kubernetes":
+        if engine is None:
+            raise ValueError("a Kubernetes engine sends KV through the HCA of its pod")
+        env = engine.environment(env)
     transports = set(env.get("UCX_TLS", "").split(","))
     devices = env.get("UCX_NET_DEVICES", "").split(",")
     if (
@@ -145,16 +150,25 @@ class _Waiting:
         time.sleep(POD_POLL_S)
 
 
-def await_launch(run: Path) -> None:
+def await_launch(run: Path, pod_evidence: Path) -> None:
     """Wait until the launch directory holds its plan and the check of this pod.
 
     The operator places the launch directory that checked the pod's records on the state
     volume once the pod's init containers have recorded them, so it appears after the pod
-    starts.
+    starts. A plan whose engine runs on a host is refused once it appears.
     """
     wait = _Waiting()
-    while not all((run / name).is_file() for name in ("launch.json", "checked.json")):
-        wait(f"waiting for {run}, the launch directory that checks this pod's records")
+    reason = f"waiting for {run}, the launch directory that checks this pod's records"
+    while True:
+        try:
+            plan = read_json(run / "launch.json")
+            break
+        except (OSError, ValueError):
+            # Absent, or still being copied.
+            wait(reason)
+    require_pod_evidence(plan, pod_evidence)
+    while not (run / "checked.json").is_file():
+        wait(reason)
 
 
 def await_pod_engine(run: Path, plan: dict) -> PodEngine:
@@ -194,7 +208,7 @@ def serve(run: Path, pod_evidence: Path | None = None) -> int:
     published one already. It stops once the container's first process ends.
     """
     if pod_evidence is not None:
-        await_launch(run)
+        await_launch(run, pod_evidence)
     plan = read_json(run / "launch.json")
     backend = engine_backend(plan.get("engine"))
     if require_pod_evidence(plan, pod_evidence):
@@ -205,7 +219,9 @@ def serve(run: Path, pod_evidence: Path | None = None) -> int:
         _, _, port = attestation_url(plan)
         # Under host networking the pod's address is its node's.
         host = engine.identity.pod_ip
+        pod_engine: PodEngine | None = engine
     else:
+        pod_engine = None
         plan, checked, _ = checked_plan(run)
         if plan.get("backend") == "native":
             process = ["--engine-pid", str(live_native(run, plan, checked)["pid"])]
@@ -235,7 +251,9 @@ def serve(run: Path, pod_evidence: Path | None = None) -> int:
     # A pod's sidecar follows its engine container's first process, and stops once it ends.
     if not backend.identity.reports_process_start or plan.get("backend") == "kubernetes":
         arguments += process
-    return attest_main(arguments + residency_arguments(plan, checked) + hca_arguments(run, plan))
+    return attest_main(
+        arguments + residency_arguments(plan, checked) + hca_arguments(run, plan, pod_engine)
+    )
 
 
 def pod_verification(pod_evidence: Path, checked: dict) -> tuple[Path, dict]:

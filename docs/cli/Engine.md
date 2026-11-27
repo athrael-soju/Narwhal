@@ -158,7 +158,7 @@ The state claim mounts at the subdirectory `engines/<role>/<pod UID>`, writable 
 
 ### Pod records
 
-The init containers write `checkpoint.json` and `runtime-check.json` to `/narwhal-state`. Both hold `plan_sha256`, `pod_uid`, `node`, and under `files` the SHA-256 of every delivered file. `checkpoint.json` adds `model_tree_sha256`, `file_count` and `bytes_verified`. `runtime-check.json` adds the allocated HCA as `transfer_device`, the probe's `returncode`, `stdout` and `stderr`, and for a passing probe the verdict as `verdict`: the evidence that `check` records and the notes it prints. A step that fails records `error`. An init container that runs again in the same pod replaces its record.
+The init containers write `checkpoint.json` and `runtime-check.json` to `/narwhal-state`. Both hold `plan_sha256`, `pod_uid`, `node`, and under `files` the SHA-256 of every delivered file. `checkpoint.json` adds `model_tree_sha256`, the files' status fingerprint `status_sha256`, `file_count` and `bytes_verified`. `runtime-check.json` adds the allocated HCA as `transfer_device`, the probe's `returncode`, `stdout` and `stderr`, and for a passing probe the verdict as `verdict`: the evidence that `check` records and the notes it prints. A step that fails records `error`. An init container that runs again in the same pod replaces its record.
 
 The runtime probe has `NARWHAL_STAGE_POD_RUNTIME_CHECK_TIMEOUT_SECONDS` to finish, or `NARWHAL_STAGE_TIMEOUT_SECONDS` when that is unset, 300 seconds by default. `prepare` reads them and pins the budget in the plan.
 
@@ -168,10 +168,10 @@ Copy the pod's directory `engines/<role>/<pod UID>/` from the state volume, and 
 
 - name no pod UID or another plan, or come from two pods or two nodes
 - list delivered files other than the plan's
-- record an error, a model tree digest other than the plan's, or a probe that exited nonzero
+- record an error, a model tree digest other than the plan's, no model file status, or a probe that exited nonzero
 - name no allocated HCA, or an HCA port other than the plan's
 
-It then checks the probe output as the Docker check does, and fails when the pod's `verdict` differs from its own. It writes `checked.json` with `backend` set to `kubernetes`, `planned_image`, `pod_uid`, `node` and `transfer_device`. `planned_image` is `NARWHAL_ENGINE_IMAGE` as the plan names it; `check` does not observe the image the kubelet ran. `check` keeps each record of the plan it reads under `pods/<pod UID>/`, named by the record and its SHA-256.
+It then checks the probe output as the Docker check does, and fails when the pod's `verdict` differs from its own. It writes `checked.json` with `backend` set to `kubernetes`, `planned_image`, `pod_uid`, `node`, `transfer_device` and `model_status_sha256`, the checkpoint record's `status_sha256`. `planned_image` is `NARWHAL_ENGINE_IMAGE` as the plan names it; `check` does not observe the image the kubelet ran, and the [attestation sidecar](../deploy/05-Attest.md#attesting-an-engine-pod) refuses an engine container that runs another. `check` keeps each record of the plan it reads under `pods/<pod UID>/`, named by the record and its SHA-256.
 
 `check` reads records, not the pod. It accepts the records of any pod that ran the plan, including one that has since stopped or been replaced.
 

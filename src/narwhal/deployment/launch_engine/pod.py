@@ -176,6 +176,8 @@ def checkpoint() -> int:
         {
             **header,
             "model_tree_sha256": manifest["model_tree_sha256"],
+            # The attestation sidecar compares the files' status with it, reading no file.
+            "status_sha256": manifest["status_sha256"],
             "file_count": manifest["file_count"],
             "bytes_verified": manifest["bytes_verified"],
         },

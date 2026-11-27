@@ -4,6 +4,7 @@
       "backend": "kubernetes",
       "engine_version": "1.4.0rc3",
       "kv_events": null,
+      "model_status_sha256": "<sha256>",
       "node": "gpu-node-a",
       "plan_sha256": "<sha256>",
       "planned_image": "registry.example/engine@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

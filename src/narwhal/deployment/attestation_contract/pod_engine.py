@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ...engines.pod_identity import PodIdentity, read_identity, service_account_namespace
 from ..launch_engine import pod as pod_steps
+from ..launch_engine.checkpoint import checkpoint_status
 from ..launch_engine.plan import POD_ADDRESS
 from ..launch_engine.runtime import write_private
 
@@ -52,6 +53,9 @@ class PodEngine:
     """The live engine container of the sidecar's pod."""
 
     identity: PodIdentity
+    # The HCA the RDMA device plugin allocated to the engine container, as the check of the
+    # pod recorded it. The engine container's serve step sets UCX_NET_DEVICES from it.
+    transfer_device: dict
 
     @property
     def directory(self) -> Path:
@@ -63,9 +67,13 @@ class PodEngine:
 
     def environment(self, values: dict[str, str]) -> dict[str, str]:
         """Return launch environment values as the engine received them, with the pod address
-        Kubernetes substitutes."""
+        Kubernetes substitutes and the allocated HCA."""
         return {
-            name: value.replace(POD_ADDRESS, self.identity.pod_ip) for name, value in values.items()
+            **{
+                name: value.replace(POD_ADDRESS, self.identity.pod_ip)
+                for name, value in values.items()
+            },
+            "UCX_NET_DEVICES": self.transfer_device["ucx_net_devices"],
         }
 
 
@@ -77,7 +85,15 @@ def live_pod(checked: dict) -> PodEngine:
             f"{POD_NAME_ENV} is unset; a Kubernetes engine's attestation binds in its pod, so "
             "run this in the pod's attestation container"
         )
-    return PodEngine(read_identity(service_account_namespace(), name, checked["pod_uid"]))
+    device = checked.get("transfer_device")
+    if not isinstance(device, dict) or not isinstance(device.get("ucx_net_devices"), str):
+        raise ValueError(
+            "the check of the pod records no allocated HCA; check the pod's records again"
+        )
+    identity = read_identity(
+        service_account_namespace(), name, checked["pod_uid"], checked["planned_image"]
+    )
+    return PodEngine(identity, device)
 
 
 def engine_home(pod_evidence: Path, container_id: str) -> Path:
@@ -87,7 +103,8 @@ def engine_home(pod_evidence: Path, container_id: str) -> Path:
 
 def write_identity(engine: PodEngine, attempt: Path) -> Path:
     destination = attempt / IDENTITY_RECORD
-    write_private(destination, json.dumps(engine.identity.record(), indent=2) + "\n")
+    record = {**engine.identity.record(), "transfer_device": engine.transfer_device}
+    write_private(destination, json.dumps(record, indent=2) + "\n")
     return destination
 
 
@@ -130,6 +147,30 @@ def recorded_inspection(engine: PodEngine, name: str, argv: list[str], log: Path
     if record.get("returncode") != 0:
         raise ValueError(f"the {name} inspection exited {record.get('returncode')}; inspect {log}")
     return str(record["stdout"])
+
+
+def require_model_files(checked: dict) -> None:
+    """Refuse the pod's model files when they changed after its checkpoint init container
+    hashed them. The check compares file status, so it reads no model file.
+
+    The kubelet restarts the engine container without its init containers, so each
+    attestation compares the files again.
+    """
+    recorded = checked.get("model_status_sha256")
+    if not isinstance(recorded, str):
+        raise ValueError(
+            "the check of the pod records no model file status; check the pod's records again"
+        )
+    model = pod_path(pod_steps.MODEL)
+    try:
+        status = checkpoint_status(model, contained=True)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"the model files under {model} are unreadable: {error}") from error
+    if status != recorded:
+        raise ValueError(
+            f"the model files under {model} changed after the pod's checkpoint init container "
+            "hashed them; replace the pod, whose new init containers hash them again"
+        )
 
 
 def model_config() -> Path:

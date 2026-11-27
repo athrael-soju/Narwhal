@@ -131,11 +131,15 @@ It writes a new `attestation-check-XXXXXX` directory in `ENGINE_RUN` with `healt
 
 A [Kubernetes engine pod](../cli/Engine.md#kubernetes-plans) runs its attestation sidecar as its `attestation` container. You do not run `capture` or `serve`. Once `narwhal-engine check` has passed on the pod's records, copy that launch directory to the state volume at `engines/<role>/launches/<pod UID>/`, where the sidecar mounts it read-only. Until it is there, the sidecar logs `waiting for /narwhal-launch, the launch directory that checks this pod's records`.
 
-The sidecar then waits for the engine to answer `/health`, and captures the engine container's attestation unless that container already published one. It binds the engine through the pod's shared process namespace and the Kubernetes API: the engine container's first process, its start ticks and the container ID in its cgroup path must match the pod's `containerStatuses` entry for `engine`, and the process must have started within 2 seconds of the container's `startedAt`. The attestation reads the image ID the pod status reports, not the plan's `planned_image`, and keeps the `{image_id, container_id}` binding a container engine's attestation has.
+The sidecar then waits for the engine to answer `/health`, and captures the engine container's attestation unless that container already published one. It binds the engine through the pod's shared process namespace and the Kubernetes API: the engine container's first process, its start ticks and the container ID in its cgroup path must match the pod's `containerStatuses` entry for `engine`. The first process is the earliest-started process of the container whose parent lies outside the pod's process namespace, so a `kubectl exec` session in the engine container does not count. The attestation reads the image ID the pod status reports, and keeps the `{image_id, container_id}` binding a container engine's attestation has. The sidecar refuses the engine when the pod specification names another image for `engine` than the checked `planned_image`, or when the digest in the pod status's `imageID` is not the `@sha256:` digest of `planned_image`.
+
+Each attestation also compares the status of the files under `/model` with the status the `checkpoint` init container recorded when it hashed them, reading no file. The kubelet restarts the engine container without its init containers, so a model file changed since then refuses the attestation until the pod is replaced.
+
+The sidecar serves [`/v1/hca`](../cli/Attest.md#routes) for a `ucx_rdma` pod with the HCA the device plugin allocated, as `narwhal-engine check` recorded it in `transfer_device`.
 
 The captures differ from a container's:
 
-- `pod-identity` runs first and writes `pod-identity.json`: the pod, its UID and node, the engine container's runtime, ID, image, image ID, start and restart count, and the engine's process ID, start ticks and start time. Every later capture requires the engine process to be the one it records.
+- `pod-identity` runs first and writes `pod-identity.json`: the pod, its UID and node, the engine container's runtime, ID, image, image ID, start and restart count, the engine's process ID, start ticks and start time, and the allocated HCA as `transfer_device`. Every later capture requires the engine process to be the one it records, and the attempt publishes only when that record names the container whose directory holds the attempt.
 - `startup-log` copies the `startup.log` of the engine process's directory in the engine volume.
 - The vLLM inspections read the output the `engine` container recorded in `inspections.json` before the engine started, and refuse output of other arguments. The live cache layout is the `cache-layout.json` the cache capture hook wrote in that directory.
 
@@ -150,7 +154,7 @@ kubectl exec <pod> -c attestation -- python3 -I -m narwhal.deployment.attestatio
 
 `verify` reads the pod through the Kubernetes API, takes the attestation of the engine container that runs now, and refuses when that container has published none, when the pod is no longer the checked pod, or when the container ID, image ID or start differs from the identity its attestation binds. It also refuses a served attestation whose `launch.image_id` or process start differs from that identity. It writes its `attestation-check-XXXXXX` directory beside the container's attempts.
 
-`capture`, `serve` and `verify` take `--pod-evidence` for a Kubernetes plan and refuse a Kubernetes plan without it, and they refuse `--pod-evidence` for other plans.
+`capture`, `serve` and `verify` take `--pod-evidence` for a Kubernetes plan and refuse a Kubernetes plan without it, and they refuse `--pod-evidence` for other plans. They read only `launch.json` for that, so the refusal comes before any check of the launch directory, and `serve --pod-evidence` refuses a host plan as soon as its `launch.json` appears.
 
 ### Finalizing the fleet contract
 

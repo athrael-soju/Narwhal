@@ -7,6 +7,7 @@
         "endpoint": "ipc:///narwhal-kv-events/events.sock",
         "replay_endpoint": "ipc:///narwhal-kv-events/replay.sock"
       },
+      "model_status_sha256": "<sha256>",
       "node": "gpu-node-a",
       "peer_release": true,
       "plan_sha256": "<sha256>",

@@ -29,7 +29,7 @@ from .evidence import (
     require_prior_dimensions,
     write_private_json,
 )
-from .pod_engine import PodEngine, require_identity
+from .pod_engine import PodEngine, require_identity, require_model_files
 
 # The startup log an attempt captures and its document attests.
 STARTUP_LOG = "startup.log"
@@ -108,8 +108,10 @@ def bound_dimensions(
         require_prior_dimensions(run, plan, plan_hash, dimensions.get("contract"))
     if digest(planned_model_config(plan)) != plan["model_config_sha256"]:
         raise ValueError("Model configuration changed after launch preparation")
-    # A pod's checkpoint record holds the digest of the model files the pod serves.
-    if not isinstance(identity, PodEngine):
+    if isinstance(identity, PodEngine):
+        # The pod's checkpoint init container hashed the model files it serves.
+        require_model_files(checked)
+    else:
         if model_file_changed(plan):
             raise ValueError("Model file changed after launch preparation")
         check_model_files(plan)

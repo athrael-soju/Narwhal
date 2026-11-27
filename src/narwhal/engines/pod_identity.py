@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
-from .host_process import boot_time, started_at_seconds
+from .host_process import boot_time
 
 PROC = Path("/proc")
 SERVICE_ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -31,14 +31,15 @@ API_SERVER = "https://kubernetes.default.svc"
 API_TIMEOUT_S = 10.0
 # The engine container's name in the pod specification.
 ENGINE_CONTAINER = "engine"
-# The kubelet reports startedAt to the second, and the kernel's boot time has one-second
-# resolution, so the engine process starts within this many seconds of its container.
+# The kernel's boot time has one-second resolution, so two readings of one process start
+# can differ by this many seconds.
 START_TOLERANCE_S = 2.0
 CONTAINER_ID = re.compile(r"([a-z][a-z0-9.-]*)://([0-9a-f]{64})")
 IMAGE_DIGEST = re.compile(r"(?:^|@)(sha256:[0-9a-f]{64})$")
 # A container's runtime ID ends its cgroup path, as `cri-containerd-<id>.scope`, `crio-<id>`,
-# or `<id>` under the cgroupfs driver.
-CGROUP_CONTAINER = re.compile(r"(?:^|[/-])([0-9a-f]{64})(?:\.scope)?$")
+# or `<id>` under the cgroupfs driver. crun under the systemd driver on cgroup v2 runs the
+# container's processes in a `container` cgroup below the scope.
+CGROUP_CONTAINER = re.compile(r"(?:^|[/-])([0-9a-f]{64})(?:\.scope)?(?:/container)?$")
 
 
 class PodIdentityError(ValueError):
@@ -180,9 +181,9 @@ def container_process(container_id: str) -> tuple[int, int]:
     """Return the process ID and start ticks of a container's first process.
 
     In a pod that shares its process namespace, the container runtime starts each container's
-    first process from outside the namespace, so that process alone has parent ID 0. A
-    container with no process here has ended, although the API can still report it running
-    for a moment.
+    first process from outside the namespace, so it has parent ID 0. So does each process that
+    `kubectl exec` starts in the container, but those start later. A container with no process
+    here has ended, although the API can still report it running for a moment.
     """
     first = []
     seen = False
@@ -204,12 +205,14 @@ def container_process(container_id: str) -> tuple[int, int]:
         raise EngineNotRunning(
             f"no process of container {container_id} runs in this pod's process namespace"
         )
-    if len(first) != 1:
+    earliest = min((ticks for _, ticks in first), default=None)
+    started = [process for process in first if process[1] == earliest]
+    if len(started) != 1:
         raise PodIdentityError(
-            f"container {container_id} shows {len(first)} first processes in this process "
+            f"container {container_id} shows {len(started)} first processes in this process "
             "namespace; expected one"
         )
-    return first[0]
+    return started[0]
 
 
 def process_start(ticks: int) -> float:
@@ -218,13 +221,18 @@ def process_start(ticks: int) -> float:
 
 
 def read_identity(
-    namespace: str, pod_name: str, pod_uid: str, container: str = ENGINE_CONTAINER
+    namespace: str,
+    pod_name: str,
+    pod_uid: str,
+    image: str,
+    container: str = ENGINE_CONTAINER,
 ) -> PodIdentity:
     """Return the live identity of `container` in this pod, checked through the API and /proc.
 
     The pod must be the one with UID `pod_uid`, share its process namespace and run the
-    container. The container's first process must be visible here and have started within
-    START_TOLERANCE_S of the container start the API reports.
+    container. The pod specification must name `image`, a `<repository>@sha256:<hex>`
+    reference, for the container, and the container must run that digest. The container's
+    first process must be visible here.
     """
     pod = read_pod(namespace, pod_name)
     metadata, spec = pod.get("metadata", {}), pod.get("spec", {})
@@ -238,15 +246,26 @@ def read_identity(
             f"pod {namespace}/{pod_name} does not set shareProcessNamespace: true, so its "
             f"sidecar cannot bind the {container} process to its container"
         )
+    specified = [
+        entry.get("image")
+        for entry in spec.get("containers") or []
+        if entry.get("name") == container
+    ]
+    if specified != [image]:
+        named = ", ".join(map(str, specified)) or "none"
+        raise PodIdentityError(
+            f"pod {namespace}/{pod_name} specifies image {named} for its {container} "
+            f"container, not the checked {image}"
+        )
     status = container_status(pod, container)
+    planned = image.rpartition("@")[2]
+    if status["image_id"] != planned:
+        raise PodIdentityError(
+            f"the {container} container of pod {namespace}/{pod_name} runs image "
+            f"{status['image_id']}, not the checked {planned}"
+        )
     pid, ticks = container_process(status["container_id"])
     started = process_start(ticks)
-    container_started = started_at_seconds(status["started_at"])
-    if abs(started - container_started) > START_TOLERANCE_S:
-        raise PodIdentityError(
-            f"process {pid} of the {container} container started at {started}, not with the "
-            f"container at {status['started_at']}"
-        )
     return PodIdentity(
         namespace=namespace,
         pod=pod_name,
