@@ -35,7 +35,7 @@ Open the dashboard through the tunnel in [Accessing the dashboard from a worksta
 
 ## Selectors
 
-**Fleet** picks the fleet whose series every panel reads, by the `fleet` label that Prometheus gives each series. With one Prometheus for several fleets, pick one fleet, since the panels that follow the active router expect one router pair. The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. The selectors default to All.
+**Fleet** picks the one fleet whose series every panel reads, by the `fleet` label that Prometheus gives each series, and defaults to the first fleet. It offers no All, since the panels that follow the active router and count each series once expect one router pair. The **Router** selector scopes every panel built from router metrics. **Engine detail** narrows the engine table and **Engine role history** to the engines you pick. Both default to All.
 
 With a [router pair](01-Start-and-Verify.md#monitoring-a-router-pair) selected, the panels that show router state read the [active router](#engines-and-engine-role-history): **Router**, the engine table, **Engine role history**, **Pool assignments**, **Pool pressure**, **Admission in-flight**, **Queue depth** and **Retry credits**. The panels that count requests, including **Requests**, **Latency** and the latency percentiles, add the counts of every selected router. Each router counts only the requests it handled, so the sum counts no request twice across a takeover. What the old router counts after its last successful scrape, as it finishes its open streams, never reaches Prometheus, and the sum leaves it out.
 
@@ -228,7 +228,7 @@ The **Deployment** row reads the status of the last `narwhal deploy run`, which 
 | **Engine attestation** | Each engine's attested binding digest. A new digest means the engine was attested again |
 | **Supervisor restarts** | How often systemd restarted each router and attestation sidecar, and on Kubernetes the kubelet restart count of each engine pod container |
 
-Both routers of a pair export the same status, so each panel takes the maximum over the routers and counts each series once. The row stays empty for routers that `narwhal deploy` did not start, which have no status to export.
+Each panel reads the router whose status has the newest `narwhal_deployment_updated_timestamp_seconds`, so a router that missed the last upload and still exports the run before does not show. Both routers of a pair normally export the same status, and each panel takes the maximum over them and counts each series once. The row stays empty for routers that `narwhal deploy` did not start, which have no status to export.
 
 ## Router event loop
 

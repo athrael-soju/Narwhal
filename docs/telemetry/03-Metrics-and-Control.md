@@ -73,7 +73,7 @@ A router started with `--deployment-status PATH` exports the [deployment status]
 | `narwhal_engine_attestation_generation_info` | `iid`, `generation` | 1 for the binding digest of each engine's attestation |
 | `narwhal_engine_attested_timestamp_seconds` | `iid` | When the attestation was captured |
 
-Both routers of a pair export the same status, so read these series with `max by` over the routers rather than `sum`.
+Both routers of a pair export the same status, so read these series with `max by` over the routers rather than `sum`. A router that missed the last upload keeps exporting the status before it; keep only the routers whose `narwhal_deployment_updated_timestamp_seconds` is the fleet's newest, as the dashboard does.
 
 `narwhal_supervisor_restarts{process}` counts how often systemd restarted the process since its unit started. The router exports it as `process="router"`, and each attestation sidecar on its own `/metrics` as `process="sidecar"`, when they run under the systemd unit that `narwhal deploy` writes. A sidecar in an engine pod started with `--pod NAMESPACE/NAME` also exports `narwhal_kubelet_restarts{container}`, the kubelet restart count of each container in its pod. Both read their counts at most every 15 seconds.
 

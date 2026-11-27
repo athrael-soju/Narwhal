@@ -233,7 +233,8 @@ FLEET_VARIABLE = {
     "kind": "QueryVariable",
     "spec": {
         "name": "fleet",
-        "current": {"text": "All", "value": "$__all"},
+        # One fleet at a time: the panels that follow the active router expect one pair.
+        "current": {},
         "label": "Fleet",
         "hide": "dontHide",
         "refresh": "onDashboardLoad",
@@ -247,8 +248,7 @@ FLEET_VARIABLE = {
         "sort": "alphabeticalAsc",
         "options": [],
         "multi": False,
-        "includeAll": True,
-        "allValue": ".*",
+        "includeAll": False,
         "allowCustomValue": True,
     },
 }

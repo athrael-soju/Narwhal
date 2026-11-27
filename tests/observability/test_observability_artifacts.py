@@ -119,6 +119,9 @@ class OrchestratorDashboardTests(unittest.TestCase):
                 self.assertIn(artifacts.FLEET_MATCHER, selector)
         fleet = next(v for v in marked["spec"]["variables"] if v["spec"]["name"] == "fleet")
         self.assertNotIn("$fleet", fleet["spec"]["query"]["spec"]["query"])
+        # One fleet at a time, so a count-once query never spans two fleets' routers.
+        self.assertFalse(fleet["spec"]["includeAll"])
+        self.assertFalse(fleet["spec"]["multi"])
 
     def test_the_orchestrator_dashboard_marks_fleet_control_activity(self):
         marked = artifacts.narwhal_dashboard(self.shipped, self.console)

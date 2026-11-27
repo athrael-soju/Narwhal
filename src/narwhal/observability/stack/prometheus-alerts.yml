@@ -29,7 +29,7 @@ groups:
           description: "The attestation sidecar does not answer its scrape: the host, its engine or the sidecar is down. After a reboot, run narwhal deploy run to start them again."
 
       - alert: NarwhalEngineEjected
-        expr: narwhal_ejected_instances > 0 and on (instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == scalar(max((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)))))
+        expr: narwhal_ejected_instances > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
         for: 1m
         labels:
           severity: page
@@ -38,7 +38,7 @@ groups:
           description: "narwhal_ejected{iid=...} identifies the engines. Inspect /narwhal/lifecycle and breaker evidence. Contracted fleets require inference and identity validation; whole_wave fleets require an operator-managed restart wave."
 
       - alert: NarwhalRouterDown
-        expr: (up{job="narwhal-router"} == 0 and on (instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        expr: (up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
         for: 2m
         labels:
           severity: page
@@ -47,7 +47,7 @@ groups:
           description: "No router controls the fleet. Check the router process, its metrics endpoint and the lease. For a router pair, read the standby's /ready reason to see why it did not take over."
 
       - alert: NarwhalStandbyRouterDown
-        expr: (up{job="narwhal-router"} == 0 and on (instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) and on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
+        expr: (up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) and on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1)
         for: 2m
         labels:
           severity: warn
@@ -57,7 +57,7 @@ groups:
 
       - alert: NarwhalNoRouterReady
         # Only for a router pair; NarwhalRouterDown pages for a stopped router with none active.
-        expr: (max(narwhal_router_ready{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30)) or vector(0)) < 1 and on () count(timestamp(up{job="narwhal-router"}) > time() - 30) > 1 unless on () ((up{job="narwhal-router"} == 0 and on (instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on () (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1))
+        expr: (max by (fleet) (narwhal_router_ready{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30)) or count by (fleet) (up{job="narwhal-router"}) * 0) < 1 and on (fleet) count by (fleet) (timestamp(up{job="narwhal-router"}) > time() - 30) > 1 unless on (fleet) ((up{job="narwhal-router"} == 0 and on (fleet, instance) (timestamp(up{job="narwhal-router"}) > time() - 30)) unless on (fleet) (timestamp(narwhal_router_role{job="narwhal-router",role="active"}) > time() - 30 and narwhal_router_role{job="narwhal-router",role="active"} == 1))
         for: 1m
         labels:
           severity: page
@@ -66,7 +66,7 @@ groups:
           description: "Both routers answer their scrape, or the one that stopped left another active, and every router answers /ready with HTTP 503. Read the reason in each router's /ready."
 
       - alert: NarwhalMultipleRoutersReady
-        expr: count(timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30 and narwhal_router_ready{job="narwhal-router"} == 1) > 1
+        expr: count by (fleet) (timestamp(narwhal_router_ready{job="narwhal-router"}) > time() - 30 and narwhal_router_ready{job="narwhal-router"} == 1) > 1
         for: 30s
         labels:
           severity: page
@@ -122,7 +122,7 @@ groups:
           description: "Compare offered demand, pool load, measured profile coverage and controller decisions in /narwhal/state."
 
       - alert: NarwhalPoolStarved
-        expr: narwhal_pool_instances < 1 and on (instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == scalar(max((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)))))
+        expr: narwhal_pool_instances < 1 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
         for: 2m
         labels:
           severity: warn
@@ -130,7 +130,7 @@ groups:
           summary: "A pool contains fewer than one engine"
 
       - alert: NarwhalPrefillBelowFloor
-        expr: narwhal_prefill_below_floor > 0 and on (instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == scalar(max((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)))))
+        expr: narwhal_prefill_below_floor > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
         for: 1m
         labels:
           severity: warn
@@ -139,7 +139,7 @@ groups:
           description: "Inspect engine exclusions and controller decisions in /narwhal/state. Predictive admission permits aggregate fallback on an idle decode engine when live prefill capacity reaches zero."
 
       - alert: NarwhalDecodeBelowFloor
-        expr: narwhal_decode_below_floor > 0 and on (instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == scalar(max((narwhal_router_lease_epoch{job="narwhal-router"} and on (instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)))))
+        expr: narwhal_decode_below_floor > 0 and on (fleet, instance) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30)) == on (fleet) group_left max by (fleet) ((narwhal_router_lease_epoch{job="narwhal-router"} and on (fleet, instance) (timestamp(narwhal_router_lease_epoch{job="narwhal-router"}) > time() - 30))))
         for: 1m
         labels:
           severity: warn

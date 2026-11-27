@@ -101,6 +101,7 @@ class DeploymentRowTests(unittest.TestCase):
             )
             inputs += series("narwhal_fabric_edge_measured_gbps", f'{base},edge="n1-n2"', "80x40")
             inputs += series("narwhal_deployment_last_passed_timestamp_seconds", base, "0x40")
+            inputs += series("narwhal_deployment_updated_timestamp_seconds", base, "50x40")
         # Another fleet's failed stage stays out of this fleet's row.
         inputs += series(
             "narwhal_deployment_stage_state",
@@ -108,16 +109,24 @@ class DeploymentRowTests(unittest.TestCase):
             'stage_instance="node-9",state="failed"',
             "1x40",
         )
+        inputs += series(
+            "narwhal_deployment_updated_timestamp_seconds",
+            'job="narwhal-router",instance="c:8000",fleet="fleet-b"',
+            "50x40",
+        )
+        fleet = '{fleet="fleet-a"}'
         tests = [
             "    promql_expr_test:",
-            *expr_test(deployment_panel("Stages not passed"), 300, 1),
+            *samples_test(deployment_panel("Stages not passed"), 300, {fleet: 1}),
             *samples_test(
                 deployment_panel("Stage table"),
                 300,
-                {'{stage="preflight",stage_instance="node-1",state="failed"}': 1},
+                {'{fleet="fleet-a",stage="preflight",stage_instance="node-1",state="failed"}': 1},
             ),
-            *samples_test(deployment_panel("Fabric edges"), 300, {'{edge="n1-n2"}': 80}),
-            *expr_test(deployment_panel("Deployment age"), 300, 300),
+            *samples_test(
+                deployment_panel("Fabric edges"), 300, {'{edge="n1-n2",fleet="fleet-a"}': 80}
+            ),
+            *samples_test(deployment_panel("Deployment age"), 300, {fleet: 300}),
         ]
         self.run_promtool(inputs, tests)
 
@@ -128,10 +137,43 @@ class DeploymentRowTests(unittest.TestCase):
             'stage_instance="node-1",state="passed"',
             "1x40",
         )
+        inputs += series(
+            "narwhal_deployment_updated_timestamp_seconds",
+            'job="narwhal-router",instance="a:8000",fleet="fleet-a"',
+            "50x40",
+        )
         tests = ["    promql_expr_test:", *expr_test(deployment_panel("Stages not passed"), 300, 0)]
         self.run_promtool(inputs, tests)
 
-    def alert_at(self, seconds: int, name: str, firing: list[dict[str, str]]) -> list[str]:
+    def test_a_router_left_with_an_older_status_does_not_show(self):
+        # The last run's upload reached router a only; router b still exports the run before,
+        # which stopped at another stage.
+        inputs = []
+        for router, updated, stage in (
+            ("a:8000", "200x40", "monitoring"),
+            ("b:8000", "100x40", "install"),
+        ):
+            base = f'job="narwhal-router",instance="{router}",fleet="fleet-a"'
+            inputs += series("narwhal_deployment_updated_timestamp_seconds", base, updated)
+            inputs += series(
+                "narwhal_deployment_stage_state",
+                f'{base},stage="{stage}",stage_instance="",state="failed"',
+                "1x40",
+            )
+        tests = [
+            "    promql_expr_test:",
+            *samples_test(deployment_panel("Stages not passed"), 300, {'{fleet="fleet-a"}': 1}),
+            *samples_test(
+                deployment_panel("Stage table"),
+                300,
+                {'{fleet="fleet-a",stage="monitoring",state="failed"}': 1},
+            ),
+        ]
+        self.run_promtool(inputs, tests)
+
+    def alert_at(
+        self, seconds: int, name: str, firing: list[dict[str, str]], value: str = ""
+    ) -> list[str]:
         rules = {rule["alert"]: rule for rule in ALERTS}
         lines = [
             f"      - eval_time: {seconds}s",
@@ -145,8 +187,57 @@ class DeploymentRowTests(unittest.TestCase):
             lines += ["            exp_annotations:"]
             for key, template in rules[name]["annotations"].items():
                 text = template.replace("{{ $labels.instance }}", labels["instance"])
+                text = text.replace("{{ $value }}", value)
                 lines += [f"              {key}: {json.dumps(text)}"]
         return lines
+
+    def test_router_alerts_hold_within_each_of_two_fleets(self):
+        # In each fleet one router is active and ready. Fleet A's other router is down, and
+        # fleet A's active router ejects an engine at a lower epoch than fleet B's.
+        a = 'job="narwhal-router",instance="a:8000",fleet="fleet-a"'
+        b = 'job="narwhal-router",instance="b:8000",fleet="fleet-b"'
+        c = 'job="narwhal-router",instance="c:8000",fleet="fleet-b"'
+        d = 'job="narwhal-router",instance="d:8000",fleet="fleet-a"'
+        inputs = [
+            *series("up", a, "0x40"),
+            *series("up", b, "1x40"),
+            *series("narwhal_router_role", b + ',role="active"', "1x40"),
+            *series("narwhal_router_ready", b, "1x40"),
+            *series("up", c, "1x40"),
+            *series("narwhal_router_ready", c, "0x40"),
+            *series("narwhal_router_lease_epoch", b, "9x40"),
+            *series("up", d, "1x40"),
+            *series("narwhal_router_role", d + ',role="active"', "1x40"),
+            *series("narwhal_router_ready", d, "1x40"),
+            *series("narwhal_router_lease_epoch", d, "3x40"),
+            *series("narwhal_ejected_instances", d, "1x40"),
+        ]
+        down = {"job": "narwhal-router", "instance": "a:8000", "fleet": "fleet-a"}
+        ejected = {"job": "narwhal-router", "instance": "d:8000", "fleet": "fleet-a"}
+        tests = [
+            "    alert_rule_test:",
+            # Fleet A's own active router leaves its down router a standby to restart.
+            *self.alert_at(300, "NarwhalRouterDown", []),
+            *self.alert_at(300, "NarwhalStandbyRouterDown", [down]),
+            # One ready router in each fleet is not two at once.
+            *self.alert_at(300, "NarwhalMultipleRoutersReady", []),
+            # Fleet B's higher epoch does not hide fleet A's lease holder.
+            *self.alert_at(300, "NarwhalEngineEjected", [ejected], value="1"),
+        ]
+        self.run_promtool(inputs, tests)
+        # Without router d, fleet A has no active router, and fleet B's does not stand in.
+        tests = [
+            "    alert_rule_test:",
+            *self.alert_at(300, "NarwhalRouterDown", [down]),
+            *self.alert_at(300, "NarwhalStandbyRouterDown", []),
+        ]
+        without = [
+            line
+            for pair in zip(inputs[::2], inputs[1::2], strict=True)
+            if "d:8000" not in pair[0]
+            for line in pair
+        ]
+        self.run_promtool(without, tests)
 
     def test_host_down_fires_while_a_sidecar_host_reboots_and_clears_after(self):
         inputs = series("up", SIDECAR, REBOOT)
