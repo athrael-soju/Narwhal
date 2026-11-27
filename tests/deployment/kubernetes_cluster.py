@@ -3,8 +3,11 @@
 `ObjectStore` is an in-memory Kubernetes API server with the semantics the controller relies on:
 resourceVersions and conflicts, `generation`, watches from an event log with 410 Gone once a
 resourceVersion has expired, owner-reference garbage collection, finalizers, server-side apply
-with field managers and `managedFields`, Jobs that create pods, a scheduler that honours
-`schedulingGates`, a kubelet that moves pods through their phases, and Leases. Tests reach it
+with field managers and `managedFields`, Jobs that create pods and track them with a finalizer,
+a scheduler that honours `schedulingGates`, node selectors and node affinity against the Nodes
+the store holds, a kubelet that moves pods through their phases and gives a deleted pod its
+grace period, and Leases. A custom resource defined from its CRD (`define_crd`) is pruned to its
+structural schema, with the API server's warnings in `last_warnings`. Tests reach it
 through its Python verbs or, as `runtime/kubernetes_api.py` does, over HTTP:
 `lightkube.Client(config, transport=store.transport())`. A test injects API failures with
 `fail()` and advances time with the store's `Clock`; `settle()` runs the controllers, the
@@ -40,7 +43,7 @@ import threading
 import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -129,6 +132,10 @@ class Kind:
     generation: bool = False
     # The propagation policy of a delete that names none.
     propagation: str = "Background"
+    # A custom resource: its CRD's structural schema prunes unknown fields and gives its lists
+    # their server-side apply types, and it takes no strategic merge patch.
+    custom: bool = False
+    schema: Any = field(default=None, compare=False, hash=False)
 
     @property
     def api_version(self) -> str:
@@ -138,6 +145,22 @@ class Kind:
     def resource(self) -> str:
         """The name the API server's messages use, such as `jobs.batch`."""
         return f"{self.plural}.{self.group}" if self.group else self.plural
+
+    def list_type(self, names: Sequence[str], items: Sequence[Any]) -> tuple[str, ...] | str | None:
+        """How server-side apply treats the list at field path `names`: the keys of a map
+        list, "set", or None for an atomic list. A custom resource's lists outside its metadata
+        are atomic unless its schema says `x-kubernetes-list-type: map` or `set`."""
+        if not self.custom or tuple(names[:1]) == ("metadata",):
+            return "set" if names[-1] in _SET_LISTS else _list_keys(names[-1], items)
+        node = _schema_at(self.schema, names)
+        listed = (node or {}).get("x-kubernetes-list-type")
+        if listed == "set":
+            return "set"
+        if listed == "map":
+            keys = tuple((node or {}).get("x-kubernetes-list-map-keys") or ())
+            if keys and all(isinstance(item, dict) and keys[0] in item for item in items):
+                return keys
+        return None
 
 
 POD = Kind("", "v1", "Pod", "pods", status=True)
@@ -184,10 +207,36 @@ KINDS = (
 
 
 def custom_kind(
-    group: str, version: str, kind: str, plural: str, *, namespaced: bool = True
+    group: str,
+    version: str,
+    kind: str,
+    plural: str,
+    *,
+    namespaced: bool = True,
+    schema: Mapping[str, Any] | None = None,
 ) -> Kind:
-    """A custom resource with a status subresource, as a CRD with `subresources.status` serves."""
-    return Kind(group, version, kind, plural, namespaced=namespaced, status=True, generation=True)
+    """A custom resource with a status subresource, as a CRD with `subresources.status` serves.
+    `schema` is its structural `openAPIV3Schema`."""
+    return Kind(
+        group,
+        version,
+        kind,
+        plural,
+        namespaced=namespaced,
+        status=True,
+        generation=True,
+        custom=True,
+        schema=schema,
+    )
+
+
+def node(name: str, **labels: str) -> dict:
+    """A Node as its kubelet registers it, with the `kubernetes.io/hostname` label."""
+    return {
+        "apiVersion": "v1",
+        "kind": "Node",
+        "metadata": {"name": name, "labels": {"kubernetes.io/hostname": name, **labels}},
+    }
 
 
 # Time.
@@ -403,7 +452,9 @@ def _item_path(item: Mapping[str, Any], keys: tuple[str, ...]) -> str:
     return "k:" + json.dumps(_key_of(item, keys), separators=(",", ":"), sort_keys=True)
 
 
-def _fields(value: Any, path: FieldPath = ()) -> dict[FieldPath, bool]:
+def _fields(
+    value: Any, kind: Kind, path: FieldPath = (), names: tuple[str, ...] = ()
+) -> dict[FieldPath, bool]:
     """Each field path in `value`, mapped to whether it is a leaf: a scalar or atomic list."""
     out: dict[FieldPath, bool] = {}
     if not isinstance(value, dict):
@@ -411,19 +462,20 @@ def _fields(value: Any, path: FieldPath = ()) -> dict[FieldPath, bool]:
     for name, child in value.items():
         if child is None:
             continue
-        here = (*path, f"f:{name}")
+        here, at_names = (*path, f"f:{name}"), (*names, name)
+        listed = kind.list_type(at_names, child) if isinstance(child, list) else None
         if isinstance(child, dict):
             out[here] = False
-            out.update(_fields(child, here))
-        elif isinstance(child, list) and name in _SET_LISTS:
+            out.update(_fields(child, kind, here, at_names))
+        elif listed == "set":
             out[here] = False
             out.update({(*here, f"v:{json.dumps(item)}"): True for item in child})
-        elif isinstance(child, list) and (keys := _list_keys(name, child)) is not None:
+        elif isinstance(listed, tuple):
             out[here] = False
             for item in child:
-                at = (*here, _item_path(item, keys))
+                at = (*here, _item_path(item, listed))
                 out[at] = False
-                out.update(_fields(item, at))
+                out.update(_fields(item, kind, at, at_names))
         else:
             out[here] = True
     return out
@@ -469,19 +521,19 @@ def _remove_path(obj: Any, path: FieldPath) -> None:
             parent[:] = [item for item in parent if item is not target and item != target]
 
 
-def _merge_applied(live: Any, applied: Any, name: str = "") -> Any:
-    """`applied` merged into `live`: maps by key, associative lists by item key."""
+def _merge_applied(live: Any, applied: Any, kind: Kind, names: tuple[str, ...] = ()) -> Any:
+    """`applied` merged into `live`: maps by key, map lists by item key."""
     if isinstance(applied, dict) and isinstance(live, dict):
         out = dict(live)
         for key, value in applied.items():
             if value is not None:
-                out[key] = _merge_applied(live.get(key), value, key)
+                out[key] = _merge_applied(live.get(key), value, kind, (*names, key))
         return out
     if isinstance(applied, list) and isinstance(live, list):
-        if name in _SET_LISTS:
+        keys = kind.list_type(names, [*live, *applied])
+        if keys == "set":
             return [*live, *(item for item in applied if item not in live)]
-        keys = _list_keys(name, [*live, *applied])
-        if keys is not None:
+        if isinstance(keys, tuple):
             out = [copy.deepcopy(item) for item in live]
             for item in applied:
                 at = next(
@@ -491,9 +543,137 @@ def _merge_applied(live: Any, applied: Any, name: str = "") -> Any:
                 if at is None:
                     out.append(copy.deepcopy(item))
                 else:
-                    out[at] = _merge_applied(out[at], item)
+                    out[at] = _merge_applied(out[at], item, kind, names)
             return out
     return copy.deepcopy(applied)
+
+
+# Structural schemas: what a CRD's `openAPIV3Schema` keeps of a custom resource.
+
+# ObjectMeta's fields; the API server drops any other under metadata.
+_OBJECT_META = {
+    "name",
+    "generateName",
+    "namespace",
+    "uid",
+    "resourceVersion",
+    "generation",
+    "creationTimestamp",
+    "deletionTimestamp",
+    "deletionGracePeriodSeconds",
+    "labels",
+    "annotations",
+    "ownerReferences",
+    "finalizers",
+    "managedFields",
+    "selfLink",
+}
+
+
+def _schema_at(schema: Mapping[str, Any] | None, names: Sequence[str]) -> Mapping[str, Any] | None:
+    node = schema
+    for name in names:
+        while node is not None and node.get("type") == "array":
+            node = node.get("items")
+        if node is None:
+            return None
+        properties = node.get("properties") or {}
+        if name in properties:
+            node = properties[name]
+        elif isinstance(node.get("additionalProperties"), dict):
+            node = node["additionalProperties"]
+        else:
+            return None
+    return node
+
+
+def _prune_value(value: Any, schema: Mapping[str, Any], at: str, warnings: list[str]) -> None:
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        extra = schema.get("additionalProperties")
+        keep = schema.get("x-kubernetes-preserve-unknown-fields") or extra is True
+        for key in list(value):
+            here = f"{at}.{key}" if at else key
+            if properties is not None and key in properties:
+                _prune_value(value[key], properties[key], here, warnings)
+            elif isinstance(extra, dict):
+                _prune_value(value[key], extra, here, warnings)
+            elif not keep:
+                del value[key]
+                warnings.append(f'unknown field "{here}"')
+    elif isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, item in enumerate(value):
+            _prune_value(item, schema["items"], f"{at}[{index}]", warnings)
+
+
+def prune(schema: Mapping[str, Any], obj: dict) -> list[str]:
+    """Drop the fields of a custom resource its structural schema does not know, in place, and
+    return the warnings the API server sends for them."""
+    warnings: list[str] = []
+    meta = obj.get("metadata")
+    if isinstance(meta, dict):
+        for key in [key for key in meta if key not in _OBJECT_META]:
+            del meta[key]
+            warnings.append(f'unknown field "metadata.{key}"')
+    body = {k: v for k, v in obj.items() if k not in ("apiVersion", "kind", "metadata")}
+    _prune_value(body, schema, "", warnings)
+    for key in [key for key in obj if key not in ("apiVersion", "kind", "metadata")]:
+        if key not in body:
+            del obj[key]
+    return warnings
+
+
+# Node selection, as the scheduler and the kubelet's admission check it.
+
+
+def _requirement(requirement: Mapping[str, Any], present: bool, value: Any) -> bool:
+    op, values = requirement.get("operator"), requirement.get("values") or []
+    if op == "In":
+        return present and value in values
+    if op == "NotIn":
+        return not present or value not in values
+    if op == "Exists":
+        return present
+    if op == "DoesNotExist":
+        return not present
+    if op in ("Gt", "Lt") and present and values:
+        try:
+            number, bound = int(value), int(values[0])
+        except (TypeError, ValueError):
+            return False
+        return number > bound if op == "Gt" else number < bound
+    return False
+
+
+def _term_matches(term: Mapping[str, Any], labels: Mapping[str, str], name: str) -> bool:
+    expressions, fields = term.get("matchExpressions") or [], term.get("matchFields") or []
+    # An empty term selects no node.
+    if not expressions and not fields:
+        return False
+    for requirement in expressions:
+        key = requirement.get("key", "")
+        if not _requirement(requirement, key in labels, labels.get(key)):
+            return False
+    # metadata.name is the one node field; it is not a label.
+    return all(
+        requirement.get("key") == "metadata.name" and _requirement(requirement, True, name)
+        for requirement in fields
+    )
+
+
+def node_fits(spec: Mapping[str, Any], node: Mapping[str, Any]) -> bool:
+    """Whether a pod's node selector and required node affinity admit `node`."""
+    labels, name = node["metadata"].get("labels") or {}, node["metadata"]["name"]
+    if any(labels.get(key) != value for key, value in (spec.get("nodeSelector") or {}).items()):
+        return False
+    required = ((spec.get("affinity") or {}).get("nodeAffinity") or {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    )
+    if required is None:
+        return True
+    return any(
+        _term_matches(term, labels, name) for term in required.get("nodeSelectorTerms") or []
+    )
 
 
 def _encode_fields(paths: set[FieldPath]) -> dict:
@@ -848,9 +1028,15 @@ def _validate_pod_update(old: Mapping[str, Any], new: Mapping[str, Any]) -> list
         for container in candidate.get(name) or []:
             if container.get("name") in images:
                 container["image"] = images[container["name"]]
-    for name in ("activeDeadlineSeconds", "tolerations"):
-        if name in after:
-            candidate[name] = copy.deepcopy(after[name])
+    if "activeDeadlineSeconds" in after:
+        candidate["activeDeadlineSeconds"] = after["activeDeadlineSeconds"]
+    # Tolerations may only be added: every existing one must remain.
+    tolerations = after.get("tolerations") or []
+    if all(toleration in tolerations for toleration in before.get("tolerations") or []):
+        if "tolerations" in after:
+            candidate["tolerations"] = copy.deepcopy(after["tolerations"])
+        else:
+            candidate.pop("tolerations", None)
     if gates:
         # A pod held at a scheduling gate may take a node selector and node affinity it did not
         # have, so a controller can pin it before it schedules.
@@ -1039,8 +1225,12 @@ Outcome = Run | Exit | Wait | Reject
 
 
 def default_kubelet(pod: Mapping[str, Any]) -> Outcome:
-    """A Job's pod exits 0; every other pod runs."""
-    owners = pod.get("metadata", {}).get("ownerReferences") or []
+    """A Job's pod exits 0; every other pod runs. A deleted pod keeps running until its grace
+    period ends, as a process that ignores SIGTERM does."""
+    meta = pod.get("metadata", {})
+    if meta.get("deletionTimestamp"):
+        return Run()
+    owners = meta.get("ownerReferences") or []
     return Exit(0) if any(owner.get("kind") == "Job" for owner in owners) else Run()
 
 
@@ -1097,6 +1287,14 @@ _FAULT_MESSAGES = {
     504: "the server was unable to return a response in the time allotted",
 }
 _SYSTEM = "kube-controller-manager"
+# The finalizer the Job controller keeps on each pod until it has counted it.
+TRACKING = "batch.kubernetes.io/job-tracking"
+_UNKNOWN_FORMAT = (
+    "the body of the request was in an unknown format - accepted media types include: "
+)
+_CUSTOM_PATCHES = (
+    "application/json-patch+json, application/merge-patch+json, application/apply-patch+yaml"
+)
 _GENERATE = "bcdfghjklmnpqrstvwxz2456789"
 
 
@@ -1140,14 +1338,14 @@ class ObjectStore:
         self._compacted = 0
         self._pages: dict[str, tuple[int, list[dict]]] = {}
         self._logs: dict[tuple[str, str, str], str] = {}
-        self._counted: set[str] = set()
+        self._warnings: list[str] = []
+        # The warnings of the last call, as the API server sends them in `Warning` headers.
+        self.last_warnings: list[str] = []
         self._random = random.Random(0)
         self.faults: list[_Fault] = []
         self.deletes: list[Deletion] = []
         self.validators: dict[Kind, list[Callable[[dict, dict | None], None]]] = {}
         self.kubelet: Callable[[dict], Outcome] = default_kubelet
-        # Where an unpinned pod schedules while the store holds no Node.
-        self.default_node = "node-0"
         self.version = "v1.31.0"
         # A Job delete that does not send Background fails the test: the API default for Jobs
         # orphans their pods.
@@ -1160,6 +1358,33 @@ class ObjectStore:
         self._kinds[(kind.api_version, kind.kind)] = kind
         self._resources[(kind.group, kind.version, kind.plural)] = kind
         return kind
+
+    def define_crd(self, crd: Mapping[str, Any]) -> Kind:
+        """Serve the custom resource a CustomResourceDefinition describes at its storage
+        version, with that version's schema, and store the CRD itself."""
+        spec = crd["spec"]
+        version = next(v for v in spec["versions"] if v.get("storage"))
+        kind = Kind(
+            spec["group"],
+            version["name"],
+            spec["names"]["kind"],
+            spec["names"]["plural"],
+            namespaced=spec.get("scope", "Namespaced") == "Namespaced",
+            status="status" in (version.get("subresources") or {}),
+            generation=True,
+            custom=True,
+            schema=(version.get("schema") or {}).get("openAPIV3Schema"),
+        )
+        self.define(kind)
+        self.create(crd, field_manager="helm")
+        return kind
+
+    def _registered(self, kind: Kind) -> Kind:
+        """The kind as the store serves it, with its schema."""
+        found = self._kinds.get((kind.api_version, kind.kind))
+        if found is None:
+            raise ApiError(404, f"the server could not find the requested resource {kind.resource}")
+        return found
 
     def kind_of(self, obj: Mapping[str, Any]) -> Kind:
         found = self._kinds.get((obj.get("apiVersion", ""), obj.get("kind", "")))
@@ -1226,7 +1451,11 @@ class ObjectStore:
                     self.faults.remove(fault)
                 if not fault.commit:
                     raise fault.error()
-            result = action()
+            self._warnings = []
+            try:
+                result = action()
+            finally:
+                self.last_warnings = self._warnings
             if fault is not None:
                 raise fault.error()
             return result
@@ -1234,6 +1463,7 @@ class ObjectStore:
     # Reads.
 
     def get(self, kind: Kind, namespace: str | None, name: str) -> dict:
+        kind = self._registered(kind)
         return self._call(
             "get", kind, name, lambda: copy.deepcopy(self._live(kind, namespace, name))
         )
@@ -1250,6 +1480,7 @@ class ObjectStore:
     ) -> dict:
         """A List object. With `limit`, a `continue` token reads the next page of the same
         snapshot; it expires with the resourceVersion it was taken at."""
+        kind = self._registered(kind)
 
         def run() -> dict:
             if continue_:
@@ -1310,6 +1541,7 @@ class ObjectStore:
         """The watch events after `resource_version`, as a watch delivers them before its
         timeout. Without one, the current objects arrive as ADDED. An expired resourceVersion
         raises 410 Gone, and the client lists again."""
+        kind = self._registered(kind)
 
         def run() -> list[dict]:
             wanted = match_labels(label_selector)
@@ -1445,10 +1677,14 @@ class ObjectStore:
         dry_run: bool = False,
     ) -> dict:
         """A JSON (`json`), merge (`merge`) or strategic merge (`strategic`) patch, all or
-        nothing. A resourceVersion the patch sets must be the live one."""
+        nothing. A resourceVersion the patch sets must be the live one. A custom resource takes
+        no strategic merge patch."""
+        kind = self._registered(kind)
 
         def run() -> dict:
             old = self._live(kind, namespace, name)
+            if patch_type == "strategic" and kind.custom:
+                raise ApiError(415, _UNKNOWN_FORMAT + _CUSTOM_PATCHES)
             try:
                 if patch_type == "json":
                     new = json_patch(old, body)
@@ -1512,11 +1748,15 @@ class ObjectStore:
         *,
         propagation_policy: str | None = None,
         preconditions: Mapping[str, str] | None = None,
+        grace_period: int | None = None,
         dry_run: bool = False,
     ) -> dict:
         """Delete the object. Its finalizers hold it, terminating, until they are removed.
         `Background` leaves its dependents to the garbage collector, `Orphan` removes their
-        owner references first, and `Foreground` deletes them before the owner."""
+        owner references first, and `Foreground` deletes them before the owner. A pod on a
+        node terminates for its grace period: `terminationGracePeriodSeconds` unless
+        `grace_period` sets it, and 0 forces it out at once."""
+        kind = self._registered(kind)
 
         def run() -> dict:
             self.deletes.append(Deletion(kind.kind, namespace or "", name, propagation_policy))
@@ -1538,7 +1778,8 @@ class ObjectStore:
                     )
             if propagation_policy not in (None, "Background", "Orphan", "Foreground"):
                 raise ApiError(422, f"unsupported propagationPolicy {propagation_policy!r}")
-            return self._delete(kind, obj, propagation_policy or kind.propagation, dry_run)
+            policy = propagation_policy or kind.propagation
+            return self._delete(kind, obj, policy, dry_run, grace_period)
 
         return self._call("delete", kind, name, run)
 
@@ -1561,7 +1802,8 @@ class ObjectStore:
 
     @_locked
     def remove(self, kind: Kind, namespace: str | None, name: str) -> None:
-        """Remove the object at once, as a force delete with no grace period does."""
+        """Remove the object at once, as an etcd edit does, past its finalizers."""
+        kind = self._registered(kind)
         obj = self._live(kind, namespace, name)
         self._remove(kind, copy.deepcopy(obj))
 
@@ -1569,6 +1811,7 @@ class ObjectStore:
     def live(self, kind: Kind, namespace: str | None = None) -> list[dict]:
         """The stored objects themselves, oldest first. Changing one in place is an
         out-of-band edit: it takes no resourceVersion and sends no watch event."""
+        kind = self._registered(kind)
         return [
             obj for (ns, _), obj in self._objects[kind].items() if not namespace or ns == namespace
         ]
@@ -1649,6 +1892,10 @@ class ObjectStore:
         if causes:
             raise _invalid(kind, obj["metadata"].get("name", ""), causes)
 
+    def _prune(self, kind: Kind, obj: dict) -> None:
+        if kind.custom and kind.schema is not None:
+            self._warnings += prune(kind.schema, obj)
+
     def _view(self, kind: Kind, obj: Mapping[str, Any] | None, subresource: str) -> dict:
         """The part of `obj` a write to `subresource` manages."""
         if obj is None:
@@ -1675,7 +1922,7 @@ class ObjectStore:
         """Give `manager` an Update entry for the fields this write changed."""
         managers = _managers(new)
         before, after = self._view(kind, old, subresource), self._view(kind, new, subresource)
-        old_fields, new_fields = _fields(before), _fields(after)
+        old_fields, new_fields = _fields(before, kind), _fields(after, kind)
         changed = {
             path
             for path, leaf in new_fields.items()
@@ -1774,6 +2021,7 @@ class ObjectStore:
             meta["generation"] = 1
         if kind.status:
             new.pop("status", None)
+        self._prune(kind, new)
         self._defaults(kind, new)
         _normalize(kind, new)
         self._check(kind, new, None)
@@ -1790,6 +2038,7 @@ class ObjectStore:
         spec = obj.setdefault("spec", {}) if kind in (POD, JOB, STATEFUL_SET, DEPLOYMENT) else None
         if kind == POD and spec is not None:
             spec.setdefault("restartPolicy", "Always")
+            spec.setdefault("terminationGracePeriodSeconds", 30)
             obj["status"] = {"phase": "Pending"}
         elif kind == JOB and spec is not None:
             uid, name = obj["metadata"]["uid"], obj["metadata"]["name"]
@@ -1883,6 +2132,7 @@ class ObjectStore:
                         )
                     ],
                 )
+        self._prune(kind, new)
         _normalize(kind, new)
         self._check(kind, new, old)
         if kind.generation and self._spec(new) != self._spec(old):
@@ -1898,7 +2148,7 @@ class ObjectStore:
             return copy.deepcopy(old)
         if dry_run:
             return new
-        if new["metadata"].get("deletionTimestamp") and not new["metadata"].get("finalizers"):
+        if _removable(new):
             self._remove(kind, new)
             return copy.deepcopy(new)
         self._commit(kind, new, old)
@@ -1933,7 +2183,9 @@ class ObjectStore:
                 name=meta["name"],
             )
         applied = self._view(kind, obj, subresource)
-        fields = _fields(applied)
+        if kind.custom and kind.schema is not None:
+            self._warnings += prune(kind.schema, applied)
+        fields = _fields(applied, kind)
         managers = _managers(live) if live else []
         key = (manager, "Apply", subresource)
         conflicts = [
@@ -1995,7 +2247,7 @@ class ObjectStore:
             if meta.get("namespace"):
                 created["metadata"]["namespace"] = meta["namespace"]
             return self._create(
-                kind, _merge_applied(created, applied), manager, dry_run, managed=record
+                kind, _merge_applied(created, applied, kind), manager, dry_run, managed=record
             )
         if meta.get("resourceVersion") not in (None, "", live["metadata"]["resourceVersion"]):
             raise self._conflict(kind, meta["name"])
@@ -2003,7 +2255,7 @@ class ObjectStore:
         for path in dropped:
             if not any(owned[: len(path)] == path for owned in others):
                 _remove_path(merged, path)
-        merged = _merge_applied(merged, applied)
+        merged = _merge_applied(merged, applied, kind)
         if subresource == "status":
             merged = {**copy.deepcopy(live), "status": merged.get("status", {})}
         return self._update(
@@ -2016,25 +2268,40 @@ class ObjectStore:
             managed=record,
         )
 
-    def _delete(self, kind: Kind, obj: dict, policy: str, dry_run: bool) -> dict:
+    def _delete(
+        self, kind: Kind, obj: dict, policy: str, dry_run: bool, grace_period: int | None = None
+    ) -> dict:
         meta = obj["metadata"]
         new = copy.deepcopy(obj)
         finalizers = list(meta.get("finalizers") or [])
-        if not meta.get("deletionTimestamp"):
+        grace = 0
+        if kind == POD:
+            spec, phase = obj.get("spec") or {}, (obj.get("status") or {}).get("phase")
+            grace = spec.get("terminationGracePeriodSeconds", 30)
+            if grace_period is not None:
+                grace = grace_period
+            # A pod no kubelet runs, or one that finished, goes at once.
+            if not spec.get("nodeName") or phase in ("Succeeded", "Failed"):
+                grace = 0
+        if meta.get("deletionTimestamp"):
+            # Deleting again may only shorten a pod's grace period.
+            current = meta.get("deletionGracePeriodSeconds") or 0
+            if dry_run or kind != POD or grace_period is None or grace_period >= current:
+                return copy.deepcopy(obj)
+        else:
             wanted = {"Orphan": "orphan", "Foreground": "foregroundDeletion"}.get(policy)
             if wanted and wanted not in finalizers:
                 finalizers.append(wanted)
         if dry_run:
             return new
-        if not finalizers:
+        if not finalizers and grace == 0:
             self._remove(kind, new)
             return copy.deepcopy(new)
-        if meta.get("deletionTimestamp"):
-            return copy.deepcopy(obj)
-        new["metadata"]["finalizers"] = finalizers
-        new["metadata"]["deletionTimestamp"] = self._now()
-        new["metadata"]["deletionGracePeriodSeconds"] = 0
-        if kind.generation:
+        if finalizers:
+            new["metadata"]["finalizers"] = finalizers
+        new["metadata"]["deletionTimestamp"] = _time(self.clock() + grace)
+        new["metadata"]["deletionGracePeriodSeconds"] = grace
+        if kind.generation and not meta.get("deletionTimestamp"):
             new["metadata"]["generation"] = meta.get("generation", 1) + 1
         self._commit(kind, new, obj)
         return copy.deepcopy(new)
@@ -2076,17 +2343,19 @@ class ObjectStore:
             if any(ref.get("uid") == uid for ref in obj["metadata"].get("ownerReferences") or [])
         ]
 
-    def _drop_finalizer(self, kind: Kind, obj: dict, finalizer: str) -> None:
+    def _drop_finalizer(
+        self, kind: Kind, obj: dict, finalizer: str, manager: str = "kube-garbage-collector"
+    ) -> None:
         new = copy.deepcopy(obj)
         new["metadata"]["finalizers"] = [
             f for f in obj["metadata"].get("finalizers", []) if f != finalizer
         ]
         if not new["metadata"]["finalizers"]:
             del new["metadata"]["finalizers"]
-        self._system(kind, obj, new, "kube-garbage-collector")
+        self._system(kind, obj, new, manager)
 
     def _collect(self) -> None:
-        """The garbage collector, which identifies owners by uid."""
+        """The garbage collector, which identifies an owner by apiVersion, kind, name and uid."""
         for kind, stored in self._all():
             obj = self._current(kind, stored)
             if obj is None or not obj["metadata"].get("deletionTimestamp"):
@@ -2105,11 +2374,20 @@ class ObjectStore:
                     self._system(dependent_kind, dependent, new, "kube-garbage-collector")
                 self._drop_finalizer(kind, obj, "orphan")
             elif "foregroundDeletion" in finalizers:
+                # Every dependent goes, but only those that block owner deletion hold the owner.
                 dependents = self._dependents(uid)
+                blocking = []
                 for dependent_kind, dependent in dependents:
+                    blocks = any(
+                        ref.get("uid") == uid and ref.get("blockOwnerDeletion")
+                        for ref in dependent["metadata"].get("ownerReferences") or []
+                    )
+                    if blocks:
+                        blocking.append(dependent)
                     if not dependent["metadata"].get("deletionTimestamp"):
-                        self._delete(dependent_kind, dependent, "Background", False)
-                if not dependents:
+                        policy = "Foreground" if blocks else "Background"
+                        self._delete(dependent_kind, dependent, policy, False)
+                if not blocking:
                     self._drop_finalizer(kind, obj, "foregroundDeletion")
         uids = {obj["metadata"]["uid"]: (kind, obj) for kind, obj in self._all()}
         for kind, obj in self._all():
@@ -2119,12 +2397,20 @@ class ObjectStore:
             namespace = obj["metadata"].get("namespace", "")
 
             def alive(ref: Mapping[str, Any], namespace: str = namespace) -> bool:
+                # An owner is the object the reference names in full; one in another
+                # namespace does not count.
                 owner = uids.get(ref.get("uid", ""))
                 if owner is None:
                     return False
                 owner_kind, owner_obj = owner
                 return (
-                    not owner_kind.namespaced or owner_obj["metadata"].get("namespace") == namespace
+                    ref.get("apiVersion") == owner_kind.api_version
+                    and ref.get("kind") == owner_kind.kind
+                    and ref.get("name") == owner_obj["metadata"]["name"]
+                    and (
+                        not owner_kind.namespaced
+                        or owner_obj["metadata"].get("namespace") == namespace
+                    )
                 )
 
             live = [ref for ref in refs if alive(ref)]
@@ -2193,24 +2479,40 @@ class ObjectStore:
             out.append(new)
         return out
 
+    def _release(self, pod: dict) -> None:
+        self._drop_finalizer(POD, pod, TRACKING, _SYSTEM)
+
     def _run_jobs(self) -> None:
+        jobs = {job["metadata"]["uid"] for job in self._objects[JOB].values()}
+        # A pod whose Job is gone keeps no tracking finalizer.
+        for pod in list(self._objects[POD].values()):
+            refs = pod["metadata"].get("ownerReferences") or []
+            if TRACKING in (pod["metadata"].get("finalizers") or []) and not any(
+                r.get("kind") == "Job" and r.get("uid") in jobs for r in refs
+            ):
+                self._release(pod)
         for job in list(self._objects[JOB].values()):
-            if job["metadata"].get("deletionTimestamp"):
-                continue
             status = copy.deepcopy(job.get("status") or {})
-            if any(
+            pods = self._owned(POD, job)
+            finished = any(
                 c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
                 for c in status.get("conditions") or []
-            ):
+            )
+            # The controller counts each finished pod once, then releases its finalizer.
+            counted = [
+                pod
+                for pod in pods
+                if pod.get("status", {}).get("phase") in ("Succeeded", "Failed")
+                and TRACKING in (pod["metadata"].get("finalizers") or [])
+            ]
+            if finished or job["metadata"].get("deletionTimestamp"):
+                for pod in counted:
+                    self._release(pod)
                 continue
             spec = job["spec"]
-            pods = self._owned(POD, job)
-            for pod in pods:
-                phase = pod.get("status", {}).get("phase")
-                if phase in ("Succeeded", "Failed") and pod["metadata"]["uid"] not in self._counted:
-                    self._counted.add(pod["metadata"]["uid"])
-                    counter = "succeeded" if phase == "Succeeded" else "failed"
-                    status[counter] = status.get(counter, 0) + 1
+            for pod in counted:
+                counter = "succeeded" if pod["status"]["phase"] == "Succeeded" else "failed"
+                status[counter] = status.get(counter, 0) + 1
             active = [
                 pod
                 for pod in pods
@@ -2267,6 +2569,10 @@ class ObjectStore:
                 status.pop("active")
             if status != (job.get("status") or {}):
                 self._system(JOB, job, {**copy.deepcopy(job), "status": status}, _SYSTEM)
+            for pod in counted:
+                current = self._current(POD, pod)
+                if current is not None:
+                    self._release(current)
 
     def _job_pod(self, job: Mapping[str, Any]) -> dict:
         template = copy.deepcopy(job["spec"]["template"])
@@ -2279,6 +2585,7 @@ class ObjectStore:
                 "namespace": job["metadata"]["namespace"],
                 "labels": meta.get("labels") or {},
                 "ownerReferences": [self._reference(JOB, job)],
+                "finalizers": [TRACKING],
             },
             "spec": template.get("spec") or {},
         }
@@ -2402,16 +2709,12 @@ class ObjectStore:
                     "Scheduling is blocked due to non-empty scheduling gates",
                 )
             else:
-                wanted = _wanted_node(spec)
-                if nodes:
-                    candidates = [wanted] if wanted else sorted(nodes)
-                    fits = [
-                        n
-                        for n in candidates
-                        if n in nodes and not (nodes[n].get("spec") or {}).get("unschedulable")
-                    ]
-                else:
-                    fits = [wanted or self.default_node]
+                fits = [
+                    name
+                    for name in sorted(nodes)
+                    if not (nodes[name].get("spec") or {}).get("unschedulable")
+                    and node_fits(spec, nodes[name])
+                ]
                 if fits:
                     new["spec"]["nodeName"] = fits[0]
                     new.setdefault("status", {})["conditions"] = self._condition(
@@ -2428,19 +2731,48 @@ class ObjectStore:
             self._system(POD, pod, new, "kube-scheduler")
 
     def _run_pods(self) -> None:
+        """Each node's kubelet: a pod bound to a node the cluster lacks never runs."""
+        nodes = {node["metadata"]["name"]: node for node in self._objects[NODE].values()}
         for pod in list(self._objects[POD].values()):
             spec, status = pod.get("spec") or {}, pod.get("status") or {}
             phase = status.get("phase", "Pending")
-            if (
-                pod["metadata"].get("deletionTimestamp")
-                or not spec.get("nodeName")
-                or phase not in ("Pending", "Running")
-            ):
+            host = nodes.get(spec.get("nodeName", ""))
+            if host is None:
                 continue
-            outcome = self.kubelet(copy.deepcopy(pod))
+            if pod["metadata"].get("deletionTimestamp"):
+                self._terminate(pod, phase)
+                continue
+            if phase not in ("Pending", "Running"):
+                continue
+            if phase == "Pending" and not node_fits(spec, host):
+                rejected = Reject("NodeAffinity", "Pod was rejected: Predicate NodeAffinity failed")
+                outcome: Outcome = rejected
+            else:
+                outcome = self.kubelet(copy.deepcopy(pod))
             new = self._pod_status(pod, phase, outcome)
             if new is not None:
                 self._system(POD, pod, new, "kubelet")
+
+    def _terminate(self, pod: dict, phase: str) -> None:
+        """Stop a deleted pod's containers: when they exit, or when the grace period ends."""
+        meta = pod["metadata"]
+        if not meta.get("deletionGracePeriodSeconds"):
+            return
+        outcome = self.kubelet(copy.deepcopy(pod))
+        ends = datetime.fromisoformat(meta["deletionTimestamp"].replace("Z", "+00:00")).timestamp()
+        if phase == "Running" and not isinstance(outcome, Exit) and self.clock() < ends:
+            return
+        if phase == "Running":
+            stopped = outcome if isinstance(outcome, Exit) else Exit(137)
+            new = self._pod_status(pod, "Running", stopped) or copy.deepcopy(pod)
+        else:
+            new = copy.deepcopy(pod)
+            if phase not in ("Succeeded", "Failed"):
+                new.setdefault("status", {})["phase"] = "Failed"
+        # The kubelet's final delete: the pod goes once its finalizers do.
+        new["metadata"]["deletionGracePeriodSeconds"] = 0
+        new["metadata"]["deletionTimestamp"] = self._now()
+        self._system(POD, pod, new, "kubelet")
 
     def _pod_status(self, pod: dict, phase: str, outcome: Outcome) -> dict | None:
         new = copy.deepcopy(pod)
@@ -2561,10 +2893,18 @@ class ObjectStore:
         return StoreTransport(self.handle)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
-        try:
-            return self._serve(request)
-        except ApiError as error:
-            return httpx.Response(error.code, json=error.status())
+        with self._lock:
+            self.last_warnings = []
+            try:
+                response = self._serve(request)
+            except ApiError as error:
+                response = httpx.Response(error.code, json=error.status())
+            # The API server's warnings, such as the unknown fields it pruned.
+            warnings = [("Warning", f"299 - {json.dumps(text)}") for text in self.last_warnings]
+            if not warnings:
+                return response
+            headers = [*response.headers.multi_items(), *warnings]
+            return httpx.Response(response.status_code, headers=headers, content=response.content)
 
     def _serve(self, request: httpx.Request) -> httpx.Response:
         parts = [part for part in request.url.path.split("/") if part]
@@ -2646,12 +2986,14 @@ class ObjectStore:
             options = json.loads(request.content) if request.content else {}
             policy = options.get("propagationPolicy") or params.get("propagationPolicy")
             dry_run = dry_run or "All" in (options.get("dryRun") or [])
+            grace = options.get("gracePeriodSeconds", params.get("gracePeriodSeconds"))
             result = self.delete(
                 kind,
                 namespace,
                 name or "",
                 propagation_policy=policy,
                 preconditions=options.get("preconditions"),
+                grace_period=None if grace is None else int(grace),
                 dry_run=dry_run,
             )
             if result["metadata"].get("deletionTimestamp"):
@@ -2772,29 +3114,19 @@ def _normalize(kind: Kind, obj: dict) -> None:
             del meta[name]
 
 
+def _removable(obj: Mapping[str, Any]) -> bool:
+    """A deleted object goes once it has no finalizers and no grace period left."""
+    meta = obj["metadata"]
+    return bool(
+        meta.get("deletionTimestamp")
+        and not meta.get("finalizers")
+        and not meta.get("deletionGracePeriodSeconds")
+    )
+
+
 def _pod_ready(pod: Mapping[str, Any]) -> bool:
     conditions = (pod.get("status") or {}).get("conditions") or []
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
-
-
-def _wanted_node(spec: Mapping[str, Any]) -> str | None:
-    """The node a pod's required node affinity or node selector names, if one."""
-    selector = (spec.get("nodeSelector") or {}).get("kubernetes.io/hostname")
-    if selector:
-        return str(selector)
-    terms = (
-        ((spec.get("affinity") or {}).get("nodeAffinity") or {})
-        .get("requiredDuringSchedulingIgnoredDuringExecution", {})
-        .get("nodeSelectorTerms", [])
-    )
-    for term in terms:
-        for requirement in [*term.get("matchFields", []), *term.get("matchExpressions", [])]:
-            if (
-                requirement.get("key") in ("metadata.name", "kubernetes.io/hostname")
-                and requirement.get("operator") == "In"
-            ):
-                return str(requirement["values"][0])
-    return None
 
 
 # The task 18 rig, now over the store.
@@ -2810,6 +3142,9 @@ GATES = Path(__file__).resolve().parents[2] / "deploy/helm/narwhal/templates/gat
 # The gate kinds whose commands call an engine's API.
 ENGINE_CALLERS = {"transfer-measure", "finalize-fleet", "profile", "calibrate", "preflight"}
 COMPONENT = "app.kubernetes.io/component"
+# The cluster's nodes: the engines' nodes, the node a misplaced engine pod lands on, and the
+# routers' node.
+CLUSTER_NODES = (*NODES.values(), "gpu-c", "cpu-a")
 
 
 def keyed_kinds() -> set[str]:
@@ -3006,8 +3341,8 @@ class Rig:
         self.root = root
         self.env = environment(root)
         self.store = ObjectStore()
-        # The chart's pods carry no node selector, so an unpinned pod lands here.
-        self.store.default_node = "gpu-any"
+        for name in CLUSTER_NODES:
+            self.store.create(node(name))
         self.store.kubelet = self.kubelet
         self.pods: MutableMapping[str, dict] = _Objects(self.store, POD, _workload)
         self.jobs: Mapping[str, dict] = _Jobs(self)
@@ -3061,6 +3396,9 @@ class Rig:
         """A gate Job's pod prints its command's log and exits as its gate decides; every other
         pod runs."""
         job = (pod["metadata"].get("labels") or {}).get("job-name")
+        if pod["metadata"].get("deletionTimestamp"):
+            # Engines and routers stop on SIGTERM.
+            return Exit(0)
         if job is None:
             return Run()
         gate = self._gates[job]
@@ -3367,10 +3705,10 @@ class FakeCluster:
             self.store.delete(
                 _KUBECTL_KINDS[kind], NAMESPACE, name, propagation_policy="Background"
             )
-        if kind == "pod":
-            # The StatefulSet makes a new pod of the same name.
-            self.rig.pods[name] = self.rig.engine_pod(name)
         self.store.settle()
+        if kind == "pod":
+            # Once the old pod is gone, the StatefulSet makes a new pod of the same name.
+            self.rig.pods[name] = self.rig.engine_pod(name)
 
     def logs(self, job: str) -> str:
         [pod] = self.store.list(POD, NAMESPACE, label_selector=f"job-name={job}")["items"]

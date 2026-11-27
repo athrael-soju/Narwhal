@@ -13,11 +13,13 @@ import httpx
 from tests.deployment.kubernetes_cluster import (
     CONFIG_MAP,
     CONFIG_MAP_BYTES,
+    CRD,
     JOB,
     LEASE,
     NODE,
     POD,
     STATEFUL_SET,
+    TRACKING,
     ApiError,
     Clock,
     Deletion,
@@ -29,11 +31,65 @@ from tests.deployment.kubernetes_cluster import (
     Wait,
     custom_kind,
     managers_of,
+    node,
 )
 
 NS = "team"
 FLEET = custom_kind("narwhal.example.com", "v1alpha1", "NarwhalFleet", "narwhalfleets")
 GATE = "example.com/placement"
+_ITEM = {"type": "object", "properties": {"name": {"type": "string"}, "image": {"type": "string"}}}
+# A structural schema in the shape of a NarwhalFleet. It stands in for the CRD that step A's
+# `deploy/helm/narwhal-crds` chart renders until that lands.
+FLEET_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "spec": {
+            "type": "object",
+            "properties": {
+                "slo": {
+                    "type": "object",
+                    "properties": {"ttftS": {"type": "number"}, "tpotS": {"type": "number"}},
+                },
+                "args": {"type": "array", "items": {"type": "string"}},
+                "containers": {"type": "array", "items": _ITEM},
+                "engines": {
+                    "type": "array",
+                    "x-kubernetes-list-type": "map",
+                    "x-kubernetes-list-map-keys": ["name"],
+                    "items": _ITEM,
+                },
+                "images": {"type": "object", "additionalProperties": {"type": "string"}},
+                "launch": {"type": "object", "x-kubernetes-preserve-unknown-fields": True},
+            },
+        },
+        "status": {
+            "type": "object",
+            "properties": {
+                "serving": {"type": "boolean"},
+                "observedGeneration": {"type": "integer"},
+            },
+        },
+    },
+}
+FLEET_CRD = {
+    "apiVersion": "apiextensions.k8s.io/v1",
+    "kind": "CustomResourceDefinition",
+    "metadata": {"name": "narwhalfleets.narwhal.example.com"},
+    "spec": {
+        "group": "narwhal.example.com",
+        "scope": "Namespaced",
+        "names": {"kind": "NarwhalFleet", "plural": "narwhalfleets", "singular": "narwhalfleet"},
+        "versions": [
+            {
+                "name": "v1alpha1",
+                "served": True,
+                "storage": True,
+                "subresources": {"status": {}},
+                "schema": {"openAPIV3Schema": FLEET_SCHEMA},
+            }
+        ],
+    },
+}
 
 
 def config_map(name: str, data: dict | None = None, **metadata) -> dict:
@@ -114,9 +170,17 @@ class StoreTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.store = ObjectStore(self.clock)
-        self.store.define(FLEET)
+        self.store.define_crd(FLEET_CRD)
         # A watch from resourceVersion "0" starts anywhere, so the tests start after a write.
         self.store.create({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": NS}})
+        for name in ("gpu-a", "gpu-b"):
+            self.store.create(node(name))
+
+    def drain(self, rounds: int = 1) -> None:
+        """Let deleted pods run out their 30-second grace periods."""
+        for _ in range(rounds):
+            self.clock.advance(30)
+            self.store.settle()
 
     def refused(self, code: int, reason: str | None = None):
         test = self
@@ -223,14 +287,24 @@ class GenerationTests(StoreTest):
         observed = self.store.patch(FLEET, NS, "fleet", status, subresource="status")
         self.assertEqual(observed["metadata"]["generation"], 2)
         self.assertEqual(observed["status"], status["status"])
-        # A write to the object leaves status alone, and a status write leaves the spec alone.
-        self.store.patch(FLEET, NS, "fleet", {"status": {"serving": False}})
+        # A status write leaves the spec alone.
         spec = {"spec": {"slo": {"ttftS": 9}}, "status": {"serving": False}}
         self.store.patch(FLEET, NS, "fleet", spec, subresource="status")
         current = self.store.get(FLEET, NS, "fleet")
         self.assertEqual(current["spec"]["slo"]["ttftS"], 5)
         self.assertEqual(current["status"], {"observedGeneration": 2, "serving": False})
         self.assertEqual(current["metadata"]["generation"], 2)
+
+    def test_a_write_to_the_object_leaves_status_alone(self):
+        self.store.create(fleet())
+        self.store.patch(FLEET, NS, "fleet", {"status": {"serving": True}}, subresource="status")
+        body = {"metadata": {"labels": {"a": "b"}}, "status": {"serving": False}}
+        patched = self.store.patch(FLEET, NS, "fleet", body)
+        self.assertEqual(
+            (patched["status"], patched["metadata"]["labels"]), ({"serving": True}, {"a": "b"})
+        )
+        replaced = self.store.replace({**patched, "status": {"serving": False}})
+        self.assertEqual(replaced["status"], {"serving": True})
 
     def test_the_statefulset_controller_reports_the_generation_it_observed(self):
         self.store.create(stateful_set("engine", 1))
@@ -370,6 +444,11 @@ class GarbageCollectionTests(StoreTest):
         self.store.settle()
         with self.refused(404):
             self.store.get(JOB, NS, "gate")
+        # The pod terminates for its grace period, then goes.
+        self.assertIn(
+            "deletionTimestamp", self.store.get(POD, NS, gate_pod["metadata"]["name"])["metadata"]
+        )
+        self.drain()
         with self.refused(404):
             self.store.get(POD, NS, gate_pod["metadata"]["name"])
 
@@ -384,17 +463,60 @@ class GarbageCollectionTests(StoreTest):
             self.store.get(FLEET, NS, "fleet")
         self.assertNotIn("ownerReferences", self.store.get(CONFIG_MAP, NS, "kept")["metadata"])
 
-    def test_foreground_deletion_removes_the_dependents_before_the_owner(self):
+    def dependent(self, name: str, owner: dict, blocks: bool) -> dict:
+        reference = {**owned_by(FLEET, owner)["ownerReferences"][0], "blockOwnerDeletion": blocks}
+        held = config_map(name, ownerReferences=[reference], finalizers=["example.com/hold"])
+        return self.store.create(held)
+
+    def test_foreground_deletion_holds_the_owner_until_its_blocking_dependents_go(self):
         owner = self.store.create(fleet())
-        self.store.create(config_map("child", **owned_by(FLEET, owner)))
+        self.dependent("blocking", owner, blocks=True)
         self.store.delete(FLEET, NS, "fleet", propagation_policy="Foreground")
-        self.assertEqual(
-            self.store.get(FLEET, NS, "fleet")["metadata"]["finalizers"], ["foregroundDeletion"]
-        )
         self.store.settle()
-        for kind, name in ((CONFIG_MAP, "child"), (FLEET, "fleet")):
+        held = self.store.get(FLEET, NS, "fleet")
+        self.assertEqual(held["metadata"]["finalizers"], ["foregroundDeletion"])
+        self.assertIn("deletionTimestamp", self.store.get(CONFIG_MAP, NS, "blocking")["metadata"])
+        self.store.patch(CONFIG_MAP, NS, "blocking", {"metadata": {"finalizers": None}})
+        self.store.settle()
+        for name in ("blocking",):
             with self.refused(404):
-                self.store.get(kind, NS, name)
+                self.store.get(CONFIG_MAP, NS, name)
+        with self.refused(404):
+            self.store.get(FLEET, NS, "fleet")
+
+    def test_foreground_deletion_does_not_wait_for_a_dependent_that_does_not_block(self):
+        owner = self.store.create(fleet())
+        self.dependent("free", owner, blocks=False)
+        self.store.delete(FLEET, NS, "fleet", propagation_policy="Foreground")
+        self.store.settle()
+        with self.refused(404):
+            self.store.get(FLEET, NS, "fleet")
+        # The dependent was deleted too, and its own finalizer holds it.
+        self.assertIn("deletionTimestamp", self.store.get(CONFIG_MAP, NS, "free")["metadata"])
+
+    def test_an_owner_reference_must_name_its_owner_in_full(self):
+        owner = self.store.create(fleet())
+        right = owned_by(FLEET, owner)["ownerReferences"][0]
+        for name, wrong in (
+            ("right", {}),
+            ("wrong-kind", {"kind": "Deployment", "apiVersion": "apps/v1"}),
+            ("wrong-version", {"apiVersion": "narwhal.example.com/v1"}),
+            ("wrong-name", {"name": "other"}),
+        ):
+            self.store.create(config_map(name, ownerReferences=[{**right, **wrong}]))
+        self.store.settle()
+        self.assertEqual(
+            [c["metadata"]["name"] for c in self.store.list(CONFIG_MAP, NS)["items"]], ["right"]
+        )
+
+    def test_an_owner_in_another_namespace_does_not_count(self):
+        self.store.create({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "other"}})
+        owner = self.store.create({**fleet(), "metadata": {"name": "fleet", "namespace": "other"}})
+        self.store.create(config_map("child", **owned_by(FLEET, owner)))
+        self.store.settle()
+        with self.refused(404):
+            self.store.get(CONFIG_MAP, NS, "child")
+        self.store.get(FLEET, "other", "fleet")
 
     def test_a_dependent_with_another_live_owner_stays(self):
         first = self.store.create(fleet(name="fleet"))
@@ -433,6 +555,7 @@ class GarbageCollectionTests(StoreTest):
         self.store.settle()
         self.store.delete(JOB, NS, "next", propagation_policy="Background")
         self.store.settle()
+        self.drain()
         self.assertEqual(
             [p["metadata"]["name"] for p in self.store.list(POD, NS)["items"]],
             [orphan["metadata"]["name"]],
@@ -526,18 +649,43 @@ class ServerSideApplyTests(StoreTest):
             self.store.apply(config_map("a"), field_manager="helm")["data"], {"x": "1"}
         )
 
-    def test_associative_lists_merge_by_key_between_managers(self):
-        first = {"containers": [{"name": "a", "image": "a:1"}], "args": ["one"]}
+    def test_a_custom_resource_list_is_atomic_unless_its_schema_makes_it_a_map(self):
+        first = {
+            "containers": [{"name": "a", "image": "a:1"}],
+            "engines": [{"name": "a", "image": "a:1"}],
+        }
         self.store.apply(fleet(first), field_manager="one")
+        # The schema gives `containers` no list type, so one manager owns the whole list.
+        with self.refused(409) as refusal:
+            self.store.apply(
+                fleet({"containers": [{"name": "b", "image": "b:1"}]}), field_manager="two"
+            )
+        self.assertIn('conflict with "one": .spec.containers', refusal.exception.message)
         merged = self.store.apply(
-            fleet({"containers": [{"name": "b", "image": "b:1"}]}), field_manager="two"
+            fleet({"engines": [{"name": "b", "image": "b:1"}]}), field_manager="two"
         )
-        self.assertEqual([c["name"] for c in merged["spec"]["containers"]], ["a", "b"])
-        # An atomic list is owned as a whole.
-        with self.refused(409):
-            self.store.apply(fleet({"args": ["two"]}), field_manager="two")
-        left = self.store.apply(fleet({"args": ["one"]}), field_manager="one")
-        self.assertEqual(left["spec"]["containers"], [{"name": "b", "image": "b:1"}])
+        self.assertEqual([e["name"] for e in merged["spec"]["engines"]], ["a", "b"])
+        left = self.store.apply(fleet({"containers": first["containers"]}), field_manager="one")
+        self.assertEqual(left["spec"]["engines"], [{"name": "b", "image": "b:1"}])
+
+    def test_a_built_in_list_merges_by_its_key(self):
+        self.store.apply(stateful_set("engine", 1), field_manager="one")
+        sidecar = {
+            "spec": {
+                "template": {"spec": {"containers": [{"name": "attestation", "image": "n:1"}]}}
+            }
+        }
+        merged = self.store.apply(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "StatefulSet",
+                "metadata": {"name": "engine", "namespace": NS},
+                **sidecar,
+            },
+            field_manager="two",
+        )
+        names = [c["name"] for c in merged["spec"]["template"]["spec"]["containers"]]
+        self.assertEqual(names, ["engine", "attestation"])
 
     def test_an_update_takes_the_fields_it_changes_from_the_applier(self):
         self.store.apply(fleet({"slo": {"ttftS": 4, "tpotS": 1}}), field_manager="narwhal-cli")
@@ -654,6 +802,27 @@ class JobTests(StoreTest):
         self.assertEqual(
             condition(self.store.get(JOB, NS, "gate"), "Failed")["reason"], "DeadlineExceeded"
         )
+        [stopping] = self.store.list(POD, NS)["items"]
+        self.assertIn("deletionTimestamp", stopping["metadata"])
+        self.drain()
+        self.assertEqual(self.store.list(POD, NS)["items"], [])
+
+    def test_a_job_pod_keeps_the_tracking_finalizer_until_it_is_counted(self):
+        outcome: list = [Run()]
+        self.store.kubelet = lambda pod: (
+            Run() if pod["metadata"].get("deletionTimestamp") else outcome[0]
+        )
+        self.store.create(job("gate"))
+        self.store.settle()
+        [running] = self.store.list(POD, NS)["items"]
+        self.assertEqual(running["metadata"]["finalizers"], [TRACKING])
+        outcome[0] = Exit(0)
+        self.store.settle()
+        [done] = self.store.list(POD, NS)["items"]
+        self.assertNotIn("finalizers", done["metadata"])
+        self.assertEqual(self.store.get(JOB, NS, "gate")["status"]["succeeded"], 1)
+        # A finished pod is deleted at once.
+        self.store.delete(POD, NS, done["metadata"]["name"])
         self.assertEqual(self.store.list(POD, NS)["items"], [])
 
     def test_a_suspended_job_starts_no_pod_and_its_template_cannot_change(self):
@@ -794,7 +963,6 @@ class SchedulingTests(StoreTest):
         self.assertEqual(created["metadata"]["uid"], before["metadata"]["uid"])
 
     def test_a_pod_for_a_node_the_cluster_lacks_is_unschedulable(self):
-        self.store.create({"apiVersion": "v1", "kind": "Node", "metadata": {"name": "gpu-a"}})
         self.store.create(pod("lost", nodeSelector={"kubernetes.io/hostname": "gpu-z"}))
         self.store.create(pod("found", nodeSelector={"kubernetes.io/hostname": "gpu-a"}))
         self.store.create(pod("any"))
@@ -804,7 +972,96 @@ class SchedulingTests(StoreTest):
         )
         self.assertEqual(self.store.get(POD, NS, "found")["spec"]["nodeName"], "gpu-a")
         self.assertEqual(self.store.get(POD, NS, "any")["spec"]["nodeName"], "gpu-a")
-        self.assertEqual([n["metadata"]["name"] for n in self.store.list(NODE)["items"]], ["gpu-a"])
+        self.assertEqual(
+            [n["metadata"]["name"] for n in self.store.list(NODE)["items"]], ["gpu-a", "gpu-b"]
+        )
+        empty = ObjectStore()
+        empty.create(pod("alone"))
+        empty.settle()
+        reason = condition(empty.get(POD, NS, "alone"), "PodScheduled")
+        self.assertEqual(
+            (reason["reason"], reason["message"][:29]),
+            ("Unschedulable", "0/0 nodes are available: 0 no"),
+        )
+
+    def test_the_scheduler_matches_node_labels_and_node_affinity(self):
+        self.store.create(node("gpu-c", **{"example.com/gpu": "big"}))
+
+        def required(**term):
+            terms = {"nodeSelectorTerms": [term]}
+            return {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": terms}}
+
+        def expression(key, operator, *values):
+            return {"key": key, "operator": operator, "values": list(values)}
+
+        placements = {
+            "selected": {"nodeSelector": {"example.com/gpu": "big"}},
+            "by-label": {
+                "affinity": required(
+                    matchExpressions=[expression("kubernetes.io/hostname", "In", "gpu-b")]
+                )
+            },
+            "not-in": {
+                "affinity": required(
+                    matchExpressions=[
+                        expression("kubernetes.io/hostname", "NotIn", "gpu-a", "gpu-b")
+                    ]
+                )
+            },
+            "by-field": {
+                "affinity": required(matchFields=[expression("metadata.name", "In", "gpu-b")])
+            },
+            # metadata.name is a field, not a label.
+            "name-as-label": {
+                "affinity": required(matchExpressions=[expression("metadata.name", "In", "gpu-a")])
+            },
+            "empty-term": {"affinity": required()},
+        }
+        for name, spec in placements.items():
+            self.store.create(pod(name, **spec))
+        self.store.settle()
+        nodes = {name: self.store.get(POD, NS, name)["spec"].get("nodeName") for name in placements}
+        self.assertEqual(
+            nodes,
+            {
+                "selected": "gpu-c",
+                "by-label": "gpu-b",
+                "not-in": "gpu-c",
+                "by-field": "gpu-b",
+                "name-as-label": None,
+                "empty-term": None,
+            },
+        )
+
+    def test_the_kubelet_refuses_a_pod_bound_to_a_node_it_does_not_match(self):
+        self.store.create(pod("bound", nodeName="gpu-a", nodeSelector={"example.com/gpu": "big"}))
+        self.store.create(pod("nowhere", nodeName="gpu-z"))
+        self.store.settle()
+        refused = self.store.get(POD, NS, "bound")["status"]
+        self.assertEqual((refused["phase"], refused["reason"]), ("Failed", "NodeAffinity"))
+        # No kubelet runs a pod bound to a node the cluster lacks.
+        self.assertEqual(self.store.get(POD, NS, "nowhere")["status"], {"phase": "Pending"})
+
+    def test_a_pod_that_was_never_gated_takes_no_node_affinity(self):
+        self.store.create(pod("free"))
+        pin = [{"op": "add", "path": "/spec/affinity", "value": self.AFFINITY}]
+        with self.refused(422) as refusal:
+            self.store.patch(POD, NS, "free", pin, patch_type="json")
+        self.assertIn("pod updates may not change fields", refusal.exception.message)
+
+    def test_a_pod_update_may_add_tolerations_but_not_remove_them(self):
+        first = {"key": "example.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
+        second = {"key": "example.com/spot", "operator": "Exists", "effect": "NoExecute"}
+        self.store.create(pod("engine", tolerations=[first]))
+        added = [{"op": "add", "path": "/spec/tolerations/-", "value": second}]
+        self.store.patch(POD, NS, "engine", added, patch_type="json")
+        self.assertEqual(self.store.get(POD, NS, "engine")["spec"]["tolerations"], [first, second])
+        for removal in (
+            [{"op": "remove", "path": "/spec/tolerations/0"}],
+            [{"op": "remove", "path": "/spec/tolerations"}],
+        ):
+            with self.refused(422):
+                self.store.patch(POD, NS, "engine", removal, patch_type="json")
 
     def test_a_statefulset_keeps_its_ordinal_pods_at_its_template(self):
         self.store.create(stateful_set("engine", 2))
@@ -814,6 +1071,12 @@ class SchedulingTests(StoreTest):
         self.assertEqual(pods["engine-1"]["spec"]["subdomain"], "engine")
         self.store.delete(POD, NS, "engine-1")
         self.store.settle()
+        # The StatefulSet waits for the old pod to go before it makes its replacement.
+        self.assertEqual(
+            self.store.get(POD, NS, "engine-1")["metadata"]["uid"],
+            pods["engine-1"]["metadata"]["uid"],
+        )
+        self.drain()
         replaced = self.store.get(POD, NS, "engine-1")
         self.assertNotEqual(replaced["metadata"]["uid"], pods["engine-1"]["metadata"]["uid"])
         image = [
@@ -821,6 +1084,7 @@ class SchedulingTests(StoreTest):
         ]
         self.store.patch(STATEFUL_SET, NS, "engine", image, patch_type="json")
         self.store.settle()
+        self.drain(rounds=2)
         status = self.store.get(STATEFUL_SET, NS, "engine")["status"]
         hashes = {
             p["metadata"]["labels"]["controller-revision-hash"]
@@ -834,6 +1098,114 @@ class SchedulingTests(StoreTest):
         self.assertIn(
             "updates to statefulset spec for fields other than", refusal.exception.message
         )
+
+
+class PodDeletionTests(StoreTest):
+    def running(self, name: str) -> dict:
+        self.store.create(pod(name, nodeName="gpu-a"))
+        self.store.settle()
+        return self.store.get(POD, NS, name)
+
+    def test_a_deleted_pod_terminates_for_its_grace_period(self):
+        self.running("engine")
+        deleted = self.store.delete(POD, NS, "engine")
+        meta = deleted["metadata"]
+        self.assertEqual(
+            (meta["deletionTimestamp"], meta["deletionGracePeriodSeconds"]),
+            ("2026-11-27T10:00:30Z", 30),
+        )
+        with self.refused(409, "AlreadyExists"):
+            self.store.create(pod("engine", nodeName="gpu-a"))
+        self.clock.advance(29)
+        self.store.settle()
+        self.assertEqual(self.store.get(POD, NS, "engine")["status"]["phase"], "Running")
+        self.clock.advance(1)
+        self.store.settle()
+        with self.refused(404):
+            self.store.get(POD, NS, "engine")
+        self.store.create(pod("engine", nodeName="gpu-a"))
+
+    def test_a_pod_goes_at_once_when_it_stops_or_never_ran_or_is_forced(self):
+        self.store.kubelet = lambda pod: (
+            Exit(0) if pod["metadata"].get("deletionTimestamp") else Run()
+        )
+        self.running("stops")
+        self.store.delete(POD, NS, "stops")
+        self.store.settle()
+        with self.refused(404):
+            self.store.get(POD, NS, "stops")
+        self.store.create(pod("unscheduled", nodeSelector={"example.com/gpu": "none"}))
+        self.store.settle()
+        self.store.delete(POD, NS, "unscheduled")
+        with self.refused(404):
+            self.store.get(POD, NS, "unscheduled")
+        self.store.kubelet = lambda pod: Run()
+        self.running("stuck")
+        self.store.delete(POD, NS, "stuck")
+        self.store.delete(POD, NS, "stuck", grace_period=0)
+        with self.refused(404):
+            self.store.get(POD, NS, "stuck")
+
+
+class PruningTests(StoreTest):
+    def test_unknown_fields_of_a_custom_resource_are_pruned_with_a_warning(self):
+        body = fleet(
+            {
+                "slo": {"ttftS": 4, "typo": 1},
+                "unknown": True,
+                "images": {"engine": "e"},
+                "launch": {"NARWHAL_X": "1"},
+            }
+        )
+        body["metadata"]["extra"] = "x"
+        body["top"] = 1
+        created = self.store.create(body)
+        self.assertEqual(
+            created["spec"],
+            {"slo": {"ttftS": 4}, "images": {"engine": "e"}, "launch": {"NARWHAL_X": "1"}},
+        )
+        self.assertNotIn("extra", created["metadata"])
+        self.assertNotIn("top", created)
+        self.assertCountEqual(
+            self.store.last_warnings,
+            [
+                'unknown field "metadata.extra"',
+                'unknown field "spec.slo.typo"',
+                'unknown field "spec.unknown"',
+                'unknown field "top"',
+            ],
+        )
+        unchanged = self.store.patch(FLEET, NS, "fleet", {"spec": {"unknown": False}})
+        self.assertEqual(
+            unchanged["metadata"]["resourceVersion"], created["metadata"]["resourceVersion"]
+        )
+        self.assertEqual(self.store.last_warnings, ['unknown field "spec.unknown"'])
+        self.store.get(FLEET, NS, "fleet")
+        self.assertEqual(self.store.last_warnings, [])
+
+    def test_an_applied_unknown_field_is_neither_kept_nor_managed(self):
+        applied = self.store.apply(
+            fleet({"slo": {"ttftS": 4}, "unknown": True}), field_manager="narwhal-cli"
+        )
+        self.assertNotIn("unknown", applied["spec"])
+        self.assertEqual(managers_of(applied, "spec.unknown"), set())
+        self.assertEqual(self.store.last_warnings, ['unknown field "spec.unknown"'])
+
+    def test_the_crd_is_served_and_stored(self):
+        stored = self.store.get(CRD, None, "narwhalfleets.narwhal.example.com")
+        self.assertEqual(stored["spec"]["versions"][0]["schema"]["openAPIV3Schema"], FLEET_SCHEMA)
+        self.assertEqual(self.store.kind_of(fleet()), FLEET)
+
+    def test_a_custom_resource_takes_no_strategic_merge_patch(self):
+        self.store.create(fleet())
+        with self.refused(415, "UnsupportedMediaType") as refusal:
+            self.store.patch(FLEET, NS, "fleet", {"spec": {"args": ["a"]}}, patch_type="strategic")
+        self.assertIn("application/merge-patch+json", refusal.exception.message)
+        self.store.create(config_map("a"))
+        patched = self.store.patch(
+            CONFIG_MAP, NS, "a", {"data": {"k": "1"}}, patch_type="strategic"
+        )
+        self.assertEqual(patched["data"], {"k": "1"})
 
 
 class LeaseTests(StoreTest):
@@ -1051,6 +1423,21 @@ class TransportTests(StoreTest):
         )
         self.assertEqual(reported.json()["status"], {"serving": True})
 
+    def test_http_sends_pruning_warnings_and_refuses_strategic_patches_of_custom_resources(self):
+        path = f"/apis/{FLEET.group}/{FLEET.version}/namespaces/{NS}/narwhalfleets"
+        created = self.http.post(path, json=fleet({"unknown": 1}))
+        self.assertEqual(
+            created.headers.get_list("warning"), ['299 - "unknown field \\"spec.unknown\\""']
+        )
+        self.assertNotIn("warning", self.http.get(f"{path}/fleet").headers)
+        strategic = {"Content-Type": "application/strategic-merge-patch+json"}
+        refused = self.http.patch(
+            f"{path}/fleet", content=json.dumps({"spec": {}}), headers=strategic
+        )
+        self.assertEqual(
+            (refused.status_code, refused.json()["reason"]), (415, "UnsupportedMediaType")
+        )
+
     def test_a_pods_log_is_served_as_text(self):
         self.store.kubelet = lambda pod: Exit(0, "narwhal-manifest {}\n")
         self.store.create(pod("gate", nodeName="gpu-a", restartPolicy="Never"))
@@ -1118,6 +1505,7 @@ class LightkubeTests(StoreTest):
         self.store.settle()
         client.delete(Job, "gate", cascade=CascadeType.BACKGROUND)
         self.store.settle()
+        self.drain()
         self.assertEqual(list(client.list(Pod)), [])
         self.assertEqual(self.store.deletes[-1], Deletion("Job", NS, "gate", "Background"))
 
